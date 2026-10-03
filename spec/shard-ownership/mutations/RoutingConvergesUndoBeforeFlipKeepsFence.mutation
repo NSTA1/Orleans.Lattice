@@ -1,11 +1,13 @@
-# Pairs with RoutingConverges. An undo before the flip clears T's forwarding
-# but not a fence the interrupted swap left, so T stays in Rejecting under an
-# alias that still names it and its own pair is refused forever. Fairness is
-# unchanged.
+# Pairs with RoutingConverges. An undo before the flip lifts the fence an
+# interrupted swap left only on the pinned shard, not on the shard an adaptive
+# split allocated above the pinned count (the issue-3880 shape), so k2's shard
+# of T stays in Rejecting under an alias that still names T, and the tree's own
+# pair is refused for k2 forever. Fairness is unchanged; no other operation is
+# blocked, so the mutant cannot deadlock instead.
 MODULE: RoutingConvergesUndoBeforeFlipKeepsFence
 TARGET: RoutingConverges
 CLASS: Temporal
-SUMMARY: an undo before the flip leaves a fence in place, so the tree's own copy refuses forever
+SUMMARY: an undo before the flip leaves the split-allocated shard fenced, so it refuses forever
 PERTURBS: UndoBeforeFlip
 
 --- FIND
@@ -14,7 +16,7 @@ PERTURBS: UndoBeforeFlip
     /\ rz' = "undone"
 --- REPLACE
     /\ rz \in {"snap", "copied"}
-\* MUTATION: the fence is not lifted.
-    /\ fence' = fence
+\* MUTATION: only the pinned shard's fence is lifted.
+    /\ fence' = fence \ {s1}
     /\ rz' = "undone"
 --- END

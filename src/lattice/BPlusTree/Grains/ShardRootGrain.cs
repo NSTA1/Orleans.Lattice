@@ -3009,13 +3009,17 @@ internal sealed partial class ShardRootGrain(
     /// destination, so a batch in flight across the fence or the retirement lands
     /// whole on both copies instead of on some of this copy's shards only, which
     /// a resize undo would re-expose torn (issue #4369). A purge clears the
-    /// mirror, and with it this admission.
+    /// mirror, and with it this admission. The rule is <see cref="ResizeFence.AdmitsBoundSaga"/>;
+    /// it is asked only on the cold path where a shadow-forward is active, so its
+    /// arguments are read eagerly.
     /// </summary>
     private bool AdmitsBoundSagaWhileFenced(bool admitBoundSaga) =>
-        state.State.ShadowForward is { Phase: ShadowForwardPhase.Rejecting }
-        && (admitBoundSaga
-            || (LatticePreparedContext.Current
-                && string.Equals(LatticeAtomicBindingContext.Current, TreeId, StringComparison.Ordinal)));
+        ResizeFence.AdmitsBoundSaga(
+            rejecting: state.State.ShadowForward is { Phase: ShadowForwardPhase.Rejecting },
+            directTerminal: admitBoundSaga,
+            preparedScope: LatticePreparedContext.Current,
+            boundPhysicalTreeId: LatticeAtomicBindingContext.Current,
+            physicalTreeId: TreeId);
 
     private static readonly Task<bool> ShardReady = Task.FromResult(true);
 

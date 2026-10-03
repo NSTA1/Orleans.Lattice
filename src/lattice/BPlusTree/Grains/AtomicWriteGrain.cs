@@ -2722,7 +2722,8 @@ internal sealed class AtomicWriteGrain(
 
             var routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
                 .GetRoutingAsync(forceRefresh: true);
-            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
+            if (SagaCopyBinding.BeforeDecision(bound, routing.PhysicalTreeId, boundMirrorDestination: null)
+                == SagaCopyBindingVerdict.Commit)
             {
                 // The broadcast's drift correction reuses this resolve rather than
                 // paying a second one. A cross-tree sub-saga parks instead and
@@ -2735,7 +2736,10 @@ internal sealed class AtomicWriteGrain(
                 return;
             }
 
-            if (await BoundCopyMirrorsIntoAsync(bound, routing.PhysicalTreeId))
+            // The tree moved; only now ask the bound copy where it mirrors, since
+            // that is a call to one of its shards.
+            if (SagaCopyBinding.BeforeDecision(bound, routing.PhysicalTreeId, await BoundCopyMirrorDestinationAsync(bound))
+                == SagaCopyBindingVerdict.StayBound)
             {
                 // An online resize moved the tree off the bound copy, which still
                 // mirrors everything it takes into the copy the tree moved to.
@@ -2766,28 +2770,27 @@ internal sealed class AtomicWriteGrain(
     private const int MaxBindingMovesPerDispatch = 3;
 
     /// <summary>
-    /// Whether the bound copy mirrors every mutation it takes into
-    /// <paramref name="currentPhysicalTreeId"/> - the source of an online resize
-    /// whose destination the tree now resolves to (issue #4369). Asked of one
-    /// shard the batch touched; every shard of a resize source mirrors to the
-    /// same destination. A failed probe answers <see langword="false"/>, so the
-    /// saga re-binds as it would without one.
+    /// The copy the bound copy mirrors every mutation it takes into - the
+    /// destination of an online resize whose source it is (issue #4369) - or
+    /// <see langword="null"/> when it mirrors nowhere. Asked of one shard the
+    /// batch touched; every shard of a resize source mirrors to the same
+    /// destination. A failed probe answers <see langword="null"/>, so the saga
+    /// re-binds as it would without one.
     /// </summary>
-    private async Task<bool> BoundCopyMirrorsIntoAsync(string bound, string currentPhysicalTreeId)
+    private async Task<string?> BoundCopyMirrorDestinationAsync(string bound)
     {
         var shardIndex = state.State.TouchedShards is { Count: > 0 } touched ? touched[0] : 0;
         try
         {
-            var destination = await grainFactory.GetGrain<IShardRootGrain>($"{bound}/{shardIndex}")
+            return await grainFactory.GetGrain<IShardRootGrain>($"{bound}/{shardIndex}")
                 .GetMirrorDestinationAsync();
-            return string.Equals(destination, currentPhysicalTreeId, StringComparison.Ordinal);
         }
         catch (Exception ex) when (!GrainStateWriteFaults.IsTranslatedConflict(ex))
         {
             Logger.LogDebug(ex,
                 "Atomic-write saga {OperationKey}: could not ask bound copy {Bound} where it mirrors; re-binding instead.",
                 OperationKey, bound);
-            return false;
+            return null;
         }
     }
 
@@ -3216,8 +3219,7 @@ internal sealed class AtomicWriteGrain(
                 // batch did not fail, it was addressed to a copy that moved.
                 if (batchFailure is StaleTreeRoutingException moved
                     && bindingMoves < MaxBindingMovesPerDispatch
-                    && state.State.BoundPhysicalTreeId is { } boundCopy
-                    && string.Equals(moved.StalePhysicalTreeId, boundCopy, StringComparison.Ordinal)
+                    && SagaCopyBinding.RebindsAfterRefusal(state.State.BoundPhysicalTreeId, moved.StalePhysicalTreeId)
                     && await TryRebindToResolvedCopyAsync().ConfigureAwait(true))
                 {
                     bindingMoves++;

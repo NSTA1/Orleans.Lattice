@@ -499,13 +499,15 @@ Reactivate(c, s) ==
     /\ reacted' = TRUE
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, late, wDone, ackOn>>
 
+\* Nothing is in flight: every operation that started has finished. An operation
+\* that never started is not owed, so a state with no enabled step is a deadlock
+\* only when something is stuck part way.
 Quiescent ==
-    /\ sg = "done"
-    /\ sp = "done"
-    /\ rz \in {"purged", "undone"}
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+    /\ rz \in {"idle", "purged", "undone"}
     /\ rs # "migrating"
     /\ late # "inflight"
-    /\ wDone
 
 Stutter ==
     /\ Quiescent

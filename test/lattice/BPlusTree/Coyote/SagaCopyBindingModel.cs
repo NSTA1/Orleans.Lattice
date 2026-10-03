@@ -1,0 +1,242 @@
+using Microsoft.Coyote.Runtime;
+using Microsoft.Coyote.Specifications;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing.Coyote;
+
+namespace Orleans.Lattice.Tests.BPlusTree.Coyote;
+
+/// <summary>
+/// Which alias swap a <see cref="SagaCopyBindingModel"/> run interleaves with the
+/// saga.
+/// </summary>
+public enum SagaCopyBindingSwap
+{
+    /// <summary>
+    /// An online resize's flip from T to R. T mirrors every mutation into R
+    /// throughout, so a saga bound to T may stay bound across the flip (#4369).
+    /// </summary>
+    ResizeFlip,
+
+    /// <summary>
+    /// A resize undo's swap from R back to T. R mirrors nothing into T, so a saga
+    /// bound to R must re-bind to T and re-dispatch there (#4357, #4358).
+    /// </summary>
+    UndoSwap,
+}
+
+/// <summary>
+/// Which fix a <see cref="SagaCopyBindingModel"/> run removes.
+/// </summary>
+public enum SagaCopyBindingGuard
+{
+    /// <summary>The shipping design.</summary>
+    None,
+
+    /// <summary>The routing tier places the batch on whichever copy its cached pair names, ignoring the binding (#4358).</summary>
+    RouterIgnoresBinding,
+
+    /// <summary>The pre-decision check re-binds without asking where the bound copy mirrors (#4369, before #4376).</summary>
+    PreDecisionIgnoresMirror,
+}
+
+/// <summary>
+/// The assertions a <see cref="SagaCopyBindingModel"/> run checks at the commit
+/// decision.
+/// </summary>
+[Flags]
+public enum SagaCopyBindingAssertions
+{
+    /// <summary>Check nothing.</summary>
+    None = 0,
+
+    /// <summary>Every key of the batch has a prepared bucket on the bound copy.</summary>
+    BatchOnBoundCopy = 1,
+
+    /// <summary>No copy that can still serve the tree holds a bucket, except the bound copy and the copy it mirrors into.</summary>
+    NoBucketOffTheBoundCopy = 2,
+
+    /// <summary>Both assertions.</summary>
+    All = BatchOnBoundCopy | NoBucketOffTheBoundCopy,
+}
+
+/// <summary>
+/// A Coyote concurrency model of an atomic-write saga's binding to a physical copy
+/// (<c>AtomicWriteState.BoundPhysicalTreeId</c>) across one alias swap. The saga
+/// dispatches its batch through stateless routing activations whose cached pair
+/// may predate the swap, then checks the binding immediately before its decision.
+/// <para>
+/// Every binding decision is the real <see cref="SagaCopyBinding"/> rule: the
+/// routing tier's <see cref="SagaCopyBinding.AdmitsDispatch"/> (checked against the
+/// cached pair, then against a refreshed one), the execute phase's
+/// <see cref="SagaCopyBinding.RebindsAfterRefusal"/>, and the pre-decision
+/// <see cref="SagaCopyBinding.BeforeDecision"/>. This is the implementation-level
+/// counterpart of the shard-ownership specification's <c>SagaPrepare</c>,
+/// <c>SagaRebindOnRefusal</c>, <c>SagaRebindBeforeDecision</c> and
+/// <c>SagaDecide</c>, and its assertions are that specification's
+/// <c>SagaBatchOnOneCopy</c>.
+/// </para>
+/// <para>
+/// <b>Scope.</b> The model leaves out the shard-level fence and redirect that
+/// <see cref="ResizeFenceModel"/> drives, so the binding rules are checked on
+/// their own: with both layers present each masks the other's removal, which the
+/// specification's <c>SagaBatchOnOneCopyRouterIgnoresBinding</c> mutation records.
+/// A dispatch is one routing-tier call that places the whole remaining batch on
+/// one copy, as <c>ILattice.SetManyAsync</c> does, unless
+/// <c>partialDispatch</c> is set: a transient shard failure can then stop it part
+/// way, which is the open defect #4454 in the mid-dispatch re-bind.
+/// </para>
+/// </summary>
+public sealed class SagaCopyBindingModel : ICoyoteModel
+{
+    private const string T = "tree";
+    private const string R = "tree/resized/op";
+
+    private readonly int _keyCount;
+    private readonly SagaCopyBindingSwap _swap;
+    private readonly SagaCopyBindingGuard _guard;
+    private readonly bool _partialDispatch;
+    private readonly SagaCopyBindingAssertions _assertions;
+
+    /// <summary>Creates the model.</summary>
+    public SagaCopyBindingModel(
+        int keyCount,
+        SagaCopyBindingSwap swap,
+        SagaCopyBindingGuard guard,
+        bool partialDispatch = false,
+        SagaCopyBindingAssertions assertions = SagaCopyBindingAssertions.All)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(keyCount, 2);
+        _keyCount = keyCount;
+        _swap = swap;
+        _guard = guard;
+        _partialDispatch = partialDispatch;
+        _assertions = assertions;
+    }
+
+    /// <inheritdoc />
+    public void Run(ICoyoteRuntime runtime)
+    {
+        // The copy the tree resolves to before the swap, and after it. Before an
+        // undo the resized copy R is live; before a flip the old copy T is.
+        var from = _swap == SagaCopyBindingSwap.ResizeFlip ? T : R;
+        var to = _swap == SagaCopyBindingSwap.ResizeFlip ? R : T;
+        var alias = from;
+        var swapped = false;
+
+        // Routers that cached a pair before the swap name `from`; after it, a
+        // router may hold either. A router holding the copy the tree left before
+        // this resize began is refused by that copy's fence or redirect, which
+        // this model leaves out (see Scope), so it is not offered.
+        var bucket = new Dictionary<string, bool[]>
+        {
+            [T] = new bool[_keyCount],
+            [R] = new bool[_keyCount],
+        };
+
+        var bound = alias;
+        var dispatched = 0;
+        var decided = false;
+
+        while (!decided)
+        {
+            if (!swapped && runtime.RandomBoolean())
+            {
+                alias = to;
+                swapped = true;
+                continue;
+            }
+
+            if (dispatched < _keyCount)
+            {
+                Dispatch(cached: swapped && runtime.RandomBoolean() ? from : alias);
+                continue;
+            }
+
+            var verdict = SagaCopyBinding.BeforeDecision(
+                bound,
+                alias,
+                _guard == SagaCopyBindingGuard.PreDecisionIgnoresMirror ? null : MirrorDestination(bound));
+            if (verdict == SagaCopyBindingVerdict.Rebind)
+            {
+                bound = alias;
+                dispatched = 0;
+                continue;
+            }
+
+            decided = true;
+        }
+
+        CheckAtDecision();
+
+        void Dispatch(string cached)
+        {
+            // The routing tier checks its cached pair, then re-reads the registry
+            // once before refusing.
+            var copy = cached;
+            var admitted = _guard == SagaCopyBindingGuard.RouterIgnoresBinding
+                || SagaCopyBinding.AdmitsDispatch(bound, copy);
+            if (!admitted)
+            {
+                copy = alias;
+                admitted = SagaCopyBinding.AdmitsDispatch(bound, copy);
+            }
+
+            if (!admitted)
+            {
+                // The refusal names the bound copy as the stale one.
+                if (SagaCopyBinding.RebindsAfterRefusal(bound, bound))
+                {
+                    bound = alias;
+                    dispatched = 0;
+                }
+
+                return;
+            }
+
+            var end = _keyCount;
+            if (_partialDispatch && dispatched < _keyCount - 1 && runtime.RandomBoolean())
+            {
+                // A transient shard failure: the keys before it are prepared, the
+                // rest are not, and the execute phase will retry the remainder.
+                end = dispatched + 1;
+            }
+
+            for (var key = dispatched; key < end; key++)
+            {
+                bucket[copy][key] = true;
+                if (MirrorDestination(copy) is { } mirror)
+                {
+                    bucket[mirror][key] = true;
+                }
+            }
+
+            dispatched = end;
+        }
+
+        string? MirrorDestination(string copy) =>
+            _swap == SagaCopyBindingSwap.ResizeFlip && copy == T ? R : null;
+
+        void CheckAtDecision()
+        {
+            if ((_assertions & SagaCopyBindingAssertions.BatchOnBoundCopy) != 0)
+            {
+                Specification.Assert(
+                    bucket[bound].All(b => b),
+                    $"the saga decided on {bound} without its whole batch prepared there");
+            }
+
+            if ((_assertions & SagaCopyBindingAssertions.NoBucketOffTheBoundCopy) != 0)
+            {
+                foreach (var copy in new[] { T, R })
+                {
+                    // An undone resize discards R, so R can no longer serve the tree.
+                    var live = !(copy == R && _swap == SagaCopyBindingSwap.UndoSwap && swapped);
+                    var allowed = copy == bound || copy == MirrorDestination(bound);
+                    Specification.Assert(
+                        !live || allowed || !bucket[copy].Any(b => b),
+                        $"the saga decided bound to {bound} while {copy}, which can still serve the tree, holds part of its batch");
+                }
+            }
+        }
+    }
+}
