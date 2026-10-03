@@ -1,0 +1,19 @@
+# Pairs with CursorNeverSkipsUnshipped. Reproduces current production. A
+# duplicate of an entry whose first delivery is still between its dependency
+# check and its buffer insert finds the identity reservation that delivery
+# took, is classified as a duplicate and acknowledged, and the ack moves the
+# shipper's cursor past the entry. A restart of the receiver then aborts the
+# first delivery, which was never acknowledged, so nothing re-sends it.
+MODULE: CursorNeverSkipsUnshippedDuplicateOfParkingAcked
+TARGET: CursorNeverSkipsUnshipped
+CLASS: Invariant
+SUMMARY: acknowledges a duplicate of an entry still being parked, so a restart loses the entry the cursor has passed
+PERTURBS: Deliver
+
+--- FIND
+          \/ w.o = x
+       /\ ~InFlight(x, w)
+--- REPLACE
+          \/ w.o = x
+\* MUTATION: an in-flight duplicate is processed (and acknowledged) at once.
+--- END

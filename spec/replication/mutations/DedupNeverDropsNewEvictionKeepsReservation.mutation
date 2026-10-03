@@ -1,0 +1,16 @@
+# Pairs with DedupNeverDropsNew. The causal buffer displaces an entry to the
+# dead-letter queue without releasing its identity-cache reservation, which
+# ParkAsync does release. The replay is then dropped as a duplicate of a
+# write that was never applied.
+MODULE: DedupNeverDropsNewEvictionKeepsReservation
+TARGET: DedupNeverDropsNew
+CLASS: Action
+SUMMARY: an evicted buffered entry keeps its identity reservation, so its replay is dropped as a duplicate
+PERTURBS: Evict
+
+--- FIND
+    /\ cache' = [cache EXCEPT ![x] = @ \ {Ident(w)}]
+--- REPLACE
+\* MUTATION: the displaced entry's reservation is kept.
+    /\ cache' = cache
+--- END

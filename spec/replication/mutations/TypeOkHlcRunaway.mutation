@@ -1,0 +1,16 @@
+# Pairs with TypeOK. A leaf clock that jumps by the number of writes already
+# authored instead of ticking past the replica's version stamp takes a write's
+# HLC outside the declared Hlcs domain, which is exactly what TypeOK is there
+# to notice.
+MODULE: TypeOkHlcRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: stamps a write with an HLC beyond the declared domain, so TypeOK fires
+PERTURBS: Author
+
+--- FIND
+    /\ LET w == [o |-> o, k |-> k, h |-> h, d |-> d]
+--- REPLACE
+\* MUTATION: the stamped HLC runs ahead of the chosen one.
+    /\ LET w == [o |-> o, k |-> k, h |-> h + Cardinality(authored), d |-> d]
+--- END
