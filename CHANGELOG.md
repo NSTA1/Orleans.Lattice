@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - OrMap dot scans read each candidate once.** `OrMap`'s linear dot scan indexed the same list element twice per candidate and reloaded `Count` on every iteration. It now walks a span with a single `ref readonly` read per element: 35% faster on a full miss. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
+- **Performance - Liveness scans resolve their cover span once.** `OrSetDotCompaction.CountLive` and `AnyLive` re-resolved the cover list to a span for every dot they tested. Both walks hoist it now: 5-15% faster, with the isolating lane attributing 37% of the per-dot cost. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
+- **Performance - Leaf transfer plans are sized once.** `LeafEntryCache`'s frame-backed batch-boundary and full-scan-window planners grew their result lists from empty, reallocating as they filled. Both compute the exact count up front now: 15-23% fewer bytes per wide-leaf plan. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
 - **Performance - Delta dot walks resolve a span once.** `OrFlag` and `RwFlag` walked each incoming delta's dot list through an interface indexer, paying a dispatch per dot. They now resolve it to a span once and split the narrow and wide walks: 19-58% faster on a re-delivered delta. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
 
 - **Performance - RwSet delta keys rent once per walk.** `RwSet.UnionDeltaDots` rented a pooled buffer and entered an exception-handling region for every element that overran its stack budget. Both are hoisted to the whole walk now: 10-17% faster on 512-byte elements. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
