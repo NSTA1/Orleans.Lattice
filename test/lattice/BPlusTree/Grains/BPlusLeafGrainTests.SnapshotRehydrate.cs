@@ -246,7 +246,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Activation_snapshot_load_failure_falls_through_to_WAL_replay()
+    public async Task Activation_snapshot_load_failure_fails_the_replay_closed_instead_of_falling_through_to_WAL_replay()
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
@@ -286,14 +286,18 @@ public partial class BPlusLeafGrainTests
             TestMutationObservers.NoObservers(),
             TestOriginClusterIdResolver.Default());
 
-        // Must not throw - snapshot load failures are best-effort and
-        // the leaf falls through to the WAL tail-replay path. The
-        // activation coherence override drives the replay from -1
-        // locally without mutating the persisted checkpoint slot.
-        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        // SUPERSEDED BY ISSUE #4450. This pinned the opposite: that a failed
+        // load fell through to the cold WAL replay. Under coverage-gated trim
+        // the snapshot may be the only durable copy of the prefix it covers, so
+        // the replay now fails closed, touches neither the checkpoint nor the
+        // WAL, and is retried by the barrier re-arm.
+        Assert.ThrowsAsync<LeafSnapshotUnavailableException>(
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L));
-        await coord.Received().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
+        Assert.That(grain.EntriesForTest, Is.Empty);
+        await coord.DidNotReceive().ReadSliceAsync(
+            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
