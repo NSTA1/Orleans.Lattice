@@ -61,7 +61,7 @@
             <LtDialog Open="_editorOpen" OpenChanged="@(open => _editorOpen = open)" Title="Edit rule" Placement="DialogPlacement">
                 @if (_editorOpen)
                 {
-                    <TenantRuleEditor Tenant="@Tenant" Rule="rule" Rules="_rules" DirectoryAvailable="@(_model?.DirectoryAvailable == true)" DirectoryExplanation="@_model?.DirectoryExplanation" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
+                    <TenantRuleEditor Tenant="@Tenant" Rule="rule" Rules="_rules" DirectoryAvailable="@(_model?.DirectoryAvailable == true)" DirectorySearchDenied="_modelDenied" DirectoryExplanation="@_model?.DirectoryExplanation" OnSaved="OnSaved" OnCancel="@(() => _editorOpen = false)" />
                 }
             </LtDialog>
             <LtConfirmDestructive Open="_confirmOpen"

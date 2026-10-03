@@ -23,6 +23,7 @@ public partial class TenantGroupDetailView
     private IReadOnlyList<TenantRuleView>? _references;
     private TenantAccessPosture? _posture;
     private AccessModelDescriptor? _model;
+    private bool _modelDenied;
     private AccessFailure? _failure;
     private (string Tenant, string Name)? _loaded;
     private string _displayName = string.Empty;
@@ -92,7 +93,11 @@ public partial class TenantGroupDetailView
         _loaded = (Tenant, Name);
         _deleteOpen = false;
         _removing = null;
-        _model ??= await Catalog.GetAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        if (_model is null)
+        {
+            (_model, _modelDenied) = await Catalog.ReadAccessModelAsync(Lifetime.Token).ConfigureAwait(true);
+        }
+
         await LoadAsync().ConfigureAwait(true);
     }
 

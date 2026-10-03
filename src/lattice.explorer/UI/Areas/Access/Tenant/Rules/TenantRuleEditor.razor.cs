@@ -64,6 +64,10 @@ public partial class TenantRuleEditor : IDisposable
     [Parameter]
     public string? DirectoryExplanation { get; set; }
 
+    /// <summary>Whether the cluster refused the caller its identity directory, so cluster users and groups are typed rather than searched.</summary>
+    [Parameter]
+    public bool DirectorySearchDenied { get; set; }
+
     /// <summary>Raised with the rule as stored.</summary>
     [Parameter]
     public EventCallback<TenantRuleView> OnSaved { get; set; }

@@ -23,6 +23,7 @@
                          IdChanged="@(value => _subject = value)"
                          Error="@_subjectError"
                          DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                         DirectorySearchDenied="_modelDenied"
                          DirectoryExplanation="@_model?.DirectoryExplanation" />
     <LtComboBox @ref="_treeBox" Label="Tree" Value="@_tree" ValueChanged="OnTreeChanged" Error="@_treeError" Source="@Trees" Noun="tree"
                 Hint="@($"One of tenant {Tenant}'s own trees.")" />

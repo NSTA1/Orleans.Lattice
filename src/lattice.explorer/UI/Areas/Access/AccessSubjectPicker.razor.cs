@@ -45,6 +45,15 @@ public partial class AccessSubjectPicker
     /// <summary>The sentence a reserved tenant group id typed into a cluster source is refused with.</summary>
     internal const string ForeignTenantGroupMessage = "A tenant group is chosen as a Tenant group, by its name. Another tenant's group can never be chosen.";
 
+    /// <summary>The id field's hint when the cluster has no identity directory to search.</summary>
+    internal const string NoDirectoryHint = "No identity directory is configured, so the id is used as typed and is not validated.";
+
+    /// <summary>The id field's hint for a user when the caller may not search the cluster's identity directory.</summary>
+    internal const string DeniedUserHint = "You can enter a user id. Searching the cluster directory needs operator access.";
+
+    /// <summary>The id field's hint for a group when the caller may not search the cluster's identity directory.</summary>
+    internal const string DeniedGroupHint = "You can enter a group id. Searching the cluster directory needs operator access.";
+
     private LtComboBox? _box;
     private string? _sourceError;
     private TenantGroupSuggestionSource? _tenantGroups;
@@ -82,6 +91,15 @@ public partial class AccessSubjectPicker
     /// <summary>Whether the cluster has an identity directory to search.</summary>
     [Parameter]
     public bool DirectoryAvailable { get; set; }
+
+    /// <summary>
+    /// Whether the cluster refused this caller the identity directory, so whether
+    /// one is configured is unknown. Read only when <see cref="DirectoryAvailable"/>
+    /// is <see langword="false"/>: the id is still used as typed, but the field
+    /// says searching needs operator access rather than that no directory exists.
+    /// </summary>
+    [Parameter]
+    public bool DirectorySearchDenied { get; set; }
 
     /// <summary>The directory's one-line explanation of what a valid id looks like.</summary>
     [Parameter]
@@ -188,7 +206,9 @@ public partial class AccessSubjectPicker
         ? $"Type part of a name to choose one of tenant {Tenant}'s own groups."
         : DirectoryAvailable
             ? (string.IsNullOrWhiteSpace(DirectoryExplanation) ? "Type part of a name or id to search the directory." : DirectoryExplanation!)
-            : "No identity directory is configured, so the id is used as typed and is not validated.";
+            : DirectorySearchDenied
+                ? SelectorKind == LatticeSubjectSelectorKind.Group ? DeniedGroupHint : DeniedUserHint
+                : NoDirectoryHint;
 
     /// <summary>
     /// The chosen group's provenance and full id, or <see langword="null"/> when

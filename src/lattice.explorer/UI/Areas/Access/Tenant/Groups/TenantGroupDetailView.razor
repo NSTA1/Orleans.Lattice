@@ -116,6 +116,7 @@
                                      IdChanged="@(value => _memberId = value)"
                                      Error="@_memberError"
                                      DirectoryAvailable="@(_model?.DirectoryAvailable == true)"
+                                     DirectorySearchDenied="_modelDenied"
                                      DirectoryExplanation="@_model?.DirectoryExplanation"
                                      Disabled="EdgesAtCap" />
                 <div class="lt-access-form__actions">
