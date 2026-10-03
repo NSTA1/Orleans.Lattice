@@ -280,6 +280,15 @@ the reshard chaos suite cover them at the implementation level:
   `ReceiverDecisionAuthorities` delegation and the `Prepared` park-and-wait
   phase are not modelled; the spec covers the single-tree saga, whose
   decision variable is the coordinator's verdict.
+  **Cross-cluster atomic visibility has no formal artefact at either layer.**
+  Neither this specification nor any Coyote model covers a saga replicated to a
+  peer: the receiver's per-source-shard terminal tally
+  (`ITxRegistryGrain.RecordTerminalArrivalAsync`, driven from
+  `IReplicationApplyGrain.ApplyTxTerminalAsync`), its dial-back to the origin's
+  decision, or the cross-tree receiver barrier. Every property row above is a
+  claim about one cluster, and none of them should be read as covering the
+  replicated half (issue #2324). That half is covered by integration and chaos
+  tests in `test/lattice.replication/`, not by an exhaustive check.
 - **Crash / recovery.** Not modelled. `DecideTx` fires at most once per saga
   and `BroadcastStep` at most once per written key, because each leaves the
   phase or terminal its own guard requires, so the model has no re-entry at

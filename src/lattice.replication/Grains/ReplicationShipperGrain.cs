@@ -1474,6 +1474,13 @@ internal sealed class ReplicationShipperGrain(
         // receiver's per-origin HWM dedup path requires a non-empty
         // OriginClusterId; shipping them would surface as ArgumentException
         // and dead-letter every such entry on every pump tick.
+        //
+        // ChangeFeed keeps these entries, and the difference is deliberate
+        // (see the matching note there): a bootstrap consumer wants every
+        // locally-authored record, a peer can only dedup one with an origin.
+        // It does not drop saga terminals (issue #2324), because on a
+        // replicated tree WalCommitLogWriter stamps the configured cluster id
+        // onto any record that arrives without an origin, terminals included.
         if (string.IsNullOrEmpty(entry.OriginClusterId))
         {
             return false;
