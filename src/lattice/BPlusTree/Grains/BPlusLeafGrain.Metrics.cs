@@ -99,6 +99,9 @@ internal sealed partial class BPlusLeafGrain
     /// The tree-id tag is sourced from persisted state and may be empty
     /// when the tree has not yet been registered with this leaf
     /// (pre-<c>SetTreeIdAsync</c>).
+    /// A persist on an activation with no stored row and no TreeId is
+    /// refused as a no-op (#4419), so a stray call reaching a cleared or
+    /// never-seeded leaf cannot create an unreclaimable stub row.
     /// </summary>
     private async Task PersistAsync([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
     {
@@ -109,6 +112,24 @@ internal sealed partial class BPlusLeafGrain
                 : (state.Etag.Length > 32 ? state.Etag.Substring(0, 32) + ".." : state.Etag);
             Console.WriteLine($"[diag persist] kind=leaf caller={caller} gid={context.GrainId} treeId='{state.State.TreeId ?? "<null>"}' shard={state.State.ShardIndex} recordExists={state.RecordExists} etag={etag}");
         }
+
+        // #4419: an activation with no stored row and no TreeId is a leaf that
+        // was never seeded or has been cleared (ClearGrainStateAsync). A stray
+        // call reaching it - a sibling-pointer splice, a checkpoint flush, a
+        // digest publication - must not create a TreeId-less stub row, because
+        // nothing ever reclaims one. Every legitimate seed (SetTreeIdAsync,
+        // InitializeSiblingAsync) assigns TreeId before persisting, so it is
+        // never refused here. The check reads two fields and allocates nothing.
+        if (!state.RecordExists && state.State.TreeId is null)
+        {
+            if (_tracePersist)
+            {
+                Console.WriteLine($"[diag persist] kind=leaf refused caller={caller} gid={context.GrainId} reason=no-row-no-treeid");
+            }
+
+            return;
+        }
+
         // #2312: resolve the histogram's tree tag HERE, before the write, and
         // never let resolving it fail the persist. `state.State` throws
         // `InvalidOperationException: Attempt to access an invalid activation`
