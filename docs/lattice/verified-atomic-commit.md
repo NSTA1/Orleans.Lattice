@@ -108,8 +108,12 @@ thread interleavings for it to enumerate. What it does enumerate is every
 resolution of the model's own choices, which is why the models encode the
 protocol's concurrency as data in the first place: expressed that way it is
 fully enumerable without threads. Raising the degree above zero, so that Coyote
-also explores genuine operation interleavings, is tracked as
-[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319). The shared
+also explores genuine operation interleavings, was considered under
+[#2319](https://github.com/NSTA1/Orleans.Lattice/issues/2319) and deliberately
+not done: it needs a `coyote rewrite` pass over the product assembly, and every
+race these models target is already a choice point they explore. The honest fix
+was to stop claiming the exploration, which the harness's member names and
+remarks now do. The shared
 harness is `CoyoteModelHarness`
 (`test/shared/Orleans.Lattice.Testing/Coyote/`), whose
 `AssertNoViolationInAnyExploredRun` / `AssertViolationFoundInSomeExploredRun` entry points

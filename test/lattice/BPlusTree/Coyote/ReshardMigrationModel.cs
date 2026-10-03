@@ -287,6 +287,9 @@ public sealed class ReshardMigrationModel : ICoyoteModel
         var outcome = AtomicVisibilityGate.ResolveKey(
             core.Resolve(s1),
             alreadyTerminal,
+            // Pinned false on purpose (issue #2319): this model is about the orphan
+            // guard, which the gate tests ahead of the prepared value's shape. The
+            // Hidden arm is exercised live in AtomicCommitVisibilityModel.
             preparedHiddenByTombstoneOrExpiry: false);
 
         // The orphan bucket carries S1's stale prepare-time value (V1). Surfacing
