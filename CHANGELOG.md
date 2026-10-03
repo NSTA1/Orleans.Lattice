@@ -273,7 +273,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Value previews say when the value goes on.** A text value whose preview ends part-way through a character shows as text rather than a hex dump, and a key's one-line preview ends in `...` whenever the value continues, including a binary value's hex. ([#4353](https://github.com/NSTA1/Orleans.Lattice/issues/4353), [#4354](https://github.com/NSTA1/Orleans.Lattice/issues/4354)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry, Data and Tenancy areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355), [#4372](https://github.com/NSTA1/Orleans.Lattice/issues/4372)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Sizes and durations never read a whole larger unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry, Data and Tenancy areas, and 59.6 seconds reads 1 minute, not 60 seconds. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355), [#4372](https://github.com/NSTA1/Orleans.Lattice/issues/4372), [#4459](https://github.com/NSTA1/Orleans.Lattice/issues/4459)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A Data tab refresh no longer reports a failed read over loaded keys.** Switching tree, page size, prefix, tag or scan mode no longer shows a read error when the previous scan's cursor cannot be released; the new page stays in view and the server reaps the old cursor. ([#4371](https://github.com/NSTA1/Orleans.Lattice/issues/4371)) (`Orleans.Lattice.Explorer.Core`)
 
@@ -292,6 +292,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - An app settles only for the caller who changed it.** After an install or enable, only the same sign-in, endpoint and tenant treat an unready read of that app as settling; another tenant or identity gets its answer at once. ([#4414](https://github.com/NSTA1/Orleans.Lattice/issues/4414)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - An undecryptable preference document no longer wedges the store.** A UI preference document the host can no longer decrypt, after a key-ring change, is logged, deleted and read as empty, so preference reads and writes resume instead of failing for the rest of the circuit. ([#4401](https://github.com/NSTA1/Orleans.Lattice/issues/4401)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Web`)
+
+- **Explorer - An extension route parameter cannot re-scope its route.** `ExplorerRoute.WithParameter` and `ExplorerRouteParameters` now refuse the shell's `tenant` and `all-tenants` keys, which re-pinned the tenant or turned on all-tenants visibility once the route round-tripped. ([#4458](https://github.com/NSTA1/Orleans.Lattice/issues/4458)) (`Orleans.Lattice.Explorer.Core`)
+
+- **Explorer - A count of one reads in the singular.** A catalogue check reports 1 orphan row rather than 1 orphan rows, and a schema size card reads at most 1 byte rather than 1 bytes. ([#4460](https://github.com/NSTA1/Orleans.Lattice/issues/4460)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
 

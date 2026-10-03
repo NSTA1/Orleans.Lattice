@@ -351,6 +351,45 @@ public sealed class ExplorerRouteTests
     }
 
     [Test]
+    [TestCase(ExplorerRouteSegments.TenantQueryKey, "globex")]
+    [TestCase(ExplorerRouteSegments.AllTenantsQueryKey, ExplorerRouteSegments.TrueValue)]
+    public void WithParameter_TenantScopeKey_ThrowsRatherThanRescopingTheRoute(string key, string value)
+    {
+        // Formatted after the shell's own keys and kept last by the parser, such a
+        // parameter would re-pin the tenant, or turn all-tenants visibility on, once
+        // the route round-trips through its URL.
+        var route = ExplorerRoute.Home.WithTenant("acme");
+
+        Assert.That(() => route.WithParameter(key, value), Throws.ArgumentException.With.Property("ParamName").EqualTo("key"));
+    }
+
+    [Test]
+    [TestCase(ExplorerRouteSegments.TenantQueryKey)]
+    [TestCase(ExplorerRouteSegments.AllTenantsQueryKey)]
+    public void WithParameters_TenantScopeKey_CannotBeBuilt(string key)
+    {
+        Assert.That(
+            () => ExplorerRoute.Home.WithParameters(ExplorerRouteParameters.Create([new ExplorerRouteParameter(key, "x")])),
+            Throws.ArgumentException);
+    }
+
+    [Test]
+    public void A_route_with_extension_parameters_round_trips_with_its_tenant_scope_intact()
+    {
+        var route = ExplorerRoute.Home.WithTenant("acme").WithParameter("page", "3");
+
+        var parsed = ExplorerRoutePath.Parse(ExplorerRoutePath.Format(route));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Canonical));
+            Assert.That(parsed.Route, Is.EqualTo(route));
+            Assert.That(parsed.Route.Tenant, Is.EqualTo("acme"));
+            Assert.That(parsed.Route.AllTenants, Is.False);
+        });
+    }
+
+    [Test]
     public void WithParameters_Null_ClearsThem()
     {
         var route = ExplorerRoute.Home.WithParameter("page", "3").WithParameters(null);

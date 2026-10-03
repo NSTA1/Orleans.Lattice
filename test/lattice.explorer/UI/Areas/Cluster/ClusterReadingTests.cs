@@ -124,6 +124,21 @@ public sealed class ClusterReadingTests
         });
     }
 
+    [TestCase(59.6, "1 minute")]
+    [TestCase(119.2, "2 minutes")]
+    [TestCase(3_599.5, "1 hour")]
+    [TestCase(86_399.1, "1 day")]
+    [TestCase(0.4, "1 second")]
+    [TestCase(58.2, "59 seconds")]
+    [TestCase(90.5, "91 seconds")]
+    [TestCase(86_400.5, "86,401 seconds")]
+    public void A_duration_is_named_on_its_rounded_figure_so_it_never_reads_a_whole_larger_unit(double seconds, string expected)
+    {
+        // The finest unit rounds up; deciding the unit before that rounding read
+        // 59.6 s as "60 seconds" and 3,599.5 s as "3,600 seconds".
+        Assert.That(ClusterFormat.Duration(TimeSpan.FromSeconds(seconds)), Is.EqualTo(expected));
+    }
+
     [TestCase(1_048_575L, "1.0 MiB")]
     [TestCase(1_048_524L, "1023.9 KiB")]
     [TestCase(1_073_741_823L, "1.0 GiB")]
