@@ -2054,8 +2054,8 @@ jobs:
           done
 
       # The TLA+ toolchain for the `Tlc` category in test/lattice, which runs
-      # TLC over spec/ and over a mutant generated from each definition in
-      # spec/mutations/ so
+      # TLC over every module under spec/ and over a mutant generated from each
+      # definition in that module's mutations/ directory, so
       # that every property has to demonstrate it can go red. See spec/README.md
       # and issue #2323.
       #
@@ -2139,7 +2139,7 @@ jobs:
   #
   # Every gate that polices TEXT rather than code is an ordinary NUnit test:
   # the formal refinement fixtures (`test/lattice/Formal/`, which read
-  # `spec/*.md`), the hygiene fixtures (`test/<pkg>/Hygiene/`, which scan every
+  # `spec/**/*.md`), the hygiene fixtures (`test/<pkg>/Hygiene/`, which scan every
   # tracked text file for em-dashes and mojibake), and the documentation
   # snippet compilations (`test/<pkg>/Docs/`, which compile the fenced C# in
   # `docs/`). Nothing else in this workflow enforces any of them.
@@ -2152,7 +2152,7 @@ jobs:
   #      exists to catch. Its miss rate on its own target population was 100%.
   #   2. Even when it does run, it selects packages seeded from the changed
   #      code paths and expanded along reverse project references. A pull
-  #      request touching only `src/lattice.explorer/**` plus `spec/*.md`
+  #      request touching only `src/lattice.explorer/**` plus `spec/**/*.md`
   #      never selects `lattice`, so the formal fixtures still do not run.
   #
   # Hence: no condition of any kind on this job. That is not belt-and-braces,

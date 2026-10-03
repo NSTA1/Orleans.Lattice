@@ -1,21 +1,19 @@
-using Orleans.Lattice.Testing.Hygiene;
-
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// Issue #2322's general rule, made a gate: every protocol action the
-/// refinement note maps to production ships with a mutation that perturbs
-/// that action and that some checked property catches.
+/// Issue #2322's general rule, made a gate for every module: every protocol
+/// action the refinement note maps to production ships with a mutation that
+/// perturbs that action and that some checked property catches.
 /// <para>
 /// WHY THE PROPERTY GATE WAS NOT ENOUGH. <see cref="SpecMutationCatalogueTests"/>
 /// already requires a firing mutation for every property, but a property can be
 /// made to fire by editing a read definition, a fairness assumption, or by
 /// splicing in an action the protocol does not have. None of those says
 /// anything about whether the spec would notice production deviating from the
-/// step a given action row claims it models. Before this gate,
-/// <c>ForgetDecision</c>'s drain guard - the whole safety argument for the
-/// cleanup - had no specification-level mutation at all, and the README said
-/// so in prose that nothing checked.
+/// step a given action row claims it models. Before this gate, the
+/// atomic-commit module's <c>ForgetDecision</c> drain guard - the whole safety
+/// argument for the cleanup - had no specification-level mutation at all, and
+/// the README said so in prose that nothing checked.
 /// </para>
 /// <para>
 /// WHAT IT CHECKS, AND WHAT IT DOES NOT. It checks that the three artefacts
@@ -29,45 +27,48 @@ namespace Orleans.Lattice.Tests.Formal;
 [TestFixture]
 public sealed class SpecActionMutationCoverageTests
 {
-    /// <summary>
-    /// Actions in <c>Next</c> that model no protocol step and so have no
-    /// production behaviour for a mutation to stand for. Explicit rather than
-    /// inferred, matching <c>RefinementDetectorMappingTests</c>, so a new action
-    /// cannot opt itself out by omission.
-    /// </summary>
-    private static readonly string[] NonBehaviouralActions = ["Stutter"];
-
-    private static string SpecDirectory => Path.Combine(HygieneRepository.FindRepoRoot(), "spec");
-
-    private static string BaseSpecification => File.ReadAllText(Path.Combine(SpecDirectory, "AtomicCommit.tla"));
-
-    private static IReadOnlyList<SpecMutation> Mutations() =>
-        SpecMutationCatalogue.Load(Path.Combine(SpecDirectory, "mutations"));
-
-    private static IReadOnlyList<string> BehaviouralActions() =>
-        SpecActions.ReadNextActions(BaseSpecification)
-            .Where(a => !NonBehaviouralActions.Contains(a, StringComparer.Ordinal))
+    private static IReadOnlyList<string> BehaviouralActions(SpecModule module) =>
+        SpecActions.ReadNextActions(module.ReadSpecification())
+            .Where(a => !module.Manifest.NonBehaviouralActions.Contains(a, StringComparer.Ordinal))
             .ToArray();
 
     /// <summary>
     /// The vacuity floor. Every other test here iterates these sets, so a
-    /// parser regression that read nothing would otherwise pass them all.
+    /// parser regression that read nothing would otherwise pass them all. The
+    /// action count is the manifest's, as an equality, so an action dropped
+    /// from <c>Next</c> together with its row and its mutation still fails.
     /// </summary>
-    [Test]
-    public void The_specification_and_catalogue_yield_actions_and_perturbations_to_check()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_specification_and_catalogue_yield_actions_and_perturbations_to_check(SpecModule module)
     {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var spec = module.Describe(module.SpecificationPath);
+
         Assert.Multiple(() =>
         {
             Assert.That(
-                BehaviouralActions(),
-                Has.Count.GreaterThanOrEqualTo(5),
-                "parsed fewer protocol actions out of spec/AtomicCommit.tla's Next relation than the "
-                + "specification has ever had, so the gates in this fixture would under-check.");
+                SpecActions.ReadNextActions(module.ReadSpecification()),
+                Has.Count.EqualTo(module.Manifest.Counts.Actions),
+                $"{spec}'s Next relation should disjoin {module.Manifest.Counts.Actions} actions. If that changed on "
+                + $"purpose, update {module.Describe(module.ManifestPath)} and the counts table in "
+                + $"{module.Describe(module.ReadmePath)}.");
 
             Assert.That(
-                Mutations().SelectMany(m => m.Perturbs),
+                module.Manifest.NonBehaviouralActions.Except(SpecActions.ReadNextActions(module.ReadSpecification()), StringComparer.Ordinal),
+                Is.Empty,
+                $"{module.Describe(module.ManifestPath)} declares a non-behavioural action that is not in {spec}'s Next.");
+
+            Assert.That(
+                BehaviouralActions(module),
                 Is.Not.Empty,
-                "no mutation in spec/mutations/ declares PERTURBS:, so the coverage gate would be vacuous.");
+                $"every action in {spec}'s Next is declared non-behavioural, so the coverage gate checks nothing.");
+
+            Assert.That(
+                module.LoadMutations().SelectMany(m => m.Perturbs),
+                Is.Not.Empty,
+                $"no mutation in {module.Describe(module.MutationDirectory)}/ declares PERTURBS:, so the coverage gate "
+                + "would be vacuous.");
         });
     }
 
@@ -76,17 +77,19 @@ public sealed class SpecActionMutationCoverageTests
     /// to <c>Next</c> without mapping it, or leaving a row behind for an action
     /// that was removed, fails here.
     /// </summary>
-    [Test]
-    public void The_refinement_action_table_maps_exactly_the_actions_in_Next()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_refinement_action_table_maps_exactly_the_actions_in_Next(SpecModule module)
     {
-        var inNext = SpecActions.ReadNextActions(BaseSpecification);
-        var mapped = RefinementNote.ReadActionRows().Select(SpecActions.ActionNameOf).ToArray();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var inNext = SpecActions.ReadNextActions(module.ReadSpecification());
+        var mapped = RefinementNote.ReadActionRows(module).Select(SpecActions.ActionNameOf).ToArray();
 
         Assert.That(
             mapped,
             Is.EquivalentTo(inNext),
-            "spec/Refinement.md's action table must have one row per disjunct of Next in "
-            + $"spec/AtomicCommit.tla. Next: [{string.Join(", ", inNext)}]. "
+            $"{module.Describe(module.RefinementNotePath)}'s action table must have one row per disjunct of Next in "
+            + $"{module.Describe(module.SpecificationPath)}. Next: [{string.Join(", ", inNext)}]. "
             + $"Rows: [{string.Join(", ", mapped)}].");
     }
 
@@ -94,18 +97,20 @@ public sealed class SpecActionMutationCoverageTests
     /// The rule itself: each behavioural action is perturbed by at least one
     /// mutation.
     /// </summary>
-    [Test]
-    public void Every_protocol_action_is_perturbed_by_a_mutation()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_protocol_action_is_perturbed_by_a_mutation(SpecModule module)
     {
-        var perturbed = Mutations().SelectMany(m => m.Perturbs).ToHashSet(StringComparer.Ordinal);
-        var unpaired = BehaviouralActions().Where(a => !perturbed.Contains(a)).ToArray();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var perturbed = module.LoadMutations().SelectMany(m => m.Perturbs).ToHashSet(StringComparer.Ordinal);
+        var unpaired = BehaviouralActions(module).Where(a => !perturbed.Contains(a)).ToArray();
 
         Assert.That(
             unpaired,
             Is.Empty,
-            "every protocol action in spec/AtomicCommit.tla's Next needs a mutation in spec/mutations/ "
-            + "that edits its definition, declares it under PERTURBS:, and makes a checked property fire "
-            + $"(issue #2322). Unpaired: [{string.Join(", ", unpaired)}].");
+            $"every protocol action in {module.Describe(module.SpecificationPath)}'s Next needs a mutation in "
+            + $"{module.Describe(module.MutationDirectory)}/ that edits its definition, declares it under PERTURBS:, "
+            + $"and makes a checked property fire (issue #2322). Unpaired: [{string.Join(", ", unpaired)}].");
     }
 
     /// <summary>
@@ -117,15 +122,18 @@ public sealed class SpecActionMutationCoverageTests
     /// real change lands elsewhere, would otherwise satisfy the rule above
     /// while proving nothing about it.
     /// </summary>
-    [Test]
-    public void Every_declared_perturbation_edits_the_action_it_names()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_declared_perturbation_edits_the_action_it_names(SpecModule module)
     {
-        var baseSpec = BaseSpecification.ReplaceLineEndings("\n");
+        ArgumentNullException.ThrowIfNull(module);
+
+        var baseSpec = module.ReadSpecification().ReplaceLineEndings("\n");
         var actions = SpecActions.ReadNextActions(baseSpec);
+        var spec = module.Describe(module.SpecificationPath);
 
         Assert.Multiple(() =>
         {
-            foreach (var mutation in Mutations())
+            foreach (var mutation in module.LoadMutations())
             {
                 foreach (var action in mutation.Perturbs)
                 {
@@ -133,7 +141,7 @@ public sealed class SpecActionMutationCoverageTests
                         actions,
                         Does.Contain(action),
                         $"mutation '{mutation.Name}' declares PERTURBS: {action}, which is not an action in "
-                        + "spec/AtomicCommit.tla's Next relation.");
+                        + $"{spec}'s Next relation.");
 
                     if (!actions.Contains(action, StringComparer.Ordinal))
                     {
@@ -153,63 +161,98 @@ public sealed class SpecActionMutationCoverageTests
 
     /// <summary>
     /// The standing negative controls for the check above, exercising the
-    /// gate's own logic rather than only the definition reader beneath it.
-    /// Each rejected case is a way a <c>PERTURBS:</c> header could lie; the
-    /// accepted case stops the controls passing because the check rejects
-    /// everything.
+    /// gate's own logic over each module's own text rather than only the
+    /// definition reader beneath it. Each rejected case is a way a
+    /// <c>PERTURBS:</c> header could lie; the accepted case stops the controls
+    /// passing because the check rejects everything.
+    /// <para>
+    /// The real change is taken from the module's catalogue - the first edit
+    /// that genuinely perturbs a declared action - so the controls run against
+    /// every module without hand-written anchors that would drift with it.
+    /// </para>
     /// </summary>
-    [Test]
-    public void The_perturbation_check_rejects_comment_only_and_misplaced_edits()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_perturbation_check_rejects_comment_only_and_misplaced_edits(SpecModule module)
     {
-        var baseSpec = BaseSpecification.ReplaceLineEndings("\n");
-        const string Anchor = "           allDone == \\A j \\in Written(t) : nterm[j] # \"none\"";
-        const string RealChange = "           allDone == \\E j \\in Written(t) : nterm[j] # \"none\"";
+        ArgumentNullException.ThrowIfNull(module);
 
-        var broadcast = SpecActions.ReadDefinition(baseSpec, "BroadcastStep");
-        var decide = SpecActions.ReadDefinition(baseSpec, "DecideTx");
+        var baseSpec = module.ReadSpecification().ReplaceLineEndings("\n");
+        var actions = SpecActions.ReadNextActions(baseSpec);
+
+        var real = module.LoadMutations()
+            .SelectMany(m => m.Perturbs.Where(a => actions.Contains(a, StringComparer.Ordinal)).Select(a => (Action: a, Mutation: m)))
+            .SelectMany(p => p.Mutation.Edits
+                .Where(e => SpecActions.EditPerturbs(SpecActions.ReadDefinition(baseSpec, p.Action), e))
+                .Select(e => (p.Action, Edit: e)))
+            .FirstOrDefault();
+
+        Assert.That(
+            real.Edit,
+            Is.Not.Null,
+            $"no mutation of {module.Name} has an edit that perturbs an action it declares, so these controls have "
+            + "nothing to start from. The coverage gates in this fixture fail for the same reason.");
+
+        var action = real.Action;
+        var anchor = real.Edit!.Find.ReplaceLineEndings("\n");
+        var definition = SpecActions.ReadDefinition(baseSpec, action);
+        var elsewhere = actions
+            .Where(a => a != action)
+            .Select(a => SpecActions.ReadDefinition(baseSpec, a))
+            .FirstOrDefault(d => !d.Contains(anchor, StringComparison.Ordinal));
 
         Assert.Multiple(() =>
         {
             Assert.That(
-                broadcast,
-                Does.Contain(Anchor),
-                "the controls' anchor no longer lies in BroadcastStep, so every arm below would pass or fail "
-                + "for the wrong reason. Re-derive it from spec/AtomicCommit.tla.");
-
-            Assert.That(
-                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, RealChange)),
+                SpecActions.EditPerturbs(definition, real.Edit),
                 Is.True,
-                "a real change anchored in BroadcastStep was refused, so the check rejects everything and the "
+                $"a real change anchored in {action} was refused, so the check rejects everything and the "
                 + "rejections below prove nothing.");
 
             Assert.That(
-                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, "\\* MUTATION: a note only.\n" + Anchor)),
+                SpecActions.EditPerturbs(definition, new SpecEdit(anchor, "\\* MUTATION: a note only.\n" + anchor)),
                 Is.False,
-                "an edit that adds only a line comment inside BroadcastStep was accepted as perturbing it.");
+                $"an edit that adds only a line comment inside {action} was accepted as perturbing it.");
 
             Assert.That(
-                SpecActions.EditPerturbs(broadcast, new SpecEdit(Anchor, Anchor + " (* note (* nested *) *)")),
+                SpecActions.EditPerturbs(definition, new SpecEdit(anchor, anchor + " (* note (* nested *) *)")),
                 Is.False,
-                "an edit that adds only a block comment inside BroadcastStep was accepted as perturbing it.");
+                $"an edit that adds only a block comment inside {action} was accepted as perturbing it.");
+
+            if (elsewhere is not null)
+            {
+                Assert.That(
+                    SpecActions.EditPerturbs(elsewhere, real.Edit),
+                    Is.False,
+                    $"a real change anchored in {action} was accepted as perturbing a different action, so the "
+                    + "check cannot tell one action from another.");
+            }
 
             Assert.That(
-                SpecActions.EditPerturbs(decide, new SpecEdit(Anchor, RealChange)),
-                Is.False,
-                "a real change anchored in BroadcastStep was accepted as perturbing DecideTx, so the check "
-                + "cannot tell one action from another.");
+                definition,
+                Does.Not.Contain("Next =="),
+                $"{action}'s definition runs into the Next relation, so the misplaced-edit control below would "
+                + "anchor inside it.");
 
-            var splitClaim = SpecMutationCatalogue.Parse(
-                "SplitClaim",
-                "MODULE: SplitClaim\nTARGET: NoStrandedPrepare\nCLASS: Temporal\nSUMMARY: control\n"
-                + "PERTURBS: BroadcastStep\n\n"
-                + "--- FIND\n" + Anchor + "\n--- REPLACE\n\\* MUTATION: decorative.\n" + Anchor + "\n--- END\n"
-                + "--- FIND\n    /\\ phase[t] = \"prepared\"\n--- REPLACE\n    /\\ phase[t] = \"init\"\n--- END\n");
+            var splitClaim = new SpecMutation
+            {
+                Name = "SplitClaim",
+                Module = "SplitClaim",
+                Target = SpecMutationCatalogue.TypeInvariant,
+                PropertyClass = SpecPropertyClass.Invariant,
+                Summary = "control",
+                Perturbs = [action],
+                Edits =
+                [
+                    new SpecEdit(anchor, "\\* MUTATION: decorative.\n" + anchor),
+                    new SpecEdit("Next ==", "Next  =="),
+                ],
+            };
 
             Assert.That(
-                SpecActions.MutationPerturbs(baseSpec, "BroadcastStep", splitClaim),
+                SpecActions.MutationPerturbs(baseSpec, action, splitClaim),
                 Is.False,
-                "a mutation whose only edit inside BroadcastStep is a comment, with its real change in another "
-                + "action, was accepted as perturbing BroadcastStep.");
+                $"a mutation whose only edit inside {action} is a comment, with its real change outside it, was "
+                + $"accepted as perturbing {action}.");
         });
     }
 
@@ -239,8 +282,8 @@ public sealed class SpecActionMutationCoverageTests
     }
 
     /// <summary>
-    /// The parser handles the module's real disjunct shapes: an unquantified
-    /// action, one quantifier, and two nested quantifiers.
+    /// The parser handles the real disjunct shapes: an unquantified action, one
+    /// quantifier, and two nested quantifiers.
     /// </summary>
     [Test]
     public void Next_disjuncts_are_read_through_their_quantifiers()

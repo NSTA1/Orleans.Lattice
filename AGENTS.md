@@ -74,8 +74,9 @@ closes.
   video series, neither with a `src/`/`test/` counterpart).
 - `samples/`, `benchmark/` - runnable samples and the throughput rig.
 - `apps/` (the container host apps), `reference-architecture/` (the standalone
-  deployment kit), `spec/` (the TLA+ specification of the atomic-commit
-  protocol), `docs-site/` (the documentation-site build), and `tools/`
+  deployment kit), `spec/` (the TLA+ specifications, one module per area,
+  starting with the atomic-commit protocol), `docs-site/` (the
+  documentation-site build), and `tools/`
   (repository scripts, such as the repository-wide gate runner).
 - `videos/` - the educational video series: a HyperFrames (HTML-to-video)
   workspace with its own CI lane. See [videos/README.md](videos/README.md) and

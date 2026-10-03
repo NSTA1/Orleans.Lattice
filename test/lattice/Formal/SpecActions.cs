@@ -3,12 +3,12 @@ using System.Text.RegularExpressions;
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// Reads the protocol actions out of <c>spec/AtomicCommit.tla</c>: the names
+/// Reads the protocol actions out of a module under <c>spec/</c>: the names
 /// the <c>Next</c> relation disjoins, and the text of each one's definition.
 /// <para>
 /// String work over the module, deliberately. A TLA+ parser would be more
-/// general and much harder to review, and the module is written in one
-/// consistent layout that these few patterns follow exactly. Every caller
+/// general and much harder to review, and the modules are written in one
+/// consistent layout that these few patterns follow exactly (see spec/README.md). Every caller
 /// asserts its result is non-empty, so a layout change that defeats a pattern
 /// fails loudly rather than leaving a gate checking nothing.
 /// </para>
