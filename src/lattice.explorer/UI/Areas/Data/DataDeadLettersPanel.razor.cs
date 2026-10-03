@@ -54,7 +54,7 @@ public partial class DataDeadLettersPanel : IDisposable
 
     private static string Clip(string content) => content.Length <= DataValueRendering.DisplayLimit
         ? content
-        : string.Concat(content.AsSpan(0, DataValueRendering.DisplayLimit), "\n...");
+        : string.Concat(LtTextCut.Prefix(content, DataValueRendering.DisplayLimit), "\n...");
 
     private void Select(DeadLetterEntry entry) => _selected = ReferenceEquals(entry, _selected) ? null : entry;
 

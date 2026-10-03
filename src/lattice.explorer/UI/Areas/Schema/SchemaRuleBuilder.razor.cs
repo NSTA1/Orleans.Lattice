@@ -701,7 +701,7 @@ public partial class SchemaRuleBuilder : IDisposable
         : node.Distinct is [var first, ..] && node.Dominant == SchemaValueType.Text ? Clip(first)
         : null;
 
-    private static string Clip(string text) => text.Length > 24 ? text[..24] + "..." : text;
+    private static string Clip(string text) => text.Length > 24 ? string.Concat(LtTextCut.Prefix(text, 24), "...") : text;
 
     /// <summary>Whether the composer's card constrains <paramref name="node"/>: same list scopes and the same member.</summary>
     private static bool IsSelected(SchemaRuleCard card, SchemaShapeNode node)

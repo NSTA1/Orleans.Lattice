@@ -62,7 +62,7 @@ public partial class SchemaDeadLettersPanel : IDisposable
     /// <summary>A key clipped for a table cell; the detail shows it whole.</summary>
     /// <param name="key">The key.</param>
     /// <returns>The clipped key.</returns>
-    internal static string Clip(string key) => key.Length > KeyCharacters ? key[..KeyCharacters] + "..." : key;
+    internal static string Clip(string key) => key.Length > KeyCharacters ? string.Concat(LtTextCut.Prefix(key, KeyCharacters), "...") : key;
 
     private async Task CountAsync()
     {

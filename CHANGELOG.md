@@ -255,6 +255,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Route addresses with escapes that are not UTF-8 are reported, not misread.** `ExplorerRoutePath.Parse` now reports an id, tenant or parameter whose percent-escapes are not valid UTF-8, such as `%FF`, as malformed instead of resolving it to a differently named tree. ([#4373](https://github.com/NSTA1/Orleans.Lattice/issues/4373)) (`Orleans.Lattice.Explorer.Core`)
 
+- **Explorer - A clipped preview never ends in half an emoji.** A key, value, dead letter, schema preview or chart label clipped part-way through a character outside the Basic Multilingual Plane now stops before it, so it no longer shows a replacement character before the `...`. ([#4388](https://github.com/NSTA1/Orleans.Lattice/issues/4388)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A key prefix ending in an emoji lists only its own keys.** A Data or History prefix ending in U+D7FF or a character such as U+1F3FF no longer sends a range bound the wire widens, so keys outside the prefix are no longer listed. ([#4389](https://github.com/NSTA1/Orleans.Lattice/issues/4389)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - The highest schema target version is not advanced to 0.** At target version 4,294,967,295 the Versions tab no longer offers to advance to version 0; Advance is turned off and the tab says no higher version exists. ([#4390](https://github.com/NSTA1/Orleans.Lattice/issues/4390)) (`Orleans.Lattice.Explorer.UI`)
+
 ### Security
 
 - **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)

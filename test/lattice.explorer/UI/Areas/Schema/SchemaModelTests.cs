@@ -1,3 +1,4 @@
+using System.Text;
 using Orleans.Lattice.Explorer.UI.Areas.Schema;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
@@ -248,6 +249,15 @@ public sealed class SchemaModelTests
             Assert.That(SchemaFormat.Preview([0xFF, 0x00]), Is.EqualTo("FF00"));
             Assert.That(SchemaFormat.Preview(new byte[SchemaFormat.PreviewCharacters + 10]), Has.Length.EqualTo(SchemaFormat.PreviewCharacters + 3));
         });
+    }
+
+    [Test]
+    public void A_clipped_preview_never_ends_in_half_an_emoji()
+    {
+        // A cut between the two halves of a surrogate pair is drawn as the replacement character.
+        var text = new string('v', SchemaFormat.PreviewCharacters - 1) + "\U0001F600" + "tail";
+
+        Assert.That(SchemaFormat.Preview(Encoding.UTF8.GetBytes(text)), Is.EqualTo(new string('v', SchemaFormat.PreviewCharacters - 1) + "..."));
     }
 
     [Test]

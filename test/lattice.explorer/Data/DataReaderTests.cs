@@ -194,6 +194,39 @@ public class DataReaderTests
         Assert.That(DataReader.PrefixUpperBound(string.Empty), Is.Null);
     }
 
+    [TestCase("x\uD7FF", "x\U00010000")]
+    [TestCase("x\U0001F3FF", "x\U0001F400")]
+    [TestCase("x\U0001F3FF\uFFFF", "x\U0001F400")]
+    [TestCase("x\U0001F600", "x\U0001F601")]
+    [TestCase("x\U0010FFFF", "x\uE000")]
+    public void PrefixUpperBound_IsWellFormedText_SoTheWireCarriesItUnchanged(string prefix, string expected)
+    {
+        // The state API carries strings as UTF-8, which replaces a lone surrogate with
+        // U+FFFD, so a malformed bound widened the scan past the prefix.
+        var bound = DataReader.PrefixUpperBound(prefix)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bound, Is.EqualTo(expected));
+            Assert.That(Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(bound)), Is.EqualTo(bound));
+        });
+    }
+
+    [Test]
+    public async Task ScanAsync_WithAPrefixEndingInAnAstralCharacter_SendsAWellFormedBound()
+    {
+        var client = new FakeEntryStateClient();
+        var reader = new DataReader(client);
+
+        await reader.ScanAsync("tree-1", pageSize: 25, keyPrefix: "user/\U0001F3FF");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(client.LastScan!.StartInclusive, Is.EqualTo("user/\U0001F3FF"));
+            Assert.That(client.LastScan!.EndExclusive, Is.EqualTo("user/\U0001F400"));
+        });
+    }
+
     [Test]
     public async Task ListTagIndexesForTreeAsync_PassesSourceTreeId_AndPagesAllEntries()
     {

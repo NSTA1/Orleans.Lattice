@@ -77,6 +77,9 @@ public partial class SchemaVersionsPanel : IDisposable
 
     private bool Busy => _busy || (Workspace is { } workspace && Operations.Find(workspace.TreeId) is { IsActive: true });
 
+    /// <summary>Whether the target version has a version above it to advance to.</summary>
+    private bool CanAdvance => _config?.TargetVersion is not uint.MaxValue;
+
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     /// <inheritdoc />
@@ -158,6 +161,13 @@ public partial class SchemaVersionsPanel : IDisposable
 
     private void OpenAdvance()
     {
+        // The highest target has no version above it; uint arithmetic would wrap the
+        // suggestion to 0, which no advance accepts.
+        if (!CanAdvance)
+        {
+            return;
+        }
+
         _versionText = ((_config?.TargetVersion ?? 0) + 1).ToString(CultureInfo.InvariantCulture);
         _formError = null;
         _editor = Editor.Advance;

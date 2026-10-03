@@ -215,21 +215,53 @@ public sealed class DataReader(ILatticeStateClient client) : IDataReader
     /// <c>U+FFFF</c> code units, for which no finite upper bound exists (the scan
     /// then runs to the last key).
     /// </summary>
+    /// <remarks>
+    /// The bound is well-formed text whenever the prefix is: the state API carries
+    /// a string as UTF-8, which replaces a lone surrogate with <c>U+FFFD</c>, so a
+    /// bound that split a surrogate pair would arrive far above the prefix and
+    /// widen the scan past it. A last character of <c>U+D7FF</c> therefore moves to
+    /// <c>U+10000</c>, the next text in code-unit order, and a last character
+    /// outside the Basic Multilingual Plane moves to the next code point, or to
+    /// <c>U+E000</c> after <c>U+10FFFF</c>.
+    /// </remarks>
     internal static string? PrefixUpperBound(string prefix)
     {
         for (var i = prefix.Length - 1; i >= 0; i--)
         {
-            if (prefix[i] < char.MaxValue)
+            var last = prefix[i];
+            if (last == char.MaxValue)
             {
-                var bound = new char[i + 1];
-                prefix.AsSpan(0, i + 1).CopyTo(bound);
-                bound[i]++;
-                return new string(bound);
+                continue;
             }
+
+            if (char.IsLowSurrogate(last) && i > 0 && char.IsHighSurrogate(prefix[i - 1]))
+            {
+                var high = prefix[i - 1];
+                return last < '\uDFFF'
+                    ? Bound(prefix, i, (char)(last + 1))
+                    : high < '\uDBFF'
+                        ? Bound(prefix, i - 1, (char)(high + 1), '\uDC00')
+                        : Bound(prefix, i - 1, '\uE000');
+            }
+
+            return last == '\uD7FF'
+                ? Bound(prefix, i, '\uD800', '\uDC00')
+                : Bound(prefix, i, (char)(last + 1));
         }
 
         return null;
     }
+
+    private static string Bound(string prefix, int keep, char first, char? second = null) =>
+        string.Create(keep + (second is null ? 1 : 2), (prefix, keep, first, second), static (span, state) =>
+        {
+            state.prefix.AsSpan(0, state.keep).CopyTo(span);
+            span[state.keep] = state.first;
+            if (state.second is { } next)
+            {
+                span[state.keep + 1] = next;
+            }
+        });
 
     /// <inheritdoc />
     public async Task CancelScanAsync(string treeId, string? continuationToken, CancellationToken cancellationToken = default)
