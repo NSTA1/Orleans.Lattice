@@ -764,8 +764,8 @@ siloBuilder.AddLatticeTenancy(options =>
 });
 ```
 
-Each silo logs its value once at start-up, at Information level, as
-`Lattice tenancy posture: DelegatedAccessAdministrationEnabled={value}`. The auth
+Each silo logs its value once at start-up, at Information level, in a line beginning
+`Lattice tenancy posture: DelegatedAccessAdministrationEnabled={value}.`. The auth
 facade's `GetAccessModelAsync` reports it as
 `AccessModelDescriptor.DelegatedTenantAccessAdministrationEnabled`, and
 `ILatticeTenantPolicyAdmin.GetPostureAsync` reports it per tenant as
@@ -773,12 +773,14 @@ facade's `GetAccessModelAsync` reports it as
 
 While the flag is off:
 
-- Tenant groups, member entries, group entries in an admin set and tenant-tier rules
-  are **inert**. Active-tenant validation is the exact-subject-id admin check it has
-  always been, the compiled tenant-policy snapshot builds no member or group index,
-  and the authorization engine never enters the tenant rule layer.
-- Every delegated access operation except `GetPostureAsync` is refused with
-  `TenantAccessAdministrationDisabledException`.
+- Member entries, group entries in an admin set and tenant-tier rules are **inert**.
+  Active-tenant validation is the exact-subject-id admin check it has always been,
+  the compiled tenant-policy snapshot builds no member or group index, and the
+  authorization engine never enters the tenant rule layer. Tenant group records are
+  kept, and an operator rule or app role binding that names one is still honoured
+  through the group's recorded members, as the claim filter below explains.
+- After the caller is authorized, every delegated access operation except
+  `GetPostureAsync` is refused with `TenantAccessAdministrationDisabledException`.
 - **Nothing is deleted.** Existing groups, member entries and tenant-tier rules are
   kept and become effective again when the flag is turned back on.
 
@@ -880,7 +882,10 @@ addition that would exceed one is refused through `TenantAccessCaps.AdmitAdditio
 which throws `LatticeQuotaExceededException` with `Dimension` set to one of
 `TenantAccessCaps.GroupsDimension` (`tenant-groups`), `MembershipEdgesDimension`
 (`tenant-membership-edges`), `MemberSubjectsDimension` (`tenant-member-subjects`) or
-`TenantRulesDimension` (`tenant-rules`).
+`TenantRulesDimension` (`tenant-rules`). That check runs before the write; the
+delegated access facades count again after it, and a call that a concurrent addition
+left over the cap withdraws its own addition and is refused the same way (see
+[Caps: verify and compensate](../lattice.api.tenantadmin/README.md#rules-both-facades-share)).
 
 ### Isolation and the default tenant
 
@@ -891,7 +896,9 @@ which throws `LatticeQuotaExceededException` with `Dimension` set to one of
 - **The reserved `default` tenant is excluded.** It gets no tenant groups, members or
   tenant-tier rules, its tree ids carry no `t/` segment for the tenant layer to
   govern, and the delegated access facades refuse it with
-  `ReservedTenantOperationException`. Its access stays operator-administered.
+  `ReservedTenantOperationException` (while the feature is off, every operation but
+  `GetPostureAsync` is refused as disabled first). Its access stays
+  operator-administered.
 
 ### Deleting a tenant purges its access data
 
@@ -1116,7 +1123,7 @@ the service collection directly - for example
 | `HistoryRetentionWindow` | `TimeSpan?` | `null` | Age after which a registry history revision row expires; `null` means no age bound. Must be strictly positive when supplied. |
 | `EnableDurableHistoryView` | `bool` | `true` | Whether to create the durable history materialised view (`sys-tenant-registry-history`) over the `sys-tenant-registry` tree. |
 | `SeedDefaultTenant` | `bool` | `true` | Whether to seed the reserved `default` tenant (unbounded quota) at startup when absent. The seed is create-if-absent, so it never clobbers an operator's later edits. |
-| `DelegatedAccessAdministrationEnabled` | `bool` | `false` | Whether [delegated tenant access administration](#delegated-tenant-access-administration) is enabled: tenant groups, tenant member sets, group entries in an admin set, and tenant-tier rules. While `false` they are inert and unauthorable, and nothing is deleted. Read live: a change invalidates the compiled tenant-policy snapshot and clears the subject-resolution cache, with no restart. |
+| `DelegatedAccessAdministrationEnabled` | `bool` | `false` | Whether [delegated tenant access administration](#delegated-tenant-access-administration) is enabled: tenant groups, tenant member sets, group entries in an admin set, and tenant-tier rules. While `false` the facades refuse to change any of them, member entries, group entries in an admin set and tenant-tier rules are inert, and nothing is deleted. Read live: a change invalidates the compiled tenant-policy snapshot and clears the subject-resolution cache, with no restart. |
 | `PolicySnapshotLeaseDuration` | `TimeSpan` | `10s` | How long a silo may treat its compiled tenant-policy, residency and placement snapshots as authoritative without renewing its lease from the cluster-wide tenant-policy epoch; renewed every third of this. While the lease is lapsed, every request that acts as an asserted active tenant (on its own trees or across a cross-tenant grant), residency checks and inbound-replication tenant checks are confirmed against the registry or denied, and a tenant tree's registration waits up to a fifth of this for the placement view to become authoritative before it is refused. It is also the most a registry write can be held open (about 1.1 times this) when a silo cannot be reached, or just after the epoch restarts, so keep it well below the Orleans response timeout. Must be strictly positive and at most `0xFFFFFFFE` milliseconds (about 49.7 days). |
 
 ### `TenantUsageAccountingOptions`

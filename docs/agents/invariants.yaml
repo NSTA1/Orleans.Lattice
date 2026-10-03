@@ -741,7 +741,7 @@ invariants:
       - "docs/lattice.replication/deltas.md"
   - id: delegated-tenant-access-off-is-inert
     name: "Delegated tenant access administration off is inert"
-    description: "With LatticeTenancyOptions.DelegatedAccessAdministrationEnabled false (the default), tenant groups, member entries, group admin entries and tenant-tier rules have no effect, active-tenant validation is the exact-id admin check, the delegated facades refuse with TenantAccessAdministrationDisabledException except posture, and turning the flag off deletes nothing."
+    description: "With LatticeTenancyOptions.DelegatedAccessAdministrationEnabled false (the default), member entries, group admin entries and tenant-tier rules have no effect, active-tenant validation is the exact-id admin check, the delegated facades refuse with TenantAccessAdministrationDisabledException except posture, and turning the flag off deletes nothing. Tenant group records are kept and still satisfy an operator rule or app role binding that names them through their directory-recorded members, while identity-provider-asserted t/ group claims stay stripped whenever tenancy is registered."
     scope:
       packages:
         - "Orleans.Lattice.Tenancy"

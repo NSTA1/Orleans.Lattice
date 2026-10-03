@@ -481,8 +481,10 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   `tenant:{tenant}:{id}` for a rule from the tenant the call names, so a caller can
   never name another tenant's group, tree or rule: it reads as not found.
   `TenantSubjectKind` (`User`, `TenantGroup`, `ClusterGroup`) says how to read a
-  subject id. A `User` or `ClusterGroup` id that starts with `t/` is refused with
-  `TenantAccessConfinementException` (`ForeignTenantGroup`).
+  subject id. A `ClusterGroup` id that starts with `t/` is refused with
+  `TenantAccessConfinementException` (`ForeignTenantGroup`), and so is a `User` id
+  that starts with `t/` when it names a group member or a member-set entry. A `User`
+  rule subject is taken as given.
 - **Caps: verify and compensate.** A new group, a membership edge, a member-set entry
   and a new tenant-tier rule are each checked against the tenant's cap
   (`MaxGroups`, `MaxMembershipEdges`, `MaxMemberSubjects`, `MaxTenantRules` on
@@ -503,8 +505,8 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   and cluster group ids share one namespace there, as they do in the membership
   directory: an entry matches a subject whose own id, or any of whose groups, equals
   it. Keeping user and group ids distinct is the identity provider's and the
-  directory's job. Tenant groups cannot collide, because no user or cluster group id
-  may start with `t/`.
+  directory's job. Tenant groups cannot collide, because the facades never store a
+  user or cluster group entry that starts with `t/`.
 - **Idempotent mutations, ordinal listings.** Repeating an add or remove reports
   `Changed` (or `Removed`) `false`. Paged listings take a `TenantAccessPageRequest`
   (`PageSize` defaults to 100 and is clamped to 1000) and return `NextPageToken`.

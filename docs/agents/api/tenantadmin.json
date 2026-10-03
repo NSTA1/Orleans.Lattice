@@ -9,7 +9,9 @@
   "sources": [
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantGrantAdmin.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
