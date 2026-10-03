@@ -196,6 +196,10 @@ mid-flight (its caller sees `LatticeShuttingDownException`) and leave its
 prepared writes undecided beside every later batch over the same keys;
 readers stay atomic throughout, without waiting for the parked saga to
 resume. See [Atomic Writes - Silo restarts](atomic-writes.md#silo-restarts).
+A batch whose call failed never becomes visible after writes its caller
+issued next: a saga that cannot record its commit while its caller can
+still be waiting is rolled back. See
+[Atomic Writes - Batches whose caller was answered](atomic-writes.md#batches-whose-caller-was-answered).
 
 See [Atomic Writes](atomic-writes.md) for the saga primitive and
 [Durable Cursors](durable-cursors.md#point-in-time-cursors) for the

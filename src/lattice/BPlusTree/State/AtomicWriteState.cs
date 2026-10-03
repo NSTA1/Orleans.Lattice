@@ -363,4 +363,21 @@ internal sealed class AtomicWriteState
     /// </para>
     /// </summary>
     [Id(23)] public string? BoundPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The UTC tick by which the saga must record its commit decision for the
+    /// caller that last invoked it (see <c>LatticeSagaDecisionDeadlineContext</c>),
+    /// or <c>0</c> when no caller supplied one. A saga that reaches its commit
+    /// decision past this deadline - or resumes from its keepalive reminder,
+    /// with no caller waiting - and has not already recorded a commit rolls the
+    /// batch back instead, so a batch whose caller was answered with a failure
+    /// never becomes visible after writes that caller issued next. Each call
+    /// that re-enters the saga (a caller re-issuing its operation id) replaces
+    /// it with its own.
+    /// <para>
+    /// Wire-compatible: a missing field on legacy persisted state decodes to
+    /// <c>0</c>, which imposes no deadline.
+    /// </para>
+    /// </summary>
+    [Id(24)] public long DecideByUtcTicks { get; set; }
 }
