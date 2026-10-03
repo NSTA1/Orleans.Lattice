@@ -86,6 +86,8 @@ public sealed class BackupClusterOperationTests
     [TestCase(false, new string[0], "Every catalogue row has its backup in the store.", false)]
     [TestCase(false, new[] { "o1", "o2" }, "Found 2 orphan rows. They are never offered as restore points; remove them from the maintenance page.", true)]
     [TestCase(true, new[] { "o1", "o2" }, "Removed 2 orphan rows from the catalogue.", false)]
+    [TestCase(false, new[] { "o1" }, "Found 1 orphan row. It is never offered as a restore point; remove it from the maintenance page.", true)]
+    [TestCase(true, new[] { "o1" }, "Removed 1 orphan row from the catalogue.", false)]
     public void A_succeeded_scrub_lists_its_orphans_and_says_whether_any_are_left(bool pruned, string[] orphans, string summary, bool removable)
     {
         var status = FakeBackupControl.Running("op-1", BackupOperationKinds.CatalogScrub, "sys-backup-catalog") with
