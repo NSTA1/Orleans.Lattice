@@ -247,7 +247,8 @@ internal sealed class TreeResizeGrain(
             throw new InvalidOperationException(
                 $"A reshard is already in progress for tree '{TreeId}'; resize refused until reshard completes.");
 
-        if (state.State.Complete)
+        var priorComplete = state.State.Complete;
+        if (priorComplete)
         {
             state.State.Complete = false;
         }
@@ -279,7 +280,7 @@ internal sealed class TreeResizeGrain(
             return;
         }
 
-        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren);
+        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren, priorComplete);
         await StartCoordinatorAsync();
     }
 
@@ -326,10 +327,13 @@ internal sealed class TreeResizeGrain(
 
     /// <summary>
     /// Persists the resize intent with <see cref="ResizePhase.Snapshot"/> phase,
-    /// then kicks off the offline snapshot to the new physical tree.
+    /// then kicks off the offline snapshot to the new physical tree. Refuses,
+    /// restoring the state it replaced, when a shard migration is in flight on
+    /// the tree (issue #4452); <paramref name="priorComplete"/> is whether that
+    /// state recorded a completed resize the caller already cleared in memory.
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren, bool priorComplete = false)
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var operationId = Guid.NewGuid().ToString("N");
@@ -397,6 +401,34 @@ internal sealed class TreeResizeGrain(
             state.State.OldRegistryEntry = prevOldRegistryEntry;
             state.State.ShardIndices = prevShardIndices;
             throw;
+        }
+
+        // Interlock with adaptive splits and online consolidations (issue
+        // #4452): the shard set and map above are fixed for the whole resize,
+        // so a migration in flight now would commit a map the resize never
+        // carries. The intent is persisted first, so a migration that opens its
+        // record after this read sees the resize and backs out itself (see
+        // ShardMigrationResizeInterlock).
+        if (await ShardMigrationResizeInterlock.FindMigratingShardAsync(grainFactory, currentPhysical, shardIndices)
+            is { } migrating)
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.NewMaxLeafKeys = prevNewMaxLeafKeys;
+            state.State.NewMaxInternalChildren = prevNewMaxInternalChildren;
+            state.State.OperationId = prevOperationId;
+            state.State.ShardCount = prevShardCount;
+            state.State.Complete = prevComplete || priorComplete;
+            state.State.SnapshotTreeId = prevSnapshotTreeId;
+            state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
+            state.State.OldRegistryEntry = prevOldRegistryEntry;
+            state.State.ShardIndices = prevShardIndices;
+
+            // Restoring a completed predecessor keeps it undoable for the rest of
+            // its soft-delete window.
+            await WriteResizeStateAsync();
+            throw new InvalidOperationException(
+                $"A shard split or consolidation is in progress on shard {migrating} of tree '{TreeId}'; resize refused until it completes.");
         }
 
         // Initiate the online snapshot from current physical tree to new tree.

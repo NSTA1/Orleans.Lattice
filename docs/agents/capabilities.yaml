@@ -2640,6 +2640,11 @@ capabilities:
         hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
         source: "docs/lattice/tree-sizing.md"
       - sequence:
+          - "an adaptive split or online consolidation is in flight on the tree"
+          - "start a resize"
+        hazard: "Resize and shard-migration interlock; ResizeAsync throws InvalidOperationException while a split or consolidation is in flight on the tree, and a split or fold that opens its shadow-write window after a resize starts backs out (#4452)."
+        source: "docs/lattice/tree-sizing.md"
+      - sequence:
           - "call ResizeAsync while a resize is in progress"
           - "pass different target sizing"
         hazard: "A duplicate resize with different parameters throws InvalidOperationException."
