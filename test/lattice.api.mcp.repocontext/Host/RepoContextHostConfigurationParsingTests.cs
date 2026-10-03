@@ -290,4 +290,25 @@ public sealed class RepoContextHostConfigurationParsingTests
 
         Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.SqliteAutoVacuumKey));
     }
+
+    [Test]
+    public void Sqlite_snapshot_sweep_defaults_to_off()
+        => Assert.That(From().SqliteSnapshotSweep, Is.EqualTo(SqliteSnapshotSweepMode.Off));
+
+    [TestCase("off", SqliteSnapshotSweepMode.Off)]
+    [TestCase("none", SqliteSnapshotSweepMode.Off)]
+    [TestCase(" Report ", SqliteSnapshotSweepMode.Report)]
+    [TestCase("DELETE", SqliteSnapshotSweepMode.Delete)]
+    public void Sqlite_snapshot_sweep_tokens_map_to_the_expected_mode(string token, SqliteSnapshotSweepMode expected)
+        => Assert.That(
+            From((RepoContextHostConfiguration.SqliteSnapshotSweepKey, token)).SqliteSnapshotSweep,
+            Is.EqualTo(expected));
+
+    [Test]
+    public void An_unknown_sqlite_snapshot_sweep_mode_is_rejected()
+    {
+        var ex = Rejects((RepoContextHostConfiguration.SqliteSnapshotSweepKey, "yes"));
+
+        Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.SqliteSnapshotSweepKey));
+    }
 }

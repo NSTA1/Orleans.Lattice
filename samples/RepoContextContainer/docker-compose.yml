@@ -739,6 +739,11 @@ services:
       # repocontext_reset_index drops it, which preserves memory. An unrecognised
       # value falls back to on. See container.md "Memory-only mode".
       LATTICE_REPOCONTEXT_SOURCE_INDEXING: ${REPOCONTEXT_SOURCE_INDEXING:-on}
+      # Startup sweep of stranded leaf snapshot storage: off by default. Set
+      # REPOCONTEXT_SQLITE_SNAPSHOT_SWEEP=report in .env to log what it would delete,
+      # or =delete to delete it and give the space back before the silo starts. Set it
+      # back to off afterwards. See container.md "Sweeping stranded snapshot storage".
+      LATTICE_SQLITE_SNAPSHOT_SWEEP: ${REPOCONTEXT_SQLITE_SNAPSHOT_SWEEP:-off}
       # The container's stop_grace_period, DECLARED to the process that has to fit
       # inside it. The host derives its own shutdown budget from this (issue #2402)
       # instead of holding a second, independent constant: 240s here yields a 180s
