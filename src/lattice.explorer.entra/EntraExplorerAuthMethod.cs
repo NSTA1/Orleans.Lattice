@@ -82,7 +82,7 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
     {
         var authority = ResolveAuthority(context.Parameters, options);
         var clientId = Resolve(options.ClientId, context.Parameters, ExplorerAuthSchemes.ClientIdParameter);
-        var scopes = ResolveScopes(context.Parameters, options);
+        var scopes = ResolveScopes(context.Parameters, options, context.Endpoint);
 
         if (string.IsNullOrWhiteSpace(authority))
         {
@@ -182,7 +182,7 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
             + "host to ExplorerEntraOptions.AllowedAuthorityHosts to accept it.");
     }
 
-    private static IReadOnlyList<string> ResolveScopes(IReadOnlyDictionary<string, string> parameters, ExplorerEntraOptions options)
+    private static IReadOnlyList<string> ResolveScopes(IReadOnlyDictionary<string, string> parameters, ExplorerEntraOptions options, string? endpoint)
     {
         if (options.Scopes.Count > 0)
         {
@@ -195,6 +195,14 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
             return Array.Empty<string>();
         }
 
+        // Nothing is configured locally in this branch, so the advertisement is
+        // the only thing naming the resource the operator's token is minted for.
+        // It is fetched over an unauthenticated RPC from the very endpoint the
+        // token is then handed to, so it is admitted or refused, never trusted -
+        // the same rule EnsureAdvertisedAuthorityIsAdmitted applies to the
+        // authority leg.
+        EnsureAdvertisedAudienceIsAdmitted(audience, options, endpoint);
+
         // An audience is a resource identifier that maps to the resource's
         // default scope; a value that already names a scope (ends with
         // "/.default") is used verbatim.
@@ -202,6 +210,85 @@ public sealed class EntraExplorerAuthMethod : IExplorerAuthMethod
             ? audience
             : $"{audience}/.default";
         return new[] { scope };
+    }
+
+    /// <summary>
+    /// Admits an audience that came from the endpoint's advertisement, or refuses
+    /// it. Nothing is configured locally in this branch, so the advertisement is
+    /// the only thing naming the resource the operator is about to mint a token
+    /// for; a hostile endpoint could otherwise name a resource of its choosing
+    /// (for example Microsoft Graph) and collect the resulting delegated token as
+    /// the bearer credential for its own calls.
+    /// </summary>
+    private static void EnsureAdvertisedAudienceIsAdmitted(string audience, ExplorerEntraOptions options, string? endpoint)
+    {
+        if (options.AllowedAudiences.Count > 0)
+        {
+            foreach (var allowed in options.AllowedAudiences)
+            {
+                if (string.Equals(allowed, audience, StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+            }
+
+            throw new InvalidOperationException(
+                $"The endpoint advertised the Entra audience '{audience}', which is not in "
+                + "ExplorerEntraOptions.AllowedAudiences. A hostile endpoint could otherwise choose the resource "
+                + "your token is minted for. Configure ExplorerEntraOptions.Scopes to pin the scope yourself, or "
+                + "add the audience to AllowedAudiences to accept it.");
+        }
+
+        if (IsEndpointBoundResource(audience, endpoint))
+        {
+            return;
+        }
+
+        throw new InvalidOperationException(
+            $"The endpoint advertised the Entra audience '{audience}', which is not an admitted resource. An "
+            + "advertised audience is accepted only when it is an 'api://' resource identifier, or an https "
+            + "resource whose host is the host of the endpoint being signed in to. A hostile endpoint could "
+            + "otherwise choose the resource your token is minted for. Configure ExplorerEntraOptions.Scopes to "
+            + "pin the scope yourself, or add the audience to ExplorerEntraOptions.AllowedAudiences to accept it.");
+    }
+
+    /// <summary>
+    /// <c>true</c> when <paramref name="audience"/> names a resource that belongs
+    /// to the endpoint being signed in to: an <c>api://</c> application id URI, or
+    /// an https resource sharing the endpoint's host (the verified-domain shape of
+    /// an Entra application id URI). Every first-party Microsoft resource is an
+    /// https identifier on a foreign host, so this admits the deployment shapes a
+    /// State API actually takes and refuses the ones worth stealing a token for.
+    /// </summary>
+    private static bool IsEndpointBoundResource(string audience, string? endpoint)
+    {
+        var resource = audience.EndsWith("/.default", StringComparison.OrdinalIgnoreCase)
+            ? audience[..^"/.default".Length]
+            : audience;
+
+        if (!Uri.TryCreate(resource, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        if (string.Equals(uri.Scheme, "api", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(endpoint))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var endpointUri)
+            && !Uri.TryCreate($"https://{endpoint}", UriKind.Absolute, out endpointUri))
+        {
+            return false;
+        }
+
+        return string.Equals(uri.Host, endpointUri.Host, StringComparison.OrdinalIgnoreCase);
     }
 
     private static string? Resolve(string? configured, IReadOnlyDictionary<string, string> parameters, string key)
