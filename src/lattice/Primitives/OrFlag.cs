@@ -257,20 +257,101 @@ public sealed class OrFlag : ICrdt<OrFlag>
         }
     }
 
+    /// <summary>
+    /// Folds a delta-side dot list into <paramref name="target"/>. This is the
+    /// delta twin of <see cref="UnionInto"/> and carries the same two trims:
+    /// the source is walked through its backing span where its runtime shape
+    /// allows it, and each width strategy lives in its own sibling method
+    /// rather than in a shared body.
+    /// <para>
+    /// The span matters more here than on the state path. A delta's collection
+    /// is declared <see cref="IReadOnlyList{T}"/> because it is serialised
+    /// public surface, so the loop that shipped before paid an interface call
+    /// for the indexer <b>and</b> another for the re-read of <c>Count</c> in
+    /// the loop condition, on every dot, and <see cref="OrSetDot"/> is returned
+    /// whole by value from both. Flag merges drive this twice per applied
+    /// delta on the replication apply path.
+    /// </para>
+    /// <para>
+    /// The split is the second trim and is not cosmetic: fusing a second
+    /// strategy into one body makes the JIT compile both, which lengthens the
+    /// live ranges the narrow arm - the steady-state arm - is compiled under.
+    /// </para>
+    /// </summary>
     private static void UnionDots(List<OrSetDot> target, IReadOnlyList<OrSetDot>? source)
     {
         if (source is not { Count: > 0 }) return;
-        if (source.Count <= DotLinearScanThreshold)
+
+        // Aliasing a flag's own dot list into its delta is constructible
+        // because Enables and Tombstones are settable, and the span walks below
+        // would let an append resize the array out from under a live span. The
+        // union of a list with itself is the identity, so returning is both
+        // safe and correct.
+        if (ReferenceEquals(target, source)) return;
+
+        if (!CrdtDeltaListSpan.TryGetSpan(source, out var span))
         {
-            for (var i = 0; i < source.Count; i++)
+            UnionDotsByIndex(target, source);
+            return;
+        }
+
+        if (span.Length <= DotLinearScanThreshold)
+        {
+            UnionDotsNarrow(target, span);
+            return;
+        }
+
+        UnionDotsWide(target, span);
+    }
+
+    /// <summary>
+    /// Small incoming dot list - the steady-state delta-fold case. At most
+    /// <c>DotLinearScanThreshold</c> appends, so the linear probe stays
+    /// O(target) and never grows quadratic.
+    /// </summary>
+    private static void UnionDotsNarrow(List<OrSetDot> target, ReadOnlySpan<OrSetDot> source)
+    {
+        for (var i = 0; i < source.Length; i++)
+        {
+            ref readonly var dot = ref source[i];
+            if (!target.Contains(dot)) target.Add(dot);
+        }
+    }
+
+    /// <summary>
+    /// Wide incoming dot list: index the accumulated side once so the probe is
+    /// O(1) per dot rather than O(target).
+    /// </summary>
+    private static void UnionDotsWide(List<OrSetDot> target, ReadOnlySpan<OrSetDot> source)
+    {
+        var seen = OrSetDotSet.Build(target, source.Length);
+        for (var i = 0; i < source.Length; i++)
+        {
+            ref readonly var dot = ref source[i];
+            if (seen.Add(dot)) target.Add(dot);
+        }
+    }
+
+    /// <summary>
+    /// Fallback for a delta whose collection is neither an array nor a
+    /// <see cref="List{T}"/> - a caller-supplied container, or a deserialiser
+    /// that chose another shape. This is the walk that shipped before, kept
+    /// verbatim so an unspannable delta is no slower than it used to be.
+    /// </summary>
+    private static void UnionDotsByIndex(List<OrSetDot> target, IReadOnlyList<OrSetDot> source)
+    {
+        var count = source.Count;
+        if (count <= DotLinearScanThreshold)
+        {
+            for (var i = 0; i < count; i++)
             {
                 var dot = source[i];
                 if (!target.Contains(dot)) target.Add(dot);
             }
             return;
         }
-        var seen = OrSetDotSet.Build(target, source.Count);
-        for (var i = 0; i < source.Count; i++)
+        var seen = OrSetDotSet.Build(target, count);
+        for (var i = 0; i < count; i++)
         {
             var dot = source[i];
             if (seen.Add(dot)) target.Add(dot);

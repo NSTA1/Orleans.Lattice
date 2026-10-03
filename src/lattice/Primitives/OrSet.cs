@@ -403,16 +403,37 @@ public sealed class OrSet : ICrdt<OrSet>
             // scanned collection's length, so the span stays valid.
             var addsSpanned = CrdtDeltaListSpan.TryGetSpan(adds, out var addsSpan);
             var addCount = adds.Count;
-            for (var i = 0; i < addCount; i++)
+            // Hoist the pooled rental to the whole walk. The shape this
+            // replaced opened an exception-handling region per dot and rented
+            // and returned a pooled buffer per oversized element, so a delta
+            // carrying n large elements paid n rent/return round trips where
+            // one suffices. The rental grows monotonically and the previous one
+            // is returned before it is replaced, so the pool is never leaked
+            // into; content left by a previous dot is never observable because
+            // the buffer is only read back as buffer[..written].
+            char[]? rented = null;
+            try
             {
-                var dot = addsSpanned ? addsSpan[i] : adds[i];
-                if (dot.Element is null) continue;
-                var element = dot.Element;
-                var charCount = Base64CharCount(element.Length);
-                char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
-                Span<char> buffer = rented ?? scratch;
-                try
+                for (var i = 0; i < addCount; i++)
                 {
+                    var dot = addsSpanned ? addsSpan[i] : adds[i];
+                    if (dot.Element is null) continue;
+                    var element = dot.Element;
+                    var charCount = Base64CharCount(element.Length);
+                    scoped Span<char> buffer;
+                    if (charCount > scratch.Length)
+                    {
+                        if (rented is null || rented.Length < charCount)
+                        {
+                            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                            rented = ArrayPool<char>.Shared.Rent(charCount);
+                        }
+                        buffer = rented;
+                    }
+                    else
+                    {
+                        buffer = scratch;
+                    }
                     Convert.TryToBase64Chars(element, buffer, out var written);
                     var key = buffer[..written];
                     if (!addLookup.TryGetValue(key, out var dots))
@@ -423,10 +444,10 @@ public sealed class OrSet : ICrdt<OrSet>
                     var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
                     if (!dots.Contains(entry)) dots.Add(entry);
                 }
-                finally
-                {
-                    if (rented is not null) ArrayPool<char>.Shared.Return(rented);
-                }
+            }
+            finally
+            {
+                if (rented is not null) ArrayPool<char>.Shared.Return(rented);
             }
         }
         var removes = delta.Removes;
@@ -441,16 +462,30 @@ public sealed class OrSet : ICrdt<OrSet>
             var tombLookup = Tombstones.GetAlternateLookup<ReadOnlySpan<char>>();
             var removesSpanned = CrdtDeltaListSpan.TryGetSpan(removes, out var removesSpan);
             var removeCount = removes.Count;
-            for (var i = 0; i < removeCount; i++)
+            // Same rental hoist as the adds loop above.
+            char[]? rented = null;
+            try
             {
-                var dot = removesSpanned ? removesSpan[i] : removes[i];
-                if (dot.Element is null) continue;
-                var element = dot.Element;
-                var charCount = Base64CharCount(element.Length);
-                char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
-                Span<char> buffer = rented ?? scratch;
-                try
+                for (var i = 0; i < removeCount; i++)
                 {
+                    var dot = removesSpanned ? removesSpan[i] : removes[i];
+                    if (dot.Element is null) continue;
+                    var element = dot.Element;
+                    var charCount = Base64CharCount(element.Length);
+                    scoped Span<char> buffer;
+                    if (charCount > scratch.Length)
+                    {
+                        if (rented is null || rented.Length < charCount)
+                        {
+                            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                            rented = ArrayPool<char>.Shared.Rent(charCount);
+                        }
+                        buffer = rented;
+                    }
+                    else
+                    {
+                        buffer = scratch;
+                    }
                     Convert.TryToBase64Chars(element, buffer, out var written);
                     var key = buffer[..written];
                     if (!tombLookup.TryGetValue(key, out var tomb))
@@ -461,10 +496,10 @@ public sealed class OrSet : ICrdt<OrSet>
                     var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
                     if (!OrSetDotCompaction.Covers(tomb, in entry)) tomb.Add(entry);
                 }
-                finally
-                {
-                    if (rented is not null) ArrayPool<char>.Shared.Return(rented);
-                }
+            }
+            finally
+            {
+                if (rented is not null) ArrayPool<char>.Shared.Return(rented);
             }
         }
 
