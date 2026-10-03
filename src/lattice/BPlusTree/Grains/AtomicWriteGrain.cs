@@ -2649,37 +2649,131 @@ internal sealed class AtomicWriteGrain(
 
             // The touched shards were indices of the bound copy; the new copy is
             // addressed by its own map.
-            var touched = new SortedSet<int>();
-            foreach (var entry in state.State.Entries)
-            {
-                touched.Add(routing.Map.Resolve(entry.Key));
-            }
-
             var prevBound = state.State.BoundPhysicalTreeId;
-            var prevNextIndex = state.State.NextIndex;
-            var prevTouchedShards = state.State.TouchedShards;
-            var prevRetries = state.State.RetriesOnCurrentStep;
-            state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
-            state.State.NextIndex = 0;
-            state.State.TouchedShards = [.. touched];
-            state.State.RetriesOnCurrentStep = 0;
-            try
-            {
-                await WriteSagaStateAsync("execute-rebind");
-            }
-            catch
-            {
-                state.State.BoundPhysicalTreeId = prevBound;
-                state.State.NextIndex = prevNextIndex;
-                state.State.TouchedShards = prevTouchedShards;
-                state.State.RetriesOnCurrentStep = prevRetries;
-                throw;
-            }
+            await RebindToAsync(routing);
 
             Logger.LogInformation(
                 "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Previous} to {Current} before the commit decision; re-dispatching the batch onto the new tree.",
                 OperationKey, state.State.TreeId, prevBound, routing.PhysicalTreeId);
             await ExecutePhaseAsync();
+        }
+    }
+
+    /// <summary>
+    /// The most times one execute-phase dispatch follows its bound copy to
+    /// another one (issue #4358) before the move is treated as an ordinary batch
+    /// failure, so a tree whose alias never settles still reaches a decision.
+    /// </summary>
+    private const int MaxBindingMovesPerDispatch = 3;
+
+    /// <summary>
+    /// Called when the routing tier refused the prepared batch because the
+    /// logical tree no longer resolves to the bound copy (issue #4358). Resolves
+    /// the routing afresh and, when the tree has indeed moved, re-binds the saga
+    /// to the copy it resolves to now so the batch is re-dispatched there.
+    /// Returns <see langword="false"/> when the fresh routing still names the
+    /// bound copy, leaving the failure to the ordinary retry path.
+    /// </summary>
+    private async Task<bool> TryRebindToResolvedCopyAsync()
+    {
+        RoutingInfo routing;
+        try
+        {
+            routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
+                .GetRoutingAsync(forceRefresh: true);
+            if (string.Equals(routing.PhysicalTreeId, state.State.BoundPhysicalTreeId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            var prevBound = state.State.BoundPhysicalTreeId;
+            await RebindToAsync(routing);
+            Logger.LogInformation(
+                "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Previous} to {Current} while its batch was being dispatched; re-dispatching the batch onto the new tree.",
+                OperationKey, state.State.TreeId, prevBound, routing.PhysicalTreeId);
+            return true;
+        }
+        catch (Exception ex) when (!GrainStateWriteFaults.IsTranslatedConflict(ex))
+        {
+            // A failed resolve or re-bind persist leaves the binding as it was
+            // (RebindToAsync reverts it); the refusal then takes the ordinary
+            // retry path, so this follow-up never escapes the execute phase
+            // with the saga still staged.
+            Logger.LogWarning(ex,
+                "Atomic-write saga {OperationKey}: could not re-bind after its bound copy moved; retrying the batch.",
+                OperationKey);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Binds a saga resumed from state persisted before the binding existed to
+    /// the copy the tree resolves to now, before it dispatches, so its batch is
+    /// held to one copy like any other (issue #4358). The dispatch position and
+    /// the touched shards already recorded are kept, since an earlier attempt
+    /// may have prepared on them. Held in memory only: the dispatch's own
+    /// checkpoint persists it, and a saga that stops before then binds afresh.
+    /// </summary>
+    private async Task BindUnboundSagaAsync()
+    {
+        RoutingInfo routing;
+        try
+        {
+            routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
+                .GetRoutingAsync(forceRefresh: true);
+        }
+        catch (Exception ex)
+        {
+            // Unbound, the dispatch behaves as it did before the binding existed.
+            Logger.LogWarning(ex,
+                "Atomic-write saga {OperationKey}: could not resolve a copy to bind its resumed batch to; dispatching it unbound.",
+                OperationKey);
+            return;
+        }
+
+        var touched = new SortedSet<int>(state.State.TouchedShards);
+        foreach (var entry in state.State.Entries)
+        {
+            touched.Add(routing.Map.Resolve(entry.Key));
+        }
+
+        state.State.TouchedShards = [.. touched];
+        state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
+    }
+
+    /// <summary>
+    /// Re-binds the saga's prepared batch to <paramref name="routing"/>'s physical
+    /// tree: every entry is re-dispatched from the start, and the touched shards
+    /// become the owners under that tree's own map. Persisted before any
+    /// re-dispatch, and reverted in memory if the persist fails.
+    /// </summary>
+    private async Task RebindToAsync(RoutingInfo routing)
+    {
+        var touched = new SortedSet<int>();
+        foreach (var entry in state.State.Entries)
+        {
+            touched.Add(routing.Map.Resolve(entry.Key));
+        }
+
+        var prevBound = state.State.BoundPhysicalTreeId;
+        var prevNextIndex = state.State.NextIndex;
+        var prevTouchedShards = state.State.TouchedShards;
+        var prevRetries = state.State.RetriesOnCurrentStep;
+        state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
+        state.State.NextIndex = 0;
+        state.State.TouchedShards = [.. touched];
+        state.State.RetriesOnCurrentStep = 0;
+        try
+        {
+            await WriteSagaStateAsync("execute-rebind");
+        }
+        catch
+        {
+            state.State.BoundPhysicalTreeId = prevBound;
+            state.State.NextIndex = prevNextIndex;
+            state.State.TouchedShards = prevTouchedShards;
+            state.State.RetriesOnCurrentStep = prevRetries;
+            throw;
         }
     }
 
@@ -2786,6 +2880,13 @@ internal sealed class AtomicWriteGrain(
         // pre-c2-viii sequential loop did.
         using (LatticePreparedContext.BeginScope())
         {
+            var bindingMoves = 0;
+            if (state.State.BoundPhysicalTreeId is null
+                && state.State.NextIndex < state.State.Entries.Count)
+            {
+                await BindUnboundSagaAsync().ConfigureAwait(true);
+            }
+
             while (state.State.NextIndex < state.State.Entries.Count)
             {
                 var startIndex = state.State.NextIndex;
@@ -2924,7 +3025,12 @@ internal sealed class AtomicWriteGrain(
                         // this internal leg (which runs without the caller's
                         // identity and would otherwise fail-closed).
                         using (LatticeAccessGateContext.EnterSystemOrigin())
+                        using (LatticeAtomicBindingContext.With(state.State.BoundPhysicalTreeId))
                         {
+                            // Bound to the physical tree the saga will commit on:
+                            // a routing activation still addressing another copy
+                            // refuses the batch rather than placing it there
+                            // (issue #4358), and the catch below re-binds.
                             await lattice.SetManyAsync(slice).ConfigureAwait(true);
                         }
                     }
@@ -2978,7 +3084,22 @@ internal sealed class AtomicWriteGrain(
                     break;
                 }
 
-                // Batch failed. Identical retry / compensate-pivot
+                // Batch failed. The routing tier refused it because the logical
+                // tree no longer resolves to the copy the saga is bound to
+                // (issue #4358): re-bind to the copy it resolves to now and
+                // re-dispatch there, without spending the retry budget - the
+                // batch did not fail, it was addressed to a copy that moved.
+                if (batchFailure is StaleTreeRoutingException moved
+                    && bindingMoves < MaxBindingMovesPerDispatch
+                    && state.State.BoundPhysicalTreeId is { } boundCopy
+                    && string.Equals(moved.StalePhysicalTreeId, boundCopy, StringComparison.Ordinal)
+                    && await TryRebindToResolvedCopyAsync().ConfigureAwait(true))
+                {
+                    bindingMoves++;
+                    continue;
+                }
+
+                // Identical retry / compensate-pivot
                 // contract to D1's per-batch loop.
                 //
                 // Detect the terminal-shutdown refusal shape before

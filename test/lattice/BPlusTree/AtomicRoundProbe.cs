@@ -317,7 +317,11 @@ internal sealed class AtomicRoundProbe
             problems.Add($"{phase}: CountAsync returned {count}, expected {_keys.Count}");
 
         var scanned = new HashSet<string>(StringComparer.Ordinal);
-        await foreach (var key in _tree.ScanKeysAsync(maxAttempts: 5))
+        // The readers are still polling when a phase is verified, so a scan's
+        // continuation often reaches another stateless routing worker than the
+        // one holding its enumerator and is aborted. Each abort resumes after the
+        // last key yielded; the budget only has to outlast that load.
+        await foreach (var key in _tree.ScanKeysAsync(maxAttempts: 25))
         {
             if (!scanned.Add(key)) problems.Add($"{phase}: ScanKeysAsync yielded {key} twice");
         }
