@@ -365,6 +365,39 @@ def main() -> int:
           "the job grants the read scopes the guard needs")
 
     print()
+    print("K. SOFT REFERENCES - 'Relates to #N' and its kin are claims too (#4121)")
+    soft = Scenario([member(1, "Refs #10"), member(2, "Relates to #12")], [10],
+                    {10: "OPEN", 12: "OPEN"})
+    code, out = run(soft)
+    check(code != 0, "an unlisted open issue claimed only by 'Relates to' FAILS the guard")
+    check("#12" in out, "the soft-referenced issue is named")
+    verbatim(out)
+    code, out = run(Scenario([member(1, "Refs #10"), member(2, "Relates to #12")], [10, 12],
+                             {10: "OPEN", 12: "OPEN"}))
+    check(code == 0, "a soft-referenced issue the bucket closes passes")
+    code, out = run(soft, body="## Deliberately held open\n\n"
+                               "- #12 - the soft-referenced issue stays open by design\n")
+    check(code == 0, "a soft-referenced issue explicitly held open with a reason passes")
+    for form, wanted in (("Related to #12", (12,)), ("Addresses: #12", (12,)),
+                         ("Part of #13, #14", (13, 14)), ("Towards #15", (15,))):
+        issues = {10: "OPEN"}
+        issues.update({n: "OPEN" for n in wanted})
+        code, out = run(Scenario([member(1, "Refs #10"), member(2, form)], [10], issues))
+        check(code != 0, f"'{form}' is a claim, so leaving it unlisted FAILS")
+        for n in wanted:
+            check(f"#{n}" in out, f"and #{n} from '{form}' is named")
+    decoys = ("`Relates to #9001`\n\n```\nPart of #9002\n```\n\n"
+              "> Addresses #9003\n")
+    code, out = run(Scenario([member(1, "Refs #10\n\n" + decoys)], [10],
+                             {10: "OPEN", **DECOYS}))
+    check(code == 0, "soft references in a code span, fence or blockquote are not claims")
+    for decoy in DECOYS:
+        check(f"#{decoy}" not in out, f"the soft decoy #{decoy} raised no phantom gap")
+    code, out = run(Scenario([member(1, "Refs #10, and mentions #12 without a keyword")],
+                             [10], {10: "OPEN", 12: "OPEN"}))
+    check(code == 0, "a bare mention without any keyword is still not a claim")
+
+    print()
     print("J. MUTATIONS - each case above must be load-bearing")
 
     def mutate(anchor: str, replacement: str) -> str:
@@ -456,6 +489,15 @@ def main() -> int:
          mutate("if not closing:", "if False and not closing:"),
          dict(scenario=lambda: Scenario([member(1, "Refs #10")], [], {10: "OPEN"})),
          lambda c, o: c != 0 and "came back EMPTY" in o),
+        # M13 pins #4121: drop every soft keyword and a "Relates to" claim is
+        # silently not a claim again, so a soft-referenced issue left out of
+        # the closing list passes as if nobody had claimed it.
+        ("M13 soft claim keywords dropped",
+         mutate(r'CLAIM_KEYWORDS = r"(?:refs?|relates?[ \t]+to|related[ \t]+to|addresse[sd]|part[ \t]+of|towards?)"',
+                'CLAIM_KEYWORDS = r"(?:refs?)"'),
+         dict(scenario=lambda: Scenario([member(1, "Refs #10"), member(2, "Relates to #12")],
+                                        [10], {10: "OPEN", 12: "OPEN"})),
+         lambda c, o: c != 0 and "#12" in o),
     ]
     for label, mutated, kwargs, expect in mutations:
         factory = kwargs.pop("scenario")
