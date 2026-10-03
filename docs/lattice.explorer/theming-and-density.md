@@ -47,6 +47,10 @@ The calendar button opens a picker below the field, or in the flow of the page o
 
 A field that takes a duration has a whole-number box for each unit it offers - days, hours, minutes or seconds - in one control box, each named by the field and its unit. A box that is not a whole number, or a total outside the field's range, is refused with the reason shown under the box. `ShellTimeFieldHygieneTests` fails the build when a field whose label, hint or placeholder names a date, a time, UTC, ISO or a duration is drawn as a plain text box.
 
+## Sizes
+
+Byte sizes are written in binary units (`B`, `KiB`, `MiB`, `GiB` and larger units where a surface offers them). The unit is chosen from the figure as written: a value just under the next unit boundary moves up instead of reading as `1024` of the smaller unit.
+
 ## First paint and document attributes
 
 A classic blocking script in the document head reads the small appearance record `orleans.lattice.explorer.appearance.v2` from local storage. It accepts only shipped names, resolves System against the operating system, and sets these attributes before the first paint:

@@ -37,7 +37,7 @@ var lattice = grainFactory.GetGrain<ILattice>("my-tree");
 await lattice.SetAsync("hello", "world"u8.ToArray());
 ```
 
-For production, replace both in-memory pieces. Register a durable grain storage provider in the `AddLattice` callback - each leaf's state and snapshots live there - and swap the in-memory WAL for a durable backend such as [Orleans.Lattice.Storage.AzureTable](https://www.nuget.org/packages/Orleans.Lattice.Storage.AzureTable). A durable WAL alone is not enough: the WAL garbage collector trims entries once a snapshot in grain storage covers them, so in-memory grain storage would lose that data on restart. Cross-cluster replication is added with [Orleans.Lattice.Replication](https://www.nuget.org/packages/Orleans.Lattice.Replication).
+For production, replace both in-memory pieces. Register a durable grain storage provider in the `AddLattice` callback - each leaf's state and snapshots live there - and swap the in-memory WAL for a durable backend such as [Orleans.Lattice.Storage.AzureTable](https://www.nuget.org/packages/Orleans.Lattice.Storage.AzureTable). The grain storage provider must enforce ETags on stale writes; each silo probes that requirement at startup and can be configured to warn or reject a non-fencing provider. A durable WAL alone is not enough: the WAL garbage collector trims entries once a snapshot in grain storage covers them, so in-memory grain storage would lose that data on restart. Cross-cluster replication is added with [Orleans.Lattice.Replication](https://www.nuget.org/packages/Orleans.Lattice.Replication).
 
 ## Documentation
 

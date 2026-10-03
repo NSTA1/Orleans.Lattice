@@ -36,24 +36,26 @@ SHA-256 digests), and - for an increment - its `BaseBackupId`. Nothing the catal
 holds is unique to the catalog; every row can be re-derived from the sink.
 
 Four capabilities follow from that model, each exposed through the
-`Orleans.Lattice.Api.Backup` control facade. Long restores use the
-accept-then-poll `ILatticeBackupOperations` start verbs; catalog maintenance and
-health operations remain on `ILatticeBackupControl`. Every operation below
-authorizes fail-closed except the advisory `IsHealthMonitoringAvailableAsync`
-flag:
+`Orleans.Lattice.Api.Backup` control facade. Restores, catalog maintenance, and
+on-demand health checks use the accept-then-poll `ILatticeBackupOperations` start
+verbs; the control facade still exposes deprecated blocking twins and the
+advisory health availability, health read, and health configuration verbs. Every
+operation below authorizes fail-closed except the advisory
+`IsHealthMonitoringAvailableAsync` flag:
 
 | Capability | Operation | What it does |
 |---|---|---|
-| Rebuild catalog | `RebuildCatalogFromSinkAsync` | Re-derives the catalog by enumerating every manifest in the sink and re-registering it. |
-| Scrub catalog | `ScrubCatalogAgainstSinkAsync` | Flags (and optionally prunes) catalog rows whose sink payload is gone. |
+| Rebuild catalog | `StartCatalogRebuildAsync`, then poll `GetOperationStatusAsync` | Re-derives the catalog by enumerating every manifest in the sink and re-registering it. |
+| Scrub catalog | `StartCatalogScrubAsync`, then poll `GetOperationStatusAsync` | Flags (and optionally prunes) catalog rows whose sink payload is gone. |
 | Cold restore | `StartColdRestoreAsync`, then poll `GetOperationStatusAsync` | Restores a backup into a fresh cluster from the sink alone, with no surviving catalog. |
-| Health monitoring | `IsHealthMonitoringAvailableAsync`, `CheckBackupHealthAsync`, `GetBackupHealthAsync`, `ConfigureBackupHealthAsync` | Periodically re-verifies that each backup's sink payload is present and intact. |
+| Health monitoring | `StartBackupHealthCheckAsync`, then poll `GetOperationStatusAsync`; `IsHealthMonitoringAvailableAsync`, `GetBackupHealthAsync`, and `ConfigureBackupHealthAsync` remain direct reads/configuration | Periodically re-verifies that each backup's sink payload is present and intact. |
 
 ### Rebuild the catalog from the sink
 
-`RebuildCatalogFromSinkAsync` enumerates every manifest the sink holds (via
-`ILatticeBackupSink.ListManifestsAsync`, which returns manifests in backup-id
-order) and re-registers each into `sys-backup-catalog` under system origin. It is
+`StartCatalogRebuildAsync` starts a tracked operation that enumerates every
+manifest the sink holds (via `ILatticeBackupSink.ListManifestsAsync`, which
+returns manifests in backup-id order) and re-registers each into
+`sys-backup-catalog` under system origin. It is
 idempotent: a manifest already catalogued is reconciled in place, keeping its
 immutable capture timestamp, rather than duplicated; a catalog missing rows the
 sink has is repopulated. It returns a `BackupCatalogRebuildReport` whose invariant
@@ -65,7 +67,7 @@ incomplete.
 
 ### Scrub the catalog against the sink
 
-`ScrubCatalogAgainstSinkAsync` is the reconcile pass in the other direction: it
+`StartCatalogScrubAsync` starts the reconcile pass in the other direction: it
 enumerates every catalog row and probes the sink for its resolvability (manifest
 present, and every referenced artifact present and committed), reporting the
 **orphans** - rows whose payload is gone. It is **non-destructive by default**:
@@ -131,9 +133,9 @@ same durable sink:
    cold restore re-projects every manifest the sink holds, so after the first one
    the catalog reflects the whole sink, including backups of trees you have not
    restored. To re-project the catalog for discovery before, or without, any cold
-   restore, run `RebuildCatalogFromSinkAsync`.
-4. **Scrub** with `ScrubCatalogAgainstSinkAsync` if you suspect the sink itself
-   lost some payload, so the catalog only advertises resolvable restore points.
+   restore, start `StartCatalogRebuildAsync` and poll it to a terminal status.
+4. **Scrub** with `StartCatalogScrubAsync` if you suspect the sink itself lost
+   some payload, so the catalog only advertises resolvable restore points.
 
 The recovered cluster is causally faithful to the source: entries replay through
 the HLC-preserving merge and bulk-load seams, so a restored tree converges
@@ -168,8 +170,8 @@ Key properties:
   `MultiSiteManufacturing` sample runs it every 5 minutes.
 - **Per-backup overrides.** An operator can enable or disable monitoring and set a
   custom interval per backup with `ConfigureBackupHealthAsync`, trigger an on-demand
-  check with `CheckBackupHealthAsync`, and read the last stored report with
-  `GetBackupHealthAsync`. A backup is re-verified only by a sweep that finds its
+  check with `StartBackupHealthCheckAsync` and poll it to a terminal status, and
+  read the last stored report with `GetBackupHealthAsync`. A backup is re-verified only by a sweep that finds its
   interval fully elapsed since its last check, and that check was timestamped
   part-way through an earlier sweep. So an interval shorter than the sweep cadence
   takes effect as the cadence, and an interval equal to a whole number of sweep

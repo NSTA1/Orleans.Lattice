@@ -45,7 +45,8 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
 
     /// <summary>
     /// Undoes the most recent resize synchronously by recovering the old physical
-    /// tree, removing the alias, restoring the original registry configuration,
+    /// tree, moving the logical tree back onto it together with its shard map,
+    /// restoring the original registry configuration,
     /// and deleting the new snapshot tree. Available at every phase of the
     /// resize: before the alias swap the destination tree is simply discarded,
     /// and after it the old physical tree is restored - recovering it from

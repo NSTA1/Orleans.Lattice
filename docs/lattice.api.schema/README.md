@@ -8,8 +8,8 @@ A transport-agnostic schema-management control facade for [Orleans.Lattice.Schem
 
 It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md), read-write [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md), and backup [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) facades:
 
-- **A transport-agnostic facade.** A single control surface (`ILatticeSchemaControl`, a public contract in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package) exposes policy, dead-letter, versioning, remediation, compliance-audit, and capability-probe operations over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
-- **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client. This package ships no transport of its own; it is the contract every binding adapts over.
+- **Transport-agnostic facades.** `ILatticeSchemaControl`, `ILatticeSchemaComplianceOperations`, and `ILatticeSchemaOperations` are public contracts in the shared [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) package. They expose policy, dead-letter, versioning, remediation, compliance-audit, capability-probe, and accept-then-poll operation verbs over plain request / response records. They have no wire dependency, so the same surfaces serve an in-process consumer and a remote one.
+- **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) package) that projects these facades onto a remotely callable service and typed client. This package ships no transport of its own; it is the contract every binding adapts over.
 
 ## Core properties
 
@@ -47,7 +47,7 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 | Scan compliance | Run a read-only compliance audit and return counts and reasons. Deprecated in favour of the accept-then-poll scan below. |
 | Start a compliance scan | Start the same audit in the background and poll its progress and report (`ILatticeSchemaComplianceOperations`; see [Schema operations](operations.md)). |
 | Start remediation, start migration, start advance and migrate | Start the run in the background and return at once; poll the operation for its phase and values processed (`ILatticeSchemaOperations`; see [Schema operations](operations.md)). |
-| Operation status, list, cancel | Read, page or cancel the caller's remediation and migration operations. |
+| Operation status, list, cancel | Read, page or cancel the caller's remediation and migration operations through `ILatticeSchemaOperations`, and the caller's compliance scans through `ILatticeSchemaComplianceOperations`. |
 | Probe capabilities | Report, with no side effects, which schema operations the caller may perform over a tree. |
 
 ## Reference
@@ -61,5 +61,5 @@ The facade operations (each projected by the gRPC binding as one RPC when the si
 
 - [`Orleans.Lattice.Schema`](../lattice.schema/README.md) - the enforcement, versioning, dead-letter, remediation, and compliance engine this facade drives.
 - [`Orleans.Lattice.Api.Schema.Grpc`](../lattice.api.schema.grpc/README.md) - the code-first gRPC binding and typed client.
-- [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeSchemaControl`.
+- [`Orleans.Lattice.Api.Abstractions`](../lattice.api.abstractions/README.md) - the shared control-surface contract package that publishes `ILatticeSchemaControl`, `ILatticeSchemaComplianceOperations`, `ILatticeSchemaOperations`, and the shared operation records.
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) - the sibling control facade this package mirrors.

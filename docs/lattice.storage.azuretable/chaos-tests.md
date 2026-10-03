@@ -10,24 +10,24 @@ dotnet test --filter "TestCategory!=Chaos"
 
 ## Azure Table WAL suite (`test/lattice.storage.azuretable/Chaos/`)
 
-`AzureTableWalChaosTests` drives concurrent append load across multiple shards against a real Azurite endpoint. The suite creates an isolated table per run, appends fixed-size batches from one writer per shard, reads each shard back after the workload, and verifies the WAL invariants that recovery and materialization rely on.
+`AzureTableWalChaosTests` drives concurrent append load across multiple WAL partitions against a real Azurite endpoint. The suite creates an isolated table per run, appends fixed-size batches from one writer per partition, reads each partition back after the workload, and verifies the WAL invariants that recovery and materialization rely on.
 
 | Suite | What it proves |
 |---|---|
-| Sustained concurrent appends across shards | Parallel shard writers preserve dense per-shard offset namespaces, no duplicate offsets, monotone read order, and the expected highest offset after every append batch has completed. |
+| Sustained concurrent appends across WAL partitions | Parallel partition writers preserve dense per-partition offset namespaces, no duplicate offsets, monotone read order, and the expected highest offset after every append batch has completed. |
 
 ### Runtime characteristics
 
 | Property | Azure Table WAL suite |
 |---|---|
 | Backend | Real Azurite emulator via `AzureTableWalStorageProvider` |
-| Shards | 6 |
-| Workload | 10 batches per shard, 4 entries per batch |
+| WAL partitions | 6 |
+| Workload | 10 batches per partition, 4 entries per batch |
 | Compression | Off (`Compression = LatticeCompression.None`), so payloads are stored verbatim and the default Zstandard path is not exercised |
 | Total entries | 240 |
-| Writers | One writer per shard, all shards active concurrently |
+| Writers | One writer per WAL partition, all partitions active concurrently |
 | Validation | Full readback, duplicate detection, gap detection, monotone offset assertion, highest-offset assertion |
-| Visibility barrier | Drains outstanding commit completions after the write window and before readback, so the invariants are asserted against a quiesced shard rather than against a batch still in flight |
+| Visibility barrier | Drains outstanding commit completions after the write window and before readback, so the invariants are asserted against a quiesced partition rather than against a batch still in flight |
 | Skip behaviour | Calls `Assert.Inconclusive` when the default Azurite development endpoint is not reachable |
 
 The workload runs on the shipping commit-pipeline defaults, under which an append can return before its own commit completion lands. The suite therefore drains the outstanding completions through the provider's flush barrier before reading back, so it keeps covering the pipelined path without asserting read-after-write that the default does not promise. See [Architecture](architecture.md#read-visibility-lag-under-pipelining).

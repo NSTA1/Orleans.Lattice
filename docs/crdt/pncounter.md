@@ -13,7 +13,10 @@ The trick: each replica keeps its own private tally of how much it has added
 own* entries, so there is no write-write conflict. Merging takes the
 **per-replica maximum** of every entry, and the scalar value is
 `sum(P) - sum(N)`. Because each entry only grows, taking the max is safe,
-commutative, and idempotent - a re-delivered update changes nothing.
+commutative, and idempotent - a re-delivered update changes nothing. Increment
+and decrement amounts must be non-negative; an advance that would push either
+component past `long.MaxValue` throws `OverflowException` and leaves that
+component unchanged.
 
 Use it for: like counts, inventory / stock levels, quota consumption, active
 connection counts, votes - any quantity edited from many places at once.

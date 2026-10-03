@@ -133,10 +133,11 @@ among them - and its brief cites each one.
 
 ### Operate (operators)
 
-**Held until the Explorer is released** (see
+**Held until the Explorer's in-progress console is released** (see
 [Production order](#production-order)): an operator works through its console,
-which is being redesigned, so this path is made once the new console ships, and
-shows it wherever an operator would use it, alongside the API it drives. Where
+and the console's access, schema, tenant and backup areas are still in progress,
+so this path is made once that surface is released and shows it wherever an
+operator would use it, alongside the API it drives. Where
 the console itself, last on the site's list, goes on the path is decided then.
 Watched in order, then on to Secure and govern. It departs from the site's list
 once, for a reason: **Metrics and dashboards** comes second, ahead of sizing,
@@ -155,9 +156,10 @@ instruments show.
 
 ### Deep dive: Secure and govern (after Evaluate and Operate)
 
-**Held until the Explorer is released**, like Operate: the console has its own
-areas for access, schemas and tenants, and is one of the surfaces the last
-episode is about. Watched in order, following the security pipeline the docs
+**Held until the Explorer's in-progress console is released**, like Operate: the
+console has its own areas for access, schemas and tenants, and is one of the
+surfaces the last episode is about. Watched in order, following the security
+pipeline the docs
 describe: who the caller is, what they may do, what a tree may hold and whose
 it is, and every surface that reaches it. Identity comes first because a policy
 names a subject. The site's Videos tab still labels this group "Deep dive:
@@ -226,10 +228,10 @@ for developers and for evaluators come first, so both have a way in; then
 Build straight through, then the rest of Evaluate.
 
 **Operate and Secure and govern wait for the Explorer.** An operator works
-through its console, which is being redesigned; the console has its own areas
-for access, schemas, tenants and backups; and it is one of the surfaces the
-last Secure and govern episode is about. So both paths are held at the end of
-the order until the redesigned console is released, and their episodes then
+through its console. The Explorer is still in progress; its console has its own
+areas for access, schemas, tenants and backups; and it is one of the surfaces
+the last Secure and govern episode is about. So both paths are held at the end
+of the order until that console surface is released, and their episodes then
 show it wherever an operator would use it, alongside the API it drives.
 Releasing the hold is a change to this plan and to
 [series.json](series.json), which holds this order as data. If the console is
@@ -256,10 +258,11 @@ The order is kept, not just stated:
    back to, it forced the style, voice and pacing decisions before there were
    ten episodes to change, and its source is the most-reviewed prose in the
    repository. It is published: the docs site plays it on the home page and
-   under Videos. Its ending is re-cut twice, each time as an item of its own:
-   F2 names Build's and Evaluate's first episodes and brings the cut back
-   within three minutes (the current cut runs 3:01), and F3 names Operate's
-   first episode once it exists.
+   under Videos. Its ending has not yet been re-cut: the published episode
+   lists only F in `episode.json`, and its narration still ends by naming the
+   three paths. F2 is the next re-cut, to name Build's and Evaluate's first
+   episodes and bring the cut back within three minutes (the current cut runs
+   3:01); F3 will name Operate's first episode once it exists.
 3. **The order**, each item in turn:
 
    | Step | Items | Completes |

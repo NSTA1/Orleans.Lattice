@@ -117,6 +117,13 @@ alongside one another. Apart from registering an [OR-Map](ormap.md)'s shape for
 the tree that holds it, there is nothing to configure per tree for local
 (single-cluster) use.
 
+Most mutating accessors read the current value once to mint the delta they need,
+then apply that one typed delta through the tree. They no longer run a client-side
+CAS retry loop; any `maxAttempts` parameter you see is retained for compatibility,
+validated to be at least `1`, and otherwise ignored. The monotone max/min
+registers are the exception: their writes are blind candidate deltas and do not
+need the read.
+
 > [!NOTE]
 > The one exception is **cross-cluster replication**. An enrolled tree declares a
 > single [`LatticeMergeMode`](../lattice/api.md) in its replication map, and a

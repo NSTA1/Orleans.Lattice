@@ -90,7 +90,7 @@ internal sealed class ReplicationShipperState
     /// The physical tree id this shipper's per-partition cursors are bound to,
     /// resolved from the logical tree alias. A logical tree can be repointed to
     /// a new physical tree by a registry alias swap (shadow-cutover restore,
-    /// resize or schema remediation); WAL shards are keyed by the physical id, so when the
+    /// resize or schema remediation); WAL partitions are keyed by the physical id, so when the
     /// resolved physical id changes the persisted <see cref="PartitionCursors"/>
     /// are absolute offsets into the retired log and must be discarded. The
     /// shipper normally rebinds from the alias-change notification and also

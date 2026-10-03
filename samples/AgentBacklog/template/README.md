@@ -164,7 +164,8 @@ overlap tolerance.
   names any other record family is refused, because claims exist only on memory
   records.
 - `repocontext_claim` on a real memory key returns `granted: true` with a
-  `fencingToken`, confirming writes are enabled.
+  `fencingToken`, `leaseSeconds`, and `leaseExpiresAtUtc`, confirming writes are
+  enabled.
 - An unfenced `repocontext_update` against that claimed key is **refused**. If it
   succeeds, the fence is not being enforced and the backlog is not safe to drain
   concurrently.

@@ -86,6 +86,20 @@ public partial class LatticeSchemaRemediationGrainTests
         LatticeSchemaPolicy? existingPolicy = null) =>
         CreateGrainCore(() => EntriesBytes(sourceEntries), seedState, schemaRegistry, existingPolicy);
 
+    /// <summary>The values a point read returns for <paramref name="keys"/>, from <paramref name="entries"/>.</summary>
+    internal static async Task<Dictionary<string, byte[]>> PointReadsAsync(
+        IAsyncEnumerable<KeyValuePair<string, byte[]>> entries, List<string> keys)
+    {
+        var wanted = new HashSet<string>(keys, StringComparer.Ordinal);
+        var values = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        await foreach (var entry in entries)
+        {
+            if (wanted.Contains(entry.Key)) values[entry.Key] = entry.Value;
+            if (values.Count == wanted.Count) break;
+        }
+
+        return values;
+    }
     private static Harness CreateGrainCore(
         Func<IAsyncEnumerable<KeyValuePair<string, byte[]>>> entriesFactory,
         SchemaRemediationState? seedState,
@@ -103,6 +117,10 @@ public partial class LatticeSchemaRemediationGrainTests
         source.EntriesAsync(
                 Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
             .Returns(ci => Bounded(entriesFactory(), ci.ArgAt<string?>(0), ci.ArgAt<string?>(1)));
+        // A slice takes each scanned key's value from a point read (#4361), served
+        // here from the same entries.
+        source.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci => PointReadsAsync(entriesFactory(), ci.ArgAt<List<string>>(0)));
         // Source routing for cutover: a single-shard identity map on the physical
         // tree that equals the (never-aliased) logical tree id.
         source.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(

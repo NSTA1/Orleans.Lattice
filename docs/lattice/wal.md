@@ -19,19 +19,19 @@ If you're looking for a different angle on the WAL:
 
 ## What the WAL is
 
-The WAL is an **append-only log of `LatticeMutation` envelopes**, partitioned per
-shard. Each shard owns a monotonically increasing offset space starting at zero,
-and an acknowledged offset is never reused or reordered. Offsets are dense in
-normal operation. A flush that fails leaves its window unacknowledged and the
-shard resumes from the provider's durable tail, so that window is either
-reassigned (when nothing above it landed) or left as a permanent gap (when a
-later concurrent window had already committed), which readers observe honestly -
-see [Append-failure semantics](#append-failure-semantics).
+The WAL is an **append-only log of `LatticeMutation` envelopes**, split into WAL
+partitions. Each partition owns a monotonically increasing offset space starting
+at zero, and an acknowledged offset is never reused or reordered. Offsets are
+dense in normal operation. A flush that fails leaves its window unacknowledged
+and the partition resumes from the provider's durable tail, so that window is
+either reassigned (when nothing above it landed) or left as a permanent gap
+(when a later concurrent window had already committed), which readers observe
+honestly - see [Append-failure semantics](#append-failure-semantics).
 
 ```text
-shard 0:  [0]Set k1   [1]Set k2     [2]Delete k1   [3]Set k3      ...
-shard 1:  [0]Set a    [1]DelRange   [2]Set b       [3]Set c       ...
-shard 2:  [0]Set x    [1]Set y      [2]Set z       [3]Delete y    ...
+partition 0:  [0]Set k1   [1]Set k2     [2]Delete k1   [3]Set k3      ...
+partition 1:  [0]Set a    [1]DelRange   [2]Set b       [3]Set c       ...
+partition 2:  [0]Set x    [1]Set y      [2]Set z       [3]Delete y    ...
 ```
 
 A `LatticeMutation` carries everything a replay or replication consumer needs to
@@ -550,7 +550,7 @@ unlinked when the budget expires is force-faulted with a typed
 released rather than parking through the rest of host shutdown. The
 `orleans.lattice.wal.shard.drain.budget.expirations` counter and
 `orleans.lattice.wal.shard.drain.budget.force_faulted_slots` histogram
-(both tagged `tree` and `shard`) attribute every budget-driven
+(both tagged `tree` and `shard`, where `shard` carries the WAL partition index) attribute every budget-driven
 force-fault per partition.
 
 This bound defends against the saturating-storage-account wedge: when
@@ -1056,14 +1056,41 @@ LatticeWalGcReport report = await gc.RunOnceAsync(
 //   - report.ShardsScanned   - WAL partitions whose provider resolved and were
 //                              visited; zero means none could be, not an empty WAL
 //   - report.EntriesTrimmed  - total entries the pass found eligible and asked the
-//                              provider to trim, across all shards
+//                              provider to trim, across all partitions
 //   - report.ByteCeiling, RetainedBytesBefore, RetainedBytesAfter,
 //     LogicalRetainedBytes, BytePressureTriggered, BytePressureOverThreshold,
 //     CeilingUnsatisfiable - the advisory byte-pressure inputs and verdicts
 //   - report.CursorFloorState, BlockingConsumerId, BlockingConsumerIds - whether
 //     the cursor floor was usable, and which consumers blocked it
-//   - report.RetainedBacklog - whether a shard's scan stopped on WAL it had to retain
+//   - report.RetainedBacklog - whether a partition's scan stopped on WAL it had to retain
 ```
+
+### Reclamation floor-holder read
+
+`ILatticeWalReclamation.GetWalReclamationAsync(treeId)` is the public read for a
+tree whose WAL usage is flat and whose reclamation might be idle or wedged. The
+MCP tool is `lattice_treeadmin_wal_reclamation`. The report echoes the tree id as
+the caller named it, but the probe reads the physical tree that alias resolution
+currently targets, because materialiser pins are published under the physical
+copy a leaf belongs to.
+
+`PinStoreReadable = false` means the durable pin store did not answer; the other
+fields are not measurements, and `IsWedged = false` means "not established", not
+"healthy". When the store answers, `PinCount` counts the materialiser pins and
+`PinsWithoutOffset` counts the pins still at the `-1` no-offset sentinel. The
+`FloorHolder`, when present, is the pin with the lowest usable offset; if no pin
+has a usable offset it is one of the `-1` pins, and if the tree has no pins it is
+`null`. The holder carries its consumer id, parsed leaf id when available, WAL
+partition, pin offset, persisted checkpoint, and state. The state is one of
+`CheckpointedUncovered`, `NeverCheckpointed`, `NoDurableState`, `Unreadable`,
+`Orphaned`, or `CheckpointedCoverageUnknown`.
+
+`IsWedged` is keyed on that holder, not on WAL growth: it is true exactly when
+the holder has a usable offset (`PinOffset >= 0`) and its persisted checkpoint is
+still `-1` (`NeverCheckpointed`). That shape will not clear on its own because
+the durable pin store merges pins upward and the GC will not drive a leaf with no
+proven checkpoint. The same `NeverCheckpointed` state on a holder at offset `-1`
+is the benign sentinel that clears when the leaf checkpoints.
 
 ### Metrics
 
@@ -1073,10 +1100,29 @@ start from:
 
 | Instrument | Tags | Description |
 |---|---|---|
-| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | Counter. WAL entries removed by a GC pass, reported once per shard the pass scanned. A shard that was scanned but reclaimed nothing records a zero, so an absent series means the shard was not scanned on this silo. |
+| `orleans.lattice.wal.entries_trimmed` | `tree`, `shard` | Counter. WAL entries removed by a GC pass, reported once per WAL partition the pass scanned. The tag is named `shard` for compatibility but its value is a WAL partition index. A partition that was scanned but reclaimed nothing records a zero, so an absent series means the partition was not scanned on this silo. |
 | `orleans.lattice.wal.gc.passes` | `tree`, `outcome` | Counter. One count per scheduled pass, by outcome: `reclaimed`, `blocked`, `no_consumer`, `no_partitions`, `idle`, `over_ceiling`, `stranded`, `unclassified` or `failed`. Only `reclaimed` states that WAL came back; every other arm says why nothing was trimmed. `no_partitions` means no pinned WAL provider resolved on this silo (issue #2465), not an empty WAL. It outranks the other non-reclaiming arms and is zero-primed per tree. Inspect WAL placement and provider registration. `ShardsScanned` counts only resolved partitions visited for trimming or compaction; partial resolution keeps the existing outcome and does not imply every partition was examined. With no cursor and no TTL, `no_consumer` names the no-predicate return; `blocked` names an unusable durable pin, while `stranded` can describe a legitimate lagging consumer holding retained WAL. |
 | `orleans.lattice.wal.gc.interval` | `tree` | Histogram (seconds). The adaptive interval the scheduler chose for the tree after its latest pass. A series pinned at `WalGcMinInterval` is a tree the scheduler is holding at the floor - reclaiming, blocked, or over its byte ceiling. |
-| `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each shard's trim scan stopped: `exhausted`, `empty`, `offset_floor`, `cursor_floor`, `causal_frontier`, `block_pin`, `durability_unverified`, `durability_hold` or `durable_offset_refusal`. |
+| `orleans.lattice.wal.gc.trim_stop` | `tree`, `shard`, `reason` | Counter. Why each WAL partition's trim scan stopped: `exhausted`, `empty`, `offset_floor`, `cursor_floor`, `causal_frontier`, `block_pin`, `durability_unverified`, `durability_hold` or `durable_offset_refusal`. The `shard` tag carries the WAL partition index. |
+
+The floor-holder diagnostics explain why a retained floor did or did not enter a
+repair drive. `orleans.lattice.wal.gc.floor_holder_admission` is tagged by
+`tree`, tenant and `status`; `admitted` means the floor-defining candidate
+entered the blocked-leaf drive, `blocked` means the floor's own holder could not
+be admitted, and `unreached` means the pass exited through the floor-blocked heal
+arm before the floor-holder classifier ran. `orleans.lattice.wal.gc.never_checkpointed_pin_offset`
+splits `NeverCheckpointed` holders into `offset_absent` (the benign `-1` pin
+sentinel) and `offset_usable` (the wedging shape that can hold the offset floor),
+tagged by tree, WAL partition, status and tenant; both arms are zero-primed for
+evaluated trees.
+
+Orphan-pin removal has its own decision counters. `orleans.lattice.wal.gc.orphan_pin_sweep`
+partitions each examined durable pin into `retired`, `retire_failed`, `deferred`,
+`refused_malformed_id`, `refused_ambiguous_partition`, `live`, `unresolved` or
+`unreadable`; the decision arms also carry a `cause` of `orphaned` or
+`no_durable_state`. `orleans.lattice.wal.gc.drive_orphan_pin_retirement` records
+the same removal/refusal outcomes when the blocked-leaf drive gets a `NotDriven`
+verdict, with `cause="not_driven"`.
 
 Two further GC signals separate a tree that is catching up from one that is
 stuck (issue #3149). `orleans.lattice.wal.gc.floor_head_distance` records,

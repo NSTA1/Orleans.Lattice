@@ -1152,6 +1152,15 @@ skips them. The checks run on a fresh submission only: a re-submission
 that re-attaches to a cross-tree write already under way is not checked
 again.
 
+The cross-tree coordinator also runs any registered write interceptor
+(schema enforcement and schema versioning) before the saga is dispatched.
+It applies the interceptor to each tree's plain whole-value upserts with
+`atomic: true`, so a rejected or dead-lettered value aborts the whole
+cross-tree commit before any participating tree is mutated, and an
+accepted transformed value is substituted into that tree's slice. Tombstone
+deletes and staged CRDT-delta entries do not carry a whole value for this
+pass, so they are not schema-checked by the coordinator.
+
 ### Usage
 
 ```csharp verify

@@ -8,7 +8,9 @@ An **OR-Map** is a dictionary that is a CRDT twice over. Its **keys** follow
 add-wins [OR-Set](orset.md) semantics, and each **value** is itself a CRDT that
 is merged **recursively** per key. So when two replicas write the same map key
 concurrently, the values are not overwritten - they are folded together through
-the value type's own merge.
+the value type's own merge. A map remove records the exact key dots it observed;
+unlike OR-Set and OR-Flag, it cancels exact dot membership rather than every
+same-replica dot at or below a counter.
 
 `TValue` must implement `ICrdt<TValue>` and have a parameterless constructor;
 use any built-in primitive or your own. Because the wire shape is generic, the

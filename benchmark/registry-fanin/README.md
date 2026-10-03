@@ -271,7 +271,7 @@ indistinguishable from a correct read in the output.
 | `scripts/run-birth-curve.ps1` | **cold-start birth curve** - the experiment that targets the storm regime |
 | `scripts/run-fanout.ps1` | **the fan-out arm** - the only arm that reaches the regime in which the fan-in bound binds, plus its ungated A/B control; see [The fan-out arm](#the-fan-out-arm-the-only-arm-that-reaches-the-bound) |
 | `scripts/run-host-pressure.ps1` | cold start at fixed K while a throwaway burner contends for the host |
-| `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers (41) |
+| `scripts/Test-FanInHelpers.ps1` | unit tests for the helpers |
 | `results/` | committed per-run JSON results: the cells quoted below, plus the post-gate birth curves (`birth-K20-gated`, `birth-K80-gated`) cited in #3262 (`results/runs/` spills are gitignored) |
 
 ## Driver

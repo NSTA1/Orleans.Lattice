@@ -574,9 +574,8 @@ Prometheus is at <http://localhost:9090> for raw query access.
 
 `microbench` does not stand up the docker stack and does not boot an Orleans silo. It
 targets `ILattice` directly through a [BenchmarkDotNet](https://benchmarkdotnet.org/)
-harness that hand-instantiates the `LatticeGrain -> ShardRootGrain -> BPlusLeafGrain`
-vertical and routes the `IGrainFactory` calls through a hand-rolled `FakeGrainFactory`
-(NSubstitute stubs only the auxiliary grains). The
+harness that hand-instantiates the tree routing and leaf-storage path behind the
+public API, with a hand-rolled `IGrainFactory` for the supporting routes. The
 measurement isolates the lattice algorithm cost from Orleans dispatch, serialization,
 and the simulator pipeline; the Orleans-native end-to-end cost is captured by
 `current-state-no-replication` onwards.
@@ -586,8 +585,8 @@ and the simulator pipeline; the Orleans-native end-to-end cost is captured by
 ```
 
 The runner builds and invokes `benchmark/host/Bench.Microbench/`, whose default
-`LatticeMicroBenchmarks` suite exposes about 90 `[Benchmark]` methods across the
-primitive operations (`PointRead`, `PointWrite`, `PointGetMany`, `BulkLoad`,
+`LatticeMicroBenchmarks` suite exposes `[Benchmark]` methods across the primitive
+operations (`PointRead`, `PointWrite`, `PointGetMany`, `BulkLoad`,
 `SetManyAtomic`, etc.) plus their parameterised / deeper-tree / atomic-tree
 variants. Several dozen narrower suites (allocation trims, fan-out collapses,
 replication apply, tag index, tenancy, ...) are opt-in via

@@ -8,9 +8,11 @@ It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 a strongly-typed `LatticeTreeAdminApiGrpcClient` with one method per facade
 operation - the fail-closed **capability probe**, diagnostics, tree lifecycle and
 configuration, bulk load, restore, reshard, resize, snapshot, WAL placement and
-moves, orphaned-leaf audit / survey / repair, view and tag-index administration,
-compaction, and history retention - plus the unauthenticated auth-scheme discovery
-RPC: 51 unary RPCs in all, with the orphaned-leaf survey riding the audit RPC.
+moves, WAL reclamation, orphaned-leaf audit / survey / repair, view and tag-index
+administration, compaction, history retention, accept-then-poll maintenance and
+storage-usage refresh operations - plus the unauthenticated auth-scheme discovery
+RPC, with the orphaned-leaf survey riding the audit RPC rather than having one of
+its own.
 Every wire message rides the Orleans serializer, so the contract stays versioned
 and additive-only.
 

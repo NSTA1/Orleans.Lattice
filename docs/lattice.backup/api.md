@@ -231,23 +231,23 @@ An in-process control value only (no serializer surface).
 
 ### `BackupOperationKinds`
 
-Public constants for tracked backup operation kinds. `Prefix` is `backup.`, and the concrete kinds are `Capture` (`backup.capture`), `IncrementalCapture` (`backup.incremental-capture`), `SetCapture` (`backup.set-capture`), `Restore` (`backup.restore`), and `ColdRestore` (`backup.cold-restore`).
+Public constants for tracked backup operation kinds. `Prefix` is `backup.`, and the concrete kinds are `Capture` (`backup.capture`), `IncrementalCapture` (`backup.incremental-capture`), `SetCapture` (`backup.set-capture`), `Restore` (`backup.restore`), `ColdRestore` (`backup.cold-restore`), `HealthCheck` (`backup.health-check`), `CatalogRebuild` (`backup.catalog-rebuild`), and `CatalogScrub` (`backup.catalog-scrub`).
 
 ### `BackupOperationPhases`
 
-Public constants for progress phases reported by tracked operations: `Capturing`, `CapturingMembers`, `Cataloguing`, `Bootstrapping`, `Validating`, `Applying`, and `Replaying`. A kind reports only the phases that apply to the work in hand.
+Public constants for progress phases reported by tracked operations: `Capturing`, `CapturingMembers`, `Cataloguing`, `Bootstrapping`, `Validating`, `Applying`, `Replaying`, `Verifying`, `RebuildingCatalog`, `ScrubbingCatalog`, and `PruningOrphans`. A kind reports only the phases that apply to the work in hand.
 
 ### `BackupOperationUnits`
 
-Public constants for progress unit names: `Entries` (`entries`), `Shards` (`shards`), `Members` (`members`), and `Manifests` (`manifests`).
+Public constants for progress unit names: `Entries` (`entries`), `Shards` (`shards`), `Members` (`members`), `Manifests` (`manifests`), and `Artifacts` (`artifacts`).
 
 ### `BackupOperationResultKeys`
 
-Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, and `deadLetteredOverQuota`.
+Public constants for the string result map carried by a succeeded tracked operation: `backupId`, `setId`, `memberBackupIds`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `shadowPhysicalTreeId`, `previousPhysicalTreeId`, `deadLetteredCrossTenant`, `deadLetteredOverQuota`, `healthStatus`, `missingArtifactCount`, `hashMismatchArtifactCount`, `scannedCount`, `registeredCount`, `reconciledCount`, `orphanCount`, `removedCount`, `pruned`, and `orphanBackupIds`.
 
 ### `BackupOperationResults`
 
-Helpers for reading operation result maps. `TryReadRestoreResult(IReadOnlyDictionary<string, string> result, out LatticeRestoreResult? restore)` reconstructs the full restore result when the map has the restore keys, and `ReadMemberBackupIds(IReadOnlyDictionary<string, string> result)` parses the comma-separated set-member backup ids.
+Helpers for reading operation result maps. `TryReadRestoreResult(IReadOnlyDictionary<string, string> result, out LatticeRestoreResult? restore)` reconstructs the full restore result when the map has the restore keys, `ReadMemberBackupIds(IReadOnlyDictionary<string, string> result)` parses the comma-separated set-member backup ids, `TryReadCatalogRebuildReport(IReadOnlyDictionary<string, string> result, out BackupCatalogRebuildReport? report)` reconstructs a catalog rebuild report, and `TryReadCatalogScrubReport(IReadOnlyDictionary<string, string> result, out BackupCatalogScrubReport? report)` reconstructs a catalog scrub report.
 
 ## Requests and results
 

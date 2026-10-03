@@ -4,19 +4,21 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Grpc;
 
 /// <summary>
-/// Holds the gRPC <see cref="Method{TRequest, TResponse}"/> definition
-/// for the replication push RPC. The method is constructed lazily on
-/// first access so the encoder and ack serializer can be supplied via
-/// DI without a static initialiser race.
+/// Holds the gRPC <see cref="Method{TRequest, TResponse}"/> definitions
+/// for the replication service's unary RPCs: the batch push plus the
+/// digest probe, content-manifest exchange, compression-dictionary pull,
+/// Merkle-walk probe and peer high-water-mark read. The methods are
+/// constructed in the constructor so the encoder and ack serializer can be
+/// supplied via DI without a static initialiser race.
 /// </summary>
 /// <remarks>
-/// The wire contract is intentionally a single unary RPC:
+/// The batch push is intentionally unary:
 /// <c>Push(ReplicationBatchEnvelope) -&gt; ReplicationAck</c>. The
 /// underlying <see cref="global::Grpc.Net.Client.GrpcChannel"/> multiplexes every batch over a
 /// long-lived HTTP/2 connection per peer, so the unary shape achieves
 /// the sub-second-latency target without the additional
 /// state machine of a bidi stream. Future iterations may promote the
-/// method to client-streaming if measurement shows benefit; that
+/// push to client-streaming if measurement shows benefit; that
 /// promotion is a wire-format-compatible extension because the
 /// envelope and ack types are unchanged.
 /// </remarks>

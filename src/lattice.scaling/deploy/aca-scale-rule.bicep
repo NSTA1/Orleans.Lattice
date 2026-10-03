@@ -26,7 +26,7 @@ var latticeScale = {
         type: 'metrics-api'
         metadata: {
           // scaleValue is the dominant pressure (0.0 to 1.0) times the current
-          // replica count, so it never exceeds that count. desiredReplicas =
+          // replica count, so demand alone never lifts it above that count. desiredReplicas =
           // ceil(scaleValue / targetValue), and targetValue must therefore be
           // below 1 for the pool to grow: '1' could only hold or shrink it.
           // '0.5' holds each replica at half load and asks for twice the
