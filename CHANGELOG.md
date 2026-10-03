@@ -312,6 +312,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Schema - A format rule admitted a smuggled trailing newline.** The built-in format patterns, the `EndsWith` text match and the app-install digest pin anchored with `$`, which in .NET also matches before a line feed ending the input. All now anchor at `\z`; a stored rule is kept verbatim. ([#4471](https://github.com/NSTA1/Orleans.Lattice/pull/4471)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Security - Three credential records printed their secret.** `StoredCredential`, `ExplorerAccessToken` and `MembershipCacheKey` are records, so the generated `ToString` disclosed a live password or bearer token to any log or fault that formatted one. Each now redacts it. ([#4471](https://github.com/NSTA1/Orleans.Lattice/pull/4471)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Membership`)
+
 - **Explorer - A web sign-in minted a token for whatever resource the endpoint asked for.** The advertised OAuth audience became the requested scope unchecked, so a hostile endpoint harvested a delegated Graph token. An audience must now be bound to the endpoint or listed in `AllowedAudiences`. ([#4394](https://github.com/NSTA1/Orleans.Lattice/issues/4394)) (`Orleans.Lattice.Explorer.Entra.Web`)
 
 - **Explorer - The interactive sign-in guarded its authority but not its audience.** The advertised audience reached MSAL unchecked, so a hostile endpoint could raise a consent prompt for a foreign resource. The same admission rule now applies, widened by `AllowedAudiences`. ([#4395](https://github.com/NSTA1/Orleans.Lattice/issues/4395)) (`Orleans.Lattice.Explorer.Entra`)

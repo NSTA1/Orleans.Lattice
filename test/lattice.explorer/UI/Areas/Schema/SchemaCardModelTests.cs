@@ -193,6 +193,26 @@ public sealed class SchemaCardModelTests
     }
 
     [Test]
+    public void A_legacy_dollar_anchored_rule_is_kept_verbatim_as_a_pattern_card()
+    {
+        // The format patterns moved from "$" to "\z" because "$" also matches
+        // before a trailing line feed, so a stored "$" rule is a weaker rule
+        // than the card that wrote it. Reading it back as a format card would
+        // silently rewrite the operator's policy on the next save, so it reads
+        // back as a pattern card holding the stored pattern unchanged.
+        var legacy = LatticeSchemaRule.Regex("^[a-z0-9]+(-[a-z0-9]+)*$", "s");
+        var card = SchemaCardDecompiler.Decompile(legacy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(card.Kind, Is.EqualTo(SchemaCardKind.Pattern));
+            Assert.That(card.Pattern, Is.EqualTo("^[a-z0-9]+(-[a-z0-9]+)*$"));
+            Assert.That(SchemaCardCompiler.TryCompile(card, out var kept, out _), Is.True);
+            Assert.That(kept, Is.EqualTo(legacy), "opening a policy must never rewrite it");
+        });
+    }
+
+    [Test]
     public void A_clone_is_deep_and_has_its_own_id()
     {
         var card = Card(SchemaCardKind.AnyOf, string.Empty, group => group.Alternatives = [Card(SchemaCardKind.EveryItem, "l", every => every.Item = Card(SchemaCardKind.Type))]);
