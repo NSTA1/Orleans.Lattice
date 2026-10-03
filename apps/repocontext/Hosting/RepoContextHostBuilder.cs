@@ -191,6 +191,7 @@ public static class RepoContextHostBuilder
         RepoContextHostOwnedDisposables owned)
     {
         var sqliteAutoVacuum = PrepareDataPaths(config);
+        var snapshotSweep = SweepSnapshotStorage(config);
 
         // Startup admission, sited here on purpose: immediately after the data paths
         // are prepared, because that is the first moment the recorded evidence is
@@ -597,6 +598,7 @@ public static class RepoContextHostBuilder
         if (sqliteAutoVacuum is not null)
         {
             builder.Services.AddSingleton(sqliteAutoVacuum);
+            builder.Services.AddSingleton(snapshotSweep);
             builder.Services.AddHostedService<SqliteAutoVacuumService>();
         }
 
@@ -950,5 +952,26 @@ public static class RepoContextHostBuilder
         return config.UsesSqlite
             ? new SqliteSchemaInitializer(config.SqlitePath, autoVacuum: config.SqliteAutoVacuum).Initialize()
             : null;
+    }
+
+    /// <summary>
+    /// Runs the opt-in sweep of stranded leaf snapshot storage
+    /// (<see cref="RepoContextHostConfiguration.SqliteSnapshotSweep"/>) over the SQLite
+    /// grain store, before the silo starts and so while nothing else has the database
+    /// open. See <see cref="SqliteSnapshotOrphanSweep"/>.
+    /// </summary>
+    /// <param name="config">The resolved host configuration.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="config"/> is null.</exception>
+    /// <returns>
+    /// What the sweep found and removed; <see cref="SqliteSnapshotSweepOutcome.NotRun"/> when it is
+    /// off or grain state is not stored in SQLite.
+    /// </returns>
+    public static SqliteSnapshotSweepOutcome SweepSnapshotStorage(RepoContextHostConfiguration config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        return config.GrainStorage == RelationalStore.Sqlite
+            ? SqliteSnapshotOrphanSweep.Run(config.SqlitePath, config.SqliteSnapshotSweep)
+            : SqliteSnapshotSweepOutcome.NotRun;
     }
 }

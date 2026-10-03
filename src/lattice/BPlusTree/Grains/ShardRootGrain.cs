@@ -3417,7 +3417,7 @@ internal sealed partial class ShardRootGrain(
     {
         if (bounds.HighKeyExclusive is not { } high)
             return null;
-        var floor = MaxOrdinal(MaxOrdinal(startInclusive, resumeFromKey), continuationToken);
+        var floor = OrdinalStrings.MaxBound(OrdinalStrings.MaxBound(startInclusive, resumeFromKey), continuationToken);
         return floor is null || string.CompareOrdinal(high, floor) > 0 ? high : null;
     }
 
@@ -3432,19 +3432,9 @@ internal sealed partial class ShardRootGrain(
     {
         if (bounds.LowKeyInclusive is not { } low)
             return null;
-        var ceiling = MinOrdinal(MinOrdinal(endExclusive, resumeFromKey), continuationToken);
+        var ceiling = OrdinalStrings.MinBound(OrdinalStrings.MinBound(endExclusive, resumeFromKey), continuationToken);
         return ceiling is null || string.CompareOrdinal(low, ceiling) < 0 ? low : null;
     }
-
-    private static string? MaxOrdinal(string? left, string? right)
-        => left is null ? right
-            : right is null ? left
-            : string.CompareOrdinal(left, right) >= 0 ? left : right;
-
-    private static string? MinOrdinal(string? left, string? right)
-        => left is null ? right
-            : right is null ? left
-            : string.CompareOrdinal(left, right) <= 0 ? left : right;
 
     public Task<KeysPage> GetSortedKeysBatchAsync(
         string? startInclusive,
@@ -3478,8 +3468,8 @@ internal sealed partial class ShardRootGrain(
         // Determine the starting leaf. A resume key is an inclusive lower
         // boundary handed back by a work-bounded page, so it composes with the
         // range start and the continuation token by taking the furthest of them.
-        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
-        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        var effectiveStart = OrdinalStrings.MaxBound(startInclusive, resumeFromKey);
+        var seekKey = OrdinalStrings.MaxBound(OrdinalStrings.MaxBound(continuationToken, resumeFromKey), startInclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
@@ -3649,8 +3639,8 @@ internal sealed partial class ShardRootGrain(
         // Determine the starting leaf (rightmost, or the leaf for the seek key).
         // A reverse resume key is an exclusive upper boundary, so it composes
         // with the continuation token by taking the nearer of the two.
-        var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
-        var seekKey = MinOrdinal(effectiveBefore, endExclusive);
+        var effectiveBefore = OrdinalStrings.MinBound(continuationToken, resumeFromKey);
+        var seekKey = OrdinalStrings.MinBound(effectiveBefore, endExclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
@@ -3802,8 +3792,8 @@ internal sealed partial class ShardRootGrain(
         if (!await PrepareForReadAsync()) return new EntriesPage { Entries = [], HasMore = false };
         RecordRead();
 
-        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
-        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        var effectiveStart = OrdinalStrings.MaxBound(startInclusive, resumeFromKey);
+        var seekKey = OrdinalStrings.MaxBound(OrdinalStrings.MaxBound(continuationToken, resumeFromKey), startInclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
@@ -3959,8 +3949,8 @@ internal sealed partial class ShardRootGrain(
         if (!await PrepareForReadAsync()) return new EntriesPage { Entries = [], HasMore = false };
         RecordRead();
 
-        var effectiveBefore = MinOrdinal(continuationToken, resumeFromKey);
-        var seekKey = MinOrdinal(effectiveBefore, endExclusive);
+        var effectiveBefore = OrdinalStrings.MinBound(continuationToken, resumeFromKey);
+        var seekKey = OrdinalStrings.MinBound(effectiveBefore, endExclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
@@ -4122,8 +4112,8 @@ internal sealed partial class ShardRootGrain(
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
             return new KeysPage { Keys = [], HasMore = false };
 
-        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
-        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        var effectiveStart = OrdinalStrings.MaxBound(startInclusive, resumeFromKey);
+        var seekKey = OrdinalStrings.MaxBound(OrdinalStrings.MaxBound(continuationToken, resumeFromKey), startInclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)
@@ -4260,8 +4250,8 @@ internal sealed partial class ShardRootGrain(
         if (sortedSlots.Length == 0 || state.State.RootNodeId is null)
             return new EntriesPage { Entries = [], HasMore = false };
 
-        var effectiveStart = MaxOrdinal(startInclusive, resumeFromKey);
-        var seekKey = MaxOrdinal(MaxOrdinal(continuationToken, resumeFromKey), startInclusive);
+        var effectiveStart = OrdinalStrings.MaxBound(startInclusive, resumeFromKey);
+        var seekKey = OrdinalStrings.MaxBound(OrdinalStrings.MaxBound(continuationToken, resumeFromKey), startInclusive);
         scan.Phase = ScanPagePhase.Descent;
         GrainId leafId;
         if (state.State.RootIsLeaf)

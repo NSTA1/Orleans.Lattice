@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Tenancy;
@@ -25,7 +26,10 @@ internal sealed class TenantObservabilityView(
     TenantObservabilitySource source,
     ILatticeAccessGate accessGate,
     ITenantPolicyEngine engine,
-    ILatticeMembershipContext membership) : ITenantObservabilityView
+    ILatticeMembershipContext membership,
+    CompiledTenantPolicySnapshotMaintainer policy,
+    ITenantRegistry registry,
+    ILogger<TenantObservabilityView> logger) : ITenantObservabilityView
 {
     private readonly TenantObservabilitySource _source =
         source ?? throw new ArgumentNullException(nameof(source));
@@ -38,6 +42,15 @@ internal sealed class TenantObservabilityView(
 
     private readonly ILatticeMembershipContext _membership =
         membership ?? throw new ArgumentNullException(nameof(membership));
+
+    private readonly CompiledTenantPolicySnapshotMaintainer _policy =
+        policy ?? throw new ArgumentNullException(nameof(policy));
+
+    private readonly ITenantRegistry _registry =
+        registry ?? throw new ArgumentNullException(nameof(registry));
+
+    private readonly ILogger<TenantObservabilityView> _logger =
+        logger ?? throw new ArgumentNullException(nameof(logger));
 
     /// <inheritdoc />
     public async Task<TenantObservabilitySnapshot?> GetActiveTenantAsync(CancellationToken cancellationToken = default)
@@ -108,6 +121,24 @@ internal sealed class TenantObservabilityView(
         if (subject.IsAnonymous)
         {
             return null;
+        }
+
+        // The compiled snapshot answers only while it is authoritative. A
+        // rebuild in flight (or a failed one) means the snapshot may not yet
+        // reflect a just-removed admin or a just-deleted/suspended tenant, so
+        // this read path confirms directly against the registry rather than
+        // trust a snapshot it knows is stale - the same defence in depth
+        // TenantGateEnforcer applies on the enforcement path (issue #4065).
+        if (!_policy.IsSnapshotAuthoritative)
+        {
+            return await ActiveTenantRegistryConfirmation.ConfirmAsync(
+                _registry,
+                _policy.IsDelegatedAccessEnabled,
+                subject.SubjectId,
+                subject.GroupIds,
+                asserted,
+                _logger,
+                cancellationToken).ConfigureAwait(false);
         }
 
         // Group-aware when delegated tenant access administration is enabled, and

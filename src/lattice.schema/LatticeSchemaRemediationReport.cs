@@ -142,7 +142,7 @@ public readonly record struct LatticeSchemaRemediationReport
         && ScannedCount == other.ScannedCount
         && string.Equals(OffendingKey, other.OffendingKey, StringComparison.Ordinal)
         && string.Equals(Reason, other.Reason, StringComparison.Ordinal)
-        && BytesEqual(OffendingValuePreview, other.OffendingValuePreview)
+        && ByteArrayEquality.ContentEquals(OffendingValuePreview, other.OffendingValuePreview)
         && string.Equals(DestinationTreeId, other.DestinationTreeId, StringComparison.Ordinal)
         && string.Equals(OperationId, other.OperationId, StringComparison.Ordinal);
 
@@ -164,8 +164,4 @@ public readonly record struct LatticeSchemaRemediationReport
         hash.Add(OperationId, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }

@@ -36,7 +36,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
     public async Task<TenantRuleView> PutRuleAsync(
         string tenantId, TenantRuleDraft rule, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(rule);
 
         var record = await AuthorizeAsync(tenant, nameof(PutRuleAsync), answersWhileDisabled: false, cancellationToken)
@@ -159,7 +159,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
     public async Task<TenantRuleView?> GetRuleAsync(
         string tenantId, string ruleId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
 
         await AuthorizeAsync(tenant, nameof(GetRuleAsync), answersWhileDisabled: false, cancellationToken)
@@ -177,7 +177,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
     public async Task<bool> RemoveRuleAsync(
         string tenantId, string ruleId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
 
         await AuthorizeAsync(tenant, nameof(RemoveRuleAsync), answersWhileDisabled: false, cancellationToken)
@@ -203,7 +203,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
     public async Task<TenantRulePage> ListRulesAsync(
         string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(page);
 
         await AuthorizeAsync(tenant, nameof(ListRulesAsync), answersWhileDisabled: false, cancellationToken)

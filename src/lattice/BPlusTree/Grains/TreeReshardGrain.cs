@@ -168,7 +168,7 @@ internal sealed class TreeReshardGrain(
             var previousHighestShardIndex = Math.Max(
                 resolved.ShardCount - 1,
                 previousIndices.Count > 0 ? previousIndices[previousIndices.Count - 1] : -1);
-            await ApplyEmptyTreeResharAsync(registry, newShardCount, virtualShardCount, previousHighestShardIndex);
+            await ApplyEmptyTreeResharAsync(registry, currentMap, newShardCount, virtualShardCount, previousHighestShardIndex);
             return;
         }
 
@@ -793,6 +793,62 @@ internal sealed class TreeReshardGrain(
         return -1;
     }
 
+    /// <summary>
+    /// Groups every virtual slot whose owner differs between
+    /// <paramref name="currentMap"/> and <paramref name="newMap"/> by its
+    /// previous owner, so each old owner can be fenced in one call. Returns an
+    /// empty array when the current map uses a different virtual-slot space,
+    /// since its slot indices are then not comparable with the new map's.
+    /// </summary>
+    private static MovedSlotFence[] CollectMovedSlotFences(ShardMap currentMap, ShardMap newMap, int virtualShardCount)
+    {
+        if (currentMap.VirtualShardCount != virtualShardCount || newMap.VirtualShardCount != virtualShardCount)
+        {
+            return [];
+        }
+
+        SortedDictionary<int, (List<int> Slots, List<int> NewOwners)>? byOldOwner = null;
+        for (var slot = 0; slot < virtualShardCount; slot++)
+        {
+            var oldOwner = currentMap.Slots[slot];
+            var newOwner = newMap.Slots[slot];
+            if (oldOwner == newOwner)
+            {
+                continue;
+            }
+
+            byOldOwner ??= [];
+            if (!byOldOwner.TryGetValue(oldOwner, out var group))
+            {
+                group = ([], []);
+                byOldOwner[oldOwner] = group;
+            }
+
+            group.Slots.Add(slot);
+            group.NewOwners.Add(newOwner);
+        }
+
+        if (byOldOwner is null)
+        {
+            return [];
+        }
+
+        var fences = new MovedSlotFence[byOldOwner.Count];
+        var index = 0;
+        foreach (var (oldOwner, group) in byOldOwner)
+        {
+            fences[index++] = new MovedSlotFence(oldOwner, [.. group.Slots], [.. group.NewOwners]);
+        }
+
+        return fences;
+    }
+
+    /// <summary>
+    /// The virtual slots one previous owner gives up in an empty-tree reshard,
+    /// paired with the shard each slot moves to.
+    /// </summary>
+    private readonly record struct MovedSlotFence(int OldOwner, int[] Slots, int[] NewOwners);
+
     private async Task DispatchSplitAsync(ITreeShardSplitGrain split, int sourceShardIndex)
     {
         try
@@ -931,9 +987,18 @@ internal sealed class TreeReshardGrain(
     /// <paramref name="previousHighestShardIndex"/> in the same write as the
     /// pin, so a shrink's dropped shards - which may still hold tombstones -
     /// stay inside every later delete, recover and purge walk (issue #4234).
+    /// Every slot whose owner changes is fenced on its previous owner before
+    /// any new owner is revived or the map is published, and each new owner
+    /// then reclaims the slots it now owns, so a router still holding
+    /// <paramref name="currentMap"/> is redirected rather than writing to a
+    /// shard that no longer owns the slot (issue #4066).
     /// </summary>
     private async Task ApplyEmptyTreeResharAsync(
-        ILatticeRegistry registry, int newShardCount, int virtualShardCount, int previousHighestShardIndex)
+        ILatticeRegistry registry,
+        ShardMap currentMap,
+        int newShardCount,
+        int virtualShardCount,
+        int previousHighestShardIndex)
     {
         var newMap = ShardMap.CreateDefault(virtualShardCount, newShardCount);
 
@@ -951,9 +1016,30 @@ internal sealed class TreeReshardGrain(
             if (ordinal >= 0) ownedSlots[ordinal].Add(slot);
         }
 
-        await BoundedFanOut.RunAsync(indices.Count, BoundedFanOut.DefaultWidth, i =>
-            grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{indices[i]}")
-                .ReviveAsync([.. ownedSlots[i]], virtualShardCount));
+        // Fence every moved slot on the shard giving it up before any router
+        // can be handed the new map. A router still on the old map would
+        // otherwise keep writing to the old owner, where the data is
+        // invisible to every reader on the new map. A failed fence aborts the
+        // reshard before the map is published.
+        var fences = CollectMovedSlotFences(currentMap, newMap, virtualShardCount);
+        if (fences.Length > 0)
+        {
+            await BoundedFanOut.RunAsync(fences.Length, BoundedFanOut.DefaultWidth, i =>
+                grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{fences[i].OldOwner}")
+                    .FenceMovedSlotsAsync(fences[i].Slots, fences[i].NewOwners, virtualShardCount));
+        }
+
+        await BoundedFanOut.RunAsync(indices.Count, BoundedFanOut.DefaultWidth, async i =>
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{indices[i]}");
+            int[] owned = [.. ownedSlots[i]];
+            await shard.ReviveAsync(owned, virtualShardCount);
+
+            // Lift any fence this shard still holds on a slot it now owns, as
+            // a regular reshard swap does, so a grow back onto a shard that
+            // once gave a slot away does not keep refusing it.
+            await shard.ReclaimSlotsAsync(owned, virtualShardCount);
+        });
 
         await UpdateShardCountPinAsync(newShardCount, previousHighestShardIndex);
         await registry.SetShardMapAsync(TreeId, newMap);

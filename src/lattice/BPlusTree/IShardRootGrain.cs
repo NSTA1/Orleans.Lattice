@@ -822,6 +822,28 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task ReviveAsync(int[] ownedSlots, int virtualShardCount);
 
     /// <summary>
+    /// Fences this shard against the virtual slots a routing map being published
+    /// takes away from it: records each slot in <paramref name="slots"/> as moved
+    /// to the shard at the same position in <paramref name="newOwners"/>, persists
+    /// that fence, and marks this shard's leaves so a write or read routed here by
+    /// a caller still holding the previous map is refused with a stale-routing
+    /// redirect instead of being served. Idempotent: re-fencing slots already
+    /// fenced to the same owners writes nothing. A fence recorded under a
+    /// different virtual slot count is replaced, because it cannot be read
+    /// against this map.
+    /// <para>
+    /// Only valid when the routing map is being rebuilt over an observably empty
+    /// tree - the online reshard's empty-tree path, which moves slots without a
+    /// split or consolidation and so has no other seam that fences the previous
+    /// owner (issue #4066). It must complete before the new map is published.
+    /// </para>
+    /// </summary>
+    /// <param name="slots">The virtual slots the map being published moves off this shard.</param>
+    /// <param name="newOwners">The physical shard index each slot moves to, positionally matched to <paramref name="slots"/>.</param>
+    /// <param name="virtualShardCount">The virtual slot count of that map.</param>
+    Task FenceMovedSlotsAsync(int[] slots, int[] newOwners, int virtualShardCount);
+
+    /// <summary>
     /// Returns <c>true</c> once <see cref="RetireAsync"/> has retired this shard.
     /// </summary>
     Task<bool> IsRetiredAsync();

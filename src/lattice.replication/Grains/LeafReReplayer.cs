@@ -104,7 +104,7 @@ internal static class LeafReReplayer
             {
                 continue;
             }
-            if (!InAnyRange(e.Key, ranges))
+            if (!LeafReReplayRanges.AnyContains(ranges, e.Key))
             {
                 continue;
             }
@@ -271,18 +271,6 @@ internal static class LeafReReplayer
         }
 
         return result;
-    }
-
-    private static bool InAnyRange(string? key, IReadOnlyList<LeafReReplayRange> ranges)
-    {
-        for (var i = 0; i < ranges.Count; i++)
-        {
-            if (ranges[i].Contains(key))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 
     // The byte cap is applied to a cheap estimate of each entry's payload size

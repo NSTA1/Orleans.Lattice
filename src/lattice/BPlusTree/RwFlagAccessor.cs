@@ -156,19 +156,19 @@ public readonly record struct RwFlagAccessor
     /// <summary>Mints the remove-wins enable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
     private static RwFlagDelta EnableDelta(RwFlag flag, string replicaId)
     {
-        var counter = NextCounter(flag, replicaId);
+        var counter = ObservedRemoveDots.NextCounter(flag, replicaId);
         return new RwFlagDelta
         {
             Enables = new[] { new OrSetDot { ReplicaId = replicaId, Counter = counter } },
             Disables = Array.Empty<OrSetDot>(),
-            Tombstones = ObservedDisables(flag),
+            Tombstones = ObservedRemoveDots.ObservedDisables(flag),
         };
     }
 
     /// <summary>Mints the remove-wins disable delta for <paramref name="replicaId"/> against <paramref name="flag"/>.</summary>
     private static RwFlagDelta DisableDelta(RwFlag flag, string replicaId)
     {
-        var counter = NextCounter(flag, replicaId);
+        var counter = ObservedRemoveDots.NextCounter(flag, replicaId);
         return new RwFlagDelta
         {
             Enables = Array.Empty<OrSetDot>(),
@@ -192,35 +192,6 @@ public readonly record struct RwFlagAccessor
             Disables = other.Disables.ToArray(),
             Tombstones = other.Tombstones.ToArray(),
         }, cancellationToken, maxAttempts);
-    }
-
-    private static OrSetDot[] ObservedDisables(RwFlag flag)
-    {
-        if (flag.Disables.Count == 0) return Array.Empty<OrSetDot>();
-        var observed = new OrSetDot[flag.Disables.Count];
-        for (var i = 0; i < flag.Disables.Count; i++)
-        {
-            observed[i] = flag.Disables[i];
-        }
-        return observed;
-    }
-
-    private static long NextCounter(RwFlag flag, string replicaId)
-    {
-        long max = 0;
-        foreach (var d in flag.Enables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Disables)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        foreach (var d in flag.Tombstones)
-        {
-            if (d.ReplicaId == replicaId && d.Counter > max) max = d.Counter;
-        }
-        return max + 1;
     }
 
     private async Task MutateAsync(

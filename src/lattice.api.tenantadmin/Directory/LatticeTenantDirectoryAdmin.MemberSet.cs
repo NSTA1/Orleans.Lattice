@@ -8,7 +8,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
     public async Task<TenantMemberPage> ListMembersAsync(
         string tenantId, TenantAccessPageRequest page, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(page);
 
         var record = await AuthorizeAsync(tenant, "list-members", cancellationToken).ConfigureAwait(false);
@@ -51,7 +51,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateEntry(subjectId, subjectKind, nameof(subjectId), nameof(subjectKind));
 
         var record = await AuthorizeAsync(tenant, "add-member", cancellationToken).ConfigureAwait(false);
@@ -114,7 +114,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateEntry(subjectId, subjectKind, nameof(subjectId), nameof(subjectKind));
 
         var record = await AuthorizeAsync(tenant, "remove-member", cancellationToken).ConfigureAwait(false);
@@ -141,7 +141,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateEntry(subjectId, subjectKind, nameof(subjectId), nameof(subjectKind));
 
         var record = await AuthorizeAsync(tenant, "resolve-subject", cancellationToken).ConfigureAwait(false);

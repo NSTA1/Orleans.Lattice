@@ -766,17 +766,17 @@ internal sealed partial class TreeDeletionGrain(
         && !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal);
 
     /// <summary>
-    /// Finishes a purge whose completion is persisted: trims a discarded copy's
-    /// log while its registry entry still resolves the partition count and
-    /// placement, removes the registry entry, then retires the cursors and
-    /// reminders and publishes the purge. Safe to re-drive after a failure: a
-    /// removal still owed is recorded in
+    /// Finishes a purge whose completion is persisted: trims the tree's log
+    /// while its registry entry still resolves the partition count and
+    /// placement (issue #3936 - otherwise a purge that never discarded leaves
+    /// no cursor behind to ever trim it again), removes the registry entry,
+    /// then retires the cursors and reminders and publishes the purge. Safe to
+    /// re-drive after a failure: a removal still owed is recorded in
     /// <see cref="TreeDeletionState.RegistryUnregisterPending"/> (issue #4265).
     /// </summary>
     private async Task FinishCompletedPurgeAsync()
     {
-        if (state.State.Discarded)
-            await TrimDiscardedWalAsync();
+        await TrimPurgedWalAsync();
         await SettleRegistryEntryAsync();
 
         await DeregisterLeafCursorsAsync();

@@ -33,7 +33,7 @@ internal readonly record struct LatticeQueueByteEntry
     /// <param name="other">The entry to compare against.</param>
     public bool Equals(LatticeQueueByteEntry other) =>
         EntryId == other.EntryId
-        && BytesEqual(Value, other.Value);
+        && ByteArrayEquality.ContentEquals(Value, other.Value);
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -47,8 +47,4 @@ internal readonly record struct LatticeQueueByteEntry
 
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
