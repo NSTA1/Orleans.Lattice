@@ -146,6 +146,7 @@ public static class RepoContextEffectiveConfiguration
             RepoContextHostConfiguration.WalDirKey,
             RepoContextHostConfiguration.SqlitePathKey,
             RepoContextHostConfiguration.SqliteAutoVacuumKey,
+            RepoContextHostConfiguration.SqliteSnapshotSweepKey,
             RepoContextHostConfiguration.AzureWalTableKey,
             RepoContextHostConfiguration.EmbeddingEndpointKey,
             RepoContextHostConfiguration.EmbeddingModelKey,

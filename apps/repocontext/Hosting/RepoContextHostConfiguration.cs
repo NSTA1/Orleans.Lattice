@@ -45,6 +45,13 @@ public sealed class RepoContextHostConfiguration
     public const string SqliteAutoVacuumKey = "LATTICE_SQLITE_AUTO_VACUUM";
 
     /// <summary>
+    /// Environment variable selecting the startup sweep of stranded leaf snapshot storage
+    /// in the SQLite grain store: <c>off</c> (the default), <c>report</c>, or <c>delete</c>.
+    /// See <see cref="SqliteSnapshotOrphanSweep"/>.
+    /// </summary>
+    public const string SqliteSnapshotSweepKey = "LATTICE_SQLITE_SNAPSHOT_SWEEP";
+
+    /// <summary>
     /// Environment variable for the absolute dead-byte ceiling that forces a file WAL
     /// compaction regardless of the dead-byte ratio. Zero (the default) leaves the
     /// ceiling disabled, so only the ratio trigger applies.
@@ -107,6 +114,7 @@ public sealed class RepoContextHostConfiguration
         string walDirectory,
         string sqlitePath,
         SqliteAutoVacuumMode sqliteAutoVacuum,
+        SqliteSnapshotSweepMode sqliteSnapshotSweep,
         long walCompactionMaximumDeadBytes,
         string? postgresConnectionString,
         string? azureConnectionString,
@@ -128,6 +136,7 @@ public sealed class RepoContextHostConfiguration
         WalDirectory = walDirectory;
         SqlitePath = sqlitePath;
         SqliteAutoVacuum = sqliteAutoVacuum;
+        SqliteSnapshotSweep = sqliteSnapshotSweep;
         WalCompactionMaximumDeadBytes = walCompactionMaximumDeadBytes;
         PostgresConnectionString = postgresConnectionString;
         AzureConnectionString = azureConnectionString;
@@ -172,6 +181,13 @@ public sealed class RepoContextHostConfiguration
     /// SQLite's freelist for ever.
     /// </summary>
     public SqliteAutoVacuumMode SqliteAutoVacuum { get; }
+
+    /// <summary>
+    /// Whether the SQLite grain store is swept for stranded leaf snapshot storage before
+    /// the silo starts, and whether the sweep deletes. <see cref="SqliteSnapshotSweepMode.Off"/>
+    /// by default.
+    /// </summary>
+    public SqliteSnapshotSweepMode SqliteSnapshotSweep { get; }
 
     /// <summary>
     /// The absolute dead-byte ceiling that forces a file WAL compaction regardless of
@@ -265,6 +281,7 @@ public sealed class RepoContextHostConfiguration
         var walDirectory = Trimmed(configuration[WalDirKey]) ?? CombinePath(dataRoot, "wal");
         var sqlitePath = Trimmed(configuration[SqlitePathKey]) ?? CombinePath(dataRoot, "repocontext.db");
         var sqliteAutoVacuum = ParseAutoVacuum(configuration[SqliteAutoVacuumKey]) ?? SqliteAutoVacuumMode.Incremental;
+        var sqliteSnapshotSweep = ParseSnapshotSweep(configuration[SqliteSnapshotSweepKey]) ?? SqliteSnapshotSweepMode.Off;
 
         var postgresConnectionString = Trimmed(configuration[PostgresConnectionKey]);
         var azureConnectionString = Trimmed(configuration[AzureConnectionKey]);
@@ -293,6 +310,7 @@ public sealed class RepoContextHostConfiguration
             walDirectory,
             sqlitePath,
             sqliteAutoVacuum,
+            sqliteSnapshotSweep,
             walCompactionMaximumDeadBytes,
             postgresConnectionString,
             azureConnectionString,
@@ -426,6 +444,20 @@ public sealed class RepoContextHostConfiguration
             "none" or "off" => SqliteAutoVacuumMode.None,
             _ => throw new InvalidOperationException(
                 $"{SqliteAutoVacuumKey}='{raw}' is not a known auto_vacuum mode (incremental, full, none)."),
+        };
+    }
+
+    private static SqliteSnapshotSweepMode? ParseSnapshotSweep(string? raw)
+    {
+        var value = Trimmed(raw);
+        return value?.ToLowerInvariant() switch
+        {
+            null => null,
+            "off" or "none" => SqliteSnapshotSweepMode.Off,
+            "report" => SqliteSnapshotSweepMode.Report,
+            "delete" => SqliteSnapshotSweepMode.Delete,
+            _ => throw new InvalidOperationException(
+                $"{SqliteSnapshotSweepKey}='{raw}' is not a known snapshot sweep mode (off, report, delete)."),
         };
     }
 
