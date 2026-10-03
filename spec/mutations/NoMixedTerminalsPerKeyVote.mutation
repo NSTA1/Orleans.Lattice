@@ -6,6 +6,7 @@ MODULE: NoMixedTerminalsPerKeyVote
 TARGET: NoMixedTerminals
 CLASS: Invariant
 SUMMARY: derives each leaf's terminal from its own vote, so one saga both commits and aborts
+PERTURBS: BroadcastStep
 
 --- FIND
     /\ LET kind == IF phase[t] = "committing" THEN "commit" ELSE "abort"

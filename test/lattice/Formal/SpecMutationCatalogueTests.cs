@@ -31,7 +31,7 @@ public sealed class SpecMutationCatalogueTests
     /// </summary>
     private const int ExpectedInvariantCount = 7;
 
-    private const int ExpectedTemporalPropertyCount = 5;
+    private const int ExpectedTemporalPropertyCount = 6;
 
     private static string SpecDirectory => Path.Combine(HygieneRepository.FindRepoRoot(), "spec");
 
@@ -46,18 +46,28 @@ public sealed class SpecMutationCatalogueTests
     /// <summary>
     /// Completeness, driven by the model rather than by a hand-maintained list.
     /// Every name in the base cfg's INVARIANTS and PROPERTIES blocks must have
-    /// a mutation, so adding a property without pairing it fails here.
+    /// at least one mutation, so adding a property without pairing it fails
+    /// here.
     /// <para>
     /// This is the gate that keeps #2323 closed rather than merely satisfied
     /// once. A pairing rule that covers today's properties but not tomorrow's
     /// decays into exactly the state the audit found.
+    /// </para>
+    /// <para>
+    /// At least one, not exactly one. A property may be the one that catches
+    /// defects in several protocol actions, and issue #2322 asks for each
+    /// action's claim to ship with a mutation of its own; requiring one
+    /// mutation per property would force those into a single file or leave the
+    /// action rows unpaired. What must stay unique is the mutation, so two
+    /// files cannot claim to be the same experiment.
     /// </para>
     /// </summary>
     [Test]
     public void Every_property_the_base_model_checks_has_a_mutation()
     {
         var checkedProperties = SpecMutationCatalogue.ReadCheckedProperties(BaseConfig);
-        var paired = Mutations().Select(m => m.Target).ToArray();
+        var mutations = Mutations();
+        var paired = mutations.Select(m => m.Target).Distinct(StringComparer.Ordinal).ToArray();
 
         Assert.That(
             checkedProperties,
@@ -72,7 +82,10 @@ public sealed class SpecMutationCatalogueTests
             + $"Model checks: [{string.Join(", ", checkedProperties.Order(StringComparer.Ordinal))}]. "
             + $"Mutations target: [{string.Join(", ", paired.Order(StringComparer.Ordinal))}].");
 
-        Assert.That(paired, Is.Unique, "two mutations target the same property; each needs its own.");
+        Assert.That(
+            mutations.Select(m => m.Module),
+            Is.Unique,
+            "two mutations generate the same module name, so one mutant would overwrite the other.");
     }
 
     /// <summary>

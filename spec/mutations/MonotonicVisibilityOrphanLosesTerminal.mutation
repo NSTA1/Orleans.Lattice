@@ -1,0 +1,23 @@
+# Pairs with MonotonicVisibility. A reshard shadow-forward installs the stale
+# prepared write on a leaf that has no record of the saga's terminal - a split
+# destination the terminal never reached - rather than on one that already
+# applied it. The orphan guard then has nothing to stand on: once the registry
+# row has been retired the bucket resolves InFlight, the gate falls through to a
+# projection that never received the commit, and a key a reader saw post-saga
+# reverts. This is the stranded-prepare class (#2318) at design level, and why
+# the action's guard requires the terminal to be present.
+MODULE: MonotonicVisibilityOrphanLosesTerminal
+TARGET: MonotonicVisibility
+CLASS: Action
+SUMMARY: shadow-forwards an orphan onto a leaf with no record of the terminal, so a committed key reverts once the row is retired
+PERTURBS: ShadowForwardOrphan
+
+--- FIND
+    /\ pend' = [pend EXCEPT ![t][k] = "pending"]
+    /\ UNCHANGED <<phase, vote, decision, terminal, orphanDone, forgotten, masked, revision>>
+--- REPLACE
+\* MUTATION: the destination leaf holds no applied terminal for the saga.
+    /\ pend' = [pend EXCEPT ![t][k] = "pending"]
+    /\ terminal' = [terminal EXCEPT ![t][k] = "none"]
+    /\ UNCHANGED <<phase, vote, decision, orphanDone, forgotten, masked, revision>>
+--- END

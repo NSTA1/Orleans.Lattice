@@ -67,6 +67,20 @@ public sealed record SpecMutation
     public required IReadOnlyList<SpecEdit> Edits { get; init; }
 
     /// <summary>
+    /// The protocol actions in <c>Next</c> whose definitions this mutation
+    /// edits, from the optional <c>PERTURBS:</c> header. Empty for a mutation
+    /// that perturbs a read definition, a fairness assumption, or that splices
+    /// in an action the protocol does not have.
+    /// <para>
+    /// A declaration, and so a claim: <see cref="SpecActionMutationCoverageTests"/>
+    /// checks each name against the edits rather than trusting it, because a
+    /// coverage table whose entries nobody verifies is the artefact this
+    /// directory was written to replace.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<string> Perturbs { get; init; } = [];
+
+    /// <summary>
     /// The exact text TLC emits when <see cref="Target"/> is violated.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
@@ -77,8 +91,8 @@ public sealed record SpecMutation
     /// the generated cfg naming exactly one property, which the caller also
     /// asserts by counting violation lines. Worth stating rather than leaving
     /// as a silent gap, because "assert the banner names the property" is the
-    /// rule everywhere else here and it simply cannot be applied to two of the
-    /// twelve.
+    /// rule everywhere else here and it simply cannot be applied to the
+    /// liveness properties.
     /// </para>
     /// </summary>
     public string ExpectedBanner => PropertyClass switch
@@ -341,6 +355,9 @@ public static class SpecMutationCatalogue
             PropertyClass = Enum.Parse<SpecPropertyClass>(Require(metadata, "CLASS", name), ignoreCase: true),
             Summary = Require(metadata, "SUMMARY", name),
             Edits = edits,
+            Perturbs = metadata.TryGetValue("PERTURBS", out var perturbs)
+                ? perturbs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                : [],
         };
     }
 

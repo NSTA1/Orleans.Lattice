@@ -5,6 +5,7 @@ MODULE: CommitIntegrityIgnoresVotes
 TARGET: CommitIntegrity
 CLASS: Invariant
 SUMMARY: records commit without consulting the prepare votes, so a nacked saga commits
+PERTURBS: DecideTx
 
 --- FIND
     /\ decision' = [decision EXCEPT ![t] = IF AllAcked(t) THEN "committed" ELSE "aborted"]

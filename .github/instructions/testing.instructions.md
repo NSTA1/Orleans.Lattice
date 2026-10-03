@@ -908,7 +908,8 @@ sibling models did not yet encode. Each of its assertions has a companion guard
 | `MonotonicVisibility` | Once a committed value is observed visible it stays visible (no regression except by a later committed write/tombstone, none of which this model injects). | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` records `EverVisible[k]` and asserts a once-visible key never reverts; the cross-round/reshard form is covered by `ReshardMigrationModel`. | `Flipping_a_recorded_decision_violates_decision_durability` (a flip to abort re-hides a committed key). | Net-new (single-saga temporal) + cited (reshard). |
 | `RevisionMonotonic` | The registry revision counter never decreases; a stale-revision snapshot is exactly what the reader-side probe rejects. | `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `core.Revision >= previousRevision` after every mutation. | `Lowering_the_revision_counter_violates_revision_monotonicity`. | Net-new (explicit assertion; `AtomicCommitVisibilityModel` relies on it via the probe but does not assert it directly). |
 | `Termination` | Every saga reaches a terminal decision under a bounded fault budget (no permanent stall). | `SagaCoordinatorCore` + registry (Phase 4) | `AtomicCommitLivenessModel` drives to the budget-exhausted point and asserts the good terminal state. | `AtomicCommitLivenessModel` guard test (backstop removed) in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
-| `EveryCommittedKeyReadable` | Every stable committed key eventually becomes readable (bounded-progress liveness). | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal. | `AtomicCommitLivenessModel` guard test in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+| `EveryCommittedKeyReadable` | Every stable committed key eventually becomes readable (bounded-progress liveness). The TLA+ form also admits a key hidden while the registry reports `Indeterminate`, which the bounded model never injects, so the model asserts the stronger post-saga form. | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal. | `AtomicCommitLivenessModel` guard test in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
+| `NoStrandedPrepare` | Every participant of a decided saga eventually applies the saga's terminal, so no prepared bucket is stranded. | Broadcast + drain (Phase 4) | `AtomicCommitLivenessModel` asserts every leaf reached the saga terminal at the bounded terminal (its "progress property 1"). | `AtomicCommitLivenessModel` guard test in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
 
 **Net-new assertions this phase** (properties not previously asserted by any
 model): `VisibilityMatchesDecision`, `StrictIsolation`, `LinearizedTerminals`,
@@ -920,13 +921,13 @@ six tests in `AtomicCommitInvariantCoyoteTests` (one per `AtomicCommitInvariantG
 
 **Cited (already-covered) properties**: `AllOrNothing` and the cross-round form of
 `MonotonicVisibility` (`AtomicCommitVisibilityModel` / `ReshardMigrationModel`),
-`CommitIntegrity` (`SagaCoordinatorModel`), `Termination` and
-`EveryCommittedKeyReadable` (`AtomicCommitLivenessModel`), and the serialized
+`CommitIntegrity` (`SagaCoordinatorModel`), `Termination`,
+`EveryCommittedKeyReadable` and `NoStrandedPrepare` (`AtomicCommitLivenessModel`), and the serialized
 write-once forms of `NoMixedTerminals` / `DecisionDurability`
 (`TerminalDecisionGuardTests`). These are catalogued but not re-encoded, to avoid
 duplicating a non-vacuous assertion an existing model already makes.
 
-**Gap analysis.** All eleven TLA+ invariants have a live model home above; none is
+**Gap analysis.** All twelve TLA+ invariants have a live model home above; none is
 recorded as out-of-scope. The wall-clock, real-RPC, grain-local synchronous-state,
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.

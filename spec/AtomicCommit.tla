@@ -64,13 +64,19 @@ Written(t) == TxWrites[t]
 (*                RegistryView(t) is what a reader actually resolves - the *)
 (*                same split the Coyote model makes between its recorded   *)
 (*                outcome and a live read of the registry core.            *)
+(*  masked[t]     whether the registry is currently declining to report a  *)
+(*                decision it still holds (TxStatus.Indeterminate): the    *)
+(*                tombstone retention window has elapsed on a row that is  *)
+(*                still stored, or a snapshot pin has not yet re-exposed   *)
+(*                it. Unlike forgotten[t] it carries no ordering guarantee *)
+(*                against the participants - see RegistryMask below.       *)
 (*  revision      monotonic registry revision (DecisionsRevision), bumped  *)
 (*                on every decision write and on the cleanup that retires  *)
 (*                one (both change the surface a reader probes).           *)
 (***************************************************************************)
-VARIABLES phase, vote, decision, terminal, pend, orphanDone, forgotten, revision
+VARIABLES phase, vote, decision, terminal, pend, orphanDone, forgotten, masked, revision
 
-vars == <<phase, vote, decision, terminal, pend, orphanDone, forgotten, revision>>
+vars == <<phase, vote, decision, terminal, pend, orphanDone, forgotten, masked, revision>>
 
 Phases == {"init", "prepared", "committing", "aborting", "done"}
 
@@ -82,6 +88,7 @@ TypeOK ==
    /\ pend \in [Txns -> [Keys -> {"none", "pending"}]]
    /\ orphanDone \in [Txns -> [Keys -> BOOLEAN]]
    /\ forgotten \in [Txns -> BOOLEAN]
+   /\ masked \in [Txns -> BOOLEAN]
    /\ revision \in 0..(2 * Cardinality(Txns))
 
 (***************************************************************************)
@@ -89,38 +96,64 @@ TypeOK ==
 (*                                                                         *)
 (* AlreadyTerminal(t,k) mirrors AtomicVisibilityGate's alreadyTerminal     *)
 (* input; ProjectedPrepared(t,k) is the leaf's materialised (visible)      *)
-(* projection for the key under this saga. Gate(t,k) is the exact rule of  *)
-(* AtomicVisibilityGate.ResolveKey (minus the tombstone/TTL "hidden" case, *)
-(* which the issue puts out of scope for the abstract model): a pending    *)
-(* bucket surfaces its prepared value iff the saga committed and this leaf *)
-(* has not already applied a terminal (so a late shadow-forward orphan     *)
-(* bucket falls through to the authoritative projection instead of         *)
-(* shadowing it).                                                          *)
+(* projection for the key under this saga. SurfaceViaGate(t,k) is the      *)
+(* committed arm of AtomicVisibilityGate.ResolveKey (minus the             *)
+(* tombstone/TTL "hidden" case on the prepared VALUE, which the issue puts *)
+(* out of scope for the abstract model): a pending bucket surfaces its     *)
+(* prepared value iff the saga committed and this leaf has not already     *)
+(* applied a terminal (so a late shadow-forward orphan bucket falls        *)
+(* through to the authoritative projection instead of shadowing it).      *)
 (*                                                                         *)
-(* ObservedPrepared(t,k) is what a single snapshot read of the key         *)
-(* resolves to: TRUE = the post-saga (prepared) value, FALSE = the         *)
-(* pre-saga value. Resolving every key of a fan-out against the SAME       *)
-(* decision[t] is the linearization that makes a saga all-or-nothing       *)
-(* visible (TxDecisionView).                                               *)
+(* Observed(t,k) is what a single snapshot read of the key resolves to,    *)
+(* and it has three values, not two:                                       *)
+(*   "post"   - the post-saga (prepared) value;                            *)
+(*   "pre"    - the pre-saga value;                                        *)
+(*   "hidden" - no value: the gate's Indeterminate arm, taken when the     *)
+(*              registry declines to report a decision it still holds.    *)
+(* "hidden" is not a value, and the properties below treat it as one at    *)
+(* their peril: it asserts nothing about the saga, which is exactly why    *)
+(* the gate prefers it to falling through. Reading it as "pre" is the      *)
+(* defect AtomicVisibilityGate exists to refuse, so every property that    *)
+(* constrains a pre-saga observation names "pre" explicitly.               *)
+(*                                                                         *)
+(* Resolving every key of a fan-out against the SAME registry view is the  *)
+(* linearization that makes a saga all-or-nothing visible (TxDecisionView).*)
 (***************************************************************************)
 AlreadyTerminal(t, k)  == terminal[t][k] # "none"
 ProjectedPrepared(t, k) == terminal[t][k] = "commit"
 
 (***************************************************************************)
 (* What a reader's GetStatusAsync actually resolves for the saga. A txid    *)
-(* absent from the registry view is InFlight (:104 below), so once the      *)
-(* cleanup has retired the row the view reverts to "inflight" even though   *)
-(* the saga's outcome (decision[t]) is unchanged. Only the gate consults    *)
-(* this; the invariants below are stated against decision[t], the outcome.  *)
+(* absent from the registry view is InFlight, so once the cleanup has       *)
+(* retired the row the view reverts to "inflight" even though the saga's    *)
+(* outcome (decision[t]) is unchanged. A row the registry still holds but   *)
+(* has stopped reporting resolves to "indeterminate". Only the gate         *)
+(* consults this; the invariants below are stated against decision[t], the  *)
+(* outcome.                                                                 *)
 (***************************************************************************)
-RegistryView(t) == IF forgotten[t] THEN "inflight" ELSE decision[t]
+RegistryView(t) ==
+    IF forgotten[t] THEN "inflight"
+    ELSE IF masked[t] THEN "indeterminate"
+    ELSE decision[t]
 
 SurfaceViaGate(t, k) == RegistryView(t) = "committed" /\ ~AlreadyTerminal(t, k)
 
-ObservedPrepared(t, k) ==
+Projected(t, k) == IF ProjectedPrepared(t, k) THEN "post" ELSE "pre"
+
+\* The Indeterminate arm is tested FIRST, ahead of the orphan guard, because
+\* AtomicVisibilityGate.ResolveKey tests it first: under an outcome the
+\* registry declined to report there is no basis to prefer the projection
+\* over the prepared value, so neither is served.
+Observed(t, k) ==
     IF pend[t][k] = "pending"
-    THEN IF SurfaceViaGate(t, k) THEN TRUE ELSE ProjectedPrepared(t, k)
-    ELSE ProjectedPrepared(t, k)
+    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE Projected(t, k)
+    ELSE Projected(t, k)
+
+ObservedPrepared(t, k) == Observed(t, k) = "post"
+
+ObservedPreSaga(t, k) == Observed(t, k) = "pre"
 
 (***************************************************************************)
 (* Initial state: nothing started, every txid resolves to InFlight (the    *)
@@ -135,6 +168,7 @@ Init ==
     /\ pend = [t \in Txns |-> [k \in Keys |-> "none"]]
     /\ orphanDone = [t \in Txns |-> [k \in Keys |-> FALSE]]
     /\ forgotten = [t \in Txns |-> FALSE]
+    /\ masked = [t \in Txns |-> FALSE]
     /\ revision = 0
 
 (***************************************************************************)
@@ -154,7 +188,7 @@ PrepareTx(t) ==
     /\ pend' = [pend EXCEPT ![t] =
                   [k \in Keys |-> IF k \in Written(t) THEN "pending" ELSE pend[t][k]]]
     /\ phase' = [phase EXCEPT ![t] = "prepared"]
-    /\ UNCHANGED <<decision, terminal, orphanDone, forgotten, revision>>
+    /\ UNCHANGED <<decision, terminal, orphanDone, forgotten, masked, revision>>
 
 AllAcked(t) == \A k \in Written(t) : vote[t][k] = "ack"
 
@@ -171,7 +205,7 @@ DecideTx(t) ==
     /\ decision' = [decision EXCEPT ![t] = IF AllAcked(t) THEN "committed" ELSE "aborted"]
     /\ phase' = [phase EXCEPT ![t] = IF AllAcked(t) THEN "committing" ELSE "aborting"]
     /\ revision' = revision + 1
-    /\ UNCHANGED <<vote, terminal, pend, orphanDone, forgotten>>
+    /\ UNCHANGED <<vote, terminal, pend, orphanDone, forgotten, masked>>
 
 (***************************************************************************)
 (* BroadcastStep(t,k): one participant leaf applies the saga's terminal    *)
@@ -190,7 +224,7 @@ BroadcastStep(t, k) ==
        IN /\ terminal' = [terminal EXCEPT ![t] = nterm]
           /\ pend' = [pend EXCEPT ![t][k] = "none"]
           /\ phase' = [phase EXCEPT ![t] = IF allDone THEN "done" ELSE phase[t]]
-    /\ UNCHANGED <<vote, decision, orphanDone, forgotten, revision>>
+    /\ UNCHANGED <<vote, decision, orphanDone, forgotten, masked, revision>>
 
 (***************************************************************************)
 (* Reshard / migration interplay (abstract, the #1584 class at design      *)
@@ -212,7 +246,7 @@ ShadowForwardOrphan(t, k) ==
     /\ pend[t][k] = "none"
     /\ ~orphanDone[t][k]
     /\ pend' = [pend EXCEPT ![t][k] = "pending"]
-    /\ UNCHANGED <<phase, vote, decision, terminal, orphanDone, forgotten, revision>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, orphanDone, forgotten, masked, revision>>
 
 OrphanDrain(t, k) ==
     /\ k \in Written(t)
@@ -221,7 +255,7 @@ OrphanDrain(t, k) ==
     /\ ~orphanDone[t][k]
     /\ pend' = [pend EXCEPT ![t][k] = "none"]
     /\ orphanDone' = [orphanDone EXCEPT ![t][k] = TRUE]
-    /\ UNCHANGED <<phase, vote, decision, terminal, forgotten, revision>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, forgotten, masked, revision>>
 
 (***************************************************************************)
 (* ForgetDecision(t): the saga's post-fan-out cleanup retires the registry  *)
@@ -244,15 +278,13 @@ OrphanDrain(t, k) ==
 (* is reachable without any flip, any late terminal, or any re-delivery.    *)
 (*                                                                         *)
 (* WHAT THIS ACTION IS NOT, AND WHY THAT MATTERS. It models the *ordered*   *)
-(* cleanup path only. The *unordered* one - a retention window aging out    *)
-(* and masking a decision row while a prepared bucket is still live - is a  *)
-(* different event with no ordering guarantee behind it, and it is #2320's  *)
-(* to add, deliberately not added here. Adding it is known to violate       *)
-(* MonotonicVisibility and VisibilityMatchesDecision, which is the finding  *)
-(* #2320 exists to record; this action does not, because its conjuncts make *)
-(* every observation independent of the decision before it fires. Reading   *)
-(* the guarded action as evidence that the unguarded hazard is absent would *)
-(* invert both results, so do not treat #2320 as discharged by this.        *)
+(* cleanup path only. The *unordered* one - the registry declining to      *)
+(* report a decision while a prepared bucket is still live - has no        *)
+(* ordering guarantee behind it and is modelled separately, by             *)
+(* RegistryMask below. This action passes every property because its       *)
+(* conjuncts make every observation independent of the decision before it  *)
+(* fires; reading that pass as evidence about the unordered event would    *)
+(* invert what RegistryMask's mutation shows.                              *)
 (***************************************************************************)
 ForgetDecision(t) ==
     /\ decision[t] # "inflight"
@@ -261,7 +293,43 @@ ForgetDecision(t) ==
     /\ \A k \in Written(t) : pend[t][k] = "none"
     /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
     /\ revision' = revision + 1
-    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, masked>>
+
+(***************************************************************************)
+(* RegistryMask(t): the registry stops reporting a decision it still holds, *)
+(* or starts reporting it again. In production the row resolves to         *)
+(* TxStatus.Indeterminate once TxDecisionRetention has elapsed on a        *)
+(* tombstone that PruneExpired has not yet purged, and a snapshot pin       *)
+(* covering that tombstone re-exposes it; both are toggles of one flag     *)
+(* here. A cross-tree coordinator that cannot be dialled reports the same  *)
+(* status for the same reason, with no clock involved at all.              *)
+(*                                                                         *)
+(* THE GUARD IS DELIBERATELY WEAKER THAN PRODUCTION'S. In code a tombstone *)
+(* exists only after ForgetAsync, which follows the terminal fan-out, so   *)
+(* the retention mask is ordinarily reached late. Nothing makes that       *)
+(* ordering hold for a prepared bucket the fan-out never saw - a           *)
+(* shadow-forward onto a split destination the participant query passed  *)
+(* over - and a dial failure has no ordering at all. So the action may     *)
+(* fire at any point after the decision, including while every bucket is  *)
+(* still live. That is an over-approximation: every behaviour production   *)
+(* can produce is a behaviour of this model, so a safety property that     *)
+(* holds here holds for the ordered case too.                              *)
+(*                                                                         *)
+(* This is the variable issue #2320 found missing. Before it the stored    *)
+(* decision WAS the registry, so the registry could not misreport itself.  *)
+(* The interposition is what matters, not the clock: reporting the masked  *)
+(* row as "inflight" instead - the defect production had before            *)
+(* AtomicVisibilityGate learnt the Indeterminate arm - violates            *)
+(* MonotonicVisibility at depth 4, which the paired mutation keeps         *)
+(* demonstrating. The revision is left alone: production's comparison      *)
+(* token does move on a mask, through terms the spec abstracts away (see   *)
+(* RevisionMonotonic in Refinement.md).                                    *)
+(***************************************************************************)
+RegistryMask(t) ==
+    /\ decision[t] # "inflight"
+    /\ ~forgotten[t]
+    /\ masked' = [masked EXCEPT ![t] = ~masked[t]]
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, forgotten, revision>>
 
 (***************************************************************************)
 (* A fully quiesced terminal state has an explicit stuttering successor so *)
@@ -282,13 +350,15 @@ Next ==
     \/ \E t \in Txns : \E k \in Keys : ShadowForwardOrphan(t, k)
     \/ \E t \in Txns : \E k \in Keys : OrphanDrain(t, k)
     \/ \E t \in Txns : ForgetDecision(t)
+    \/ \E t \in Txns : RegistryMask(t)
     \/ Stutter
 
 (***************************************************************************)
 (* Fairness: each saga makes progress (prepare -> decide -> broadcast every *)
-(* leaf) so every saga terminates. The reshard orphan / drain actions are  *)
-(* deliberately NOT fair - they model an optional environment event, and   *)
-(* every safety property must hold whether or not they fire.               *)
+(* leaf) so every saga terminates. The reshard orphan / drain actions and  *)
+(* RegistryMask are deliberately NOT fair - they model optional            *)
+(* environment events, and every safety property must hold whether or not  *)
+(* they fire.                                                              *)
 (***************************************************************************)
 TxProgress(t) ==
     \/ PrepareTx(t)
@@ -301,16 +371,22 @@ Spec == Init /\ [][Next]_vars /\ \A t \in Txns : WF_vars(TxProgress(t))
 (* Safety invariants (the property catalogue, lever (b) / #1595).          *)
 (***************************************************************************)
 
-\* Atomicity / all-or-nothing visibility: within one saga every written
-\* key resolves identically for a snapshot reader - never a split view.
+\* Atomicity / all-or-nothing visibility: within one saga no snapshot reader
+\* sees one written key at its post-saga value and another at its pre-saga
+\* value - never a split view. A "hidden" key is compatible with either: it
+\* is the gate declining to answer, not an answer.
 AllOrNothing ==
-    \A t \in Txns : \A a, b \in Written(t) : ObservedPrepared(t, a) = ObservedPrepared(t, b)
+    \A t \in Txns : \A a, b \in Written(t) : ~(ObservedPrepared(t, a) /\ ObservedPreSaga(t, b))
 
-\* Sharpened form: a key is post-saga-visible for a reader exactly when the
-\* tree-wide registry decision is committed. Implies AllOrNothing and
-\* StrictIsolation; a broadcast-before-decision bug violates it.
+\* Sharpened form: a key is post-saga-visible for a reader only when the
+\* tree-wide registry decision is committed, and pre-saga-visible only when
+\* it is not. Implies AllOrNothing and StrictIsolation; a
+\* broadcast-before-decision bug violates it, and so does a gate that serves
+\* the pre-saga value for a saga that did commit.
 VisibilityMatchesDecision ==
-    \A t \in Txns : \A k \in Written(t) : ObservedPrepared(t, k) = (decision[t] = "committed")
+    \A t \in Txns : \A k \in Written(t) :
+        /\ ObservedPrepared(t, k) => decision[t] = "committed"
+        /\ ObservedPreSaga(t, k)  => decision[t] # "committed"
 
 \* Strict-isolation default: an in-flight or aborted saga is never surfaced
 \* as committed to a reader.
@@ -342,8 +418,8 @@ NoMixedTerminals ==
 (***************************************************************************)
 (* Liveness / progress (temporal). DecisionDurability, MonotonicVisibility *)
 (* and RevisionMonotonic are action (safety) properties expressed as       *)
-(* box-of-action formulas; Termination and EveryCommittedKeyReadable need  *)
-(* the fairness assumption in Spec.                                        *)
+(* box-of-action formulas; Termination, EveryCommittedKeyReadable and     *)
+(* NoStrandedPrepare need the fairness assumption in Spec.                 *)
 (***************************************************************************)
 
 \* Decision durability: once the registry records a terminal decision it never
@@ -364,11 +440,13 @@ DecisionDurability ==
                  /\ \E k \in Written(t) : terminal[t][k] = "none"
               => ~forgotten'[t] ) ]_vars
 
-\* Monotonic visibility: once a key is post-saga-visible it stays visible
-\* (a committed value never reverts to pre-saga, even across a reshard).
+\* Monotonic visibility: once a key is post-saga-visible it never reverts to
+\* its pre-saga value (a committed value never reverts, even across a
+\* reshard or a registry that stops reporting the decision). Going hidden is
+\* not a reversion: the reader is refused an answer, not given a stale one.
 MonotonicVisibility ==
     [][ \A t \in Txns : \A k \in Written(t) :
-          ObservedPrepared(t, k) => ObservedPrepared(t, k)' ]_vars
+          ObservedPrepared(t, k) => ~ObservedPreSaga(t, k)' ]_vars
 
 \* The registry revision counter never decreases.
 RevisionMonotonic == [][ revision' >= revision ]_vars
@@ -376,10 +454,34 @@ RevisionMonotonic == [][ revision' >= revision ]_vars
 \* Every saga terminates.
 Termination == \A t \in Txns : <>(phase[t] = "done")
 
-\* Every committed saga's keys are eventually all readable at the post-saga
-\* value.
+\* Every committed saga's keys eventually read at the post-saga value - or
+\* are hidden, which happens only while the registry declines to report the
+\* decision. What this rules out is a committed saga settling at its
+\* pre-saga value.
+\*
+\* The hidden disjunct is required, not a convenience. A late orphan bucket
+\* on a leaf that has already applied the commit is hidden for as long as the
+\* registry reports Indeterminate, because the gate tests that arm ahead of
+\* the orphan guard, and neither event that ends it (the registry answering
+\* again, or the orphan being discarded) is guaranteed to happen. Requiring
+\* every key to read post-saga infinitely often fails on exactly that
+\* behaviour, and it is a behaviour production has too.
 EveryCommittedKeyReadable ==
     \A t \in Txns :
-        (decision[t] = "committed") ~> (\A k \in Written(t) : ObservedPrepared(t, k))
+        (decision[t] = "committed")
+            ~> (\A k \in Written(t) : ObservedPrepared(t, k) \/ Observed(t, k) = "hidden")
+
+\* No stranded prepare: every participant of a decided saga eventually
+\* applies the saga's terminal, which is what consumes its prepared bucket.
+\* This is the liveness property the catalogue was missing (issue #2321).
+\* Termination cannot stand in for it - a saga can reach "done" with a
+\* participant never told - and EveryCommittedKeyReadable cannot either,
+\* because a stranded bucket under a still-reported commit reads as
+\* post-saga through the gate, and an aborted saga is outside it entirely.
+\* Under the fairness Spec asserts, only a defect in the protocol's own
+\* steps can make this fail, which is the property the other two lack.
+NoStrandedPrepare ==
+    \A t \in Txns : \A k \in Written(t) :
+        (decision[t] # "inflight") ~> (terminal[t][k] # "none")
 
 =============================================================================

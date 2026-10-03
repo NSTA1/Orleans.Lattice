@@ -17,7 +17,7 @@ Next ==
 \* edited.
 RevisionRunaway ==
     /\ revision' = revision + 1
-    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, forgotten>>
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, forgotten, masked>>
 
 Next ==
     \/ RevisionRunaway

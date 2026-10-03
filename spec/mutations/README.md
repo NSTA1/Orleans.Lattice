@@ -5,8 +5,13 @@ Each `.mutation` file here describes a deliberate defect in
 it must make TLC report as violated. Together they answer a question the base
 specification cannot answer about itself: **does this property actually fire?**
 
-Every property in [`../AtomicCommit.cfg`](../AtomicCommit.cfg) has one, and
-`SpecMutationCatalogueTests` fails if that ever stops being true.
+Every property in [`../AtomicCommit.cfg`](../AtomicCommit.cfg) has at least
+one, and `SpecMutationCatalogueTests` fails if that ever stops being true. Every
+protocol action in the specification's `Next` relation is also perturbed by at
+least one, which answers the question for the refinement note's action rows
+rather than its property rows: **would the spec notice production deviating from
+this step?** `SpecActionMutationCoverageTests` fails if an action goes unpaired
+(issue #2322).
 
 ## Why
 
@@ -105,6 +110,13 @@ way round; keeping the two the same is a convention for readability, not a
 constraint TLA+ imposes. `CLASS` is `Invariant`, `Action` or `Temporal`,
 and selects which violation banner the harness expects.
 
+`PERTURBS:` is optional: a comma-separated list of the actions in `Next` whose
+definitions the mutation edits. It is a claim, so it is checked rather than
+trusted - at least one edit's anchor must lie inside each named action's
+definition - and it is what the action-coverage gate counts. Leave it off a
+mutation that edits a read definition, the fairness assumption, or that splices
+in an action the protocol does not have.
+
 ## `TypeOK` rides along in every cfg
 
 Every generated cfg checks `TypeOK` alongside the target. A mutation that
@@ -128,32 +140,39 @@ Worth stating plainly, because it is a real gap rather than an oversight:
 | Action property | `Error: Action property <Name> is violated.` | yes |
 | Liveness | `Error: Temporal properties were violated.` | **no** |
 
-So `Termination` and `EveryCommittedKeyReadable` cannot have their banner
+So `Termination`, `EveryCommittedKeyReadable` and `NoStrandedPrepare` cannot have their banner
 checked against the property name. For those two the guard against a
 misattributed violation is that the generated cfg names exactly one property,
 backed by the harness asserting the violation *count* is one.
 
 ## Inventory
 
-All twelve properties are paired.
+All thirteen properties are paired, and every protocol action is perturbed.
 `Every_property_the_base_model_checks_has_a_mutation` reads the base cfg and
-fails if a property is added without one, so this table cannot silently fall
-behind.
+fails if a property is added without a mutation, and
+`Every_protocol_action_is_perturbed_by_a_mutation` reads the specification's
+`Next` and fails if an action is, so this table cannot silently fall behind.
 
-| Mutation | Property it makes fire | Class | The defect it models |
-| --- | --- | --- | --- |
-| `TypeOkRevisionRunaway` | `TypeOK` | Invariant | a revision bump with no decision behind it, leaving the declared domain |
-| `AllOrNothingUngatedProjection` | `AllOrNothing` | Invariant | reads bypass the gate, so a mid-broadcast saga is seen as a split view |
-| `VisibilityMatchesDecisionTerminalPresence` | `VisibilityMatchesDecision` | Invariant | any terminal counts as visible, so an aborted saga's writes surface |
-| `StrictIsolationInflightSurfaces` | `StrictIsolation` | Invariant | absence of a decision reads as permission, so in-flight writes are readable |
-| `CommitIntegrityIgnoresVotes` | `CommitIntegrity` | Invariant | the coordinator commits without consulting the prepare votes |
-| `LinearizedTerminalsBroadcastBeforeDecision` | `LinearizedTerminals` | Invariant | a leaf applies a terminal before the registry records the decision |
-| `NoMixedTerminalsPerKeyVote` | `NoMixedTerminals` | Invariant | each leaf takes its outcome from its own vote, so one saga does both |
-| `DecisionDurabilityDecisionFlip` | `DecisionDurability` | Action | a recorded terminal decision is overwritten after the fact |
-| `MonotonicVisibilityOrphanShadows` | `MonotonicVisibility` | Action | a late reshard orphan shadows the committed projection (the #1584 class) |
-| `RevisionMonotonicRollback` | `RevisionMonotonic` | Action | a stale registry write replays over a newer one |
-| `TerminationNoFairness` | `Termination` | Temporal | no fairness, so a saga may stall forever |
-| `EveryCommittedKeyReadableStaleProjection` | `EveryCommittedKeyReadable` | Temporal | the projection never switches to the post-saga value after a commit |
+| Mutation | Property it makes fire | Class | Perturbs | The defect it models |
+| --- | --- | --- | --- | --- |
+| `TypeOkRevisionRunaway` | `TypeOK` | Invariant | - | a revision bump with no decision behind it, leaving the declared domain |
+| `AllOrNothingUngatedProjection` | `AllOrNothing` | Invariant | - | reads bypass the gate, so a mid-broadcast saga is seen as a split view |
+| `VisibilityMatchesDecisionTerminalPresence` | `VisibilityMatchesDecision` | Invariant | - | any terminal counts as visible, so an aborted saga's writes surface |
+| `VisibilityMatchesDecisionPrepareNotStaged` | `VisibilityMatchesDecision` | Invariant | `PrepareTx` | a prepare is acknowledged without staging its bucket, so a committed key reads pre-saga |
+| `VisibilityMatchesDecisionDrainsLivePrepare` | `VisibilityMatchesDecision` | Invariant | `OrphanDrain` | the orphan discard drops a live prepare before its terminal lands |
+| `StrictIsolationInflightSurfaces` | `StrictIsolation` | Invariant | - | absence of a decision reads as permission, so in-flight writes are readable |
+| `CommitIntegrityIgnoresVotes` | `CommitIntegrity` | Invariant | `DecideTx` | the coordinator commits without consulting the prepare votes |
+| `LinearizedTerminalsBroadcastBeforeDecision` | `LinearizedTerminals` | Invariant | `BroadcastStep` | a leaf applies a terminal before the registry records the decision |
+| `NoMixedTerminalsPerKeyVote` | `NoMixedTerminals` | Invariant | `BroadcastStep` | each leaf takes its outcome from its own vote, so one saga does both |
+| `DecisionDurabilityDecisionFlip` | `DecisionDurability` | Action | - | a recorded terminal decision is overwritten after the fact |
+| `DecisionDurabilityEarlyForget` | `DecisionDurability` | Action | `ForgetDecision` | the registry row is retired before every participant has applied its terminal |
+| `MonotonicVisibilityOrphanShadows` | `MonotonicVisibility` | Action | - | a late reshard orphan shadows the committed projection (the #1584 class) |
+| `MonotonicVisibilityOrphanLosesTerminal` | `MonotonicVisibility` | Action | `ShadowForwardOrphan` | an orphan lands on a leaf with no record of the terminal, then the row is retired (the #2318 class) |
+| `MonotonicVisibilityMaskReportsAbsent` | `MonotonicVisibility` | Action | `RegistryMask` | a masked registry row is reported as absent rather than indeterminate (the #2320 experiment) |
+| `RevisionMonotonicRollback` | `RevisionMonotonic` | Action | - | a stale registry write replays over a newer one |
+| `TerminationNoFairness` | `Termination` | Temporal | - | no fairness, so a saga may stall forever |
+| `EveryCommittedKeyReadableStaleProjection` | `EveryCommittedKeyReadable` | Temporal | - | the projection never switches to the post-saga value after a commit |
+| `NoStrandedPrepareEarlyCompletion` | `NoStrandedPrepare` | Temporal | `BroadcastStep` | the saga completes after the first participant's terminal, stranding the rest |
 
 ### Some mutations break more than their target, and that is fine
 
@@ -171,15 +190,17 @@ every saga terminating normally, rather than taking the easy route of dropping
 fairness, which would fire `Termination` as well and so prove nothing about the
 property it is paired with.
 
-### Nine mutations perturb the protocol; three add an action it does not have
+### Fifteen mutations perturb the protocol; three add an action it does not have
 
 This distinction matters, and reading past it would reproduce in miniature the
 overclaim this whole directory exists to prevent.
 
-Nine mutations change something the protocol actually does: a guard, a gate
-definition, a projection, or the fairness assumption. For those, the pairing
-shows the property constrains the modelled protocol - weaken the protocol and
-the property notices.
+Fifteen mutations change something the protocol actually does: a guard, an
+action's effect, a gate definition, a projection, or the fairness assumption.
+For those, the pairing shows the property constrains the modelled protocol -
+weaken the protocol and the property notices. The nine that carry `PERTURBS:`
+change a protocol action itself, which is the claim the refinement note's
+action rows rest on.
 
 Three do not. `TypeOkRevisionRunaway`, `DecisionDurabilityDecisionFlip` and
 `RevisionMonotonicRollback` splice a brand-new action into `Next`
@@ -195,17 +216,18 @@ once by `DecideTx` and at most once more by `ForgetDecision`, which sets the
 `0..(2 * Cardinality(Txns))` revision conjunct cannot fail however the base is
 scheduled.
 
-`DecisionDurability`'s third conjunct is the exception, and its pairing does
-not reach it. That conjunct forbids retiring a decision's row while a written
-key has not yet applied its terminal, and `ForgetDecision` is a protocol action
-whose drain guard is all that prevents it: weaken the guard and the conjunct
-fires. `DecisionDurabilityDecisionFlip` exercises only the flip half, so the
-retirement half is covered at the implementation level, by
+`DecisionDurability`'s third conjunct is the exception. It forbids retiring a
+decision's row while a written key has not yet applied its terminal, and
+`ForgetDecision` is a protocol action whose drain guard is all that prevents
+it. `DecisionDurabilityDecisionFlip` exercises only the flip half, so for a
+while the retirement half was covered only at the implementation level, by
 `AtomicCommitInvariantCoyoteTests.Forgetting_the_decision_before_every_leaf_drained_violates_decision_durability`
-(see [`../Refinement.md`](../Refinement.md)), rather than by this directory.
+(see [`../Refinement.md`](../Refinement.md)). `DecisionDurabilityEarlyForget`
+now covers it here too, by dropping that guard, and it is a protocol-level
+perturbation rather than an added action.
 
 For those three the two-arm experiment therefore establishes something weaker
-than it does for the other nine. It establishes that the property is
+than it does for the other fifteen. It establishes that the property is
 **well-formed**: that it is not a tautology, that it says what its name says,
 and that TLC would report it if the state it forbids became reachable. It does
 **not** establish that the property currently constrains the protocol, because

@@ -1,0 +1,20 @@
+# Pairs with DecisionDurability, and reaches the half of it the flip mutation
+# does not: the unset. The cleanup retires the registry row without waiting for
+# every participant to apply its terminal, which is the precondition
+# ITxRegistryGrain.ForgetAsync states for itself. Unlike DecisionFlip this
+# perturbs a protocol action rather than adding one, so it shows the third
+# conjunct constrains the modelled protocol, not merely that it is well-formed.
+MODULE: DecisionDurabilityEarlyForget
+TARGET: DecisionDurability
+CLASS: Action
+SUMMARY: retires the registry row before every participant has applied its terminal
+PERTURBS: ForgetDecision
+
+--- FIND
+    /\ \A k \in Written(t) : terminal[t][k] # "none"
+    /\ \A k \in Written(t) : pend[t][k] = "none"
+    /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
+--- REPLACE
+\* MUTATION: the drain-before-cleanup ordering is dropped.
+    /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
+--- END

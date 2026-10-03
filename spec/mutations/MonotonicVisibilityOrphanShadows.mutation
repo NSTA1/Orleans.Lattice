@@ -10,16 +10,21 @@ CLASS: Action
 SUMMARY: lets a late reshard orphan bucket shadow the committed projection, so a visible key reverts
 
 --- FIND
-ObservedPrepared(t, k) ==
+Observed(t, k) ==
     IF pend[t][k] = "pending"
-    THEN IF SurfaceViaGate(t, k) THEN TRUE ELSE ProjectedPrepared(t, k)
-    ELSE ProjectedPrepared(t, k)
+    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE Projected(t, k)
+    ELSE Projected(t, k)
 --- REPLACE
 \* MUTATION: the pending branch no longer falls through to the authoritative
 \* projection when the gate refuses it. A shadow-forward orphan arriving after
-\* the leaf applied its commit terminal therefore hides the committed value.
-ObservedPrepared(t, k) ==
+\* the leaf applied its commit terminal therefore hides the committed value
+\* behind the pre-saga one.
+Observed(t, k) ==
     IF pend[t][k] = "pending"
-    THEN SurfaceViaGate(t, k)
-    ELSE ProjectedPrepared(t, k)
+    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE "pre"
+    ELSE Projected(t, k)
 --- END
