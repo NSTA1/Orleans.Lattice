@@ -146,8 +146,11 @@ internal sealed class CompiledTenantPolicy
 
     /// <summary>
     /// The tenants a subject may act as, considering its resolved transitive
-    /// groups: the tenants for which its id or any of its groups is an admin or
-    /// member entry, in ascending tenant-id order, without duplicates. When the
+    /// groups: the tenants for which its id is an admin or member entry, and the
+    /// group-aware tenants for which any of its groups is one, in ascending
+    /// tenant-id order, without duplicates. A group never admits to a tenant that
+    /// is not group-aware, such as the reserved default tenant, even when the group
+    /// id is in that tenant's admin set. When the
     /// snapshot was compiled with delegated access administration disabled, or the
     /// subject carries no groups, this is exactly
     /// <see cref="ResolveAllowedTenants(string)"/>.
@@ -177,7 +180,16 @@ internal sealed class CompiledTenantPolicy
         List<TenantId[]>? several = null;
         foreach (var group in groupIds)
         {
-            if (group is null || !_subjectToTenants.TryGetValue(group, out var tenants))
+            if (group is null || !_subjectToTenants.TryGetValue(group, out var indexed))
+            {
+                continue;
+            }
+
+            // The index also holds exact-id admin entries of tenants that are not
+            // group-aware (the reserved default tenant, D16), and a group never
+            // admits to one of those: the gate refuses it too.
+            var tenants = GroupAware(indexed);
+            if (tenants.Length == 0)
             {
                 continue;
             }
@@ -207,6 +219,46 @@ internal sealed class CompiledTenantPolicy
         var result = new TenantId[merged.Count];
         merged.CopyTo(result);
         Array.Sort(result, static (a, b) => string.CompareOrdinal(a.Value, b.Value));
+        return result;
+    }
+
+    /// <summary>
+    /// The tenants of an index bucket a group entry may admit to: the group-aware
+    /// ones. Returns the bucket itself when every tenant in it is group-aware (the
+    /// common case, no copy), the shared empty array when none is, and a filtered
+    /// copy, still in ascending tenant-id order, otherwise.
+    /// </summary>
+    private TenantId[] GroupAware(TenantId[] tenants)
+    {
+        var aware = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsGroupAware)
+            {
+                aware++;
+            }
+        }
+
+        if (aware == tenants.Length)
+        {
+            return tenants;
+        }
+
+        if (aware == 0)
+        {
+            return NoTenants;
+        }
+
+        var result = new TenantId[aware];
+        var next = 0;
+        foreach (var tenant in tenants)
+        {
+            if (_tenants[tenant.Value].IsGroupAware)
+            {
+                result[next++] = tenant;
+            }
+        }
+
         return result;
     }
 

@@ -16,10 +16,17 @@ internal static class SampleIdentities
     /// <summary>The tenant administrator of <see cref="AcmeTenant"/>.</summary>
     public const string AcmeAdmin = "acme-admin";
 
-    /// <summary>The tenant administrator of <see cref="GlobexTenant"/>.</summary>
+    /// <summary>
+    /// The tenant administrator of <see cref="GlobexTenant"/>. Not a platform
+    /// operator: under delegated tenant access administration it keeps globex's
+    /// groups, members and rules itself.
+    /// </summary>
     public const string GlobexAdmin = "globex-admin";
 
-    /// <summary>A member of the <c>operators</c> and <c>task-editors</c> groups.</summary>
+    /// <summary>
+    /// A member of the <c>operators</c> and <c>task-editors</c> groups, and of
+    /// globex's own group <see cref="GlobexOperatorsGroup"/>.
+    /// </summary>
     public const string Alice = "alice";
 
     /// <summary>A member of the <c>task-viewers</c> group.</summary>
@@ -66,6 +73,20 @@ internal static class SampleIdentities
 
     /// <summary>The tenant-local name of the tree each tenant owns.</summary>
     public const string TenantOrdersTree = "orders";
+
+    /// <summary>
+    /// The tenant-local name of globex's second tree, where a Platform rule shadows
+    /// globex's own rule, so Access &gt; Explain shows both layers.
+    /// </summary>
+    public const string GlobexInvoicesTree = "invoices";
+
+    /// <summary>
+    /// The local name of globex's own tenant group (<c>t/globex/operators</c>),
+    /// administered by <see cref="GlobexAdmin"/> under delegated tenant access
+    /// administration. <see cref="Alice"/> is its member, and globex's member set
+    /// holds it. It is not the cluster group <see cref="OperatorsGroup"/>.
+    /// </summary>
+    public const string GlobexOperatorsGroup = "operators";
 
     /// <summary>The number of machines seeded in <see cref="FactoryFloorTree"/>.</summary>
     public const int MachineCount = 12;

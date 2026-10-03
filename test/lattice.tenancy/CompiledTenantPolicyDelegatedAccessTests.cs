@@ -178,6 +178,54 @@ public sealed class CompiledTenantPolicyDelegatedAccessTests
         });
     }
 
+    [Test]
+    public void ResolveAllowedTenants_with_groups_never_admits_to_the_default_tenant_through_a_group()
+    {
+        // D16: the reserved default tenant is never group-aware, so a group id that
+        // happens to sit in its admin set is an exact-id entry, not a group grant.
+        var policy = CompiledTenantPolicy.Compile(
+            [DefaultWithAdmins(ClusterGroup), Record("acme", admins: ["owner"], members: [ClusterGroup])],
+            true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(policy.ResolveAllowedTenants("carol", [ClusterGroup]), Is.EqualTo(new[] { Acme }));
+            Assert.That(policy.ResolveAllowedTenants("dave", [ClusterGroup, "unknown"]), Is.EqualTo(new[] { Acme }));
+        });
+    }
+
+    [Test]
+    public void ResolveAllowedTenants_with_groups_admits_to_the_default_tenant_by_the_subjects_own_id()
+    {
+        var policy = CompiledTenantPolicy.Compile(
+            [DefaultWithAdmins("operator", ClusterGroup), Record("acme", admins: ["owner"], members: [ClusterGroup])],
+            true);
+
+        Assert.That(
+            policy.ResolveAllowedTenants("operator", [ClusterGroup]),
+            Is.EqualTo(new[] { Acme, TenantId.Default }.OrderBy(tenant => tenant.Value, StringComparer.Ordinal)));
+    }
+
+    [Test]
+    public void ResolveAllowedTenants_with_only_a_default_tenant_group_entry_is_empty()
+    {
+        var policy = CompiledTenantPolicy.Compile([DefaultWithAdmins(ClusterGroup)], true);
+
+        Assert.That(policy.ResolveAllowedTenants("carol", [ClusterGroup]), Is.Empty);
+    }
+
+    private static TenantRecord DefaultWithAdmins(params string[] admins)
+    {
+        var record = TenantRecord.CreateDefault(TestClocks.Clock(1), "test");
+        var tick = 2;
+        foreach (var admin in admins)
+        {
+            record.AddAdminSubject(admin, TestClocks.Clock(tick++), "test");
+        }
+
+        return record;
+    }
+
     private static CompiledTenant Compiled(TenantRecord record)
     {
         var policy = CompiledTenantPolicy.Compile([record], true);

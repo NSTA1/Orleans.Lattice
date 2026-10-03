@@ -34,6 +34,12 @@ namespace Orleans.Lattice.Api.Mcp;
 public static class LatticeMcpRemoteServiceCollectionExtensions
 {
     /// <summary>
+    /// The service key of the one tenant-administration client that serves both
+    /// delegated tenant access facades on a remote head.
+    /// </summary>
+    internal const string TenantAccessClientKey = "Orleans.Lattice.Api.Mcp.Remote.TenantAccess";
+
+    /// <summary>
     /// Registers the remote-host MCP binding: the base MCP server
     /// (via <see cref="LatticeMcpServiceCollectionExtensions.AddLatticeMcp"/>),
     /// Orleans serialization for the gRPC wire marshallers, the caller-credential
@@ -242,6 +248,18 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.Replace(ServiceDescriptor.Singleton<ITenantRegionVisibilityResolver>(
                 sp => new GrpcTenantRegionVisibilityResolver(
                     sp.GetRequiredService<ILatticeTenantRegionAdmin>())));
+
+            // Delegated tenant access administration rides the same tenant endpoint:
+            // the binding's client implements both facades directly, so one client
+            // serves both, and the tenant access tools light up wherever the facades
+            // are registered (they stay behind the same EnableTenantControl opt-in).
+            services.TryAddKeyedSingleton(TenantAccessClientKey, (sp, _) =>
+                LatticeTenantAdminApiGrpcClient.Create(
+                    BuildRoutingInvoker(sp, options, tenantAdmin, static r => r.TenantAdmin), sp));
+            services.TryAddSingleton<ILatticeTenantDirectoryAdmin>(static sp =>
+                sp.GetRequiredKeyedService<LatticeTenantAdminApiGrpcClient>(TenantAccessClientKey));
+            services.TryAddSingleton<ILatticeTenantPolicyAdmin>(static sp =>
+                sp.GetRequiredKeyedService<LatticeTenantAdminApiGrpcClient>(TenantAccessClientKey));
 
             services.AddTenantAdminTools(options.EnableTenantControl);
         }

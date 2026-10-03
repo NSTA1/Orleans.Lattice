@@ -68,9 +68,43 @@ public sealed class ShellTenantOperatorGateTests
         Assert.That(async () => await gate.IsPlatformOperatorAsync(new CancellationToken(canceled: true)), Throws.InstanceOf<OperationCanceledException>());
     }
 
-    private static ShellTenantOperatorGate Gate(FakeArea area, ExplorerChromeOptions? options = null, TimeProvider? time = null)
+    [Test]
+    public async Task An_area_visible_to_a_delegated_tenant_admin_is_not_operator_standing()
     {
-        var services = new ServiceCollection().AddSingleton<IExplorerArea>(area).BuildServiceProvider();
+        // Access is visible to a tenant administrator under delegated tenant access
+        // administration; only the cluster-wide probe proves operator standing.
+        var gate = Gate(new ProbingArea(isClusterAdministrator: false));
+
+        Assert.That(await gate.IsPlatformOperatorAsync(), Is.False);
+    }
+
+    [Test]
+    public async Task An_area_that_proves_cluster_access_administration_is_operator_standing()
+    {
+        var gate = Gate(new ProbingArea(isClusterAdministrator: true));
+
+        Assert.That(await gate.IsPlatformOperatorAsync(), Is.True);
+    }
+
+    private static ShellTenantOperatorGate Gate(IExplorerArea area, ExplorerChromeOptions? options = null, TimeProvider? time = null)
+    {
+        var services = new ServiceCollection().AddSingleton(area).BuildServiceProvider();
         return new ShellTenantOperatorGate(services, options ?? new ExplorerChromeOptions(), time ?? TimeProvider.System);
+    }
+
+    /// <summary>An Access area that is visible, answering the operator question separately.</summary>
+    private sealed class ProbingArea(bool isClusterAdministrator) : IExplorerArea, IPlatformOperatorProbe
+    {
+        public string Key => "access";
+
+        public string DisplayName => "Access";
+
+        public int DirectoryOrder => 0;
+
+        public ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult(AreaAvailability.Visible);
+
+        public ValueTask<bool> IsClusterAccessAdministratorAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult(isClusterAdministrator);
     }
 }

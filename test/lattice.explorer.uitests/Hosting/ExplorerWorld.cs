@@ -55,7 +55,7 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// refused by the app's roles rather than by the viewer's own rights.
 /// </para>
 /// </remarks>
-internal sealed class ExplorerWorld : IAsyncDisposable
+internal sealed partial class ExplorerWorld : IAsyncDisposable
 {
     /// <summary>The demo tree the world seeds, readable by the <c>operators</c> group.</summary>
     public const string DemoTree = "factory-floor";
@@ -85,7 +85,7 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     public string GrpcEndpoint { get; }
 
     /// <summary>Starts the world and seeds its data, groups and rules.</summary>
-    public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false);
+    public static Task<ExplorerWorld> StartAsync() => StartCoreAsync(tenancy: false, delegatedAccess: false);
 
     /// <summary>
     /// Starts a world that also serves tenancy - the tenant registry, the tenant
@@ -94,9 +94,9 @@ internal sealed class ExplorerWorld : IAsyncDisposable
     /// reach several tenants. It is a separate world, so the shared one keeps
     /// tenancy's single-tenant shape for every other fixture.
     /// </summary>
-    public static Task<ExplorerWorld> StartWithTenancyAsync() => StartCoreAsync(tenancy: true);
+    public static Task<ExplorerWorld> StartWithTenancyAsync() => StartCoreAsync(tenancy: true, delegatedAccess: false);
 
-    private static async Task<ExplorerWorld> StartCoreAsync(bool tenancy)
+    private static async Task<ExplorerWorld> StartCoreAsync(bool tenancy, bool delegatedAccess)
     {
         var grpcPort = LoopbackEndpoints.ReservePort();
         var siloPort = LoopbackEndpoints.ReservePort();
@@ -107,13 +107,17 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         {
             Endpoint = grpcEndpoint,
             ConfigureKestrel = kestrel => kestrel.Listen(System.Net.IPAddress.Loopback, grpcPort, listen => listen.Protocols = HttpProtocols.Http2),
-            ConfigureBuilder = builder => ConfigureCluster(builder, siloPort, gatewayPort, tenancy),
+            ConfigureBuilder = builder => ConfigureCluster(builder, siloPort, gatewayPort, tenancy, delegatedAccess),
             ConfigureApp = app => MapClusterSurface(app, tenancy),
         });
 
         var world = new ExplorerWorld(head, grpcEndpoint);
         await world.SeedAsync();
-        if (tenancy)
+        if (delegatedAccess)
+        {
+            await world.SeedDelegatedAccessAsync();
+        }
+        else if (tenancy)
         {
             await world.SeedTenantsAsync();
         }
@@ -304,7 +308,7 @@ internal sealed class ExplorerWorld : IAsyncDisposable
         });
     }
 
-    private static void ConfigureCluster(WebApplicationBuilder builder, int siloPort, int gatewayPort, bool tenancy)
+    private static void ConfigureCluster(WebApplicationBuilder builder, int siloPort, int gatewayPort, bool tenancy, bool delegatedAccess)
     {
         builder.Host.UseOrleans(silo =>
         {
@@ -321,6 +325,7 @@ internal sealed class ExplorerWorld : IAsyncDisposable
                 .AddUser(WorldIdentities.Bob, "Bob Ito")
                 .AddUser(WorldIdentities.Carol, "Carol Diaz")
                 .AddUser(WorldIdentities.Dave, "Dave Okafor")
+                .AddUser(WorldIdentities.GlobexAdmin, "Globex tenant administrator")
                 .AddGroup(WorldIdentities.OperatorsGroup, "Floor Operators")
                 .AddGroup(WorldIdentities.EditorsGroup, "Task board editors")
                 .AddGroup(WorldIdentities.ViewersGroup, "Task board viewers")
@@ -336,7 +341,7 @@ internal sealed class ExplorerWorld : IAsyncDisposable
 
             if (tenancy)
             {
-                silo.AddLatticeTenancy();
+                silo.AddLatticeTenancy(options => options.DelegatedAccessAdministrationEnabled = delegatedAccess);
                 silo.AddLatticeTenantAdminApi();
             }
 
