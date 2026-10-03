@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Orleans.Lattice.Primitives;
@@ -25,6 +26,7 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
 
     /// <inheritdoc />
     public LatticeMergeMode Mode => LatticeMergeMode.OrSet;
+
 
     /// <summary>
     /// Decodes an ordered <see cref="OrSetDelta"/> sequence into member-change
@@ -132,105 +134,97 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         var adds = set.Adds;
         var tombstones = set.Tombstones;
 
+        var keyCount = adds.Count + tombstones.Count;
+        if (keyCount == 0) return Array.Empty<CrdtMemberChange>();
+
         // Union of element keys across adds and tombstones (a pure-remove
         // element appears only in tombstones), collected once and sorted for a
         // deterministic cross-element order. Dedup is by an O(1) dictionary
-        // probe against the adds map, so the union costs one list rather than a
-        // transient set per call.
-        var keys = new List<string>(adds.Count + tombstones.Count);
-        var total = 0;
-        var tombstoneDots = 0;
-        foreach (var (key, dots) in adds)
-        {
-            keys.Add(key);
-            total += dots.Count;
-        }
-        foreach (var (key, dots) in tombstones)
-        {
-            total += dots.Count;
-            tombstoneDots += dots.Count;
-            if (!adds.ContainsKey(key)) keys.Add(key);
-        }
-        if (total == 0) return Array.Empty<CrdtMemberChange>();
-
-        keys.Sort(OrdinalStringOrder.Comparison);
-
-        // Presized to the dot total, which is exact for an uncompacted set: every
-        // add dot and every tombstone dot yields one event and nothing else is
-        // appended. A COMPACTED set breaks that, because each tombstone whose dot
-        // no longer survives in the add list synthesizes a second event (see the
-        // Added branch below) - so the list overflows its presize and grows.
+        // probe against the adds map, so the union costs one window rather than
+        // a transient set per call.
         //
-        // Natural growth is what costs here, and the cost is NOT a chain of
-        // doublings: the ceiling is total + tombstoneDots, which never exceeds
-        // 2 * total, so the list grows exactly once either way. What it grows TO
-        // is the difference. List<T> doubles, taking a 2 * total array; the
-        // ceiling is total + tombstoneDots, which is smaller by the add-dot
-        // count. Assigning Capacity reallocates to exactly that instead, so a
-        // compacted decode of a mostly-add set stops over-reserving an array
-        // nearly the size of the whole result - and for a large set that array
-        // is on the large object heap.
-        //
-        // The widening is LAZY rather than folded into the presize above.
-        // Reserving the ceiling eagerly would over-allocate by the whole
-        // tombstone dot count on every uncompacted decode, which is the common
-        // path; widening on the first synthesized event leaves that path
-        // byte-for-byte as it was and pays exactly one exact-size growth on the
-        // path that needs it.
-        var result = new List<CrdtMemberChange>(total);
-        var widened = false;
-        foreach (var key in keys)
+        // That window is a pooled rental, not a List<string>. It is scratch
+        // that never escapes the call, so the per-call array the list cost is
+        // avoidable outright - and the list is NOT presized, so its growth
+        // doubles and the array it ends up holding is roughly twice the union.
+        // The window holds the keys alone, deliberately: pairing each key with
+        // its add-dot list would let the emit loop skip one dictionary probe,
+        // but it widens the sorted element from an 8-byte reference to a
+        // 16-byte pair, and the isolated lane for this call shape measured that
+        // sort costing more than the removed probe saves. Only the written
+        // prefix is cleared on return, because the rented array is at least the
+        // requested length and clearing the whole of it would memset past what
+        // was used.
+        var window = ArrayPool<string>.Shared.Rent(keyCount);
+        var written = 0;
+        try
         {
-            // Decode the element bytes once and share the reference across every
-            // event for this element.
-            var element = Convert.FromBase64String(key);
-            var start = result.Count;
-
-            if (adds.TryGetValue(key, out var addDots))
+            var total = 0;
+            var tombstoneDots = 0;
+            foreach (var (key, dots) in adds)
             {
-                // Span walk - see the type remarks. The loop appends only to
-                // result, so the scanned list's length cannot change. The
-                // element is copied rather than held by reference: the body
-                // calls into result.Add, and a byref into the span held live
-                // across a call is pinned to a GC-tracked stack slot, which
-                // measured dearer than the 16-byte copy it saves.
-                var addSpan = CollectionsMarshal.AsSpan(addDots);
-                for (var i = 0; i < addSpan.Length; i++)
+                window[written++] = key;
+                total += dots.Count;
+            }
+            foreach (var (key, dots) in tombstones)
+            {
+                total += dots.Count;
+                tombstoneDots += dots.Count;
+                if (!adds.ContainsKey(key))
                 {
-                    var dot = addSpan[i];
-                    result.Add(new CrdtMemberChange
-                    {
-                        Element = element,
-                        Kind = CrdtMemberChangeKind.Added,
-                        ReplicaId = dot.ReplicaId,
-                        Ordinal = dot.Counter,
-                        WallClock = null,
-                    });
+                    window[written++] = key;
                 }
             }
+            if (total == 0) return Array.Empty<CrdtMemberChange>();
 
-            if (tombstones.TryGetValue(key, out var tombDots))
+            var keys = window.AsSpan(0, written);
+            keys.Sort(OrdinalStringOrder.Comparison);
+
+            // Presized to the dot total, which is exact for an uncompacted set: every
+            // add dot and every tombstone dot yields one event and nothing else is
+            // appended. A COMPACTED set breaks that, because each tombstone whose dot
+            // no longer survives in the add list synthesizes a second event (see the
+            // Added branch below) - so the list overflows its presize and grows.
+            //
+            // Natural growth is what costs here, and the cost is NOT a chain of
+            // doublings: the ceiling is total + tombstoneDots, which never exceeds
+            // 2 * total, so the list grows exactly once either way. What it grows TO
+            // is the difference. List<T> doubles, taking a 2 * total array; the
+            // ceiling is total + tombstoneDots, which is smaller by the add-dot
+            // count. Assigning Capacity reallocates to exactly that instead, so a
+            // compacted decode of a mostly-add set stops over-reserving an array
+            // nearly the size of the whole result - and for a large set that array
+            // is on the large object heap.
+            //
+            // The widening is LAZY rather than folded into the presize above.
+            // Reserving the ceiling eagerly would over-allocate by the whole
+            // tombstone dot count on every uncompacted decode, which is the common
+            // path; widening on the first synthesized event leaves that path
+            // byte-for-byte as it was and pays exactly one exact-size growth on the
+            // path that needs it.
+            var result = new List<CrdtMemberChange>(total);
+            var widened = false;
+            foreach (var key in keys)
             {
-                var tombSpan = CollectionsMarshal.AsSpan(tombDots);
-                for (var i = 0; i < tombSpan.Length; i++)
-                {
-                    var dot = tombSpan[i];
-                    if (addDots is not null && !ContainsExact(addDots, in dot))
-                    {
-                        // A compacted add list can retain only this replica's
-                        // newest add. The tombstone is still proof that the
-                        // removed dot once existed, so synthesize its Added half
-                        // to keep add-then-remove history decodable.
-                        if (!widened)
-                        {
-                            // First synthesized event proves this set is
-                            // compacted. total + tombstoneDots is the ceiling -
-                            // every tombstone dot synthesizes at most one extra
-                            // event - so this exact-size growth is the last one.
-                            widened = true;
-                            result.Capacity = total + tombstoneDots;
-                        }
+                adds.TryGetValue(key, out var addDots);
 
+                // Decode the element bytes once and share the reference across every
+                // event for this element.
+                var element = Convert.FromBase64String(key);
+                var start = result.Count;
+
+                if (addDots is not null)
+                {
+                    // Span walk - see the type remarks. The loop appends only to
+                    // result, so the scanned list's length cannot change. The
+                    // element is copied rather than held by reference: the body
+                    // calls into result.Add, and a byref into the span held live
+                    // across a call is pinned to a GC-tracked stack slot, which
+                    // measured dearer than the 16-byte copy it saves.
+                    var addSpan = CollectionsMarshal.AsSpan(addDots);
+                    for (var i = 0; i < addSpan.Length; i++)
+                    {
+                        var dot = addSpan[i];
                         result.Add(new CrdtMemberChange
                         {
                             Element = element,
@@ -240,23 +234,62 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
                             WallClock = null,
                         });
                     }
-
-                    result.Add(new CrdtMemberChange
-                    {
-                        Element = element,
-                        Kind = CrdtMemberChangeKind.Removed,
-                        ReplicaId = dot.ReplicaId,
-                        Ordinal = dot.Counter,
-                        WallClock = null,
-                    });
                 }
+
+                if (tombstones.TryGetValue(key, out var tombDots))
+                {
+                    var tombSpan = CollectionsMarshal.AsSpan(tombDots);
+                    for (var i = 0; i < tombSpan.Length; i++)
+                    {
+                        var dot = tombSpan[i];
+                        if (addDots is not null && !ContainsExact(addDots, in dot))
+                        {
+                            // A compacted add list can retain only this replica's
+                            // newest add. The tombstone is still proof that the
+                            // removed dot once existed, so synthesize its Added half
+                            // to keep add-then-remove history decodable.
+                            if (!widened)
+                            {
+                                // First synthesized event proves this set is
+                                // compacted. total + tombstoneDots is the ceiling -
+                                // every tombstone dot synthesizes at most one extra
+                                // event - so this exact-size growth is the last one.
+                                widened = true;
+                                result.Capacity = total + tombstoneDots;
+                            }
+
+                            result.Add(new CrdtMemberChange
+                            {
+                                Element = element,
+                                Kind = CrdtMemberChangeKind.Added,
+                                ReplicaId = dot.ReplicaId,
+                                Ordinal = dot.Counter,
+                                WallClock = null,
+                            });
+                        }
+
+                        result.Add(new CrdtMemberChange
+                        {
+                            Element = element,
+                            Kind = CrdtMemberChangeKind.Removed,
+                            ReplicaId = dot.ReplicaId,
+                            Ordinal = dot.Counter,
+                            WallClock = null,
+                        });
+                    }
+                }
+
+                // Sort this element's slice in place - no per-element temp list.
+                CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
             }
 
-            // Sort this element's slice in place - no per-element temp list.
-            CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CausalOrderComparer.Comparison);
+            return result;
         }
-
-        return result;
+        finally
+        {
+            Array.Clear(window, 0, written);
+            ArrayPool<string>.Shared.Return(window);
+        }
     }
 
     /// <summary>
@@ -280,86 +313,110 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         var adds = set.Adds;
         if (adds.Count == 0) return Array.Empty<CrdtMemberValue>();
 
-        var keys = new List<string>(adds.Count);
-        foreach (var key in adds.Keys) keys.Add(key);
-        keys.Sort(OrdinalStringOrder.Comparison);
-
-        var tombstones = set.Tombstones;
-        var result = new List<CrdtMemberValue>(keys.Count);
-        foreach (var key in keys)
+        // Collect the element keys and sort them for a deterministic order. The
+        // window is scratch that never escapes the call, so it is rented rather
+        // than allocated: the key list it replaces cost one array per call -
+        // and, being unpresized, grew by doubling to roughly twice the key
+        // count - where this costs none once the pool is warm. The window holds
+        // the keys alone rather than pairing each with its add-dot list: the
+        // pair would spare the emit loop one dictionary probe, but it widens
+        // the sorted element from an 8-byte reference to a 16-byte pair, and
+        // the isolated lane for this call shape measured that sort costing more
+        // than the removed probe saves. Only the written prefix is cleared on
+        // return, because the rented array is at least the requested length and
+        // clearing the whole of it would memset past what was used.
+        var count = adds.Count;
+        var window = ArrayPool<string>.Shared.Rent(count);
+        try
         {
-            var addDots = adds[key];
-            tombstones.TryGetValue(key, out var tomb);
+            var next = 0;
+            foreach (var key in adds.Keys) window[next++] = key;
 
-            // A churned element accumulates tombstones, and testing each of its
-            // add dots by linear scan over that list is O(adds x tombstones) per
-            // element. Cancellation here is coverage-based, not exact-match: a
-            // dot is cancelled when the same replica tombstoned any counter at
-            // or above it. So when an element's tombstones all carry one replica
-            // id - which is what they overwhelmingly do - the whole list
-            // collapses to that replica's highest counter, and the test becomes
-            // a single comparison. That reduces the element to O(T + A) with no
-            // allocation at all: unlike the exact-containment index in
-            // DecodeState, coverage needs no sorted set of counters, only their
-            // maximum. An element whose tombstones span several replicas, or
-            // whose list is short, keeps the scan.
-            string? sharedReplica = null;
-            var coverCounter = long.MinValue;
-            if (tomb is not null && tomb.Count > DotIndexThreshold && addDots.Count > 1)
+            var keys = window.AsSpan(0, count);
+            keys.Sort(OrdinalStringOrder.Comparison);
+
+            var tombstones = set.Tombstones;
+            var result = new List<CrdtMemberValue>(count);
+            foreach (var key in keys)
             {
-                sharedReplica = SingleReplica(tomb);
-                if (sharedReplica is not null)
+                var addDots = adds[key];
+                tombstones.TryGetValue(key, out var tomb);
+
+                // A churned element accumulates tombstones, and testing each of its
+                // add dots by linear scan over that list is O(adds x tombstones) per
+                // element. Cancellation here is coverage-based, not exact-match: a
+                // dot is cancelled when the same replica tombstoned any counter at
+                // or above it. So when an element's tombstones all carry one replica
+                // id - which is what they overwhelmingly do - the whole list
+                // collapses to that replica's highest counter, and the test becomes
+                // a single comparison. That reduces the element to O(T + A) with no
+                // allocation at all: unlike the exact-containment index in
+                // DecodeState, coverage needs no sorted set of counters, only their
+                // maximum. An element whose tombstones span several replicas, or
+                // whose list is short, keeps the scan.
+                string? sharedReplica = null;
+                var coverCounter = long.MinValue;
+                if (tomb is not null && tomb.Count > DotIndexThreshold && addDots.Count > 1)
                 {
-                    // Span walk: this list is longer than DotIndexThreshold by
-                    // the gate above, and the body only reads.
-                    var tombSpan = CollectionsMarshal.AsSpan(tomb);
-                    for (var i = 0; i < tombSpan.Length; i++)
+                    sharedReplica = SingleReplica(tomb);
+                    if (sharedReplica is not null)
                     {
-                        var counter = tombSpan[i].Counter;
-                        if (counter > coverCounter) coverCounter = counter;
+                        // Span walk: this list is longer than DotIndexThreshold by
+                        // the gate above, and the body only reads.
+                        var tombSpan = CollectionsMarshal.AsSpan(tomb);
+                        for (var i = 0; i < tombSpan.Length; i++)
+                        {
+                            var counter = tombSpan[i].Counter;
+                            if (counter > coverCounter) coverCounter = counter;
+                        }
                     }
                 }
-            }
 
-            // Pick the surviving (un-tombstoned) dot with the highest causal
-            // ordinal, tie-broken by replica id, as the element's representative
-            // provenance. No surviving dot means the element has been fully
-            // removed and is absent from the current value.
-            var hasLive = false;
-            var bestReplica = string.Empty;
-            var bestCounter = long.MinValue;
-            // Span walk: the body only reads, but it can call IsTombstoned, so
-            // the element is copied rather than held by reference (a byref into
-            // the span live across a call is pinned to a GC-tracked stack slot).
-            var addSpan = CollectionsMarshal.AsSpan(addDots);
-            for (var i = 0; i < addSpan.Length; i++)
-            {
-                var dot = addSpan[i];
-                var tombstoned = sharedReplica is not null
-                    ? dot.Counter <= coverCounter
-                        && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
-                    : IsTombstoned(tomb, dot);
-                if (tombstoned) continue;
-                if (!hasLive
-                    || dot.Counter > bestCounter
-                    || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
+                // Pick the surviving (un-tombstoned) dot with the highest causal
+                // ordinal, tie-broken by replica id, as the element's representative
+                // provenance. No surviving dot means the element has been fully
+                // removed and is absent from the current value.
+                var hasLive = false;
+                var bestReplica = string.Empty;
+                var bestCounter = long.MinValue;
+                // Span walk: the body only reads, but it can call IsTombstoned, so
+                // the element is copied rather than held by reference (a byref into
+                // the span live across a call is pinned to a GC-tracked stack slot).
+                var addSpan = CollectionsMarshal.AsSpan(addDots);
+                for (var i = 0; i < addSpan.Length; i++)
                 {
-                    hasLive = true;
-                    bestReplica = dot.ReplicaId;
-                    bestCounter = dot.Counter;
+                    var dot = addSpan[i];
+                    var tombstoned = sharedReplica is not null
+                        ? dot.Counter <= coverCounter
+                            && string.Equals(dot.ReplicaId, sharedReplica, StringComparison.Ordinal)
+                        : IsTombstoned(tomb, dot);
+                    if (tombstoned) continue;
+                    if (!hasLive
+                        || dot.Counter > bestCounter
+                        || (dot.Counter == bestCounter && string.CompareOrdinal(dot.ReplicaId, bestReplica) > 0))
+                    {
+                        hasLive = true;
+                        bestReplica = dot.ReplicaId;
+                        bestCounter = dot.Counter;
+                    }
                 }
+
+                if (!hasLive) continue;
+                result.Add(new CrdtMemberValue
+                {
+                    Element = Convert.FromBase64String(key),
+                    ReplicaId = bestReplica,
+                    Ordinal = bestCounter,
+                });
             }
 
-            if (!hasLive) continue;
-            result.Add(new CrdtMemberValue
-            {
-                Element = Convert.FromBase64String(key),
-                ReplicaId = bestReplica,
-                Ordinal = bestCounter,
-            });
+            return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
         }
-
-        return result.Count == 0 ? Array.Empty<CrdtMemberValue>() : result;
+        finally
+        {
+            Array.Clear(window, 0, count);
+            ArrayPool<string>.Shared.Return(window);
+        }
     }
 
     /// <summary>
@@ -410,7 +467,14 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
         return first;
     }
 
-    private static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)
+    /// <summary>
+    /// Whether <paramref name="dot"/> is covered by <paramref name="tombstones"/>.
+    /// Widened to <see langword="internal"/> so the microbenchmark host's
+    /// verbatim <c>DecodeCurrentValue</c> baseline calls the same untouched
+    /// helper the shipped body does, keeping the pair differing only in the
+    /// key window.
+    /// </summary>
+    internal static bool IsTombstoned(List<OrSetDot>? tombstones, OrSetDot dot)
         => tombstones is not null && OrSetDotCompaction.Covers(tombstones, in dot);
 
     /// <summary>
@@ -444,8 +508,13 @@ public sealed class OrSetProvenanceDecoder : ICrdtProvenanceDecoder
     /// then replica id, then kind (an add sorts before the remove that observed
     /// its own dot). Cached as a single shared instance so the per-element sort
     /// never allocates a comparison delegate.
+    /// <para>
+    /// Internal rather than private so the microbenchmark host's verbatim
+    /// pre-trim baseline sorts through the same cached comparison the shipped
+    /// body uses, leaving the key window as the pair's only difference.
+    /// </para>
     /// </summary>
-    private sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
+    internal sealed class CausalOrderComparer : IComparer<CrdtMemberChange>
     {
         public static CausalOrderComparer Instance { get; } = new();
 

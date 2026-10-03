@@ -712,14 +712,39 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     internal static byte[] ComputeKeyFingerprint(List<KeyValuePair<string, byte[]>> entries)
     {
-        var sortedKeys = new string[entries.Count];
-        for (int i = 0; i < entries.Count; i++) sortedKeys[i] = entries[i].Key;
-        Array.Sort(sortedKeys, OrdinalStringOrder.Comparison);
+        // The sorted key set is pure scratch: it is read once by the hash
+        // append below and discarded on return, so it never escapes and can be
+        // rented instead of allocated. Prepare runs on the saga write path, so
+        // this removes one transient array per prepared batch. Sorting in place
+        // through the span keeps the order byte-identical to Array.Sort over
+        // the same comparison. Only the written prefix is cleared on return,
+        // because the rented array is at least the requested length and
+        // clearing the whole of it would null out past what was used - and the
+        // prefix must be cleared, because the entries are string references the
+        // pool would otherwise keep alive.
+        var count = entries.Count;
+        var rented = System.Buffers.ArrayPool<string>.Shared.Rent(count);
+        try
+        {
+            for (var i = 0; i < count; i++) rented[i] = entries[i].Key;
+            var sortedKeys = rented.AsSpan(0, count);
+            sortedKeys.Sort(OrdinalStringOrder.Comparison);
 
-        return ComputeKeyFingerprintCore(sortedKeys);
+            return ComputeKeyFingerprintCore(sortedKeys);
+        }
+        finally
+        {
+            Array.Clear(rented, 0, count);
+            System.Buffers.ArrayPool<string>.Shared.Return(rented);
+        }
     }
 
-    private static byte[] ComputeKeyFingerprintCore(string[] sortedKeys)
+    /// <summary>
+    /// Hashes an already-sorted key set. Internal so the microbenchmark host's
+    /// verbatim fingerprint baseline hashes through the same untouched core,
+    /// leaving the rented-versus-allocated key window as the only difference.
+    /// </summary>
+    internal static byte[] ComputeKeyFingerprintCore(ReadOnlySpan<string> sortedKeys)
     {
         using var sha = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> lenBuf = stackalloc byte[4];
