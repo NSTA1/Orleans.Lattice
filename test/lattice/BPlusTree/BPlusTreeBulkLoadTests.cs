@@ -290,6 +290,7 @@ public partial class BPlusTreeBulkLoadTests
     {
         // Calling BulkAppendAsync twice with the same operationId should
         // produce the same result - no duplicate entries, no corruption.
+        await RegisterSingleShardAsync("bulk-append-idem");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-idem/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append-idem");
 
@@ -313,6 +314,7 @@ public partial class BPlusTreeBulkLoadTests
     [Test]
     public async Task BulkAppend_different_operationIds_append_independently()
     {
+        await RegisterSingleShardAsync("bulk-append-multi");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-multi/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append-multi");
 
@@ -348,6 +350,7 @@ public partial class BPlusTreeBulkLoadTests
     [Test]
     public async Task BulkAppend_empty_entries_is_noop()
     {
+        await RegisterSingleShardAsync("bulk-append-empty");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-empty/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append-empty");
 
@@ -372,6 +375,7 @@ public partial class BPlusTreeBulkLoadTests
     {
         // With MaxLeafKeys=4, append 2 entries (fills existing), then 6 more
         // (should create new leaves). Verify all 8 are readable and in order.
+        await RegisterSingleShardAsync("bulk-append-fill");
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>("bulk-append-fill/0");
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("bulk-append-fill");
 
