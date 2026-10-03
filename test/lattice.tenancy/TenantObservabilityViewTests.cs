@@ -63,12 +63,29 @@ public sealed class TenantObservabilityViewTests
         ILatticeAccessGate gate,
         FakeTenantOverageBilling? billing = null,
         ITenantPolicyEngine? engine = null,
-        ILatticeMembershipContext? membership = null) =>
+        ILatticeMembershipContext? membership = null,
+        CompiledTenantPolicySnapshotMaintainer? policy = null,
+        ITenantRegistry? registry = null) =>
         new(
             new TenantObservabilitySource(usage, billing ?? new FakeTenantOverageBilling()),
             gate,
             engine ?? ValidatingEngine(),
-            membership ?? MembershipFor());
+            membership ?? MembershipFor(),
+            policy ?? AuthoritativePolicy(),
+            registry ?? Substitute.For<ITenantRegistry>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantObservabilityView>.Instance);
+
+    /// <summary>
+    /// A maintainer that has built one (empty) snapshot with no rebuild
+    /// outstanding, so it is authoritative and the view decides from the
+    /// substituted engine exactly as it did before issue #4065. The snapshot lag
+    /// window is covered by <see cref="TenantObservabilityViewRegistryLagTests"/>.
+    /// </summary>
+    private static CompiledTenantPolicySnapshotMaintainer AuthoritativePolicy() =>
+        TenantPolicyEpochTestCluster
+            .LeasedAsync(new TenantPolicyTestData.FakeTenantRegistry())
+            .GetAwaiter()
+            .GetResult();
 
     private static async Task<List<TenantObservabilitySnapshot>> ListAsync(TenantObservabilityView view, TenantObservabilityScope scope)
     {
@@ -79,6 +96,47 @@ public sealed class TenantObservabilityViewTests
         }
 
         return results;
+    }
+
+    [Test]
+    public void Constructor_rejects_a_null_dependency()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                () => new TenantObservabilityView(
+                    new TenantObservabilitySource(TwoTenants(), new FakeTenantOverageBilling()),
+                    AllowingGate(),
+                    ValidatingEngine(),
+                    MembershipFor(),
+                    null!,
+                    Substitute.For<ITenantRegistry>(),
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantObservabilityView>.Instance),
+                Throws.ArgumentNullException,
+                "a null policy snapshot maintainer must be rejected");
+            Assert.That(
+                () => new TenantObservabilityView(
+                    new TenantObservabilitySource(TwoTenants(), new FakeTenantOverageBilling()),
+                    AllowingGate(),
+                    ValidatingEngine(),
+                    MembershipFor(),
+                    AuthoritativePolicy(),
+                    null!,
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantObservabilityView>.Instance),
+                Throws.ArgumentNullException,
+                "a null registry must be rejected");
+            Assert.That(
+                () => new TenantObservabilityView(
+                    new TenantObservabilitySource(TwoTenants(), new FakeTenantOverageBilling()),
+                    AllowingGate(),
+                    ValidatingEngine(),
+                    MembershipFor(),
+                    AuthoritativePolicy(),
+                    Substitute.For<ITenantRegistry>(),
+                    null!),
+                Throws.ArgumentNullException,
+                "a null logger must be rejected");
+        });
     }
 
     // ---- GetActiveTenantAsync ------------------------------------------
