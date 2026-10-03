@@ -28,7 +28,10 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     public static readonly TimeSpan SettlingWindow = TimeSpan.FromSeconds(30);
 
     private readonly TimeProvider _time = time ?? TimeProvider.System;
-    private readonly Dictionary<string, DateTimeOffset> _changedAt = new(StringComparer.Ordinal);
+
+    // Filed under the caller as well as the slug, as every memo here is: a change one
+    // sign-in, endpoint or tenant made never makes another caller's read settle (#4414).
+    private readonly Dictionary<(ShellCallerKey Caller, string Slug), DateTimeOffset> _changedAt = [];
     /// <summary>How many catalogue entries completions search, at most.</summary>
     public const int CompletionIndexSize = AvailableAppQuery.MaxPageSize;
 
@@ -142,7 +145,7 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
             _index = null;
             if (slug is not null)
             {
-                _changedAt[slug] = _time.GetUtcNow();
+                _changedAt[(caller, slug)] = _time.GetUtcNow();
             }
         }
 
@@ -150,16 +153,18 @@ internal sealed class AppsAccess(AppsFacades facades, ILogger<AppsAccess>? logge
     }
 
     /// <summary>
-    /// Whether <paramref name="slug"/> went through a lifecycle change in this circuit
-    /// within <see cref="SettlingWindow"/>. A cluster read right after an install or an
-    /// enable can briefly miss it while the change settles.
+    /// Whether <paramref name="slug"/> went through a lifecycle change in this circuit,
+    /// made by the caller now, within <see cref="SettlingWindow"/>. A cluster read right
+    /// after an install or an enable can briefly miss it while the change settles; a
+    /// change made under another sign-in, endpoint or tenant does not count.
     /// </summary>
     /// <param name="slug">The app slug.</param>
     public bool ChangedRecently(string slug)
     {
+        var caller = facades.Caller;
         lock (_gate)
         {
-            return _changedAt.TryGetValue(slug, out var at) && _time.GetUtcNow() - at <= SettlingWindow;
+            return _changedAt.TryGetValue((caller, slug), out var at) && _time.GetUtcNow() - at <= SettlingWindow;
         }
     }
 

@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - OrMap dot scans read each candidate once.** `OrMap`'s linear dot scan indexed the same list element twice per candidate and reloaded `Count` on every iteration. It now walks a span with a single `ref readonly` read per element: 35% faster on a full miss. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
+- **Performance - Liveness scans resolve their cover span once.** `OrSetDotCompaction.CountLive` and `AnyLive` re-resolved the cover list to a span for every dot they tested. Both walks hoist it now: 5-15% faster, with the isolating lane attributing 37% of the per-dot cost. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
+- **Performance - Leaf transfer plans are sized once.** `LeafEntryCache`'s frame-backed batch-boundary and full-scan-window planners grew their result lists from empty, reallocating as they filled. Both compute the exact count up front now: 15-23% fewer bytes per wide-leaf plan. ([#4410](https://github.com/NSTA1/Orleans.Lattice/pull/4410)) (`Orleans.Lattice`)
+
 - **Performance - Delta dot walks resolve a span once.** `OrFlag` and `RwFlag` walked each incoming delta's dot list through an interface indexer, paying a dispatch per dot. They now resolve it to a span once and split the narrow and wide walks: 19-58% faster on a re-delivered delta. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
 
 - **Performance - RwSet delta keys rent once per walk.** `RwSet.UnionDeltaDots` rented a pooled buffer and entered an exception-handling region for every element that overran its stack budget. Both are hoisted to the whole walk now: 10-17% faster on 512-byte elements. ([#4399](https://github.com/NSTA1/Orleans.Lattice/pull/4399)) (`Orleans.Lattice`)
@@ -272,6 +278,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - A key prefix ending in an emoji lists only its own keys.** A Data or History prefix ending in U+D7FF or a character such as U+1F3FF no longer sends a range bound the wire widens, so keys outside the prefix are no longer listed. ([#4389](https://github.com/NSTA1/Orleans.Lattice/issues/4389)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - The highest schema target version is not advanced to 0.** At target version 4,294,967,295 the Versions tab no longer offers to advance to version 0; Advance is turned off and the tab says no higher version exists. ([#4390](https://github.com/NSTA1/Orleans.Lattice/issues/4390)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A region planned for a tenant resident nowhere can be unchecked.** The Regions page locked the last planned region even when the tenant had no committed residency, which the cluster lets it empty; it is now held only while the tenant is resident in some region. ([#4412](https://github.com/NSTA1/Orleans.Lattice/issues/4412)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Switching a backup to Set of trees adds no blank or repeated tree.** The tree carried into the set is trimmed first, so spaces add nothing and a padded name already in the set is not added twice, and Capture asks for a tree instead of failing. ([#4413](https://github.com/NSTA1/Orleans.Lattice/issues/4413)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - An app settles only for the caller who changed it.** After an install or enable, only the same sign-in, endpoint and tenant treat an unready read of that app as settling; another tenant or identity gets its answer at once. ([#4414](https://github.com/NSTA1/Orleans.Lattice/issues/4414)) (`Orleans.Lattice.Explorer.UI`)
 
 ### Security
 

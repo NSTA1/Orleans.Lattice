@@ -144,11 +144,35 @@ internal static class OrSetDotCompaction
     /// <param name="dot">The dot to test for cancellation.</param>
     /// <returns><see langword="true"/> when the dot is cancelled.</returns>
     internal static bool Covers(List<OrSetDot> cover, in OrSetDot dot)
+        => Covers(CollectionsMarshal.AsSpan(cover), in dot);
+
+    /// <summary>
+    /// The span-typed form of <see cref="Covers(List{OrSetDot}, in OrSetDot)"/>,
+    /// for a caller that tests many dots against one cancelling list.
+    /// <para>
+    /// The list-typed overload resolves the span on every call, so a walk of
+    /// <c>n</c> candidate dots against the same cover re-derived the same span
+    /// <c>n</c> times. A caller that already holds the cover for the whole walk
+    /// resolves it once and calls this instead. The predicate is identical.
+    /// </para>
+    /// <para>
+    /// <b>The precondition is the span walks' usual one:</b> the caller must not
+    /// change the covering list's length while the span is alive. The
+    /// merge-time loops that append to the very list they test against
+    /// (<c>OrSet.MergeDelta</c>, <c>RwSet.UnionDeltaDots</c>,
+    /// <c>OrFlag</c>/<c>RwFlag.MergeDelta</c>) therefore keep the list-typed
+    /// overload, which re-resolves the span per call and so always observes the
+    /// current backing array.
+    /// </para>
+    /// </summary>
+    /// <param name="cover">The cancelling dots, already resolved to a span.</param>
+    /// <param name="dot">The dot to test for cancellation.</param>
+    /// <returns><see langword="true"/> when the dot is cancelled.</returns>
+    internal static bool Covers(ReadOnlySpan<OrSetDot> cover, in OrSetDot dot)
     {
-        var span = CollectionsMarshal.AsSpan(cover);
-        for (var i = 0; i < span.Length; i++)
+        for (var i = 0; i < cover.Length; i++)
         {
-            ref readonly var candidate = ref span[i];
+            ref readonly var candidate = ref cover[i];
             if (candidate.Counter >= dot.Counter
                 && string.Equals(candidate.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
             {
@@ -308,9 +332,13 @@ internal static class OrSetDotCompaction
 
         var live = 0;
         var span = CollectionsMarshal.AsSpan(dots);
+        // The cover is resolved to a span once for the whole walk instead of
+        // once per candidate dot inside Covers, so an n-dot slot pays one span
+        // resolution rather than n.
+        var coverSpan = CollectionsMarshal.AsSpan(cover);
         for (var i = 0; i < span.Length; i++)
         {
-            if (!Covers(cover, in span[i]))
+            if (!Covers(coverSpan, in span[i]))
             {
                 live++;
             }
@@ -361,9 +389,11 @@ internal static class OrSetDotCompaction
         }
 
         var span = CollectionsMarshal.AsSpan(dots);
+        // Same one-resolution-per-walk hoist as CountLive above.
+        var coverSpan = CollectionsMarshal.AsSpan(cover);
         for (var i = 0; i < span.Length; i++)
         {
-            if (!Covers(cover, in span[i]))
+            if (!Covers(coverSpan, in span[i]))
             {
                 return true;
             }

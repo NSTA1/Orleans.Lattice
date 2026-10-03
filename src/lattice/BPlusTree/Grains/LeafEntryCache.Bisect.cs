@@ -223,8 +223,18 @@ internal sealed partial class LeafEntryCache
         }
 
         var stride = (int)rowsPerBatch;
-        var boundaries = new List<string>();
-        for (var index = lowerBound + stride; index < rowCount; index += stride)
+        var firstBoundary = (long)lowerBound + stride;
+        if (firstBoundary >= rowCount)
+        {
+            return [];
+        }
+
+        // The walk's length is a closed form of the stride and the row count, so
+        // the list is sized exactly once rather than doubling its way there. A
+        // leaf that bisects into tens of batches otherwise allocates - and then
+        // discards - every intermediate backing array it grew through.
+        var boundaries = new List<string>((int)((rowCount - firstBoundary + stride - 1) / stride));
+        for (var index = (int)firstBoundary; index < rowCount; index += stride)
         {
             if (source.TryReadRowKeyAt(index, out var boundary))
             {
@@ -305,9 +315,14 @@ internal sealed partial class LeafEntryCache
             return [(null, null)];
         }
 
-        var windows = new List<(string?, string?)>();
+        var stride = (int)rowsPerWindow;
+
+        // One window per stride, plus the final open-ended one: a closed form,
+        // so the list is sized once instead of growing through every
+        // intermediate array on a leaf wide enough to need many windows.
+        var windows = new List<(string?, string?)>((rowCount + stride - 1) / stride);
         string? start = null;
-        for (var index = (int)rowsPerWindow; index < rowCount; index += (int)rowsPerWindow)
+        for (var index = stride; index < rowCount; index += stride)
         {
             if (!source.TryReadRowKeyAt(index, out var boundary))
             {

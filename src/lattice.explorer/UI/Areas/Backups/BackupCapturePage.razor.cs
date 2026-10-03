@@ -99,9 +99,13 @@ public partial class BackupCapturePage : IDisposable
     {
         _kind = value is IncrementalKind or SetKind ? value : FullKind;
         _error = null;
-        if (_kind == SetKind && _tree is { Length: > 0 } tree && !_setTrees.Contains(tree, StringComparer.Ordinal))
+
+        // The tree carried into a set is judged as Add judges it: trimmed, and only
+        // when it names a tree the set does not already hold (#4413).
+        var tree = _tree?.Trim();
+        if (_kind == SetKind && !string.IsNullOrEmpty(tree) && !_setTrees.Contains(tree, StringComparer.Ordinal))
         {
-            _setTrees.Add(tree.Trim());
+            _setTrees.Add(tree);
             _tree = null;
         }
 

@@ -268,10 +268,27 @@ public sealed class OrMap<TKey, TValue> : ICrdt<OrMap<TKey, TValue>>
 
     private static bool ListContainsDot(List<OrSetDot> list, OrSetDot dot)
     {
-        for (var i = 0; i < list.Count; i++)
+        // Walked through the backing span rather than the list indexer. The
+        // shape this replaced indexed the list *twice* per iteration - once for
+        // the counter and once for the replica id - so every element it did not
+        // match was copied out of the list in full twice and bounds-checked
+        // twice, and List<T>.Count is a mutable field the JIT cannot hoist out
+        // of the loop condition. Reading each element once through
+        // ref readonly removes both copies, both bounds checks and the
+        // per-iteration Count reload. Nothing here changes the list's length
+        // while the span is alive: both callers append only after this returns
+        // false. Mirrors the span scans OrSetDotCompaction already uses.
+        var span = CollectionsMarshal.AsSpan(list);
+        for (var i = 0; i < span.Length; i++)
         {
-            if (list[i].Counter == dot.Counter && string.Equals(list[i].ReplicaId, dot.ReplicaId, StringComparison.Ordinal)) return true;
+            ref readonly var candidate = ref span[i];
+            if (candidate.Counter == dot.Counter
+                && string.Equals(candidate.ReplicaId, dot.ReplicaId, StringComparison.Ordinal))
+            {
+                return true;
+            }
         }
+
         return false;
     }
 
