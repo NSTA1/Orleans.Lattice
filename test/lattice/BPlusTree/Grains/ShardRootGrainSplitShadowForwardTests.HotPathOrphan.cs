@@ -68,6 +68,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// discarding that bucket without surfacing its prepare-time value - remains
 /// detected by <c>BPlusLeafGrainTests.OrphanBucketDiscard</c>.
 /// </para>
+/// <para>
+/// Since issue #4385 a destination leaf whose current activation applied the
+/// terminal refuses the late prepare rather than bucketing it, so the detector
+/// stages the realisable case - a destination leaf whose terminal predates its
+/// activation - and a sibling test pins the refusal.
+/// </para>
 /// </summary>
 public partial class ShardRootGrainSplitShadowForwardTests
 {
@@ -82,8 +88,16 @@ public partial class ShardRootGrainSplitShadowForwardTests
     private sealed class HotPathOrphanHarness
     {
         public required ShardRootGrain Source { get; init; }
-        public required BPlusLeafGrain DestinationLeaf { get; init; }
+        public required BPlusLeafGrain DestinationLeaf { get; set; }
         public required FakePersistentState<ShardRootState> SourceState { get; init; }
+
+        /// <summary>
+        /// Replaces the destination leaf with a fresh activation over the same
+        /// persisted state. It loses the per-activation memory of which saga
+        /// terminals it has applied; this harness runs no replay, so it also
+        /// starts with no rows.
+        /// </summary>
+        public required Func<BPlusLeafGrain> ReactivateDestinationLeaf { get; init; }
     }
 
     private static HotPathOrphanHarness CreateHotPathOrphanHarness(ShardSplitPhase phase)
@@ -99,13 +113,14 @@ public partial class ShardRootGrainSplitShadowForwardTests
         destinationLeafContext.GrainId.Returns(GrainId.Create("leaf", DestinationLeafKey));
         var destinationLeafState = new FakePersistentState<LeafNodeState>();
         destinationLeafState.State.TreeId = TreeId;
-        var destinationLeaf = new BPlusLeafGrain(
+        BPlusLeafGrain NewDestinationLeaf() => new(
             destinationLeafContext,
             destinationLeafState,
             destinationFactory,
             destinationResolver,
             TestMutationObservers.NoObservers(),
             TestOriginClusterIdResolver.Default());
+        var destinationLeaf = NewDestinationLeaf();
 
         destinationFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(destinationLeaf);
         destinationFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
@@ -163,6 +178,12 @@ public partial class ShardRootGrainSplitShadowForwardTests
             Source = source,
             DestinationLeaf = destinationLeaf,
             SourceState = sourceState,
+            ReactivateDestinationLeaf = () =>
+            {
+                var reactivated = NewDestinationLeaf();
+                destinationFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(reactivated);
+                return reactivated;
+            },
         };
     }
 
@@ -191,11 +212,16 @@ public partial class ShardRootGrainSplitShadowForwardTests
     }
 
     [Test]
-    public async Task Hot_path_shadow_forward_installs_orphan_pending_bucket_on_destination_leaf_that_already_applied_the_terminal()
+    public async Task Hot_path_shadow_forward_installs_orphan_pending_bucket_on_destination_leaf_whose_terminal_predates_its_activation()
     {
         // This is the refinement detector for ShadowForwardOrphan(t,k)'s
         // hot-path production realisation. Every conjunct of the spec action
         // has a concrete counterpart below.
+        //
+        // Since issue #4385 a destination leaf that remembers the saga's
+        // terminal refuses the late prepare (see the next test), so the action
+        // is realised only where the leaf's current activation does not know
+        // the terminal: it landed before a reactivation.
         var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
         var txid = Guid.NewGuid();
 
@@ -214,6 +240,11 @@ public partial class ShardRootGrainSplitShadowForwardTests
                 "Setup: the destination must hold no pending bucket for the saga (spec pend[t][k] = \"none\").");
         });
 
+        // The leaf reactivates and no longer remembers the terminal.
+        h.DestinationLeaf = h.ReactivateDestinationLeaf();
+        Assert.That(h.DestinationLeaf.RecentlyTerminalCount, Is.Zero,
+            "Setup: the reactivated destination leaf must not remember the terminal.");
+
         // The action: a prepared write for the same saga arrives at the SOURCE
         // shard while its split is active, and the hot-path shadow-forward
         // carries it to the destination.
@@ -227,14 +258,42 @@ public partial class ShardRootGrainSplitShadowForwardTests
         Assert.That(h.DestinationLeaf.PendingTransactionCount, Is.EqualTo(1),
             "The hot-path shadow-forward of a prepared write must install a pending bucket on the destination leaf.");
 
-        // UNCHANGED terminal, and the orphan guard: the late bucket must not
-        // shadow the authoritative post-terminal projection. A forward that
-        // published [11] into Entries would be the pre-fix MergeManyAsync
-        // behaviour, and the mid-saga atomic-visibility violation of #1584.
+        // UNCHANGED terminal projection: the late bucket must not be published
+        // into the destination's visible Entries. A forward that published [11]
+        // would be the pre-fix MergeManyAsync behaviour, and the mid-saga
+        // atomic-visibility violation of #1584. (The reactivated leaf runs no
+        // replay here, so it holds no row for the key at all.)
+        Assert.That(h.DestinationLeaf.EntriesForTest.ContainsKey("k"), Is.False,
+            "The forwarded prepared value must be bucketed, never published into the destination's visible Entries.");
+    }
+
+    [Test]
+    public async Task Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it()
+    {
+        // Issue #4385. The same forward as the detector above, onto a
+        // destination leaf whose current activation applied the saga's
+        // terminal. The leaf refuses the prepare instead of bucketing it:
+        // nothing would ever drain that bucket, and once the leaf forgets the
+        // terminal (a reactivation replaying the logged prepare, or a split
+        // that strands the key outside its span) the orphan surfaces as the
+        // committed value - a stale round, a duplicate key in a count or scan.
+        var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
+        var txid = Guid.NewGuid();
+
+        await h.DestinationLeaf.SetAsync("k", [99]);
+        await h.DestinationLeaf.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
+
+        await PreparedShardSetAsync(h.Source, txid, "k", [11]);
+        var pendingKeys = await h.DestinationLeaf.GetPendingKeysAsync();
+
         Assert.Multiple(() =>
         {
+            Assert.That(h.DestinationLeaf.PendingTransactionCount, Is.Zero,
+                "A prepare that trails its saga's terminal must not leave an orphan pending bucket on the destination leaf.");
+            Assert.That(pendingKeys, Is.Empty,
+                "The refused prepare must not be visible as a pending key.");
             Assert.That(h.DestinationLeaf.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 99 }),
-                "The forwarded prepared value must be bucketed, never published into the destination's visible Entries.");
+                "The refused prepare must not touch the destination's visible Entries.");
             Assert.That(h.DestinationLeaf.RecentlyTerminalCount, Is.EqualTo(1),
                 "The forward must not disturb the terminal the destination already applied.");
         });
