@@ -42,7 +42,7 @@ public partial class DataEntryView : IDisposable
         ? string.Empty
         : _valueExpanded || _rendered.Content.Length <= DataValueRendering.DisplayLimit
             ? _rendered.Content
-            : string.Concat(_rendered.Content.AsSpan(0, DataValueRendering.DisplayLimit), "\n...");
+            : string.Concat(LtTextCut.Prefix(_rendered.Content, DataValueRendering.DisplayLimit), "\n...");
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()

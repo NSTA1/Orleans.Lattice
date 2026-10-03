@@ -144,6 +144,26 @@ public sealed class SchemaVersionsPanelTests : SchemaTestContext
     }
 
     [Test]
+    public void At_the_highest_version_the_target_is_not_offered_an_advance_to_version_zero()
+    {
+        // The next version was computed in unchecked uint arithmetic, so the target
+        // 4,294,967,295 offered to advance to 0, which no advance or save accepts.
+        UseEstate();
+        Schema.Versions["orders"] = new LatticeSchemaVersionConfig(7, uint.MaxValue, strictIngest: true);
+
+        var cut = Open();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll("[role=tabpanel] dl.lt-dl dd")[1].TextContent, Is.EqualTo("4294967295"));
+            Assert.That(Button(cut, "Advance target version...").HasAttribute("disabled"), Is.True);
+            Assert.That(cut.FindAll(".lt-schema-note").Select(note => note.TextContent),
+                Has.Some.EqualTo("The target is the highest version there is, so it cannot be advanced."));
+            Assert.That(Button(cut, "Migrate stored values...").HasAttribute("disabled"), Is.False);
+        });
+    }
+
+    [Test]
     public void A_refused_advance_is_explained_in_the_form()
     {
         UseEstate();

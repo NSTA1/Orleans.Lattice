@@ -1,4 +1,5 @@
 using System.Globalization;
+using Orleans.Lattice.Explorer.UI.Design.Components;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 
@@ -281,5 +282,5 @@ internal static class SchemaCardExamples
 
     private static string Raw(double value) => value.ToString("R", CultureInfo.InvariantCulture);
 
-    private static string Clip(string text) => text.Length > 32 ? text[..32] + "..." : text;
+    private static string Clip(string text) => text.Length > 32 ? string.Concat(LtTextCut.Prefix(text, 32), "...") : text;
 }

@@ -172,7 +172,7 @@ public partial class DataKeysPanel : IDisposable
     }
 
     internal static string Clip(string key) =>
-        key.Length <= KeyClip ? key : string.Concat(key.AsSpan(0, KeyClip - 3), "...");
+        key.Length <= KeyClip ? key : string.Concat(LtTextCut.Prefix(key, KeyClip - 3), "...");
 
     internal static string TypeText(DataEntry entry) =>
         entry.IsTombstone ? "Deleted" : entry.CrdtShape ?? "LWW";

@@ -84,24 +84,54 @@ internal static class DataTreeNames
     /// The exclusive upper bound of every key that starts with <paramref name="prefix"/>,
     /// or <see langword="null"/> when the prefix has no finite bound.
     /// </summary>
+    /// <remarks>
+    /// The bound is well-formed text whenever the prefix is: the state API carries a
+    /// string as UTF-8, which replaces a lone surrogate with U+FFFD, so a bound that
+    /// split a surrogate pair would arrive far above the prefix and admit keys outside
+    /// it. A last character of U+D7FF moves to U+10000, the next text in code-unit
+    /// order, and a last character outside the Basic Multilingual Plane moves to the
+    /// next code point, or to U+E000 after U+10FFFF.
+    /// </remarks>
     /// <param name="prefix">The key prefix.</param>
     public static string? PrefixUpperBound(string prefix)
     {
         ArgumentNullException.ThrowIfNull(prefix);
         for (var i = prefix.Length - 1; i >= 0; i--)
         {
-            if (prefix[i] < char.MaxValue)
+            var last = prefix[i];
+            if (last == char.MaxValue)
             {
-                return string.Create(i + 1, (prefix, i), static (span, state) =>
-                {
-                    state.prefix.AsSpan(0, state.i + 1).CopyTo(span);
-                    span[state.i]++;
-                });
+                continue;
             }
+
+            if (char.IsLowSurrogate(last) && i > 0 && char.IsHighSurrogate(prefix[i - 1]))
+            {
+                var high = prefix[i - 1];
+                return last < '\uDFFF'
+                    ? Bound(prefix, i, (char)(last + 1))
+                    : high < '\uDBFF'
+                        ? Bound(prefix, i - 1, (char)(high + 1), '\uDC00')
+                        : Bound(prefix, i - 1, '\uE000');
+            }
+
+            return last == '\uD7FF'
+                ? Bound(prefix, i, '\uD800', '\uDC00')
+                : Bound(prefix, i, (char)(last + 1));
         }
 
         return null;
     }
+
+    private static string Bound(string prefix, int keep, char first, char? second = null) =>
+        string.Create(keep + (second is null ? 1 : 2), (prefix, keep, first, second), static (span, state) =>
+        {
+            state.prefix.AsSpan(0, state.keep).CopyTo(span);
+            span[state.keep] = state.first;
+            if (state.second is { } next)
+            {
+                span[state.keep + 1] = next;
+            }
+        });
 
     private static bool IsPlatformInternal(string id) =>
         id[0] == '_' || id.StartsWith(SystemDataPrefix, StringComparison.Ordinal);

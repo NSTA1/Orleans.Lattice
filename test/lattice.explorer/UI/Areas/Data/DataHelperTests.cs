@@ -70,6 +70,27 @@ public sealed class DataHelperTests
         });
     }
 
+    [TestCase("x\uD7FF", "x\U00010000")]
+    [TestCase("x\U0001F3FF", "x\U0001F400")]
+    [TestCase("x\U0001F3FF\uFFFF", "x\U0001F400")]
+    [TestCase("x\U0001F600", "x\U0001F601")]
+    [TestCase("x\U0010FFFF", "x\uE000")]
+    public void A_prefix_bound_is_well_formed_so_it_survives_the_wire(string prefix, string expected)
+    {
+        // The state API carries strings as UTF-8, which replaces a lone surrogate: a bound
+        // such as "x\uD83C\uE000" arrived as "x\uFFFD\uE000" and let keys outside the prefix in.
+        var bound = DataTreeNames.PrefixUpperBound(prefix)!;
+        var sent = Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(bound));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bound, Is.EqualTo(expected));
+            Assert.That(sent, Is.EqualTo(bound), "the bound is changed on the wire");
+            Assert.That(string.CompareOrdinal(prefix + "\uFFFF\uFFFF", sent), Is.LessThan(0), "a key with the prefix falls outside the range");
+            Assert.That(string.CompareOrdinal(expected, sent), Is.GreaterThanOrEqualTo(0), "the first key past the prefix falls inside the range");
+        });
+    }
+
     [Test]
     public void Faults_are_classified_and_described_without_the_servers_words()
     {
@@ -155,6 +176,23 @@ public sealed class DataHelperTests
             Assert.That(DataValueRendering.Inline(binary, truncated: true), Is.EqualTo(Convert.ToHexString(binary).ToLowerInvariant() + "..."));
             Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes(new string('x', 300)), truncated: true), Has.Length.EqualTo(160).And.EndsWith("..."));
             Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes("short text"), truncated: false), Is.EqualTo("short text"));
+        });
+    }
+
+    [Test]
+    public void A_clipped_key_or_preview_never_splits_a_character_in_two()
+    {
+        // An emoji is a surrogate pair; a cut between its halves left a lone surrogate,
+        // which the page can only draw as the replacement character.
+        const string Emoji = "\U0001F600";
+        var value = new string('x', 156) + Emoji + new string('y', 50);
+        var key = new string('k', DataKeysPanel.KeyClip - 4) + Emoji + "tail";
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(DataValueRendering.Inline(Encoding.UTF8.GetBytes(value), truncated: false), Is.EqualTo(new string('x', 156) + "..."));
+            Assert.That(DataKeysPanel.Clip(key), Is.EqualTo(new string('k', DataKeysPanel.KeyClip - 4) + "..."));
+            Assert.That(DataKeysPanel.Clip(new string('k', DataKeysPanel.KeyClip - 5) + Emoji + "tail"), Is.EqualTo(new string('k', DataKeysPanel.KeyClip - 5) + Emoji + "..."));
         });
     }
 

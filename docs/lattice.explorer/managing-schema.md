@@ -131,7 +131,7 @@ When versioning is off, **Turn on versioning** asks for a schema family, a targe
 - **Change config** by replacing the config as typed;
 - **Turn off versioning** after a destructive confirmation named **Turn off versioning**.
 
-Advancing can only move the target version up. Migration and advance-and-migrate start cluster-tracked background operations. The tab links to the Remediation tab while one is running.
+Advancing can only move the target version up, so at the highest target version, 4,294,967,295, **Advance target version...** is turned off and the tab says no higher version exists. Migration and advance-and-migrate start cluster-tracked background operations. The tab links to the Remediation tab while one is running.
 
 If the cluster has not registered schema versioning, the tab says **Versioning is not available** instead of failing opaquely.
 
