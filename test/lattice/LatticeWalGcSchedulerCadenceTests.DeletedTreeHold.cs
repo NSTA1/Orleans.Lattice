@@ -26,11 +26,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         return deletion;
     }
 
-    private static ILatticeWalGc BlockedGc()
+    private static ILatticeWalGc BlockedGc(string? consumerId = null)
     {
+        var blockingConsumerId = consumerId ?? BlockedConsumerId();
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromResult(BlockedReportNaming(BlockedConsumerId())));
+            .Returns(_ => Task.FromResult(BlockedReportNaming(blockingConsumerId)));
         return gc;
     }
 
@@ -42,7 +43,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var deletion = DeletionReporting(factory, PhysicalTreeRetention.Deleted);
         var reporter = Substitute.For<ILeafCursorReporter>();
 
-        var scheduler = CreateScheduler(factory, BlockedGc(), Adaptive(), time, cursorReporter: reporter);
+        // Issue #4258: the blocking id must be partition-suffixed. Unsuffixed, the
+        // #4238 retirement gate refuses it before any removal, so the
+        // UnregisterAsync absence below held even if the hold retired the pin.
+        var consumerId = BlockedConsumerId() + "_0";
+        using var decisions = new InstrumentRecorder(LatticeMetrics.WalGcDriveOrphanPinRetirements, StrandedTree);
+        var scheduler = CreateScheduler(factory, BlockedGc(consumerId), Adaptive(), time, cursorReporter: reporter);
         await StartAndRunFirstPassAsync(scheduler, time);
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
@@ -52,6 +58,15 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         factory.DidNotReceive().GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>());
 
         // A deleted copy is still recoverable, so its pins keep protecting it.
+        Assert.Multiple(() =>
+        {
+            Assert.That(DriveDecisions(decisions, "refused_malformed_id"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "refused_ambiguous_partition"), Is.Zero,
+                "anti-vacuity: the gate must accept this id, or a retirement could never be observed.");
+            Assert.That(DriveDecisions(decisions, "retired"), Is.Zero,
+                "a deleted tree's pins must not be retired while it is recoverable.");
+        });
         await reporter.DidNotReceive().UnregisterTreeAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await reporter.DidNotReceive().UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
 
