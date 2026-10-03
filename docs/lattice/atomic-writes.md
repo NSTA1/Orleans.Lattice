@@ -559,7 +559,10 @@ remembered the terminal - after a reactivation, or after a split stranded
 the key outside the leaf's span - as a stale value or as a key counted twice
 by `CountAsync`. The refusal happens before the write-ahead-log append, so
 the orphan cannot reappear on replay. The retention window above still
-covers a leaf whose current activation does not know the terminal.
+covers a leaf whose current activation does not know the terminal. The sweep
+reads each saga's verdict under the logical tree, where the saga records it,
+so the check also holds for a resized tree whose shards live under a
+physical copy.
 
 ### After the retention window: `Indeterminate`, not `InFlight`
 
