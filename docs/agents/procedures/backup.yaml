@@ -19,8 +19,8 @@ preconditions:
     check: "Snapshot destination tree does not already exist."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
   - id: source-authority
-    check: "Caller has whole-tree Admin for snapshot source and destination, or backup permission for backup scope."
-    source: "docs/lattice.api.treeadmin/README.md"
+    check: "Caller has whole-tree Admin for snapshot source and destination, or Backup permission over the whole backup scope: whole tree, every key under a prefix, or the exact key."
+    source: "src/lattice.backup/BackupAccessAuthorizer.cs#BackupAccessAuthorizer.AuthorizeAsync"
 steps:
   - n: 1
     action: "For a live tree copy, start snapshot into a fresh destination tree."

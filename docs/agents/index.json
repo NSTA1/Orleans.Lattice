@@ -36,6 +36,7 @@
     "grpc_method": "/<service>/<Method>",
     "validation": "test/lattice/Docs/AgentDocsConsistencyTests.cs",
     "empty_list": "the entity sources, read in full, state none",
+    "configuration_property": "deployment.yaml configuration_schema[].properties[] is {name, type, default, source} plus optional validation and environment_variable; environment_variable is the exact process environment variable that binds the property, or an angle-bracket placeholder pattern for a prefix family",
     "error_reference": "operations[].errors[].error_id resolves to an id in the error_taxonomy of the same file",
     "decision_tree": {
       "node": "{id, check, on_true, on_false, source}; the first node is the root",
@@ -183,7 +184,7 @@
       "kind": "deployment",
       "format": "yaml",
       "schema": "lattice.agents/deployment/v1",
-      "summary": "Deployment specification: reference topologies (silos, regions, packages, trees, replication mode, storage) and the options configuration schema."
+      "summary": "Deployment specification: reference topologies (silos, regions, packages, trees, replication mode, storage) and the options configuration schema, including environment-variable-bound options."
     },
     {
       "path": "governance/audit-events.json",

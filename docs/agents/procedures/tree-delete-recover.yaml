@@ -77,9 +77,9 @@ failure_modes:
     effect: "Tree remains live and no tree is deleted through the wrong name."
     response: "Correct or remove the alias, or delete the aliasing tree first, then retry."
   - id: purge-interrupted-before-unregister
-    signal: "A purge interrupted after recording its completion but before removing the registry entry leaves that entry behind."
-    effect: "The id reads as a live, empty tree that keeps the purged tree's registry settings."
-    response: "Check TreeExistsAsync before reusing the id; docs/lattice/tree-deletion.md states no automatic repair for the leftover entry."
+    signal: "A purge interrupted after recording its completion but before removing the registry entry leaves that removal owed."
+    effect: "The deletion status keeps reporting PurgeInProgress with every shard done, and the id is not reported purged until registry removal lands."
+    response: "Let the keepalive reminder or a PurgeTreeAsync retry re-drive registry removal before reusing the id."
 rollback:
   supported: true
   mechanism: "RecoverTreeAsync reverses soft delete within the recovery window; purge has no rollback."

@@ -1609,6 +1609,8 @@ concepts:
       in_scope:
         - statement: "Provides repository onboarding, recall, memory, semantic search, graph navigation, context packing, and usage accounting."
           source: "FEATURES.md"
+        - statement: "Can run memory-only, storing and embedding agent memory while source-derived file and symbol indexing is disabled."
+          source: "src/lattice.api.mcp.repocontext/Indexing/RepoContextIndexingOptions.cs#SourceIndexing"
       out_of_scope:
         - statement: "Semantic search is approximate by default unless exact retrieval is configured."
           source: "docs/lattice.api.mcp.repocontext/README.md"
@@ -2099,6 +2101,8 @@ concepts:
           source: "docs/lattice/tree-registry.md"
         - statement: "Every alias assignment is decided by the registered tree ownership guard before it is written."
           source: "docs/lattice/tree-registry.md"
+        - statement: "A successful alias assignment carries the target's shard map and split allocation mark onto the logical entry and writes the replaced map to the previous physical entry when it has one; a refused alias writes nothing."
+          source: "src/lattice/BPlusTree/AliasCutoverShardMaps.cs#AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync"
       out_of_scope:
         - statement: "Alias indirection does not change the virtual shard count."
           source: "docs/lattice/architecture.md"
