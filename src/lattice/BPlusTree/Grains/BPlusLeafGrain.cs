@@ -2926,6 +2926,10 @@ internal sealed partial class BPlusLeafGrain(
 
             if (changed)
             {
+                // A split sibling is a topology seed: an unbound donor (#1744) mints
+                // it with TreeId null and no row, then moves entries onto it, so the
+                // #4419 rowless-unbound persist refusal must not apply here.
+                _seedingSibling = true;
                 try
                 {
                     await PersistAsync();
@@ -2941,6 +2945,10 @@ internal sealed partial class BPlusLeafGrain(
                     state.State.MovedAwaySlots = prevMovedSlots;
                     state.State.MovedAwayVirtualShardCount = prevMovedVsc;
                     throw;
+                }
+                finally
+                {
+                    _seedingSibling = false;
                 }
             }
         }

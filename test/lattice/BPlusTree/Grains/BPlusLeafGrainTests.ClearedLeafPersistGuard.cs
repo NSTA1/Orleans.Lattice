@@ -1,7 +1,10 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Tests.Fakes;
 using Orleans.Runtime;
+using System.Text;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -11,9 +14,11 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <c>leaf</c> stub row by a stray RPC. Nothing reclaims such a row: it is
 /// unreachable from any shard root and carries no tree id for a per-tree sweep
 /// to find it by. <c>PersistAsync</c> therefore refuses the write on an
-/// activation where <c>!RecordExists &amp;&amp; TreeId is null</c>; the only
-/// legitimate seeds (<c>SetTreeIdAsync</c>, <c>InitializeSiblingAsync</c>)
-/// assign the tree id before they persist and are unaffected.
+/// activation where <c>!RecordExists &amp;&amp; TreeId is null</c> AND the
+/// leaf holds nothing (no entries, no moved-away mask, no unresolved replay
+/// work). A sibling being seeded by <c>InitializeSiblingAsync</c>, and an
+/// unbound leaf that holds data (the tolerated unbound-donor state, #1744),
+/// still persist so no acknowledged data is dropped.
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
@@ -145,5 +150,51 @@ public partial class BPlusLeafGrainTests
         await grain.SetNextSiblingAsync(GrainId.Create("leaf", "next"));
 
         Assert.That(state.WriteCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task Unbound_split_sibling_init_persists_and_keeps_moved_entries()
+    {
+        var (grain, state) = CreateRowlessTreelessLeaf();
+
+        await grain.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = null,
+            ShardIndex = 4,
+            LowKeyInclusive = "m",
+            HighKeyExclusive = "z",
+            NextSibling = null,
+            PrevSibling = null,
+            MovedAwaySlots = new[] { 3, 9 },
+            MovedAwayVirtualShardCount = 16,
+        });
+        var writesAfterSeed = state.WriteCount;
+        await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k1"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v1"), HybridLogicalClock.Tick(default)),
+        });
+        await grain.SetNextSiblingAsync(GrainId.Create("leaf", "next"));
+
+        Assert.That(writesAfterSeed, Is.GreaterThanOrEqualTo(1), "the sibling seed of an unbound donor (#1744) must persist its row");
+        Assert.That(state.WriteCount, Is.GreaterThan(writesAfterSeed), "a populated unbound sibling must persist later updates");
+        Assert.That(state.State.MovedAwaySlots, Is.EquivalentTo(new[] { 3, 9 }));
+        Assert.That(state.State.NextSibling, Is.EqualTo(GrainId.Create("leaf", "next")));
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
+    }
+
+    [Test]
+    public async Task Unbound_rowless_leaf_data_write_is_persisted_by_the_next_persist()
+    {
+        var (grain, state) = CreateRowlessTreelessLeaf();
+
+        await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k1"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("v1"), HybridLogicalClock.Tick(default)),
+        });
+        await grain.SetNextSiblingAsync(GrainId.Create("leaf", "next"));
+
+        Assert.That(state.WriteCount, Is.GreaterThan(0), "an acknowledged data write on an unbound leaf must not be dropped by the #4419 guard");
+        Assert.That(state.State.NextSibling, Is.EqualTo(GrainId.Create("leaf", "next")));
+        Assert.That(grain.EntriesForTest.ContainsKey("k1"), Is.True);
     }
 }
