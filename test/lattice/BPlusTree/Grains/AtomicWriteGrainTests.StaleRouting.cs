@@ -53,8 +53,7 @@ public partial class AtomicWriteGrainTests
         // saga now routes routing fetches through the forceRefresh:true
         // overload so the per-activation StatelessWorker cache is
         // bypassed under cascading mid-saga topology changes.
-        // ... plus one for the alias check that precedes the commit decision (#4336).
-        await lattice.Received(5).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -85,8 +84,7 @@ public partial class AtomicWriteGrainTests
         // throw. Plus one for BroadcastTerminalsAsync's drift-correction
         // pass. Three calls in total - all via the forceRefresh:true
         // overload.
-        // ... plus one for the alias check that precedes the commit decision (#4336).
-        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await lattice.Received(3).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -135,8 +133,7 @@ public partial class AtomicWriteGrainTests
         // throw (mixed shard / tree). Plus one for
         // BroadcastTerminalsAsync's drift-correction pass. All via
         // forceRefresh:true overload.
-        // ... plus one for the alias check that precedes the commit decision (#4336).
-        await lattice.Received(5).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await lattice.Received(4).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -241,8 +238,7 @@ public partial class AtomicWriteGrainTests
         // the initial fetch (Storm + 1 prepare-side calls), plus one
         // by BroadcastTerminalsAsync's drift-correction pass. All via
         // forceRefresh:true overload.
-        // ... plus one for the alias check that precedes the commit decision (#4336).
-        await lattice.Received(Storm + 3).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
+        await lattice.Received(Storm + 2).GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
