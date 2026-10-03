@@ -265,6 +265,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Security
 
+- **Explorer - A web sign-in minted a token for whatever resource the endpoint asked for.** The advertised OAuth audience became the requested scope unchecked, so a hostile endpoint harvested a delegated Graph token. An audience must now be bound to the endpoint or listed in `AllowedAudiences`. ([#4394](https://github.com/NSTA1/Orleans.Lattice/issues/4394)) (`Orleans.Lattice.Explorer.Entra.Web`)
+
+- **Explorer - The interactive sign-in guarded its authority but not its audience.** The advertised audience reached MSAL unchecked, so a hostile endpoint could raise a consent prompt for a foreign resource. The same admission rule now applies, widened by `AllowedAudiences`. ([#4395](https://github.com/NSTA1/Orleans.Lattice/issues/4395)) (`Orleans.Lattice.Explorer.Entra`)
+
+- **Tenancy - A subject id shaped like a tenant group was a tenant admin.** Group grants share a slot map with subject ids, so a `sub` of `t/{tenant}/{group}` exact-matched one. Authorization probes now refuse that namespace and the subject mapper rejects it; set inspection is unchanged. ([#4396](https://github.com/NSTA1/Orleans.Lattice/issues/4396)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Membership`)
+
 - **Backup - A prefix backup or restore skipped carve-outs.** A prefix scope was authorized at its root key, so a single-key grant covered the whole subtree and a deny below the prefix was never consulted. It now needs a grant covering every key under the prefix. ([#4278](https://github.com/NSTA1/Orleans.Lattice/issues/4278)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup`)
 
 - **Indexing - A newline in a path defeated exclude globs and .gitignore rules.** Both pattern translations emitted `.` constructs that do not cross a line feed, so a file under a directory whose name held one was indexed despite matching a deny rule. Both now match across lines and anchor at `\z`. ([#4287](https://github.com/NSTA1/Orleans.Lattice/pull/4287)) (`Orleans.Lattice.Api.Mcp.RepoContext`)

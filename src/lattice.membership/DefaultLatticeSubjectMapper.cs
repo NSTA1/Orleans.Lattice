@@ -17,10 +17,13 @@ internal sealed class DefaultLatticeSubjectMapper(IOptionsMonitor<LatticeMembers
         ArgumentNullException.ThrowIfNull(principal);
         ArgumentNullException.ThrowIfNull(directoryGroups);
 
-        // Defense in depth: a principal whose subject id is empty or collides with
-        // a reserved well-known sentinel (anonymous / system) must never carry
-        // group or claim authority - it would otherwise be granted access through a
-        // group rule or impersonate the system subject. The built-in authenticators
+        // Defense in depth: a principal whose subject id is empty, collides with
+        // a reserved well-known sentinel (anonymous / system), or occupies the
+        // reserved tenant-group namespace must never carry group or claim
+        // authority - it would otherwise be granted access through a group rule,
+        // impersonate the system subject, or exact-match a stored
+        // "t/{tenant}/{group}" admin entry and act as a tenant admin without
+        // belonging to the group. The built-in authenticators
         // already return null (resolved upstream to Anonymous) for such tokens;
         // this also contains a host-supplied authenticator that does not honor that
         // convention.
@@ -65,5 +68,6 @@ internal sealed class DefaultLatticeSubjectMapper(IOptionsMonitor<LatticeMembers
     private static bool IsReservedOrEmptySubject(string subjectId) =>
         string.IsNullOrEmpty(subjectId)
         || string.Equals(subjectId, LatticeSubject.AnonymousSubjectId, StringComparison.Ordinal)
-        || string.Equals(subjectId, LatticeSubject.SystemSubjectId, StringComparison.Ordinal);
+        || string.Equals(subjectId, LatticeSubject.SystemSubjectId, StringComparison.Ordinal)
+        || subjectId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal);
 }

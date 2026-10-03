@@ -11,6 +11,23 @@ namespace Orleans.Lattice.Tenancy;
 internal static class TenantAccessEntries
 {
     /// <summary>
+    /// <c>true</c> when <paramref name="subjectId"/> occupies the reserved
+    /// <see cref="LatticeTenantTrees.SegmentPrefix"/> namespace, so it names a
+    /// tenant <em>group</em> rather than a principal. Group entries share the admin
+    /// and member slot maps with subject ids, so an exact-id authorization probe
+    /// must screen them out: a principal whose asserted <c>sub</c> is literally
+    /// <c>t/{tenant}/{name}</c> would otherwise match a group entry directly and
+    /// act as a tenant admin without ever belonging to the group. Every write seam
+    /// already refuses a non-group id in this namespace; this is the read-side half
+    /// of that rule. Allocation-free.
+    /// </summary>
+    /// <param name="subjectId">The subject id being authorized. A <c>null</c> id is not group-shaped.</param>
+    /// <returns><c>true</c> when the id must not be matched against a slot map directly.</returns>
+    public static bool IsGroupShapedSubject(string? subjectId) =>
+        subjectId is not null
+        && subjectId.StartsWith(LatticeTenantTrees.SegmentPrefix, StringComparison.Ordinal);
+
+    /// <summary>
     /// <c>true</c> when <paramref name="entry"/> may count for
     /// <paramref name="tenant"/>: any entry outside the reserved
     /// <see cref="LatticeTenantTrees.SegmentPrefix"/> namespace (a user id or a
