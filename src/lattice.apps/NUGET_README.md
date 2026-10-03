@@ -13,6 +13,8 @@ before loading app code.
 `AppManifestResources.Load` reads a named embedded resource from an already
 available assembly without depending on the package's filesystem layout.
 Neither entry point invokes app code, installs an app, or registers services.
+Descriptions expose `ManifestDigest`; send it as `ExpectedManifestDigest` on an
+install to refuse a manifest that changed after review.
 
 Manifests declare identity, trees, flat membership-group roles, optional
 replication intent and schema-family bindings, subscriptions, MCP tools, and

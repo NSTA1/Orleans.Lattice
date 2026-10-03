@@ -5726,7 +5726,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafDeactivationBarrierFailures =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.failures", unit: "{failure}",
-            description: "Graceful-deactivation durability barriers that faulted, or skipped because the deactivation deadline had already torn the activation down, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Each barrier is contained independently, so a fault in one no longer cancels the barriers after it.");
+            description: "Graceful-deactivation durability barriers that faulted, or skipped because the deactivation deadline had already torn the activation down, tagged by tree and reason (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Each barrier is contained independently, so a fault in one no longer cancels the barriers after it.");
 
     /// <summary>Canonical name of <see cref="LeafDeactivationBarrierFailures"/>.</summary>
     public const string LeafDeactivationBarrierFailuresName = "orleans.lattice.leaf.deactivation.barrier.failures";
@@ -5764,7 +5764,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> LeafDeactivationBarrierDuration =
         Meter.CreateHistogram<double>("orleans.lattice.leaf.deactivation.barrier.duration", unit: "ms",
-            description: "Wall-clock duration of each graceful-deactivation barrier, tagged by tree and barrier (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Recorded whether the barrier completed, faulted or skipped, so a drain's cost can be decomposed by barrier.");
+            description: "Wall-clock duration of each graceful-deactivation barrier, tagged by tree and reason (digest_publish, checkpoint_flush, snapshot_capture, frontier_pin). Recorded whether the barrier completed, faulted or skipped, so a drain's cost can be decomposed by barrier.");
 
     /// <summary>Canonical name of <see cref="LeafDeactivationBarrierDuration"/>.</summary>
     public const string LeafDeactivationBarrierDurationName = "orleans.lattice.leaf.deactivation.barrier.duration";
@@ -5796,7 +5796,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafDeactivationBarrierElided =
         Meter.CreateCounter<long>("orleans.lattice.leaf.deactivation.barrier.elided", unit: "{barrier}",
-            description: "Graceful-deactivation barriers skipped because the pin store had already acknowledged, in the same deactivation, a pin dominating everything the barrier would publish, tagged by tree and barrier (frontier_pin).");
+            description: "Graceful-deactivation barriers skipped because the pin store had already acknowledged, in the same deactivation, a pin dominating everything the barrier would publish, tagged by tree and reason (frontier_pin).");
 
     /// <summary>Canonical name of <see cref="LeafDeactivationBarrierElided"/>.</summary>
     public const string LeafDeactivationBarrierElidedName = "orleans.lattice.leaf.deactivation.barrier.elided";

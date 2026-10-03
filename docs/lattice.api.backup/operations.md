@@ -90,7 +90,7 @@ static async Task<string?> CaptureAsync(ILatticeBackupOperations operations, Can
 
 ## Migrating from the blocking verbs
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, `CheckBackupHealthAsync`, `RebuildCatalogFromSinkAsync` and `ScrubCatalogAgainstSinkAsync` on `ILatticeBackupControl`, and the matching blocking calls on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, `CheckBackupHealthAsync`, `RebuildCatalogFromSinkAsync` and `ScrubCatalogAgainstSinkAsync` on `ILatticeBackupControl`, plus the matching blocking calls that exist on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs.
 
 Each deprecated verb is now a thin wrapper that starts the matching operation and waits for its in-process completion, so it behaves as before - same result, same exceptions, and cancelling its token cancels the work - and its work also appears in `ListOperationsAsync`. It still waits, though, so a long run is still exposed to the caller's timeout. To migrate:
 

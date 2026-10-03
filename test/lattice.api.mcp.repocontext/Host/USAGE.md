@@ -20,7 +20,8 @@ All host tests are grouped under the `Host/` folder here.
 - **Unit** (`Host/*Tests.cs`, no category): among them profile selection / fail-fast
   validation, readiness-state transitions, health-check reporting, data-path
   guard, compaction constants, trusted-access constants, SQLite schema
-  round-trip, durability-selector factory registration, startup-service seeding.
+  round-trip and incremental auto-vacuum, durability-selector factory registration,
+  startup-service seeding.
 - **Integration** (`[Category("Integration")]`): `RepoContextHostIntegrationTests`
   brings up the real host over a `TestServer` and asserts restart durability
   (WAL replay across a rebuilt host on the same data root), the health-probe

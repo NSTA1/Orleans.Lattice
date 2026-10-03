@@ -10,9 +10,10 @@ from any replica concurrently, and the set still converges. Its defining rule is
 it (or re-adds it), the element **stays in the set**.
 
 It achieves this by tagging every add with a unique causal *dot*
-`(replicaId, counter)`. A remove does not delete the element by name; it
-*tombstones the specific dots it has observed*. An add the remover never saw
-carries a fresh dot that no tombstone cancels, so it survives.
+`(replicaId, counter)`. A remove does not delete the element by name; it records
+observed remove dots that cover every add dot from the same replica at that
+counter or below. An add the remover never saw carries a fresh dot that no
+tombstone covers, so it survives.
 
 Elements are opaque `byte[]` (encode strings with `Encoding.UTF8`).
 

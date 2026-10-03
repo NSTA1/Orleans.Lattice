@@ -543,7 +543,7 @@ sequenceDiagram
     PM->>W: create_session (agent: Backlog Worker, autopilot)
     W->>W: Compute the ready set itself (scan + depth-1 blockedBy)
     W->>L: repocontext_claim(key, owner, leaseSeconds) - homeRegion only
-    L-->>W: granted + fencingToken + leaseExpiresAtUtc, or granted:false + reason
+    L-->>W: granted + fencingToken + leaseSeconds + leaseExpiresAtUtc, or granted:false + reason
     W->>GH: Claim comment on the mirrored issue
     W->>GH: Pull request into the item's baseBranch
     W->>L: repocontext_renew_claim / repocontext_release_claim

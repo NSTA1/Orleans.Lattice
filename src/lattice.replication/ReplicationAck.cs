@@ -23,11 +23,13 @@ public readonly record struct ReplicationAck
     /// its cursor past the batch's start.
     /// <para>
     /// Note that <see cref="Accepted"/> is <see langword="true"/> even
-    /// when every entry in the batch was de-duplicated by the per-origin
-    /// high-water-mark - dedup is a successful idempotent apply, not a
-    /// rejection. In that case <see cref="HighestAppliedHlc"/> reflects
-    /// the receiver's existing HWM and the sender's cursor still
-    /// advances.
+    /// when every entry in the batch was de-duplicated - dropped at or
+    /// below the snapshot-pinned floor, matched in the recent
+    /// exact-identity cache, or re-applied idempotently at the leaf -
+    /// because dedup is a successful idempotent apply, not a
+    /// rejection. In that case <see cref="HighestAppliedHlc"/> still
+    /// reports the receiver's high-water mark and the sender's cursor
+    /// still advances.
     /// </para>
     /// </summary>
     [Id(0)] public bool Accepted { get; init; }

@@ -4,7 +4,7 @@ How `FileWalStorageProvider` lays out, commits, recovers, and compacts the write
 
 ## On-disk layout
 
-Every `(tree, shard)` stream is an independent segmented, append-only log under the configured root:
+Every tree/WAL-partition stream is an independent segmented, append-only log under the configured root:
 
 ```text
 {RootDirectory}/

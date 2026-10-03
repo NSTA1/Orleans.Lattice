@@ -63,8 +63,9 @@ to drift. It covers:
   `repocontext_health` and `repocontext_index_status`; and what a `keyword` /
   `Failed` degraded state means.
 - **Freshness and re-ingest** - the background reconcile that keeps an onboarded
-  repository converged with no client call, and when an explicit `add_repo`
-  re-walk is still worth forcing.
+  repository converged with no client call, when an explicit `add_repo` re-walk
+  is still worth forcing, and how `LATTICE_REPOCONTEXT_SOURCE_INDEXING=off`
+  memory-only hosts stamp a repo marker and embed memory without reading source.
 - **Regions** - the optional `region` argument every tool accepts (omit it to
   target the current region; see `lattice_list_regions`).
 

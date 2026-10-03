@@ -10,8 +10,10 @@ kinds are supported:
 - **Aggregation** - each source entry is mapped to a group key and the view
   materialises one reduced value per group (count, sum, min, max, set-union).
 
-A view lives in its own tree and is read through the ordinary `ILattice`
-surface or, preferably, through the `ILatticeView` handle.
+A view lives in its own tree and is read through an `ILatticeView` handle. The
+handle uses ordinary lattice read operations under an authorised view-read scope;
+a raw `ILattice` bind to the backing `view-*` tree rejects public reads and
+writes.
 
 ## What you need to register
 
@@ -431,7 +433,7 @@ built-in reduces are exposed through `AggregationKind`:
 | `SetUnion` | Distinct-member cardinality (`long`) | member selector |
 | `Fold` | A user-defined fold's accumulator (opaque bytes) | group key + `Initial` / `Apply` fold |
 
-The first five are commutative-numeric reduces declared with
+The first five are built-in commutative reducers declared with
 `AggregationLatticeViewProjection.Create<T>`; `Fold` is a custom, non-commutative
 reduce declared with `LatticeFoldProjection` (see
 [Folded (custom-reducer) views](#folded-custom-reducer-views) below).

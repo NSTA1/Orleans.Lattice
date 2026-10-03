@@ -58,6 +58,6 @@ Every claim is drawn from these, in their own words where possible:
 
 ## Not in this episode
 
-- The Explorer, which is being redesigned.
+- The Explorer, which is still in progress.
 - Anything unreleased: vector search, RepoContext.
 - Performance numbers, and any claim the corpus does not make.

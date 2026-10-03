@@ -36,8 +36,9 @@ live stream lets a reader follow new revisions as they happen:
    the source tree's retained WAL window. This needs no configuration and is handy
    for ad-hoc inspection, but it is bounded by WAL garbage collection, so older
    revisions may already have been trimmed. It also reads the retained log raw, so it
-   lists an atomic batch's staged writes whether the batch commits or aborts, and a
-   delete that compaction has since reaped appears twice - see
+   lists an atomic batch's staged writes whether the batch commits or aborts, while
+   internal copy, migration, split, replication and reap records for an already-seen
+   revision are collapsed by revision clock - see
    [Fallback without a history view](history-views.md#fallback-without-a-history-view).
 3. **Live feed (forward-only).** Independently of either stored source, a reader
    can subscribe to a tree's live mutation stream (`ILatticeStateObserver.ObserveAsync`

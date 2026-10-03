@@ -16,7 +16,7 @@
                 "url": "http://localhost:8080/lattice/scale",
                 "valueLocation": "scaleValue",
                 "targetValue": "0.5",
-                "//targetValue": "The per-replica pressure the pool is held at. scaleValue is the dominant pressure (0.0 to 1.0) times the current replica count, so it never exceeds that count, and desiredReplicas = ceil(scaleValue / targetValue): targetValue must be below 1 for the pool to grow ('1' could only hold or shrink it). '0.5' asks for twice the current count at full saturation.",
+                "//targetValue": "The per-replica pressure the pool is held at. scaleValue is the dominant pressure (0.0 to 1.0) times the current replica count, so demand alone never lifts it above that count, and desiredReplicas = ceil(scaleValue / targetValue): targetValue must be below 1 for the pool to grow ('1' could only hold or shrink it). '0.5' asks for twice the current count at full saturation.",
                 "//url": "Point this at the in-cluster address of a silo that mapped MapLatticeScalingSignal(). The path must match LatticeScalingSignalOptions.EndpointPath (default /lattice/scale).",
                 "//unsafeSsl": "Set 'true' only when scraping a self-signed HTTPS endpoint in-cluster; prefer plain HTTP on a private network.",
                 "//pollingInterval-note": "Polling cadence is configured on the ACA scale rule host (KEDA pollingInterval, default 30s). Keep it at or above LatticeScalingSignalOptions.SampleInterval so repeated scrapes do not just read the same cached sample.",

@@ -16,10 +16,11 @@ The facade mirrors the read-only `Orleans.Lattice.Api.State` and the backup
 `Orleans.Lattice.Api.Backup` control facades: the facade is the contract,
 transports bind over it, and it costs nothing until it is registered.
 
-- **Read-only compliance audit.** `ScanComplianceAsync` streams a tree's current
-  values through its compiled policy and returns per-tree counts of compliant vs
-  non-compliant values, grouped by failure reason. It is a pure read - it never
-  rewrites or dead-letters data - and honours cancellation between values.
+- **Accept-then-poll compliance audit.** `ILatticeSchemaComplianceOperations.StartComplianceScanAsync`
+  starts a read-only scan and returns a handle at once; poll
+  `GetOperationStatusAsync` for entry progress and rebuild the report with
+  `SchemaComplianceScanResults.TryReadReport`. The blocking `ScanComplianceAsync`
+  still runs the same pure audit, but is deprecated.
 - **Bounded-memory enumeration.** Dead-letter listing is streamed, so a large
   strict-mode queue enumerates with bounded memory.
 - **Accept-then-poll remediation and migration.** `ILatticeSchemaOperations`
@@ -29,10 +30,12 @@ transports bind over it, and it costs nothing until it is registered.
 
 ## Deprecated
 
-`RemediateAsync`, `MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` on
-`ILatticeSchemaControl` block until the run ends, so a long run is cut off by the
-caller's timeout. They raise warning `LATTICE0002` and **will be removed in the
-next major version**; use the `ILatticeSchemaOperations` start verbs instead.
+`ScanComplianceAsync`, `RemediateAsync`, `MigrateToTargetVersionAsync` and
+`AdvanceAndMigrateAsync` on `ILatticeSchemaControl` block until the run ends, so a
+large scan or long run is cut off by the caller's timeout. They raise warning
+`LATTICE0002` and **will be removed in the next major version**; use
+`ILatticeSchemaComplianceOperations` or the `ILatticeSchemaOperations` start verbs
+instead.
 
 ## Security
 

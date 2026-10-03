@@ -17,17 +17,17 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 
 ## Core Properties
 
-- **Per-shard ordering.** Offsets are stored verbatim and read back in ascending order within each `(tree, shard)` stream.
+- **Per-partition ordering.** Offsets are stored verbatim and read back in ascending order within each tree's WAL partition stream.
 - **Batch atomicity.** A successful append is visible as a complete batch; a torn or uncommitted trailing batch leaves no visible partial state after recovery.
 - **Crash recoverability.** Interrupted appends are reconciled before normal reads and writes rely on the stored tail.
-- **Self-compacting.** Trimmed payload bytes are physically reclaimed by rewriting a shard's segment file once enough dead space accumulates.
+- **Self-compacting.** Trimmed payload bytes are physically reclaimed by rewriting a WAL partition's segment file once enough dead space accumulates.
 - **Published to NuGet** as `Orleans.Lattice.Storage.File`, released under `lattice.storage.file-v<X.Y.Z>` tags.
 
 ## Public surface
 
 | Type or member | Role |
 |---|---|
-| `FileWalStorageProvider` | Public `IWalStorageProvider` implementation (also `IDisposable`) that stores one `wal.log` per `(tree, shard)` stream under `FileWalStorageOptions.RootDirectory`. Its public constructor, `FileWalStorageProvider(IOptions<FileWalStorageOptions>, Serializer<WalRecord>)`, builds a provider without the routing reader, so its filtered replay reads decode every record they examine; `AddFileWalStorage` is the registration that supplies one. |
+| `FileWalStorageProvider` | Public `IWalStorageProvider` implementation (also `IDisposable`) that stores one `wal.log` per tree/WAL-partition stream under `FileWalStorageOptions.RootDirectory`. Its public constructor, `FileWalStorageProvider(IOptions<FileWalStorageOptions>, Serializer<WalRecord>)`, builds a provider without the routing reader, so its filtered replay reads decode every record they examine; `AddFileWalStorage` is the registration that supplies one. |
 | `FileWalStorageOptions` | Public options type for the root directory, flush policy, compaction thresholds, and read-page byte ceiling, with public `Default*` constants for the compaction and read-page defaults. |
 | `LatticeFileServiceCollectionExtensions.AddFileWalStorage` | Registration extension that installs the file WAL provider, its options validator, and the durable-WAL garbage-collection wiring on an `ISiloBuilder`. |
 

@@ -17,7 +17,9 @@ the quantity can never decrease - page views, total bytes ingested, monotonic
 event tallies - and you want the smallest, tombstone-free counter primitive.
 
 `IncrementAsync` takes a `replicaId` naming the writer and a non-negative
-`amount`; each side advances only its own component.
+`amount`; each side advances only its own component. If an advance would push a
+replica's component past `long.MaxValue`, it throws `OverflowException` and
+leaves that component unchanged.
 
 ## Behaviour
 

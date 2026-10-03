@@ -136,7 +136,12 @@ Three of them are this layer's own surfaces:
 The other facades - tree administration, backup, replication, schema, tenant
 administration, app installation, and telemetry - authorize their operations
 through the same gate, and the Model Context Protocol endpoint projects those
-facades as agent tools. The full set is listed in [PACKAGES.md](../../PACKAGES.md).
+facades as agent tools. Backup and restore scopes use the same fail-closed
+semantics as the data path: a whole-tree backup needs whole-tree authority, a
+prefix scope checks the full prefix range (so an exact-key allow on the prefix
+string does not grant the subtree and a deny below the prefix refuses it), and a
+single-key scope checks just that key. The full set is listed in
+[PACKAGES.md](../../PACKAGES.md).
 
 The [Explorer](../lattice.explorer/connecting-to-an-auth-enabled-state-api.md)
 runs an extensible login challenge against an auth-enabled State API endpoint,

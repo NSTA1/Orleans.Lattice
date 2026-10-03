@@ -128,6 +128,9 @@ Each RPC's request and response is one of these Orleans-serialized records, exce
 | `SchemaMigrationStartRequest` | `required string TreeId`, `string? OperationId`. |
 | `SchemaOperationRequest` | `required string OperationId`. |
 | `SchemaOperationStatusResponse` | `LatticeOperationStatus? Status` (`null` when not found). |
+| `SchemaComplianceScanStartRequest` | `required string TreeId`, `string? OperationId`. |
+| `SchemaComplianceOperationRequest` | `required string OperationId`. |
+| `SchemaComplianceOperationStatusResponse` | `LatticeOperationStatus? Status` (`null` when not found). |
 | `AuthSchemeAdvertisementRequest` | (empty). |
 | `SchemaAckResponse` | (empty). |
 | `SchemaRemovedResponse` | `required bool Removed`. |
@@ -140,7 +143,7 @@ Each RPC's request and response is one of these Orleans-serialized records, exce
 | `AuthSchemeAdvertisement` | `IReadOnlyList<AuthSchemeDescriptor> Schemes`. |
 | `AuthSchemeDescriptor` | `required string SchemeId`, `string DisplayName`, `IReadOnlyDictionary<string, string> Parameters`. |
 
-`SetPolicy` and `SetVersionConfig` return the empty `SchemaAckResponse`; `ClearPolicy` and `ClearVersionConfig` return `SchemaRemovedResponse`. `StreamDeadLetters` takes a `SchemaTreeRequest` and streams `LatticeSchemaDeadLetterEntry` values directly (no wrapper record). `ProbeCapabilities` returns a `LatticeSchemaCapabilities` value directly. The start RPCs return a `LatticeOperationHandle`, and `ListSchemaOperations` takes a `LatticeOperationListRequest` and returns a `LatticeOperationPage`, directly; those types are defined in `Orleans.Lattice.Api.Abstractions`. Both of those types are defined in the schema packages, not in this binding. `GetAuthScheme` takes `AuthSchemeAdvertisementRequest` and returns `AuthSchemeAdvertisement`; the typed client projects that response to `IReadOnlyList<AuthSchemeDescriptor>`.
+`SetPolicy` and `SetVersionConfig` return the empty `SchemaAckResponse`; `ClearPolicy` and `ClearVersionConfig` return `SchemaRemovedResponse`. `StreamDeadLetters` takes a `SchemaTreeRequest` and streams `LatticeSchemaDeadLetterEntry` values directly (no wrapper record). `ProbeCapabilities` returns a `LatticeSchemaCapabilities` value directly. The start RPCs return `LatticeOperationHandle`; `ListComplianceScans` and `ListSchemaOperations` take `LatticeOperationListRequest` and return `LatticeOperationPage`; those operation types are defined in `Orleans.Lattice.Api.Abstractions`, not in this binding. `GetAuthScheme` takes `AuthSchemeAdvertisementRequest` and returns `AuthSchemeAdvertisement`; the typed client projects that response to `IReadOnlyList<AuthSchemeDescriptor>`.
 
 ## Serialization aliases
 

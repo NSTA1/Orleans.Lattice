@@ -59,10 +59,11 @@
 # Each silo points its package-shipped gRPC push transport
 # (`PackageReplication__PeerGrpcEndpoint`) at the peer's Traefik, which
 # is resolvable on the local cluster network because the peer Traefik
-# is multi-homed there. Traefik load balancing routes around unhealthy
-# containers: each Traefik health-checks its silos every 5s (4s timeout,
-# traefik/us.yml and traefik/eu.yml) and takes a silo that fails the check
-# out of rotation.
+# is multi-homed there. Traefik health-checks the silos behind its state,
+# backup and web routes every 5s (4s timeout, traefik/us.yml and
+# traefik/eu.yml) and takes a silo that fails the check out of rotation.
+# The replication route deliberately has no health check: a push that
+# lands on a stopped silo fails, and the transport retries it with backoff.
 #
 # Simulate a cross-cluster partition (Tier 5):
 #   # Sever us -> eu (remove peer Traefik from local cluster net):

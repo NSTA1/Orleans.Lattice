@@ -27,7 +27,10 @@ independent, composable, strictly opt-in capabilities:
 
 Both features share one serializable value-transform primitive
 ([`LatticeValueTransform`](value-transforms.md)) and the same dead-letter queue,
-which is surfaced read-only through the State API and the Explorer UI.
+which is surfaced read-only through the State API and the Explorer UI. The remote
+schema facade starts remediations, eager migrations, and compliance scans as
+accept-then-poll operations so a large tree can continue after the caller that
+started it times out or closes.
 
 ## Zero overhead when off
 

@@ -43,7 +43,7 @@
 This document defines the causal+-ready Write-Ahead Log (WAL) for `Orleans.Lattice`. It extends the existing WAL design without breaking any of its invariants:
 
 - Append-then-apply remains the commit point.
-- Per-shard monotonic offsets remain the ordering backbone.
+- Per-WAL-partition monotonic offsets remain the ordering backbone.
 - Origin stamping remains the cycle-break mechanism.
 - Replay is still strictly ordered by WAL offset.
 
@@ -67,7 +67,7 @@ Each WAL entry is extended to carry causal metadata required for causal+ consist
 - `Mode` (`LatticeMergeMode`)
 - The remaining envelope slots, which causal+ does not touch: `EndExclusiveKey`, `IsTombstone`, `ExpiresAtTicks`, `TransactionId`, `IsPrepared`, `AtomicShardCount`, `IsMerge`, `IsBackstop`, `Category`, `MatchedKeys`, `CrossTreeOperationId` and `CrossTreeParticipants` (the `AtomicBatchSize` / `AtomicBatchIndex` pair is described in 1.2).
 
-The per-shard monotonic offset is **not** a field on the entry. It is assigned by the owning WAL shard as the entry is appended and travels alongside it, which is why replay can be ordered by offset without the offset being part of the entry's wire shape.
+The per-partition monotonic offset is **not** a field on the entry. It is assigned by the owning WAL partition as the entry is appended and travels alongside it, which is why replay can be ordered by offset without the offset being part of the entry's wire shape.
 
 ### 1.2 New fields (added for causal+)
 
@@ -76,15 +76,15 @@ The per-shard monotonic offset is **not** a field on the entry. It is assigned b
 A per-origin vector clock representing the full causal frontier at commit time.
 
 - Sparse map: `{ origin → hlc }`.
-- Designed to be encoded compactly (delta-encoded relative to the previous entry on the same shard); the shipped record carries the absolute frontier (see the status note above).
+- Designed to be encoded compactly (delta-encoded relative to the previous entry on the same WAL partition); the shipped record carries the absolute frontier (see the status note above).
 - Backwards compatible: a missing field decodes as `null`, which receivers treat as the empty frontier.
 
 **Performance note (avoid Mistake 1 - full VC bloat):**
 
-- Store vector clocks **per shard as a baseline**, and encode each entry's VC as a **delta from the previous entry**.
+- Store vector clocks **per WAL partition as a baseline**, and encode each entry's VC as a **delta from the previous entry**.
 - Use a compact representation (e.g. sorted `(origin, hlc)` pairs with varint encoding).
 - Do **not** re-emit the full VC for every entry when only one origin advanced.
-- **GC-safety rule:** every entry whose predecessor on the same shard was trimmed by GC, and the first entry of every shipped batch, must carry an **absolute** VC (not a delta). Intermediate entries may delta-encode safely. This preserves the trim-from-the-head invariant in §7 without requiring GC to rewrite surviving entries.
+- **GC-safety rule:** every entry whose predecessor on the same WAL partition was trimmed by GC, and the first entry of every shipped batch, must carry an **absolute** VC (not a delta). Intermediate entries may delta-encode safely. This preserves the trim-from-the-head invariant in section 7 without requiring GC to rewrite surviving entries.
 
 #### DependencySummary
 
@@ -420,7 +420,7 @@ Every item in the completeness wave is constrained by the same rules that bound 
 
 - **No commit-path change for point writes.** VC capture happens on the leaf's existing commit path, where each WAL record is stamped. Atomic writes are the exception: their prepared writes are appended invisibly, the saga appends a separate per-shard `TxCommit` / `TxAbort` terminal record after them, and the batch becomes visible at the tree's transaction-registry decision rather than at each entry's append (see [Atomic writes](atomic-writes.md)).
 - **Append-only, monotonic, durable.** No item rewrites a WAL entry, no item changes offset semantics, no item changes the commit point.
-- **No cross-shard locks in apply.** The shadow-forward receiver-side dedupe cache is held per tree, and nothing in the apply path takes a cross-shard lock. The producer ships the causal frontier straight from the per-shard leaf WAL, so there is no separate in-memory producer-side cache to coordinate.
+- **No cross-shard locks in apply.** The shadow-forward receiver-side dedupe cache is held per tree, and nothing in the apply path takes a cross-shard lock. The producer ships the causal frontier straight from the leaf's WAL append, so there is no separate in-memory producer-side cache to coordinate.
 - **Wire-additive only.** The new structural-rewrite and shadow-forward `[Id]` slots have decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode, and apply exactly as entries whose slots are empty.
 - **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf, and entries at or below a snapshot-pinned causal floor are dropped up front. The per-origin high-water mark is not a drop criterion for steady-state writes.
 

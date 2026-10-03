@@ -225,6 +225,12 @@ the consented UI bridge grants, the consenting principal, the lifecycle state, a
 revision that every applied transition advances, and install, consent and state-change
 timestamps.
 
+A description also carries `ManifestDigest`, the lower-case SHA-256 digest of the
+manifest shape and its effective provenance. Send it back on install as
+`ExpectedManifestDigest` to pin the commit to the manifest the operator reviewed; if
+the source changes the manifest before commit, the install is refused instead of
+consenting to unseen roles, trees, bridge grants or UI assets.
+
 - **Role bindings** (`AppRoleBinding`) map each manifest role to one membership group
   id.
 - **The ceiling** (`AppCapabilityCeiling`) holds `AllowedOperations` and

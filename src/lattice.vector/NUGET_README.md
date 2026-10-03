@@ -110,7 +110,13 @@ record, which is authoritative.
 - Persisted state is admitted only if its manifest, every record checksum, every
   partition's chunk set, and its declared vector count all agree. A truncated,
   corrupt, incomplete, or version-incompatible index is rebuilt, never partly
-  served.
+  served. If a committed record is missing from one store read, the loader
+  re-reads it through a point read and a prefix scan before deleting anything;
+  if either path returns it, the load defers with
+  `VectorIndexRecordUnavailableException` and keeps the durable generation for a
+  retry. When a full load does discard state, `LoadDiscardReason` explains why
+  and `LoadDiscardedManifest` names the destroyed generation, vector count, and
+  header.
 - Every search reports its mode. Before the partitioning exists the index answers
   by exhaustive scan, which is *exact* - slower, not worse - and must be surfaced
   as warming up, never as an error.
@@ -128,9 +134,11 @@ plan - never a single unbounded record. Centroid chunks come first, so a reader 
 has applied only those can already call `SelectPartitions` to learn which cells a
 query needs, and fetch nothing else. Because a cell already stores its members
 contiguously, a vector chunk is a slice of that cell rather than a gather across
-the corpus. `VectorIndexHeader.TryRead` refuses a format version this build does
-not understand rather than misreading it, and `ApplyChunk` is order-independent
-and idempotent, so a restore can resume.
+the corpus. `VectorIndexHeader.TryRead` refuses bytes this build cannot believe -
+including a format version it does not understand, out-of-range fields, or a
+header that claims more centroid chunks than total chunks - rather than
+misreading them, and `ApplyChunk` is order-independent and idempotent, so a
+restore can resume.
 
 ## Threading
 
@@ -142,7 +150,8 @@ home is a single-threaded grain.
 
 Every figure below is produced by a committed harness in the repository, not by
 reasoning. Recall runs in the ordinary unit lane on every build, so a regression
-breaks the suite rather than a document.
+breaks the suite rather than a document. These are dated measurements: they are
+kept to explain the measured shape, not as live performance guarantees.
 
 At the default partition and probe rules (partitions `round(sqrt(n))`, probes
 `2 * ceil(sqrt(partitions))`, at least 8 and never more than the partition count)

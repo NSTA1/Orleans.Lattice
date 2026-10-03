@@ -74,8 +74,8 @@ repocontext_claim(key: "repo/lattice/mem/backlog/issue-2101",
                   owner: "worker-a", leaseSeconds: 60)
 ```
 
-The claim returns `granted: true` with a `fencingToken` and a
-`leaseExpiresAtUtc`. Note what it does **not** do on contention: a claim that
+The claim returns `granted: true` with a `fencingToken`, `leaseSeconds`,
+and `leaseExpiresAtUtc`. Note what it does **not** do on contention: a claim that
 loses a race returns `granted: false` with a reason of `contended`, `timeout`, or
 `missing`. Losing is an ordinary outcome, so a worker branches on the result
 rather than catching an exception.

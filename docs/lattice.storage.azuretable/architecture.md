@@ -10,7 +10,7 @@ For the core WAL contract and placement model, see [WAL Storage Providers](../la
 flowchart LR
     Writer[Core WAL writer] -->|IWalStorageProvider append| Provider[AzureTableWalStorageProvider]
     Provider -->|entry transaction| Batch[(Per-append batch partition)]
-    Provider -->|ordered completion| Manifest[(Per-shard commit metadata)]
+    Provider -->|ordered completion| Manifest[(Per-partition commit metadata)]
     Manifest --> Tail[(Committed shard tail)]
     Reader[Core WAL reader] -->|IWalStorageProvider read| Provider
     Provider -->|committed batch order| Batch
@@ -18,7 +18,7 @@ flowchart LR
     Recovery -->|complete or remove interrupted batches| Manifest
 ```
 
-The provider keeps each `(tree, shard)` stream ordered while allowing append payloads to land in per-batch storage partitions. Each commit writes the metadata of the batches pending at that moment in ascending start-offset order, and the stored shard tail is the high-water mark of the batches committed so far, so it never moves backward.
+The provider keeps each tree/WAL-partition stream ordered while allowing append payloads to land in per-batch storage partitions. Each commit writes the metadata of the batches pending at that moment in ascending start-offset order, and the stored partition tail is the high-water mark of the batches committed so far, so it never moves backward.
 
 ## Storage layout
 
@@ -75,7 +75,7 @@ A caller that genuinely needs read-after-write - a controlled hand-off, an opera
 
 Every batch is stored in its own partition, keyed by its first offset, so storage on its own would accept a batch that starts inside one already written, and a read would then return the shared offsets twice. The provider rejects that batch with `InvalidOperationException` before writing anything, as the `IWalStorageProvider` contract requires.
 
-The check costs nothing on the steady-state path. The provider keeps, per shard, an upper bound on the offsets that may be written, and an append starting above it is admitted with no storage call; the core WAL grain always appends above it. Any other append, such as an out-of-order arrival or a retry, is checked against the batches in motion on this instance and then with one query over the few partitions that could hold an overlapping entry. The first append on a shard reads the bound from the stored tail and any uncommitted batches above it. Reconciliation re-establishes it.
+The check costs nothing on the steady-state path. The provider keeps, per WAL partition, an upper bound on the offsets that may be written, and an append starting above it is admitted with no storage call; the core WAL grain always appends above it. Any other append, such as an out-of-order arrival or a retry, is checked against the batches in motion on this instance and then with one query over the few storage partitions that could hold an overlapping entry. The first append on a WAL partition reads the bound from the stored tail and any uncommitted batches above it. Reconciliation re-establishes it.
 
 A re-append that starts at the same offset as a written batch is not rejected here: it collides on the batch's own rows and is resolved by the idempotent-replay check, which accepts an identical retry and fails anything else. The bound is only trusted while this instance is the shard's single writer, which the WAL grain's single activation provides, so a batch another process writes after this instance read the bound is not detected until the next reconciliation. The storage check looks for stored entry rows, so an offset whose rows a trim has already deleted is not detected either: an append that reuses only trimmed offsets is accepted.
 
@@ -89,7 +89,7 @@ On activation, and again after a failed flush, the core WAL grain calls the prov
 - Reconciliation never lowers the stored tail. The tail write is conditional on the tail it read, so a concurrent commit makes the pass retry rather than overwrite.
 - Reconciliation is idempotent: a clean shard has no work to do.
 
-The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per shard and first waits, on this provider instance, for that shard's in-motion appends, its queued completions, and any completion transaction abandoned on its commit deadline to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
+The post-failure call is not quiescent: pipelined completions accepted before the failure may still be committing. Reconciliation is serialised per WAL partition and first waits, on this provider instance, for that partition's in-motion appends, its queued completions, and any completion transaction abandoned on its commit deadline to settle, so it never mistakes a live batch for an orphan. A writer on another process is covered only by the conditional writes above.
 
 When `EliminateCandidateRowOnHotPath` is enabled, reconciliation recognizes both the legacy recovery-marker shape and the newer discoverable-batch shape. Upgrading from the legacy setting to the default setting is safe. Before downgrading back to the legacy setting, drain pending appends and allow reconciliation to complete on a deployment that still has the default setting enabled.
 
@@ -103,7 +103,7 @@ Trim deletes old retained entry rows in bounded Azure Table transactions and rem
 
 Capacity planning is shared with core WAL tuning:
 
-- Increase shard count to spread work across storage partitions.
+- Increase the WAL partition count to spread work across storage partitions.
 - Keep `WalMaxBatchEntries` at or below the provider batch limit.
 - Keep each entry's encoded record under 64 KiB after compression; an entry is never split across properties or rows.
 - Use `WalMaxPendingBatches` carefully; more pending batches increase pipeline depth and storage pressure.
