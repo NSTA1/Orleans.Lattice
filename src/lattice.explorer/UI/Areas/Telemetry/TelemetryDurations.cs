@@ -60,21 +60,28 @@ internal static partial class TelemetryDurations
         var match = Token().Match(text);
         if (!match.Success
             || !long.TryParse(match.Groups["n"].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var count)
-            || count <= 0
-            || count > 100_000_000)
+            || count <= 0)
         {
             return false;
         }
 
-        duration = match.Groups["u"].Value switch
+        var unit = match.Groups["u"].Value switch
         {
-            "s" => TimeSpan.FromSeconds(count),
-            "m" => TimeSpan.FromMinutes(count),
-            "h" => TimeSpan.FromHours(count),
-            _ => TimeSpan.FromDays(count),
+            "s" => TimeSpan.TicksPerSecond,
+            "m" => TimeSpan.TicksPerMinute,
+            "h" => TimeSpan.TicksPerHour,
+            _ => TimeSpan.TicksPerDay,
         };
 
-        return duration <= Longest;
+        // Bounded in the token's own unit before the span is built, so a count no
+        // TimeSpan can hold (such as 20000000d) is refused rather than overflowing.
+        if (count > Longest.Ticks / unit)
+        {
+            return false;
+        }
+
+        duration = TimeSpan.FromTicks(count * unit);
+        return true;
     }
 
     /// <summary>Formats a duration as the shortest exact address token.</summary>

@@ -539,6 +539,16 @@ See
 [docs/lattice.api.mcp.repocontext/memory-durability.md](../../docs/lattice.api.mcp.repocontext/memory-durability.md)
 for the full model.
 
+## Database size and auto-vacuum
+
+The SQLite database under `/data` gives deleted space back to the filesystem: the host runs it with
+`auto_vacuum=INCREMENTAL` and a paced background reclaimer (at most 16 MiB a minute), so a
+`repocontext_reset_index` or a large prune shrinks `repocontext.db` gradually rather than leaving it at its
+high-water size. On an existing volume the **first start after upgrading** converts the file once with a
+`VACUUM`: startup is slower that one time, by an amount proportional to live data, and needs about that
+much free disk. Set `LATTICE_SQLITE_AUTO_VACUUM=none` on the `repocontext` service to opt out. See
+[Reclaiming SQLite space](../../docs/lattice.api.mcp.repocontext/container.md#reclaiming-sqlite-space).
+
 ## Health probing
 
 The runtime image is distroless and shell-less, so probing is HTTP-only - there is

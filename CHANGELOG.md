@@ -86,6 +86,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)
+
 - **Core - Delete, recover and purge reach every shard.** A tree re-pinned to fewer shards while empty, and an aliased tree split after its alias was set, no longer leave shards readable after delete or in storage after purge. ([#4234](https://github.com/NSTA1/Orleans.Lattice/issues/4234)) (`Orleans.Lattice`)
 
 - **Core - Resize and restore revert no longer recreate a missing tree.** A resize swap or undo, or a restore revert, against a tree whose registry row is gone now fails as not found instead of writing back a row with no sizing. ([#4270](https://github.com/NSTA1/Orleans.Lattice/issues/4270)) (`Orleans.Lattice`)
@@ -212,6 +214,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - History bound with no earliest revision.** A trimmed history with no earliest retained revision no longer reads "available from -."; it says older revisions were trimmed, and a range deletion with no end key is described in words. ([#4178](https://github.com/NSTA1/Orleans.Lattice/issues/4178)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Core - Splits, folds and reshards stop when their tree is purged.** A saga in flight when its tree is purged now abandons itself on its next failed step instead of retrying forever; a soft-deleted tree's saga still retries. ([#4271](https://github.com/NSTA1/Orleans.Lattice/issues/4271)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
+- **Explorer - An oversized Telemetry range no longer breaks the board.** A range or step naming more days than a time span can hold, such as `20000000d`, is refused like any other unreadable value, so the board falls back to each chart's default and says so. ([#4324](https://github.com/NSTA1/Orleans.Lattice/issues/4324)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - JSON values show their text as written.** The Data tab, history and dead letters no longer turn accented letters, non-Latin scripts and `< > & ' +` into `\uXXXX` escapes when they lay out a JSON value; characters beyond the Basic Multilingual Plane, such as emoji, still are. ([#4325](https://github.com/NSTA1/Orleans.Lattice/issues/4325)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - App consent review agrees with the cluster on prefixes.** An approved key prefix now covers a key or narrower prefix under it, as activation does, so the review no longer reports a gap that would not fail, flags drift, or asks to re-consent for a scope already approved. ([#4326](https://github.com/NSTA1/Orleans.Lattice/issues/4326)) (`Orleans.Lattice.Explorer.UI`)
 
 ### Security
 

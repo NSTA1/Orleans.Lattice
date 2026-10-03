@@ -377,7 +377,13 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeMutation.Timestamp"/> for the re-stamp.
     /// </para>
     /// </summary>
-    private void ApplyTxCommit(Guid transactionId)
+    /// <param name="transactionId">The saga whose bucket to drain.</param>
+    /// <param name="skipKeys">
+    /// Bucket keys to leave undrained because the caller re-routes them to
+    /// the leaf that now declares them; <see langword="null"/> drains the
+    /// whole bucket.
+    /// </param>
+    private void ApplyTxCommit(Guid transactionId, IReadOnlySet<string>? skipKeys = null)
     {
         if (transactionId == Guid.Empty)
             return;
@@ -420,6 +426,16 @@ internal sealed partial class BPlusLeafGrain
         // fold instead.
         Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
         _pendingTxDeltas?.Remove(transactionId, out deltaBucket);
+
+        // Keys the caller re-routes to the leaf that declares them (a split
+        // narrowed this leaf's span after their prepare landed) are never
+        // drained here. The bucket is already detached from _pendingTx, so
+        // removing them only narrows this drain.
+        if (skipKeys is { Count: > 0 })
+        {
+            foreach (var key in skipKeys)
+                bucket.Remove(key);
+        }
 
         // Branch on the persisted OriginClusterId signal. See the
         // method's XML doc for the full rationale and the replay
@@ -1542,6 +1558,23 @@ internal sealed partial class BPlusLeafGrain
         return result;
     }
 
+    /// <summary>
+    /// Whether a stranded prepared value with no committed-values payload can
+    /// be re-delivered to the leaf that declares its key through the
+    /// cross-migration backstop, which installs a plain live value. A
+    /// tombstone, an expiring value, or a CRDT typed delta cannot be expressed
+    /// that way, so such a key keeps the pre-#4335 local drain.
+    /// </summary>
+    private bool IsForwardablePreparedValue(Guid transactionId, string key, in LwwValue<byte[]> prepared)
+    {
+        if (prepared.Value is null || prepared.IsTombstone || prepared.ExpiresAtTicks != 0)
+            return false;
+
+        return _pendingTxDeltas is null
+            || !_pendingTxDeltas.TryGetValue(transactionId, out var deltas)
+            || !deltas.ContainsKey(key);
+    }
+
     /// <inheritdoc />
     public async Task ApplyTxTerminalAsync(
         Guid transactionId,
@@ -1600,18 +1633,55 @@ internal sealed partial class BPlusLeafGrain
         List<KeyValuePair<string, byte[]>>? missingKeys = null;
         var hasBackstopPayload = committed && committedValues is { Count: > 0 };
         HashSet<string>? alreadyBackstoppedKeys = null;
+        if (_backstoppedTerminals is not null && (hasBackstopPayload || hadPending))
+            _backstoppedTerminals.TryGetValue(transactionId, out alreadyBackstoppedKeys);
+
+        // Stranded prepared keys: bucket keys this leaf no longer declares
+        // because a leaf split narrowed its span after the prepare landed.
+        // The split moves only committed rows to the sibling and leaves the
+        // donor's bucket in place, so draining those keys here would store
+        // them outside the donor's span - a second row for the key in the
+        // shard's chain (over-count) that also breaks the ordered chain walk
+        // a scan resumes over (missed keys). They are excluded from the local
+        // drain and re-routed as a backstop to the leaf that declares them,
+        // which is also what replay does: a prepare outside the declared
+        // span is never bucketed on replay (issue #4335).
+        HashSet<string>? strandedPrepared = null;
+        if (hadPending && committed && !alreadyFlipped && HasDeclaredSpan)
+        {
+            foreach (var (key, prepared) in bucket!)
+            {
+                if (DeclaresKey(key))
+                    continue;
+                var hasCommittedValue = committedValues is not null && committedValues.ContainsKey(key);
+                if (!hasCommittedValue && !IsForwardablePreparedValue(transactionId, key, prepared))
+                    continue;
+                (strandedPrepared ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
+            }
+        }
+
         if (hasBackstopPayload)
         {
-            if (_backstoppedTerminals is not null)
-                _backstoppedTerminals.TryGetValue(transactionId, out alreadyBackstoppedKeys);
-
             foreach (var kvp in committedValues!)
             {
-                if (bucket is not null && bucket.ContainsKey(kvp.Key))
+                if (bucket is not null && bucket.ContainsKey(kvp.Key)
+                    && (strandedPrepared is null || !strandedPrepared.Contains(kvp.Key)))
                     continue;
                 if (alreadyBackstoppedKeys is not null && alreadyBackstoppedKeys.Contains(kvp.Key))
                     continue;
                 (missingKeys ??= []).Add(kvp);
+            }
+        }
+
+        if (strandedPrepared is not null)
+        {
+            foreach (var key in strandedPrepared)
+            {
+                if (committedValues is not null && committedValues.ContainsKey(key))
+                    continue;
+                if (alreadyBackstoppedKeys is not null && alreadyBackstoppedKeys.Contains(key))
+                    continue;
+                (missingKeys ??= []).Add(new KeyValuePair<string, byte[]>(key, bucket![key].Value!));
             }
         }
 
@@ -1622,6 +1692,52 @@ internal sealed partial class BPlusLeafGrain
         // alreadyFlipped path - or in the per-key backstopped set).
         if (MigrationTerminalCore.IsNoOpRedelivery(alreadyFlipped, hadPending, missingKeys is not null))
             return;
+
+        // Span admission (issue #4335): a missing key this leaf does not
+        // declare - routed here by a descent that predates a split's
+        // separator, or a stranded prepared key - is re-delivered as a
+        // backstop to the leaf that declares it rather than stored here,
+        // where it would duplicate that leaf's row in the shard's chain.
+        Dictionary<GrainId, Dictionary<string, byte[]>>? forwarded = null;
+        if (missingKeys is { Count: > 0 } && HasDeclaredSpan)
+        {
+            List<KeyValuePair<string, byte[]>>? local = null;
+            foreach (var kvp in missingKeys)
+            {
+                if (TryResolveSpanForwardTarget(kvp.Key, out var target, out var failOpen))
+                {
+                    forwarded ??= new Dictionary<GrainId, Dictionary<string, byte[]>>();
+                    if (!forwarded.TryGetValue(target, out var subset))
+                    {
+                        subset = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                        forwarded[target] = subset;
+                    }
+                    subset[kvp.Key] = kvp.Value;
+                    continue;
+                }
+
+                if (failOpen != SpanFailOpenReason.None)
+                    RecordSpanFailOpenCommit(failOpen, SpanWriteOrigin.Merge);
+                (local ??= []).Add(kvp);
+            }
+
+            if (forwarded is not null)
+                missingKeys = local;
+        }
+
+        // Forwarded before any local state changes, so a failed forward
+        // fails this delivery whole and its retry recomputes the same set.
+        // Each target applies the subset through this same backstop path,
+        // which dedups per key, and the chain invariant keeps every hop
+        // moving away from this leaf.
+        if (forwarded is not null)
+        {
+            var forwards = new Task[forwarded.Count];
+            var f = 0;
+            foreach (var (target, subset) in forwarded)
+                forwards[f++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).ApplyTxTerminalAsync(transactionId, committed: true, subset);
+            await Task.WhenAll(forwards);
+        }
 
         // Pending-flip path: drain the bucket into Entries (commit) or
         // drop it without surfacing (abort). Zero leaf I/O - the WAL is
@@ -1699,7 +1815,7 @@ internal sealed partial class BPlusLeafGrain
                 // Entries[K].Timestamp is reconstructed bit-identically
                 // from the same counter-only bump (see the matching
                 // comment block in ApplyTxCommit).
-                ApplyTxCommit(transactionId);
+                ApplyTxCommit(transactionId, strandedPrepared);
                 // Publish state.State.Clock AFTER the commit: ApplyTxCommit
                 // does the counter-only bump that lifts state.State.Clock
                 // (and every drained Entries[K].Timestamp) one counter unit

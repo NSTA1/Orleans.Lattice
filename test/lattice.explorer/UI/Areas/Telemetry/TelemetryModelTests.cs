@@ -34,8 +34,28 @@ public sealed class TelemetryModelTests
     [TestCase("-1h")]
     [TestCase("1H")]
     [TestCase("999d")]
+    [TestCase("401d")]
+    [TestCase("9601h")]
+    [TestCase("20000000d")]
+    [TestCase("100000000d")]
+    [TestCase("999999999d")]
+    [TestCase("999999999h")]
     public void A_duration_the_address_cannot_name_is_refused(string? token) =>
         Assert.That(TelemetryDurations.TryParse(token, out _), Is.False);
+
+    [TestCase("400d", 400 * 86400L)]
+    [TestCase("9600h", 9600 * 3600L)]
+    [TestCase("576000m", 576000 * 60L)]
+    [TestCase("34560000s", 34560000L)]
+    public void The_longest_duration_is_named_in_every_unit(string token, long seconds)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TelemetryDurations.TryParse(token, out var duration), Is.True);
+            Assert.That(duration, Is.EqualTo(TimeSpan.FromSeconds(seconds)));
+            Assert.That(duration, Is.EqualTo(TelemetryDurations.Longest));
+        });
+    }
 
     [Test]
     public void Durations_read_as_labels_and_prose()
@@ -95,6 +115,8 @@ public sealed class TelemetryModelTests
     [TestCase("/telemetry?from=20260101T110000Z&to=20260101T100000Z", "the time window")]
     [TestCase("/telemetry?from=yesterday", "the time window")]
     [TestCase("/telemetry?step=fast", "the step")]
+    [TestCase("/telemetry?range=20000000d", "the time range")]
+    [TestCase("/telemetry?step=20000000d", "the step")]
     public void What_the_address_names_unreadably_is_dropped_with_a_notice(string address, string named)
     {
         var window = TelemetryWindow.FromAddress(ExplorerAddress.Parse(address));

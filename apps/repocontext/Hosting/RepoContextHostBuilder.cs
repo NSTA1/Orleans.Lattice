@@ -190,7 +190,7 @@ public static class RepoContextHostBuilder
         RepoContextHostConfiguration config,
         RepoContextHostOwnedDisposables owned)
     {
-        PrepareDataPaths(config);
+        var sqliteAutoVacuum = PrepareDataPaths(config);
 
         // Startup admission, sited here on purpose: immediately after the data paths
         // are prepared, because that is the first moment the recorded evidence is
@@ -591,6 +591,15 @@ public static class RepoContextHostBuilder
         // only; it validates nothing. See issue #2294, and #2075 for the precedent.
         builder.Services.AddHostedService<RepoContextEffectiveConfigurationReporter>();
 
+        // SQLite space reclaim: reports the startup auto_vacuum outcome and, in the
+        // default incremental mode, returns freed pages to the filesystem in small
+        // paced batches so deletes stop growing the file without a commit-time cost.
+        if (sqliteAutoVacuum is not null)
+        {
+            builder.Services.AddSingleton(sqliteAutoVacuum);
+            builder.Services.AddHostedService<SqliteAutoVacuumService>();
+        }
+
         // Vector-plane warmup driver: issues the first semantic query itself so the
         // retrieval readiness component reports demonstrated capability instead of
         // waiting for traffic an orchestrator will not route to a not-ready box.
@@ -928,7 +937,8 @@ public static class RepoContextHostBuilder
     /// <param name="config">The resolved host configuration.</param>
     /// <exception cref="ArgumentNullException"><paramref name="config"/> is null.</exception>
     /// <exception cref="InvalidOperationException">A required data path is missing or unwritable.</exception>
-    public static void PrepareDataPaths(RepoContextHostConfiguration config)
+    /// <returns>The SQLite <c>auto_vacuum</c> outcome, or <see langword="null"/> when no store uses SQLite.</returns>
+    public static SqliteAutoVacuumOutcome? PrepareDataPaths(RepoContextHostConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -937,9 +947,8 @@ public static class RepoContextHostBuilder
             DataPathGuard.EnsureDirectoryWritable(config.WalDirectory, "WAL");
         }
 
-        if (config.UsesSqlite)
-        {
-            new SqliteSchemaInitializer(config.SqlitePath).Initialize();
-        }
+        return config.UsesSqlite
+            ? new SqliteSchemaInitializer(config.SqlitePath, autoVacuum: config.SqliteAutoVacuum).Initialize()
+            : null;
     }
 }

@@ -269,4 +269,25 @@ public sealed class RepoContextHostConfigurationParsingTests
         Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.WalCompactionMaxDeadBytesKey)
             .And.Contain("2GiB"));
     }
+
+    [Test]
+    public void Sqlite_auto_vacuum_defaults_to_incremental()
+        => Assert.That(From().SqliteAutoVacuum, Is.EqualTo(SqliteAutoVacuumMode.Incremental));
+
+    [TestCase("incremental", SqliteAutoVacuumMode.Incremental)]
+    [TestCase(" FULL ", SqliteAutoVacuumMode.Full)]
+    [TestCase("none", SqliteAutoVacuumMode.None)]
+    [TestCase("off", SqliteAutoVacuumMode.None)]
+    public void Sqlite_auto_vacuum_tokens_map_to_the_expected_mode(string token, SqliteAutoVacuumMode expected)
+        => Assert.That(
+            From((RepoContextHostConfiguration.SqliteAutoVacuumKey, token)).SqliteAutoVacuum,
+            Is.EqualTo(expected));
+
+    [Test]
+    public void An_unknown_sqlite_auto_vacuum_mode_is_rejected()
+    {
+        var ex = Rejects((RepoContextHostConfiguration.SqliteAutoVacuumKey, "sometimes"));
+
+        Assert.That(ex!.Message, Does.Contain(RepoContextHostConfiguration.SqliteAutoVacuumKey));
+    }
 }
