@@ -45,6 +45,8 @@ directly is the public `InMemoryWalCursorRegistry`.
 | `WalOffsetAllocationCore.Assign` | The per-shard log-offset handed to an append and the single-step advance of the offset counter - the read-and-advance that must be atomic so two concurrent appends never share an offset and the sequence stays dense. |
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
+| `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
+| `WalFallOffCore` | Whether the WAL has been trimmed past the first offset a replay resuming after a checkpoint still needs (`checkpoint > 0 && tail > checkpoint + 1`). Both the fall-off-log detector and the activation's cold-replay guard route through it, so the two cannot disagree. |
 
 The core files live under `src/lattice/`, `src/lattice/BPlusTree/`, and
 `src/lattice/BPlusTree/Grains/` next to the grains that call them.
@@ -73,6 +75,7 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalOffsetContiguityModel` | `WalOffsetAllocationCore` | Reading and advancing the offset counter is atomic, so two concurrent appends never receive the same offset and the assigned sequence stays dense and strictly ascending. |
 | `WalBlockedFloorLifecycleModel` | `WalBlockedFloorCore` | The GC's blocked floor is the minimum live buffer pin across consumers, so through every interleaving of pin-take, pin-raise, and pin-clear it never rises above a live pin and never trims an entry a buffering consumer still needs. |
 | `WalMoveRedriveModel` | `WalMoveResumeCore` | A placement move's tail copy resumes just past what the target already holds, so a coordinator that crashes and re-drives at any offset boundary copies every retained offset exactly once with no duplicate and no gap. |
+| `WalDurabilityLifecycleModel` | `WalOffsetAllocationCore`, `WalShippingWatermark`, `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | End to end, with a leaf stopping at any step: appends, out-of-order flushes, read-position replay, checkpoint persists and snapshot captures that can fail, pin publication and the GC trim. No acknowledged write is lost or skipped, no leaf falls off the log, a failed persist is rolled back, no pin exceeds the persisted checkpoint, and the lifecycle converges once faults are spent. |
 
 ### Every model ships a non-vacuous guard test
 
@@ -106,6 +109,13 @@ asserts Coyote *finds* the resulting violation
 - `WalMoveRedriveModel` - the guard resumes every re-drive from the source floor
   instead of past what the target already holds, and Coyote finds the crash point
   after which the copy re-appends an offset the target already has (a duplicate).
+- `WalDurabilityLifecycleModel` - four guards, each removing one fix and each
+  required to be caught by the assertion that fix protects, not merely by some
+  violation:
+  - resolving the pin against the pending checkpoint (`[PublishedPinWithinPersistedBelief]`);
+  - not rolling back a failed checkpoint persist (`[PersistedBeliefHonest]`);
+  - reading past the watermark (`[ShippingNeverSkips]`);
+  - flooring the trim at the highest pin (`[TrimCoveredBySnapshot]`).
 
 A model with a green fix test and a green guard test is proven load-bearing.
 
@@ -122,6 +132,47 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj -c Release --filter "Categ
 See the "Coyote concurrency tier" section of
 [`.github/instructions/testing.instructions.md`](../../.github/instructions/testing.instructions.md)
 for the tier policy and the procedure for adding a new model.
+
+## The TLA+ specification, and the scope of the assurance
+
+The cores above are each model-checked in isolation, and
+`WalDurabilityLifecycleModel` composes five of them. Above both sits a design-level
+TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
+
+- `WalDurability.tla`, the leaf lifecycle under crash-anywhere recovery;
+- `WalMove.tla`, a shard move.
+
+It follows the pattern of the atomic-commit specification: every property and every
+action has a mutation that makes a property fire, and a refinement note maps each
+construct to production and to tests proven to go red when production regresses.
+
+The specification found four durability defects, each filed with a reproduction and
+kept as a standing mutation until it is fixed:
+
+| Issue | Defect |
+|-------|--------|
+| #4450 | A snapshot that fails to load falls through to a cold replay of a trimmed WAL. |
+| #4451 | A capture during a cold rebuild claims more coverage than its rows hold. |
+| #4456 | A never-written leaf releases its block pin above its snapshot's coverage. |
+| #4467 | A faulted cold rebuild re-arms warm over a partial projection. |
+
+Until those fixes land, the properties they violate hold of the intended design the
+specification describes, not of the code that runs.
+
+**What is covered:** one WAL partition shared by two leaves, one fault per
+behaviour, and one move with one crash.
+
+**What is not covered:**
+
+- multiple partitions;
+- splits, resharding and saga state;
+- retention TTLs, which trim past the floor by design;
+- interleavings inside a grain turn's awaits;
+- replication consumers, beyond their effect on the trim floor;
+- any composition of two faults.
+
+Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
+refinement note lists its gaps in full.
 
 ## Related
 
