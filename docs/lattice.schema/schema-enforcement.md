@@ -205,6 +205,17 @@ again - so a delete of the tree is refused for that whole time, and a remediatio
 is refused with `InvalidOperationException` while the tree is deleted, a delete is
 pending, or a resize or restore holds the reservation; see
 [Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
+The destination inherits everything about the tree except its values. It is
+registered with the shard map the tree routes by (and with it the virtual slot
+count), the split allocation mark, the shard-count, leaf-sizing (`MaxLeafKeys`,
+`MaxInternalChildren`) and WAL-partition pins, and the per-tree runtime overrides a
+resize also keeps: event publishing, projection digest maintenance and its disable
+latch, history retention, and the cache-value and WAL retention ceilings. The build
+lays every value out by that map, so a resharded or pinned tree - including an app
+tree's declared `virtualShardCount` - keeps its topology and sizing across the
+cutover; an eager schema-version migration builds its destination the same way.
+Host-level named options (`ConfigureLattice(name)`) do not follow the alias, as for
+a resize.
 The destination is registered as derived from the tree, so after cutover a delete,
 recover or purge of the tree acts on the remediated copy the alias targets. The
 cutover's alias swap is put to the host's `ITreeOwnershipGuard` like every alias

@@ -92,6 +92,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Schema - Remediation keeps the tree's shard topology and sizing.** A remediation or eager schema-version migration built its copy with library defaults, so a resharded or pinned tree came back at 64 shards with default leaf sizing, WAL partitions and virtual slot count, and without its runtime overrides. The copy now inherits the tree's shard map, split mark, structural pins and overrides, as a resize's does. ([#4379](https://github.com/NSTA1/Orleans.Lattice/issues/4379)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
+
 - **Core - A resize undo no longer brings back a half-applied atomic batch.** A batch in flight when an online resize moved the alias could be left on only some shards of the old copy, which an undo then served torn. The old copy now still takes and mirrors a batch bound to it, so the batch lands whole on both copies. ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)) (`Orleans.Lattice`)
 
 - **Core - Atomic batches stay whole when an alias swap catches one in flight.** During a resize undo, or any other alias swap, a batch's prepared writes could reach the copy being discarded while it committed on the copy kept. Readers then saw it torn and a committed batch could be lost. Its writes now land only on the copy it commits on, and follow that copy if it moves. ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)) (`Orleans.Lattice`)
