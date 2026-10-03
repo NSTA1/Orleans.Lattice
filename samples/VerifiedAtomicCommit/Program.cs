@@ -22,7 +22,7 @@ using Orleans.Lattice;
 //     orderings (test/lattice/BPlusTree/Coyote/) - those orderings are encoded
 //     as data, so what Coyote enumerates is the model's choice space, not a
 //     thread schedule space, and
-//   * the TLA+ spec checks over bounded instances (spec/AtomicCommit.tla).
+//   * the TLA+ spec checks over bounded instances (spec/atomic-commit/AtomicCommit.tla).
 // See docs/lattice/verified-atomic-commit.md.
 // ---------------------------------------------------------------------------
 
@@ -158,7 +158,7 @@ Console.WriteLine();
 Console.WriteLine("This all-or-nothing visibility is machine-checked, not just observed here:");
 Console.WriteLine("  * cores    : src/lattice/BPlusTree/ (AtomicVisibilityGate, SagaCoordinatorCore, ...)");
 Console.WriteLine("  * Coyote   : test/lattice/BPlusTree/Coyote/  (dotnet test --filter Category=Coyote)");
-Console.WriteLine("  * TLA+     : spec/AtomicCommit.tla");
+Console.WriteLine("  * TLA+     : spec/atomic-commit/AtomicCommit.tla");
 Console.WriteLine("  * docs     : docs/lattice/verified-atomic-commit.md");
 Console.WriteLine();
 Console.WriteLine("Done.");

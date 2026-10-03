@@ -3,7 +3,7 @@ using NUnit.Framework;
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// Gates the <c>Detector</c> column of <c>spec/Refinement.md</c> (issue #2527).
+/// Gates the <c>Detector</c> column of every module's refinement note (issue #2527).
 /// <para>
 /// WHAT THIS PROVES, AND WHAT IT DOES NOT. It proves the column cannot rot into
 /// prose: every behaviour-asserting row declares a verdict, every test a row
@@ -27,15 +27,24 @@ namespace Orleans.Lattice.Tests.Formal;
 internal sealed partial class RefinementDetectorMappingTests
 {
     /// <summary>
-    /// Rows that assert no production behaviour, and so are outside the
-    /// question the Detector column asks. Kept as an explicit list rather than
-    /// inferred, so adding a row cannot silently opt itself out.
+    /// The labels of the rows that assert no production behaviour, and so are
+    /// outside the question the Detector column asks: the action rows for the
+    /// actions the module's manifest declares non-behavioural. Kept as an
+    /// explicit list rather than inferred, so adding a row cannot silently opt
+    /// itself out.
     /// </summary>
-    private static readonly string[] NonBehaviouralRows = ["`Stutter`"];
+    private static IReadOnlyList<string> NonBehaviouralRows(SpecModule module) =>
+        RefinementNote.NonBehaviouralRowLabels(module);
 
-    private static IReadOnlyList<RefinementTable> BehaviourTables()
+    /// <summary>
+    /// The non-behavioural row of the hand-written notes the regressions in
+    /// this fixture run against.
+    /// </summary>
+    private static readonly string[] SyntheticNonBehaviouralRows = ["`Stutter`"];
+
+    private static IReadOnlyList<RefinementTable> BehaviourTables(SpecModule module)
     {
-        var tables = RefinementNote.ReadTables();
+        var tables = RefinementNote.ReadTables(module);
         return [tables[RefinementNote.ActionSection], tables[RefinementNote.PropertySection]];
     }
 
@@ -46,15 +55,16 @@ internal sealed partial class RefinementDetectorMappingTests
         return (row, cell);
     }
 
-    private static List<(RefinementRow Row, string Detector)> BehaviourRows()
+    private static List<(RefinementRow Row, string Detector)> BehaviourRows(SpecModule module)
     {
         var result = new List<(RefinementRow, string)>();
+        var nonBehavioural = NonBehaviouralRows(module);
 
-        foreach (var table in BehaviourTables())
+        foreach (var table in BehaviourTables(module))
         {
             foreach (var row in table.Rows)
             {
-                if (NonBehaviouralRows.Contains(row.Label, StringComparer.Ordinal))
+                if (nonBehavioural.Contains(row.Label, StringComparer.Ordinal))
                 {
                     continue;
                 }
@@ -66,20 +76,29 @@ internal sealed partial class RefinementDetectorMappingTests
         return result;
     }
 
-    [Test]
-    public void The_note_yields_the_expected_behaviour_asserting_denominator()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_note_yields_the_expected_behaviour_asserting_denominator(SpecModule module)
     {
         // Anti-vacuity, and a standing check on the census's own arithmetic.
-        // The note has 17 behaviour-asserting rows (10 property, 7 action);
-        // if a row is added or removed, this fails and the prose must be
-        // re-derived rather than quietly drifting out of date.
-        Assert.That(BehaviourRows(), Has.Count.EqualTo(17));
-    }
+        // The expected count of behaviour-asserting rows (action rows other
+        // than the non-behavioural ones, plus property rows) is the module
+        // manifest's; if a row is added or removed, this fails and the
+        // manifest and the module README's counts table must be re-derived
+        // rather than quietly drifting out of date.
+        ArgumentNullException.ThrowIfNull(module);
 
-    [Test]
-    public void Every_behaviour_asserting_row_declares_a_detector()
+        Assert.That(
+            BehaviourRows(module),
+            Has.Count.EqualTo(module.Manifest.Counts.BehaviourRows),
+            $"{module.Describe(module.RefinementNotePath)} should have {module.Manifest.Counts.BehaviourRows} "
+            + $"behaviour-asserting rows, as {module.Describe(module.ManifestPath)} records.");
+    }
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_behaviour_asserting_row_declares_a_detector(SpecModule module)
     {
-        var missing = BehaviourRows()
+        ArgumentNullException.ThrowIfNull(module);
+
+        var missing = BehaviourRows(module)
             .Where(r => string.IsNullOrWhiteSpace(r.Detector))
             .Select(r => $"line {r.Row.LineNumber}: row {r.Row.Label} has an empty Detector cell")
             .ToList();
@@ -87,11 +106,13 @@ internal sealed partial class RefinementDetectorMappingTests
         Assert.That(missing, Is.Empty, string.Join(Environment.NewLine, missing));
     }
 
-    [Test]
-    public void Every_test_named_as_a_detector_exists()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_test_named_as_a_detector_exists(SpecModule module)
     {
+        ArgumentNullException.ThrowIfNull(module);
+
         var resolver = RefinementDetectorResolver.ForRepository();
-        var detectors = RefinementCodeSymbols.ExtractDetectors(BehaviourTables());
+        var detectors = RefinementCodeSymbols.ExtractDetectors(BehaviourTables(module));
 
         Assert.That(
             detectors,
@@ -102,21 +123,23 @@ internal sealed partial class RefinementDetectorMappingTests
         var broken = detectors
             .Where(d => !resolver.TestExists(d.TypeName, d.MemberName))
             .Select(d =>
-                $"spec/Refinement.md line {d.LineNumber} (row {d.Row}) names detector '{d.Text}', " +
+                $"{module.Describe(module.RefinementNotePath)} line {d.LineNumber} (row {d.Row}) names detector '{d.Text}', " +
                 $"which no longer resolves: {resolver.Explain(d.TypeName, d.MemberName)}")
             .ToList();
 
         Assert.That(broken, Is.Empty, string.Join(Environment.NewLine + Environment.NewLine, broken));
     }
 
-    [Test]
-    public void Every_row_reporting_a_gap_cites_an_issue()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_row_reporting_a_gap_cites_an_issue(SpecModule module)
     {
+        ArgumentNullException.ThrowIfNull(module);
+
         // A row admitting "None" or "Partial" coverage is the valuable output
         // of the census (#2527 calls filing those issues "the point of the
         // exercise"). An admitted gap with no issue behind it is a finding that
         // will be forgotten, so the citation is mandatory.
-        var uncited = BehaviourRows()
+        var uncited = BehaviourRows(module)
             .Where(r => r.Detector.Contains("None", StringComparison.Ordinal)
                      || r.Detector.Contains("Partial", StringComparison.Ordinal))
             .Where(r => !System.Text.RegularExpressions.Regex.IsMatch(r.Detector, @"#\d{3,}"))
@@ -126,9 +149,11 @@ internal sealed partial class RefinementDetectorMappingTests
         Assert.That(uncited, Is.Empty, string.Join(Environment.NewLine, uncited));
     }
 
-    [Test]
-    public void Every_behaviour_asserting_row_names_a_resolvable_test()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_behaviour_asserting_row_names_a_resolvable_test(SpecModule module)
     {
+        ArgumentNullException.ThrowIfNull(module);
+
         // THE SUCCESSOR TO At_least_one_row_reports_a_gap (#2557). The floor
         // asserted only that the Detector column was not uniformly reassuring:
         // at least one row admitted a gap. That is the weakest useful claim
@@ -149,21 +174,22 @@ internal sealed partial class RefinementDetectorMappingTests
         // read nothing both look like. The count is compared against the
         // independently derived behaviour-asserting row set rather than against
         // a literal, so it cannot drift as rows are added.
-        var tables = BehaviourTables();
+        var tables = BehaviourTables(module);
         var resolver = RefinementDetectorResolver.ForRepository();
+        var nonBehavioural = NonBehaviouralRows(module);
 
-        var examined = RefinementDetectorRule.BehaviourRowsExamined(tables, NonBehaviouralRows);
+        var examined = RefinementDetectorRule.BehaviourRowsExamined(tables, nonBehavioural);
 
         var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
             tables,
-            NonBehaviouralRows,
+            nonBehavioural,
             d => resolver.TestExists(d.TypeName, d.MemberName));
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 examined,
-                Is.EqualTo(BehaviourRows().Count()),
+                Is.EqualTo(BehaviourRows(module).Count),
                 "The rule examined a different number of rows than the note has "
                 + "behaviour-asserting rows, so it is not reading the corpus this fixture "
                 + "thinks it is.");
@@ -174,17 +200,23 @@ internal sealed partial class RefinementDetectorMappingTests
                 "The rule examined no rows at all. Either the tables moved or every row was "
                 + "classified non-behavioural, and in both cases the gate below proves nothing.");
 
-            Assert.That(failures, Is.Empty, string.Join(Environment.NewLine + Environment.NewLine, failures));
+            Assert.That(
+                failures,
+                Is.Empty,
+                module.Describe(module.RefinementNotePath) + Environment.NewLine
+                + string.Join(Environment.NewLine + Environment.NewLine, failures));
         });
     }
 
-    [Test]
-    public void Production_symbols_and_detector_tests_are_partitioned_by_column()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Production_symbols_and_detector_tests_are_partitioned_by_column(SpecModule module)
     {
+        ArgumentNullException.ThrowIfNull(module);
+
         // The two extractors must not overlap: a test name resolved against
         // src/ fails, and a production symbol resolved against test/ fails.
         // This is the regression that guards that partition.
-        var tables = BehaviourTables();
+        var tables = BehaviourTables(module);
         var production = RefinementCodeSymbols.Extract(tables).Select(s => s.Text).ToHashSet(StringComparer.Ordinal);
         var detectors = RefinementCodeSymbols.ExtractDetectors(tables).Select(s => s.Text).ToHashSet(StringComparer.Ordinal);
 

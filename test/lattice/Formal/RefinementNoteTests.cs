@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// than by the real note.
 /// <para>
 /// The reader is shared on purpose: more than one gate over
-/// <c>spec/Refinement.md</c> is planned, and two independently-drifting parsers
+/// <c>spec/atomic-commit/Refinement.md</c> is planned, and two independently-drifting parsers
 /// of the same markdown would end with two gates disagreeing about what the
 /// note says. Sharing it makes its failure modes everybody's problem, which is
 /// why they are pinned here rather than left to the one caller that exists
@@ -221,15 +221,18 @@ public sealed class RefinementNoteTests
     }
 
     /// <summary>
-    /// The real note must still parse, and must still yield references. This
-    /// is the on-disk half of the vacuity guard: the tests above all run on
-    /// synthetic markdown, so without this one a rewrite of the note into a
-    /// form the reader does not recognise would leave them all green.
+    /// Each module's real note must still parse, and must still yield
+    /// references. This is the on-disk half of the vacuity guard: the tests
+    /// above all run on synthetic markdown, so without this one a rewrite of a
+    /// note into a form the reader does not recognise would leave them all
+    /// green.
     /// </summary>
-    [Test]
-    public void The_real_note_parses_into_three_populated_tables()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_real_note_parses_into_three_populated_tables(SpecModule module)
     {
-        var tables = RefinementNote.ReadTables();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var tables = RefinementNote.ReadTables(module);
 
         Assert.Multiple(() =>
         {
@@ -242,6 +245,21 @@ public sealed class RefinementNoteTests
         Assert.That(
             RefinementCodeSymbols.Extract(RefinementNote.MappingSections.Select(s => tables[s])),
             Is.Not.Empty,
-            "the real spec/Refinement.md yielded no code symbols.");
+            $"{module.Describe(module.RefinementNotePath)} yielded no code symbols.");
+    }
+
+    /// <summary>
+    /// A parse error names the note it came from, so a failure in one module's
+    /// note is not reported as a fault in another's.
+    /// </summary>
+    [Test]
+    public void A_parse_error_names_the_note()
+    {
+        var emptied = MinimalNote.Replace("## Property mapping", "## Properties", StringComparison.Ordinal);
+
+        var error = Assert.Throws<InvalidOperationException>(
+            () => RefinementNote.ParseTables(emptied, "spec/example/Refinement.md"));
+
+        Assert.That(error!.Message, Does.StartWith("spec/example/Refinement.md"));
     }
 }
