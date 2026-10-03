@@ -111,4 +111,36 @@ internal sealed partial class ShardRootGrain
         state.State.RetainedRedirect = null;
         await WriteShardStateAsync();
     }
+
+    /// <inheritdoc />
+    public async Task ReleaseRetainedRedirectAsync(string logicalTreeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(logicalTreeId);
+        var rr = state.State.RetainedRedirect;
+        if (rr is null)
+        {
+            return;
+        }
+
+        // A redirect with no recorded logical id applies to every logical tree
+        // other than this shard's own id (see ThrowIfRetainedRedirect).
+        var redirectsLogical = string.IsNullOrEmpty(rr.LogicalTreeId)
+            ? !string.Equals(logicalTreeId, TreeId, StringComparison.Ordinal)
+            : string.Equals(rr.LogicalTreeId, logicalTreeId, StringComparison.Ordinal);
+        if (!redirectsLogical)
+        {
+            return;
+        }
+
+        state.State.RetainedRedirect = null;
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State.RetainedRedirect = rr;
+            throw;
+        }
+    }
 }

@@ -252,6 +252,50 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task RemoveAliasAsync(string treeId);
 
     /// <summary>
+    /// Moves the logical <paramref name="treeId"/> onto
+    /// <paramref name="physicalTreeId"/> together with the routing map that
+    /// describes that tree's shards, in one write of the logical row. Routing reads
+    /// the alias and the map from that one row, so a reader resolving it either
+    /// before or after this call sees one physical tree paired with its own map -
+    /// never one copy addressed by another copy's map, which is what a separate
+    /// <see cref="SetAliasAsync"/> and map write left open to every reader that
+    /// resolved between them.
+    /// <para>
+    /// <paramref name="physicalTreeId"/> equal to <paramref name="treeId"/> moves
+    /// the tree back onto its own shards (the <see cref="RemoveAliasAsync"/> form)
+    /// and refuses with <see cref="LatticeTreeNotRegisteredException"/> when the
+    /// row does not exist. Any other target is validated exactly as
+    /// <see cref="SetAliasAsync"/> validates it, before anything is written, so a
+    /// refused swap changes neither the alias nor the map.
+    /// </para>
+    /// <para>
+    /// <paramref name="shardMap"/> is stored as a copy re-versioned above both the
+    /// row's current map and the supplied one, so every cached router and every
+    /// map-version scan guard observes the swap; <paramref name="nextShardIndex"/>
+    /// replaces the row's split allocation high-water mark. Any in-progress
+    /// <see cref="State.TreeRegistryEntry.AliasCutoverTarget"/> marker is cleared.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The logical tree id whose row is rewritten.</param>
+    /// <param name="physicalTreeId">The physical tree the logical id routes to after the swap.</param>
+    /// <param name="shardMap">The map that describes <paramref name="physicalTreeId"/>'s shards.</param>
+    /// <param name="nextShardIndex">The split allocation high-water mark that goes with <paramref name="shardMap"/>.</param>
+    /// <param name="expectedPhysicalTreeId">
+    /// The physical tree the caller read the logical id as resolving to, or
+    /// <see langword="null"/> to skip the check. When it no longer does, the swap
+    /// is refused with <see cref="InvalidOperationException"/> and nothing is
+    /// written, so a coordinator acting on a stale read cannot overwrite a newer
+    /// alias change.
+    /// </param>
+    /// <returns>
+    /// The logical row as it stood immediately before the swap, or
+    /// <see langword="null"/> when the swap created it. Its map is the final
+    /// layout of the physical tree the alias left: a split or fold bound to that
+    /// tree is refused once the alias has moved off it.
+    /// </returns>
+    Task<State.TreeRegistryEntry?> SwapAliasAsync(string treeId, string physicalTreeId, ShardMap shardMap, int? nextShardIndex, string? expectedPhysicalTreeId);
+
+    /// <summary>
     /// Resolves the physical tree ID for the given logical <paramref name="treeId"/>.
     /// Returns <paramref name="treeId"/> itself if no alias is set.
     /// <para>

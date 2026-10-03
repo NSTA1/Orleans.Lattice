@@ -56,7 +56,8 @@ public sealed class LatticeTreeAdminLifecycleTests
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
         var error = new LatticeTreeOwnershipDeniedException("different owner");
-        registry.SetAliasAsync(Tree, "physical").Returns(Task.FromException(error));
+        registry.SwapAliasAsync(Tree, "physical", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>())
+            .Returns(Task.FromException<TreeRegistryEntry?>(error));
 
         Assert.That(Assert.ThrowsAsync<LatticeTreeOwnershipDeniedException>(
             () => Create(factory).SetTreeAliasAsync(Tree, "physical")), Is.SameAs(error));
@@ -239,7 +240,7 @@ public sealed class LatticeTreeAdminLifecycleTests
             Assert.That(result.PhysicalTreeId, Is.EqualTo("phys-orders"));
             Assert.That(result.IsAliased, Is.True);
         });
-        await registry.Received(1).SetAliasAsync(Tree, "phys-orders");
+        await registry.Received(1).SwapAliasAsync(Tree, "phys-orders", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]

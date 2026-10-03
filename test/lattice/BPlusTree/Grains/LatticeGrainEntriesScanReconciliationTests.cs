@@ -48,8 +48,7 @@ public class LatticeGrainEntriesScanReconciliationTests
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1 }));
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 1 });
 
         var mapQueue = maps.Length > 0 ? maps : [SingleShardMap(version: 1)];
         var mapCalls = 0;

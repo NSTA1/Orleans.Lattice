@@ -90,7 +90,7 @@ public partial class LatticeSchemaRemediationGrainTests
             await h.Destination.Received(1).SetAsync(key, Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
         }
 
-        await h.Registry.Received(1).SetAliasAsync(TreeId, Arg.Any<string>());
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -203,7 +203,7 @@ public partial class LatticeSchemaRemediationGrainTests
             Assert.That(h.State.State.LastReport, Is.EqualTo(report));
         });
         await h.Destination.Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        await h.Registry.DidNotReceiveWithAnyArgs().SetAliasAsync(default!, default!);
+        await h.Registry.DidNotReceiveWithAnyArgs().SwapAliasAsync(default!, default!, default!, default, default);
         await h.PolicyStore.DidNotReceiveWithAnyArgs().SetPolicyAsync(default!, default!, default);
     }
 

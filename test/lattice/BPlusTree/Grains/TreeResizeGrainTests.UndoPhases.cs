@@ -66,8 +66,8 @@ public partial class TreeResizeGrainTests
     {
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
 
-        // Alias removed so the logical tree maps back to the old physical tree.
-        await registry.Received(1).RemoveAliasAsync(TreeId);
+        // Alias moved back onto the old physical tree with its map, in one write.
+        await registry.Received(1).SwapAliasAsync(TreeId, TreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
 
         // Destination (snapshot) tree discarded (issue #3930).
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
@@ -117,7 +117,7 @@ public partial class TreeResizeGrainTests
             .Received(1).DiscardDerivedPhysicalTreeAsync();
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
 
         Assert.Multiple(() =>
         {
@@ -251,7 +251,7 @@ public partial class TreeResizeGrainTests
 
         Assert.That(ex!.TreeId, Is.EqualTo(TreeId));
         await registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
-        await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
             .DidNotReceive().DiscardDerivedPhysicalTreeAsync();
         Assert.That(state.State.InProgress, Is.True, "a refused undo leaves the resize as it found it");
@@ -273,5 +273,48 @@ public partial class TreeResizeGrainTests
 
         var ex = Assert.ThrowsAsync<InvalidOperationException>(() => grain.UndoResizeAsync());
         Assert.That(ex!.Message, Does.Contain("No resize exists for tree"));
+    }
+
+    [Test]
+    public async Task UndoResize_after_swap_arms_the_resized_copy_to_redirect_onto_the_old_tree()
+    {
+        // Issue #4336: routing activations that cached the resized copy are never
+        // told the alias moved back, so its shards must redirect them.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        SeedInFlightResize(state, ResizePhase.Reject);
+        SetupOldTreeDeletion(grainFactory, isDeleted: false);
+        var snapshotTreeId = $"{TreeId}/resized/{UndoSnapshotSuffix}";
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.SwapAliasAsync(TreeId, TreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>())
+            .Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry
+            {
+                ShardCount = ShardCount,
+                PhysicalTreeId = snapshotTreeId,
+                ShardMap = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, ShardCount),
+            }));
+
+        await grain.UndoResizeAsync();
+
+        for (var i = 0; i < ShardCount; i++)
+        {
+            await grainFactory.GetGrain<IShardRootGrain>($"{snapshotTreeId}/{i}")
+                .Received(1).MarkRetainedRedirectAsync(TreeId, $"{UndoSnapshotSuffix}:undo", TreeId);
+        }
+    }
+
+    [Test]
+    public async Task UndoResize_resumed_after_its_swap_does_not_arm_the_old_tree()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        SeedInFlightResize(state, ResizePhase.Reject);
+        SetupOldTreeDeletion(grainFactory, isDeleted: false);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.SwapAliasAsync(TreeId, TreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>())
+            .Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry { ShardCount = ShardCount }));
+
+        await grain.UndoResizeAsync();
+
+        await grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0")
+            .DidNotReceive().MarkRetainedRedirectAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>());
     }
 }

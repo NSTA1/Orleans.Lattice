@@ -41,13 +41,12 @@ public partial class LatticeGrainTests
 
         // Seed the registry pin so the resolver returns the desired
         // structural sizing for every tree id queried.
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry
             {
                 MaxLeafKeys = maxLeafKeys,
                 MaxInternalChildren = maxInternalChildren,
                 ShardCount = shardCount,
-            }));
+            });
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var services = Substitute.For<IServiceProvider>();

@@ -147,7 +147,7 @@ public partial class TreeResizeGrainTests
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
             .DidNotReceive().RecoverPhysicalAsync();
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.DidNotReceive().RemoveAliasAsync(Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -268,9 +268,9 @@ public partial class TreeResizeGrainTests
         await oldDeletion.DidNotReceive().RecoverPhysicalAsync();
         await newDeletion.Received().DiscardDerivedPhysicalTreeAsync();
 
-        // Alias removed so the logical tree maps back to the old physical tree.
+        // Alias moved back onto the old physical tree with its map, in one write.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.Received().RemoveAliasAsync(TreeId);
+        await registry.Received().SwapAliasAsync(TreeId, TreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
 
         // Shadow-forward cleared on every old-tree shard.
         for (int i = 0; i < ShardCount; i++)

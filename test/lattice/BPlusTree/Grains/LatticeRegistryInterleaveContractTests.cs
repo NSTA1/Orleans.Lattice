@@ -87,6 +87,7 @@ public sealed class LatticeRegistryInterleaveContractTests
         nameof(ILatticeRegistry.UnregisterAsync),
         nameof(ILatticeRegistry.SetAliasAsync),
         nameof(ILatticeRegistry.RemoveAliasAsync),
+        nameof(ILatticeRegistry.SwapAliasAsync),
         nameof(ILatticeRegistry.SetShardMapAsync),
         nameof(ILatticeRegistry.ReassignSlotsAsync),
         nameof(ILatticeRegistry.AllocateNextShardIndexAsync),

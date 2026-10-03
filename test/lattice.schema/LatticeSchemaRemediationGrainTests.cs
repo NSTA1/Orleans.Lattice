@@ -241,7 +241,7 @@ public partial class LatticeSchemaRemediationGrainTests
         registry.DidNotReceive().Upcast(MigSchemaId, 2, 2, Arg.Any<byte[]>());
 
         // Alias repointed; no policy installed (pure version migration, unenforced tree).
-        await h.Registry.Received(1).SetAliasAsync(TreeId, report.DestinationTreeId!);
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, report.DestinationTreeId!, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(
             Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
         Assert.That(h.State.State.LastCompletedMigrationVersion, Is.EqualTo(2u));
@@ -278,7 +278,7 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
 
         // No cutover, no policy install: the original tree is byte-for-byte untouched.
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(
             Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
     }
@@ -293,7 +293,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         Assert.That(report.Succeeded, Is.False);
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -334,7 +334,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         Assert.That(report.Succeeded, Is.False);
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -350,7 +350,7 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(second.Succeeded, Is.True);
 
         // The second call short-circuited: exactly one cutover across both calls.
-        await h.Registry.Received(1).SetAliasAsync(TreeId, Arg.Any<string>());
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -378,7 +378,7 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.Succeeded, Is.True);
         Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
         await h.Destination.Received(1).SetAsync("k1", Arg.Is<byte[]>(v => VersionOf(v) == 2));
-        await h.Registry.Received(1).SetAliasAsync(TreeId, seed.DestinationTreeId!);
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, seed.DestinationTreeId!, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -432,7 +432,7 @@ public partial class LatticeSchemaRemediationGrainTests
         await h.Destination.Received(1).SetAsync("k2", Arg.Any<byte[]>());
 
         // Cutover repointed the logical tree to the destination and installed the policy.
-        await h.Registry.Received(1).SetAliasAsync(TreeId, report.DestinationTreeId!);
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, report.DestinationTreeId!, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.Received(1).SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
 
         Assert.That(h.State.State.InProgress, Is.False);
@@ -454,7 +454,7 @@ public partial class LatticeSchemaRemediationGrainTests
         Received.InOrder(() =>
         {
             h.PolicyStore.SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
-            h.Registry.SetAliasAsync(TreeId, Arg.Any<string>());
+            h.Registry.SwapAliasAsync(TreeId, Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         });
     }
 
@@ -473,7 +473,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         // No destination was built and nothing was cut over: the original is untouched.
         await h.Destination.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
 
         Assert.That(h.State.State.InProgress, Is.False);
@@ -491,7 +491,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         Assert.That(report.DidAbort, Is.True);
         Assert.That(report.OffendingKey, Is.EqualTo("k1"));
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -504,7 +504,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         Assert.That(report.Succeeded, Is.True);
         Assert.That(report.ScannedCount, Is.Zero);
-        await h.Registry.Received(1).SetAliasAsync(TreeId, report.DestinationTreeId!);
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, report.DestinationTreeId!, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.Received(1).SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
     }
 
@@ -571,7 +571,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         Assert.That(report.Succeeded, Is.True);
         // Resumed straight at cutover: alias repointed to the already-built destination.
-        await h.Registry.Received(1).SetAliasAsync(TreeId, "orders/remediated/op1");
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, "orders/remediated/op1", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.Received(1).SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
     }
 
@@ -609,7 +609,7 @@ public partial class LatticeSchemaRemediationGrainTests
         var report = await h.Grain.StartAsync(retryTransform, policy);
 
         Assert.That(report.Succeeded, Is.True);
-        await h.Registry.Received(1).SetAliasAsync(TreeId, "orders/remediated/op1");
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, "orders/remediated/op1", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.Received(1).SetPolicyAsync(TreeId, policy, Arg.Any<CancellationToken>());
     }
 
@@ -634,7 +634,7 @@ public partial class LatticeSchemaRemediationGrainTests
         await h.Grain.RunRemediationPassAsync();
 
         await h.Destination.Received(1).SetAsync("k1", Arg.Any<byte[]>());
-        await h.Registry.Received(1).SetAliasAsync(TreeId, "orders/remediated/op7");
+        await h.Registry.Received(1).SwapAliasAsync(TreeId, "orders/remediated/op7", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         Assert.That(h.State.State.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
         Assert.That(h.State.State.InProgress, Is.False);
     }
@@ -646,7 +646,7 @@ public partial class LatticeSchemaRemediationGrainTests
 
         await h.Grain.RunRemediationPassAsync();
 
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         Assert.That(h.State.WriteCount, Is.Zero);
     }
 
@@ -700,7 +700,7 @@ public partial class LatticeSchemaRemediationGrainTests
         // k1 was written before k2 failed; the partial destination is discarded.
         await h.Destination.Received(1).SetAsync("k1", Arg.Any<byte[]>());
         await h.Destination.Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
-        await h.Registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
         Assert.That(h.State.State.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Aborted));
         Assert.That(h.State.State.LastReport!.Value.OffendingKey, Is.EqualTo("k2"));

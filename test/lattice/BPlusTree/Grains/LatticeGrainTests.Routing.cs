@@ -80,10 +80,11 @@ public partial class LatticeGrainTests
         SetupShardRoot(factory);
 
         var first = await grain.GetRoutingAsync(forceRefresh: false);
+        var afterFirst = RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync));
         var second = await grain.GetRoutingAsync(forceRefresh: false);
 
         Assert.That(second.Map, Is.SameAs(first.Map));
-        await registry.Received(1).GetShardMapAsync(treeId);
+        Assert.That(RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync)), Is.EqualTo(afterFirst));
     }
 
     [Test]
@@ -141,12 +142,13 @@ public partial class LatticeGrainTests
 
         var first = await grain.GetRoutingAsync(forceRefresh: false);
         Assert.That(first.PhysicalTreeId, Is.EqualTo(physicalV1));
+        var afterFirst = RoutingResolves(registry, nameof(ILatticeRegistry.ResolveAsync));
 
         var second = await grain.GetRoutingAsync(forceRefresh: true);
 
         Assert.That(second.PhysicalTreeId, Is.EqualTo(physicalV2),
             "forceRefresh:true must invalidate the cached alias so the next resolve picks up the new physical tree id.");
-        await registry.Received(2).ResolveAsync(aliasId);
+        Assert.That(RoutingResolves(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.EqualTo(afterFirst + 1));
     }
 
     [Test]
@@ -206,12 +208,13 @@ public partial class LatticeGrainTests
         SetupShardRoot(factory);
 
         _ = await grain.GetRoutingAsync(forceRefresh: false);
+        var afterFirst = RoutingResolves(registry, nameof(ILatticeRegistry.ResolveAsync));
         var second = await grain.GetRoutingAsync(forceRefresh: true);
         var third = await grain.GetRoutingAsync(forceRefresh: true);
 
         Assert.That(second.PhysicalTreeId, Is.EqualTo(physicalId));
         Assert.That(third.PhysicalTreeId, Is.EqualTo(physicalId));
-        await registry.Received(3).ResolveAsync(aliasId);
+        Assert.That(RoutingResolves(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.EqualTo(afterFirst + 2));
     }
 
     [Test]

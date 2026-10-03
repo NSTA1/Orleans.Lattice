@@ -805,6 +805,7 @@ internal sealed class AtomicWriteGrain(
         var prevAtomicBatchSize = state.State.AtomicBatchSize;
         var prevSagaStartedAtTicks = state.State.SagaStartedAtTicks;
         var prevTouchedShards = state.State.TouchedShards;
+        var prevBoundPhysicalTreeId = state.State.BoundPhysicalTreeId;
 
         state.State.Phase = AtomicWritePhase.Prepare;
         state.State.TreeId = treeId;
@@ -940,6 +941,7 @@ internal sealed class AtomicWriteGrain(
         // per physical shard either way.
         touchedSorted.Sort();
         state.State.TouchedShards = touchedSorted;
+        state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
 
         var capturePending = new List<Task>(shardBuckets.Count);
         foreach (var (shardIndex, bucket) in shardBuckets)
@@ -1035,6 +1037,7 @@ internal sealed class AtomicWriteGrain(
                 state.State.AtomicBatchSize = prevAtomicBatchSize;
                 state.State.SagaStartedAtTicks = prevSagaStartedAtTicks;
                 state.State.TouchedShards = prevTouchedShards;
+                state.State.BoundPhysicalTreeId = prevBoundPhysicalTreeId;
                 throw;
             }
         }
@@ -1394,6 +1397,7 @@ internal sealed class AtomicWriteGrain(
         // and obscures the contract that the broadcast pass takes
         // exactly one routing snapshot per non-trivial saga.
         RoutingInfo? routing = null;
+        var aliasMovedSinceDecision = false;
         if (state.State.TouchedShards.Count == 0 && state.State.Entries.Count > 0)
         {
             routing = await lattice.GetRoutingAsync(forceRefresh: true);
@@ -1455,14 +1459,30 @@ internal sealed class AtomicWriteGrain(
             // TerminalFanOutResolver pass below BFS-expands the
             // OLD owner's MovedAwaySlots / SplitInProgress into the
             // broadcast's destination set).
-            routing = await lattice.GetRoutingAsync(forceRefresh: true);
+            routing = _preDecisionRouting ?? await lattice.GetRoutingAsync(forceRefresh: true);
+            _preDecisionRouting = null;
             physicalTreeId = routing.PhysicalTreeId;
             HashSet<int>? union = null;
-            foreach (var entry in state.State.Entries)
+            if (state.State.BoundPhysicalTreeId is { } bound
+                && !string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
             {
-                var owner = routing.Map.Resolve(entry.Key);
-                if (state.State.TouchedShards.Contains(owner)) continue;
-                (union ??= new HashSet<int>(state.State.TouchedShards)).Add(owner);
+                // An alias swap moved the logical tree after the commit decision
+                // was recorded. The prepared writes sit on the bound copy, so the
+                // terminals go there and the batch commits wholly on it - lost
+                // with that copy rather than half-delivered to the new one by a
+                // backstop that lands shard by shard (issue #4336). Nothing is
+                // re-routed under the new copy's map.
+                physicalTreeId = bound;
+                aliasMovedSinceDecision = true;
+            }
+            else
+            {
+                foreach (var entry in state.State.Entries)
+                {
+                    var owner = routing.Map.Resolve(entry.Key);
+                    if (state.State.TouchedShards.Contains(owner)) continue;
+                    (union ??= new HashSet<int>(state.State.TouchedShards)).Add(owner);
+                }
             }
             if (union is not null)
             {
@@ -1593,7 +1613,7 @@ internal sealed class AtomicWriteGrain(
         // correct - its pending-flip path remains the authoritative
         // delivery for it.
         Dictionary<int, Dictionary<string, byte[]>>? perShardCommitted = null;
-        if (committed && state.State.Entries.Count > 0)
+        if (committed && state.State.Entries.Count > 0 && !aliasMovedSinceDecision)
         {
             var routingForBackstop = routing ?? await lattice.GetRoutingAsync(forceRefresh: true);
             // The outer map is keyed by physical shard index and holds at most
@@ -1669,13 +1689,16 @@ internal sealed class AtomicWriteGrain(
         DiagSink.Write($"[DIAG broadcast-initial-fanout] op={OperationKey} tx={transactionId} shards=[{string.Join(",", state.State.TouchedShards)}]");
 #endif
 
+        // The map this pass bucketed its backstop by: a terminal is followed to a
+        // re-resolved physical tree only when that tree lays keys out the same way.
+        var passMap = aliasMovedSinceDecision ? null : routing?.Map;
         var pending = new List<Task<WalRecord?>>(state.State.TouchedShards.Count);
         foreach (var shardIndex in state.State.TouchedShards)
         {
             IReadOnlyDictionary<string, byte[]>? subset = null;
             if (perShardCommitted is not null && perShardCommitted.TryGetValue(shardIndex, out var bucket))
                 subset = bucket;
-            pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset));
+            pending.Add(MarkOneShardAsync(physicalTreeId, shardIndex, transactionId, committed, subset, passMap));
         }
 
         var initialRecords = await Task.WhenAll(pending);
@@ -2176,7 +2199,8 @@ internal sealed class AtomicWriteGrain(
         int shardIndex,
         Guid transactionId,
         bool committed,
-        IReadOnlyDictionary<string, byte[]>? committedValues)
+        IReadOnlyDictionary<string, byte[]>? committedValues,
+        ShardMap? passMap = null)
     {
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-mark-shard] op={OperationKey} tx={transactionId} shardIndex={shardIndex} committed={committed} subsetKeys=[{(committedValues is null ? "<null>" : string.Join(",", committedValues.Keys))}]");
@@ -2205,6 +2229,14 @@ internal sealed class AtomicWriteGrain(
         using var crossTreeScope = LatticeCrossTreeTerminalContext.With(
             state.State.ExternalAuthorityKey,
             state.State.CrossTreeParticipants);
+
+        // The terminal is addressed to a physical shard the saga resolved
+        // itself, never routed through the logical alias, so it must not carry a
+        // routed-logical stamp inherited from the call that started the saga: a
+        // copy an alias swap retained would redirect it, and a terminal re-sent
+        // to the new copy under this shard index would land the batch's values
+        // on a shard the new copy's map does not route them to (issue #4336).
+        RequestContext.Remove(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey);
 
         // The catch blocks unconditionally fire so the original
         // stale-routing throw surfaces to the caller once the wall-clock
@@ -2244,7 +2276,16 @@ internal sealed class AtomicWriteGrain(
             // full rationale (StatelessWorker per-activation cache,
             // private invalidation hooks).
             var refreshed = await lattice.GetRoutingAsync(forceRefresh: true);
-            physicalTreeId = refreshed.PhysicalTreeId;
+
+            // Re-sending this shard index and this backstop subset to another
+            // physical tree is only sound when that tree lays its keys out by
+            // the same slots - an online resize's index-for-index copy. An alias
+            // swap onto a copy with another map would misplace them, so the
+            // terminal stays with the tree the pass was computed for.
+            if (passMap is null || refreshed.Map.Slots.AsSpan().SequenceEqual(passMap.Slots))
+            {
+                physicalTreeId = refreshed.PhysicalTreeId;
+            }
         }
     }
 
@@ -2296,6 +2337,8 @@ internal sealed class AtomicWriteGrain(
                     sagaWalPartitionsTag,
                     sagaTenantTag);
             }
+
+            await RebindAcrossAliasSwapAsync();
         }
 
         if (state.State.Phase == AtomicWritePhase.Compensate)
@@ -2531,6 +2574,88 @@ internal sealed class AtomicWriteGrain(
         }
 
         return SagaCoordinatorCore.Decide(outcomes) == SagaDecision.Commit;
+    }
+
+    /// <summary>
+    /// The routing <see cref="RebindAcrossAliasSwapAsync"/> resolved immediately
+    /// before the commit decision, handed to the broadcast that follows so its
+    /// drift correction does not resolve routing a second time. Consumed once.
+    /// </summary>
+    private RoutingInfo? _preDecisionRouting;
+
+    /// <summary>
+    /// Keeps a committed batch on one physical copy across an alias swap (issue
+    /// #4336). Called once Execute has dispatched every prepared write and
+    /// before the commit decision is recorded: when the logical tree no longer
+    /// resolves to the copy the prepared writes were bound to, the batch is
+    /// re-bound to the copy it resolves to now and Execute re-run, so every
+    /// prepared write sits on the copy the decision then makes visible. Re-running
+    /// a prepared write is idempotent at the leaf. A swap after the decision is
+    /// handled by the broadcast, which then delivers the terminals to the bound
+    /// copy. Bounded so a tree whose alias never settles still commits.
+    /// </summary>
+    private async Task RebindAcrossAliasSwapAsync()
+    {
+        const int MaxRebinds = 3;
+        _preDecisionRouting = null;
+        for (var rebind = 0; rebind < MaxRebinds; rebind++)
+        {
+            if (state.State.Phase != AtomicWritePhase.Execute
+                || state.State.NextIndex < state.State.Entries.Count
+                || state.State.BoundPhysicalTreeId is not { } bound)
+            {
+                return;
+            }
+
+            var routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
+                .GetRoutingAsync(forceRefresh: true);
+            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
+            {
+                // The broadcast's drift correction reuses this resolve rather than
+                // paying a second one. A cross-tree sub-saga parks instead and
+                // broadcasts later, against routing it resolves then.
+                if (state.State.ExternalAuthorityKey is null)
+                {
+                    _preDecisionRouting = routing;
+                }
+
+                return;
+            }
+
+            // The touched shards were indices of the bound copy; the new copy is
+            // addressed by its own map.
+            var touched = new SortedSet<int>();
+            foreach (var entry in state.State.Entries)
+            {
+                touched.Add(routing.Map.Resolve(entry.Key));
+            }
+
+            var prevBound = state.State.BoundPhysicalTreeId;
+            var prevNextIndex = state.State.NextIndex;
+            var prevTouchedShards = state.State.TouchedShards;
+            var prevRetries = state.State.RetriesOnCurrentStep;
+            state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
+            state.State.NextIndex = 0;
+            state.State.TouchedShards = [.. touched];
+            state.State.RetriesOnCurrentStep = 0;
+            try
+            {
+                await WriteSagaStateAsync("execute-rebind");
+            }
+            catch
+            {
+                state.State.BoundPhysicalTreeId = prevBound;
+                state.State.NextIndex = prevNextIndex;
+                state.State.TouchedShards = prevTouchedShards;
+                state.State.RetriesOnCurrentStep = prevRetries;
+                throw;
+            }
+
+            Logger.LogInformation(
+                "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Previous} to {Current} before the commit decision; re-dispatching the batch onto the new tree.",
+                OperationKey, state.State.TreeId, prevBound, routing.PhysicalTreeId);
+            await ExecutePhaseAsync();
+        }
     }
 
     /// <summary>

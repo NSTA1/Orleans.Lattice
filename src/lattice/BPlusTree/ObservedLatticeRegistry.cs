@@ -264,6 +264,13 @@ internal static class ObservedLatticeRegistry
             Observe(Stopwatch.GetTimestamp(), Inner.RemoveAliasAsync(treeId), MethodTag(nameof(RemoveAliasAsync)));
 
         /// <inheritdoc />
+        public Task<State.TreeRegistryEntry?> SwapAliasAsync(string treeId, string physicalTreeId, ShardMap shardMap, int? nextShardIndex, string? expectedPhysicalTreeId) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.SwapAliasAsync(treeId, physicalTreeId, shardMap, nextShardIndex, expectedPhysicalTreeId),
+                MethodTag(nameof(SwapAliasAsync)));
+
+        /// <inheritdoc />
         public Task<string> ResolveAsync(string treeId) =>
             Observe(Stopwatch.GetTimestamp(), Inner.ResolveAsync(treeId), MethodTag(nameof(ResolveAsync)));
 

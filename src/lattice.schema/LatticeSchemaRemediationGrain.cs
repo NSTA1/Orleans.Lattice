@@ -806,14 +806,11 @@ internal sealed class LatticeSchemaRemediationGrain(
         // back rather than following the new alias to the destination's.
         var replacedPhysical = await registry.ResolveAsync(TreeId);
         var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(grainFactory, TreeId, destinationPhysical);
-        RoutingInfo retainedRouting;
-        if (replacedMap is not null
+        RoutingInfo? retainedRouting = null;
+        var describesSource = replacedMap is not null
             && (string.Equals(replacedPhysical, sourcePhysical, StringComparison.Ordinal)
-                || string.Equals(replacedPhysical, destinationPhysical, StringComparison.Ordinal)))
-        {
-            retainedRouting = new RoutingInfo(sourcePhysical, replacedMap);
-        }
-        else
+                || string.Equals(replacedPhysical, destinationPhysical, StringComparison.Ordinal));
+        if (!describesSource)
         {
             // Forced (#4206), and pinned to the source so a resume does not follow
             // the installed alias to the destination.
@@ -821,8 +818,12 @@ internal sealed class LatticeSchemaRemediationGrain(
             retainedRouting = resolvedSource with { PhysicalTreeId = sourcePhysical };
         }
 
-        // Repoint the logical tree to the remediated destination.
-        await registry.SetAliasAsync(TreeId, destinationPhysical);
+        // Repoint the logical tree to the remediated destination, moving the
+        // destination's map onto the logical entry in the same registry write
+        // (#4336), so no reader pairs one copy with the other's map. The map the
+        // swap replaced is the source's final layout.
+        var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(grainFactory, TreeId, destinationPhysical);
+        retainedRouting ??= new RoutingInfo(sourcePhysical, finalReplacedMap ?? replacedMap!);
 
         // Arm every source shard to redirect logical-alias-routed traffic onto the
         // destination. Without this, a stale stateless-worker routing activation
