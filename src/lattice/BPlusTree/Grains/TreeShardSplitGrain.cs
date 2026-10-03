@@ -1102,8 +1102,13 @@ internal sealed class TreeShardSplitGrain(
                     // backstop path handles WAL durability and HLC
                     // stamping. Aborted sagas drop the entry without
                     // surfacing.
+                    // Read the decision under the LOGICAL tree, where the saga
+                    // records it; for a resized (aliased) tree the physical copy
+                    // has no registry rows, so a lookup keyed by physicalTreeId
+                    // reads InFlight for a committed saga and installs an orphan
+                    // (issue #4368). The post-sweep cleanup reads the same way.
                     var preStatus = await TxRegistryRouting
-                        .GetRegistry(grainFactory, physicalTreeId, snapshot.TransactionId)
+                        .GetRegistry(grainFactory, TreeId, snapshot.TransactionId)
                         .GetStatusAsync(snapshot.TransactionId);
                     if (preStatus == TxStatus.Committed)
                     {
@@ -1190,7 +1195,7 @@ internal sealed class TreeShardSplitGrain(
             {
                 var txids = new List<Guid>(perTxSnapshots.Keys);
                 var statuses = await TxRegistryFanOut.GetStatusManyAsync(
-                    grainFactory, physicalTreeId, txids);
+                    grainFactory, TreeId, txids);
                 foreach (var (txid, status) in statuses)
                 {
                     // Only a DECIDED status authorises acting. Anything else -

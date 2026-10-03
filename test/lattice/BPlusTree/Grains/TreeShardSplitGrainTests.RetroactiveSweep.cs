@@ -51,7 +51,8 @@ public partial class TreeShardSplitGrainTests
             TxStatus? postSweepStatus = null,
             int sourceShardIndex = 0,
             int virtualShardCount = 16,
-            int physicalShardCount = 2)
+            int physicalShardCount = 2,
+            string? physicalTreeId = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("split", $"{TreeId}/{sourceShardIndex}"));
@@ -63,7 +64,7 @@ public partial class TreeShardSplitGrainTests
 
         var registry = Substitute.For<ILatticeRegistry>();
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
-        registry.ResolveAsync(TreeId).Returns(TreeId);
+        registry.ResolveAsync(TreeId).Returns(physicalTreeId ?? TreeId);
         registry.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
         registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry
@@ -71,6 +72,7 @@ public partial class TreeShardSplitGrainTests
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
+                PhysicalTreeId = physicalTreeId,
             }));
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory);
         registry.AllocateNextShardIndexAsync(TreeId, Arg.Any<int>())
@@ -115,6 +117,18 @@ public partial class TreeShardSplitGrainTests
                 return Task.FromResult(map);
             });
         grainFactory.GetGrain<ITxRegistryGrain>(TreeId).Returns(txRegistry);
+
+        // An aliased tree's physical copy has no registry rows of its own:
+        // sagas record their decisions under the logical tree, so a lookup
+        // keyed by the physical id finds nothing and reads InFlight.
+        if (physicalTreeId is not null)
+        {
+            var physicalRegistry = Substitute.For<ITxRegistryGrain>();
+            physicalRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+            physicalRegistry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+                .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => TxStatus.InFlight)));
+            grainFactory.GetGrain<ITxRegistryGrain>(physicalTreeId).Returns(physicalRegistry);
+        }
 
         var state = new FakePersistentState<TreeShardSplitState>();
         var grain = new TreeShardSplitGrain(
@@ -394,5 +408,54 @@ public partial class TreeShardSplitGrainTests
                 && d.Count == 2
                 && d[snap1.Key].SequenceEqual(snap1.Value!)
                 && d[snap2.Key].SequenceEqual(snap2.Value!)));
+    }
+
+    // -------- aliased tree: decisions live under the logical tree --------
+
+    [Test]
+    public async Task RetroactiveSweep_of_an_aliased_tree_reads_the_saga_decision_under_the_logical_tree()
+    {
+        // Issue #4368. A resized tree's shards live under a physical copy id,
+        // but a saga records its decision under the logical tree. A pre-check
+        // keyed by the physical id read InFlight for a saga that had already
+        // committed, so the sweep replayed its prepare onto the destination
+        // after the terminal had passed: an orphan no terminal drains.
+        var txid = Guid.NewGuid();
+        var snap = BuildSetSnapshot(txid, out var key);
+        var (grain, _, _, target, _, _) = CreateGrainWithSweepWiring(
+            leafSnapshots: [snap],
+            preCheckStatus: TxStatus.Committed,
+            physicalTreeId: $"{TreeId}/resized/copy");
+
+        await grain.InitiateSplitStateAsync(0);
+
+        await target.DidNotReceive().SetAsync(snap.Key, Arg.Any<byte[]>());
+        await target.DidNotReceive().SetAsync(snap.Key, Arg.Any<byte[]>(), Arg.Any<long>());
+        await target.Received(1).AppendTxTerminalAsync(
+            txid,
+            committed: true,
+            Arg.Is<IReadOnlyDictionary<string, byte[]>>(d => d != null && d.Count == 1 && d[key].SequenceEqual(snap.Value!)));
+    }
+
+    [Test]
+    public async Task RetroactiveSweep_cleanup_of_an_aliased_tree_reads_the_saga_decision_under_the_logical_tree()
+    {
+        // Issue #4368. The post-sweep cleanup must find a saga that committed
+        // during the sweep under the logical tree too, or the replayed prepare
+        // stays an orphan.
+        var txid = Guid.NewGuid();
+        var snap = BuildSetSnapshot(txid, out var key);
+        var (grain, _, _, target, _, _) = CreateGrainWithSweepWiring(
+            leafSnapshots: [snap],
+            preCheckStatus: TxStatus.InFlight,
+            postSweepStatus: TxStatus.Committed,
+            physicalTreeId: $"{TreeId}/resized/copy");
+
+        await grain.InitiateSplitStateAsync(0);
+
+        await target.Received(1).AppendTxTerminalAsync(
+            txid,
+            committed: true,
+            Arg.Is<IReadOnlyDictionary<string, byte[]>>(d => d != null && d.Count == 1 && d[key].SequenceEqual(snap.Value!)));
     }
 }
