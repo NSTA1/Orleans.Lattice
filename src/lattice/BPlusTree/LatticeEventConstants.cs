@@ -236,6 +236,17 @@ public static class LatticeEventConstants
     internal const string AtomicShardCountRequestContextKey = "ol.shct";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to carry the UTC tick by which
+    /// an atomic-write saga must have recorded a commit decision for the
+    /// caller that invoked it. Stamped by <see cref="BPlusTree.Grains.LatticeGrain"/>
+    /// around each saga call from its own response timeout, persisted by the
+    /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> on entry, and checked
+    /// immediately before the commit decision. Internal - set through
+    /// <see cref="LatticeSagaDecisionDeadlineContext"/>.
+    /// </summary>
+    internal const string SagaDecisionDeadlineRequestContextKey = "ol.saga.dl";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to flag the current logical
     /// call as a saga prepare-phase write. When set to <c>true</c>, the
     /// leaf grain's commit pipeline routes the mutation into the per-leaf

@@ -122,6 +122,7 @@ internal sealed partial class BPlusLeafGrain
         _pendingTxOffsets = null;
         _recentlyTerminal = null;
         _backstoppedTerminals = null;
+        _terminalLandedClock = null;
         // The destination-side shadow markers are activation-scoped in exactly
         // the same way, and dropping them is load-bearing rather than tidy.
         // _shadowedSagas is gated against _recentlyTerminal: a marker is safe
