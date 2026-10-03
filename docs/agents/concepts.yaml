@@ -1995,6 +1995,8 @@ concepts:
           source: "docs/lattice.membership/README.md"
         - statement: "Tenant administrators manage tenant groups through ILatticeTenantDirectoryAdmin by tenant-local name."
           source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#ILatticeTenantDirectoryAdmin"
+        - statement: "With tenancy registered, identity-provider-asserted t/ group ids are always stripped before group expansion, whatever the delegated-access flag."
+          source: "src/lattice.membership/TenantGroupClaimFilter.cs#TenantGroupClaimFilter"
       out_of_scope:
         - statement: "A tenant group never becomes a member of a cluster group or of another tenant's group."
           source: "src/lattice.membership/LatticeTenantGroupNestingException.cs#LatticeTenantGroupNestingException"

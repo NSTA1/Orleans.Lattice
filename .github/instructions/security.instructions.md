@@ -281,11 +281,15 @@ gate will tell you if you forget.
   Test the whole `t/` prefix (`LatticeTenantTrees.SegmentPrefix`), never only the
   well-formed `LatticeTenantGroupId` shape: `t/default/...` and malformed `t/` ids are
   reserved too.
-- **Asserted tenant-group claims are stripped.** While the feature is on, the claim
-  filter (`ITenantGroupClaimFilter`) removes every asserted `t/` group - token claim,
-  overage or `ClaimToGroups` projection - before group expansion, keeping only groups
-  the membership directory records. Never let an identity-provider-asserted id confer
-  tenant group membership.
+- **Asserted tenant-group claims are always stripped once tenancy is registered.**
+  The claim filter (`ITenantGroupClaimFilter`) removes every asserted `t/` group -
+  token claim, overage or `ClaimToGroups` projection - before group expansion,
+  keeping only groups the membership directory records, **whatever the
+  delegated-access flag says**. Operator rules and app role bindings that name a
+  tenant group are honoured whatever the flag, so a flag-gated filter would let a
+  token asserting `t/{T}/x` match them after a rollback or on a silo whose flag lags.
+  Never make the filter follow the flag, and never let an identity-provider-asserted
+  id confer tenant group membership.
 - **No bypass of tenant isolation.** Tenant membership, group-aware admin checks and
   tenant-tier rules never bypass the tenant gate or the cross-tenant grant protocol.
   Admin-set, member-set and app role-binding entries may name only users, cluster
@@ -303,11 +307,23 @@ gate will tell you if you forget.
 - **Feature-off is inert and costs nothing.** `LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`
   is off by default. While off, active-tenant validation is the exact-subject-id admin
   check, the snapshot builds no member, group or tenant-rule index, the evaluator
-  reads one `bool`, claim resolution does no prefix work, and the facades refuse with
-  `TenantAccessAdministrationDisabledException` (posture excepted). The auth and
-  membership seams default to null implementations registered with `TryAdd`; those
-  packages must never reference tenancy. A flip to off takes effect at once, without
-  waiting for the snapshot rebuild, and deletes nothing.
+  reads one `bool`, and the facades refuse with
+  `TenantAccessAdministrationDisabledException` (posture excepted). The claim filter
+  is the deliberate exception: it stays active (see above), costing one ordinal prefix
+  test per claim-derived group on a cold resolution only. The auth and membership seams
+  default to null implementations registered with `TryAdd`, so without tenancy claim
+  resolution does no prefix work; those packages must never reference tenancy. A flip
+  to off takes effect at once, without waiting for the snapshot rebuild, and deletes
+  nothing.
+- **Admin-set and member-set writes are race-safe.** A removal of an admin-set entry,
+  through `ILatticeTenantAccessAdmin` or by removing a tenant group, re-applies the
+  last-admin guard to the merged record inside the registry's compare-and-set loop, so
+  a racing removal is refused with nothing written; never reintroduce a
+  remove-then-re-grant repair, whose second write can fail and strand the tenant.
+  Every removal from either set is stamped later than the slot it supersedes, so a
+  silo whose clock runs behind still removes the entry. A cap withdrawal is retried a
+  bounded number of times, and one that never lands is reported as a
+  `LatticeQuotaExceededException` saying the cap may stay exceeded, never as success.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
   (`test/lattice.api.tenantadmin/Security/`, Category `Integration`, filter
   `FullyQualifiedName~TenantAccessConformanceTests`) proves the invariants above end to

@@ -190,18 +190,23 @@ anything is written. A refusal throws `LatticeTenantGroupNestingException`, an
 A cluster group placed inside a tenant group makes its members members of the tenant
 group, as any nested group does.
 
-**The claim filter.** While the feature is on, an id starting with `t/` that the
-identity provider asserts - a token group claim, an Entra group overage, or a group
-`ClaimToGroups` projects - is stripped before group expansion, so no
-identity-provider administrator can join a tenant group by asserting its id. The
-whole `t/` namespace is stripped, well-formed or not. Groups the directory itself
-records the subject in are kept: those are real memberships. The seam is
+**The claim filter.** Whenever `Orleans.Lattice.Tenancy` is registered, an id
+starting with `t/` that the identity provider asserts - a token group claim, an Entra
+group overage, or a group `ClaimToGroups` projects - is stripped before group
+expansion, so no identity-provider administrator can join a tenant group by asserting
+its id. This holds whatever the delegated-access flag says, because operator rules and
+app role bindings that name a tenant group are honoured whatever the flag. The whole
+`t/` namespace is stripped, well-formed or not. Groups the directory itself records
+the subject in are kept: those are real memberships. The seam is
 `ITenantGroupClaimFilter` (`IsActive`, and `Filter(ICollection<string>)`, which
 removes reserved ids in place). This package registers an inactive default with
-`TryAdd`, and `Orleans.Lattice.Tenancy` replaces it with one that reads its
-delegated-access flag; while inactive, resolution reads one `bool` and allocates
-nothing extra. When the flag changes, the tenancy package clears the resolution
-cache, so no cached subject keeps a verdict from the old setting.
+`TryAdd`, so a cluster without tenancy reads one `bool` and resolves claims exactly
+as before; `Orleans.Lattice.Tenancy` replaces it with one that is always active.
+With tenancy, a cold (cache-miss) resolution pays one ordinal prefix test per
+claim-derived group and calls `Filter` only when one of them starts with `t/`; a
+cached resolution never reaches the filter. When the delegated-access flag changes,
+the tenancy package clears the resolution cache, so no subject resolved before the
+change outlives it.
 
 The cluster administration facade refuses to create a group with a `t/` id; tenant
 groups are managed through the tenant directory facade
@@ -224,7 +229,7 @@ Deleting a tenant removes its tenant groups and their edges in both directions.
 | Group merge mode | `SubjectGroupMergeMode` | How token-asserted groups combine with directory groups (`Union` by default). |
 | Tenant group | `LatticeTenantGroupId` (core) | A group a tenant's administrators manage, with the reserved id `t/{tenant}/{name}`; see [Tenant groups](#tenant-groups). |
 | Nesting refusal | `LatticeTenantGroupNestingException` | Thrown by `AddMemberAsync` for an edge that would let a tenant group reach outside its tenant. |
-| Tenant group claim filter | `ITenantGroupClaimFilter` | Strips asserted `t/` group ids before expansion while delegated tenant access administration is on. |
+| Tenant group claim filter | `ITenantGroupClaimFilter` | Strips asserted `t/` group ids before expansion whenever the tenancy add-on is registered, whatever its delegated-access flag. |
 | Identity-directory provider | `ILatticeIdentityDirectory` | The read-only search / validate view onto the external identity source (see [Identity-directory providers](identity-directory-providers.md)). |
 
 ## Relationship to authorization

@@ -462,7 +462,7 @@ The module adds no authorization path of its own: each tool stamps the caller cr
 | `LatticeQuotaExceededException` | An error naming the cap's dimension and limit and pointing at `lattice_tenant_set_quotas`. |
 | Any other `ArgumentException` | A client error (`invalid_argument`) carrying the facade's message, sanitised. |
 
-A remote (out-of-silo) head does not yet register either facade, so it contributes none of these tools.
+Both topologies serve them. In-silo they delegate to the co-hosted facades directly. A remote (out-of-silo) head that sets `LatticeApiMcpRemoteOptions.TenantAdmin` registers one tenant-administration gRPC client (`LatticeTenantAdminApiGrpcClient`, which implements both interfaces) as both facades, so the tools light up there too; the writes still need `EnableTenantControl`, which maps onto `enableControl`.
 
 ## Error handling
 
