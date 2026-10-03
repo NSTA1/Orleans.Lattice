@@ -532,7 +532,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // paces the retries, so the hint only slows a sender that honours it on
         // the rejected path. Every non-deferred result (apply,
         // dedup, local-origin rejection) keeps Accepted = true so the sender
-        // makes normal cursor progress.
+        // makes normal cursor progress. The applier also defers a duplicate
+        // of an entry whose first delivery is still in flight on this
+        // receiver (#4465), which takes the same not-accepted path so the
+        // sender re-ships once that delivery has completed or rolled back.
         if (result.Deferred)
         {
             return new ReplicationAckBox

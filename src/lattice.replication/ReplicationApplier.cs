@@ -499,8 +499,25 @@ internal sealed partial class ReplicationApplier(
                 entry.TreeId,
                 static (_, capacity) => new RecentApplyCache(capacity),
                 resolved.ShadowForwardDedupeCacheSize);
-            if (!cache.TryAdd(entry))
+            if (!cache.TryAdd(entry, out var duplicateInFlight))
             {
+                if (duplicateInFlight)
+                {
+                    // IN-FLIGHT DUPLICATE (#4465). The delivery holding this
+                    // identity's reservation has not completed its apply or
+                    // park yet, and it can still be aborted (a restart
+                    // mid-call, or a failure whose transport-level response
+                    // the sender has already moved past). Acknowledging this
+                    // duplicate as applied would move the sender's cursor
+                    // past an entry that may then be neither applied nor
+                    // dead-lettered. Defer it instead, exactly as the receive
+                    // fence does: a not-accepted, cursor-preserving ack, so
+                    // the sender re-sends and the re-delivery is classified
+                    // once the first delivery has completed or rolled back.
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                }
+
                 outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
@@ -514,12 +531,15 @@ internal sealed partial class ReplicationApplier(
             // dead-letter decorator's retry-counter contract would clear
             // the failure counter on what looks like a filtered call -,
             // silently dropping the entry until FIFO eviction admits a
-            // future retry. The park branch returns normally inside the
-            // try, so its cache reservation is correctly retained: the
-            // drained entry routes through ApplyPointAsync directly,
-            // bypassing the cache, and the retained reservation
-            // continues to suppress duplicate-emit pairs of the parked
-            // entry that arrive while it is buffered.
+            // future retry. The reservation is in flight until the apply
+            // or park completes, and is then marked completed so a later
+            // duplicate is acknowledged as a genuine re-delivery. The park
+            // branch returns normally inside the try, so its cache
+            // reservation is correctly retained: the drained entry routes
+            // through ApplyPointAsync directly, bypassing the cache, and
+            // the retained reservation continues to suppress
+            // duplicate-emit pairs of the parked entry that arrive while
+            // it is buffered.
             try
             {
                 // Causal-plus dependency check. Skip the fetch entirely
@@ -548,12 +568,14 @@ internal sealed partial class ReplicationApplier(
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
                     {
                         await ParkAsync(entry, resolved, cancellationToken);
+                        cache.Complete(entry);
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         return new ApplyResult { Applied = false, HighWaterMark = hwm };
                     }
                 }
 
                 await ApplyPointAsync(entry);
+                cache.Complete(entry);
                 RecordApplyLag(entry);
                 RecordAppliedContentForIndex(in entry, resolved);
 
