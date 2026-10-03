@@ -47,6 +47,14 @@ internal enum RepoContextAnnIndexLoadOutcome
     /// retries the restore, so it is the same "yield and continue" answer rather
     /// than a fault or a discard.
     /// </para>
+    /// <para>
+    /// That retry is bounded (issue #4092). A record that stays unavailable for
+    /// <c>RepoContextAnnIndexHandle.MaxRecordUnavailableDeferrals</c> consecutive
+    /// attempts is persistently inconsistent rather than racing a write, so the
+    /// attempt that reaches the bound records <see cref="Faulted"/> with reason
+    /// <c>unloadable_record</c> instead, still keeping the durable index. The
+    /// bound restarts after that fault and after any successful open.
+    /// </para>
     /// </summary>
     Deferred = 3,
 
