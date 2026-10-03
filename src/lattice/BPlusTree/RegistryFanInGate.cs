@@ -305,6 +305,45 @@ internal sealed class RegistryFanInGate(
     private int _inFlight;
 
     /// <summary>
+    /// Counts arrivals that were still in <see cref="_waiting"/> after their own
+    /// synchronously-triggered <see cref="Pump"/> call returned - that is,
+    /// genuinely deferred to a <em>later</em> pump, driven by another arrival or
+    /// by a <see cref="DispatchAsync"/> completion, rather than admitted
+    /// immediately.
+    /// <para>
+    /// This is a count of an event, not a duration, so unlike
+    /// <see cref="LatticeMetrics.RegistryAdmissionWait"/> it carries no wall-clock
+    /// component and is immune to scheduler load: an arrival is either still
+    /// queued when its own <see cref="Pump"/> call returns or it is not, and that
+    /// fact does not depend on how long the surrounding machine took to get
+    /// there. It exists specifically so a test can assert "no genuine queuing
+    /// occurred" (or the reverse) without reading a clock at all. See
+    /// <c>RegistryFanInRegimeTests</c> for why a wall-clock floor on
+    /// <see cref="LatticeMetrics.RegistryAdmissionWait"/> could not fill that
+    /// role under CI scheduler jitter.
+    /// </para>
+    /// </summary>
+    private int _deferredAdmissions;
+
+    /// <summary>
+    /// The live value of <see cref="_deferredAdmissions"/>. Internal and
+    /// test-only: production code has no use for this count, only for the bound
+    /// it reflects. Read under <see cref="_sync"/>, matching every other access
+    /// to the field, rather than introducing a second synchronization style for
+    /// one member.
+    /// </summary>
+    internal int DeferredAdmissionCount
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _deferredAdmissions;
+            }
+        }
+    }
+
+    /// <summary>
     /// Reads <paramref name="treeId"/>'s registry entry under the gate's
     /// concurrency bound, joining a read already waiting or already in flight for
     /// the same id rather than adding another.
@@ -345,6 +384,21 @@ internal sealed class RegistryFanInGate(
 
         LatticeMetrics.RegistryAdmissionQueueDepth.Record(depthAtArrival, LatticeTenantLabel.Platform);
         Pump();
+
+        // If this arrival is still waiting once its own triggering Pump() call
+        // has returned, that Pump() did not have budget for it: it will only be
+        // admitted by a later Pump(), reached through another arrival or a
+        // DispatchAsync completion. That is genuine queuing, and it is a fact
+        // about this instant, not a measurement that can be inflated by how long
+        // the lock or the Pump() loop took to run.
+        lock (_sync)
+        {
+            if (_waiting.ContainsKey(treeId))
+            {
+                _deferredAdmissions++;
+            }
+        }
+
         return waiter.Task;
     }
 
