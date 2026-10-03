@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -18,11 +19,14 @@ public partial class BPlusLeafGrainTests
         var txid = Guid.NewGuid();
         if (alreadyTerminal)
             await MarkRecentlyTerminalAsync(grain, txid);
-        await SeedPreparedOverrideAsync(grain, txid);
+        // A live prepare for a saga this leaf has already terminalled is
+        // refused (issue #4385), so the orphan variant plants its bucket.
+        await grain.SetAsync("k", [1]);
+        await PrepareOrPlantAsync(grain, txid, alreadyTerminal, "k", [2, 2]);
         await grain.SetAsync("deleted", [3]);
         await grain.SetAsync("stable", [4]);
-        await PreparePendingDeleteAsync(grain, txid, "deleted");
-        await PreparePendingSetAsync(grain, txid, "fresh", [5]);
+        await PrepareOrPlantAsync(grain, txid, alreadyTerminal, "deleted", null);
+        await PrepareOrPlantAsync(grain, txid, alreadyTerminal, "fresh", [5]);
 
         using var scope = scoped
             ? LatticeRegistrySnapshotContext.BeginScope(new Dictionary<Guid, TxStatus> { [txid] = status })
@@ -77,5 +81,18 @@ public partial class BPlusLeafGrainTests
             await registry.DidNotReceive().GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>());
         else
             await registry.Received().GetStatusManyAsync(Arg.Is<IReadOnlyList<Guid>>(ids => ids.Contains(txid)));
+    }
+
+    private static Task PrepareOrPlantAsync(BPlusLeafGrain grain, Guid txid, bool plant, string key, byte[]? value)
+    {
+        if (plant)
+        {
+            grain.PlantPreparedMutationForTest(txid, key, value);
+            return Task.CompletedTask;
+        }
+
+        return value is null
+            ? PreparePendingDeleteAsync(grain, txid, key)
+            : PreparePendingSetAsync(grain, txid, key, value);
     }
 }
