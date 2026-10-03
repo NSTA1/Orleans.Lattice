@@ -1087,8 +1087,13 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// key set. A re-submit with a different tree-set or key-set is rejected.
     /// Values are intentionally excluded (the contract pins the addressed keys,
     /// not their payloads).
+    /// <para>
+    /// Internal rather than private so the microbenchmark suite and its
+    /// fingerprint-stability fixture can drive the real implementation instead
+    /// of a copy that could drift from it.
+    /// </para>
     /// </summary>
-    private static byte[] ComputeFingerprint(List<CrossTreeParticipant> participants)
+    internal static byte[] ComputeFingerprint(List<CrossTreeParticipant> participants)
     {
         // Once-or-twice-per-saga, so not a hot path, but avoid the MemoryStream
         // growth + per-length BitConverter arrays + disposable hash object by
@@ -1096,20 +1101,45 @@ internal sealed class LatticeCrossTreeTxGrain(
         // little-endian length prefix.
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> lenPrefix = stackalloc byte[4];
+
+        // One rental covers every participant. The previous shape allocated a
+        // fresh string[] per participant inside the loop, so a saga spanning N
+        // trees paid N transient arrays; the window is sized to the widest
+        // participant once and reused across the loop instead. It is pure
+        // scratch - read only by the append below - so it never escapes.
+        var widest = 0;
         foreach (var p in participants)
         {
-            AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
-            var keys = new string[p.Entries.Count];
-            for (var i = 0; i < p.Entries.Count; i++) keys[i] = p.Entries[i].Key;
-            Array.Sort(keys, OrdinalStringOrder.Comparison);
-            BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, keys.Length);
-            hash.AppendData(lenPrefix);
-            foreach (var key in keys)
-            {
-                AppendLengthPrefixed(hash, key, lenPrefix);
-            }
+            if (p.Entries.Count > widest) widest = p.Entries.Count;
         }
-        return hash.GetHashAndReset();
+
+        var rented = System.Buffers.ArrayPool<string>.Shared.Rent(widest);
+        try
+        {
+            foreach (var p in participants)
+            {
+                AppendLengthPrefixed(hash, p.TreeId, lenPrefix);
+                var count = p.Entries.Count;
+                for (var i = 0; i < count; i++) rented[i] = p.Entries[i].Key;
+                var keys = rented.AsSpan(0, count);
+                keys.Sort(OrdinalStringOrder.Comparison);
+                BinaryPrimitives.WriteInt32LittleEndian(lenPrefix, count);
+                hash.AppendData(lenPrefix);
+                foreach (var key in keys)
+                {
+                    AppendLengthPrefixed(hash, key, lenPrefix);
+                }
+            }
+            return hash.GetHashAndReset();
+        }
+        finally
+        {
+            // Cleared because the window holds string references the pool would
+            // otherwise keep alive; only the written prefix, which is the widest
+            // participant's key count.
+            Array.Clear(rented, 0, widest);
+            System.Buffers.ArrayPool<string>.Shared.Return(rented);
+        }
     }
 
     /// <summary>
@@ -1117,8 +1147,12 @@ internal sealed class LatticeCrossTreeTxGrain(
     /// of <paramref name="value"/> to <paramref name="hash"/>, encoding through a
     /// stack buffer for short strings and renting from the array pool only for
     /// the rare long key.
+    /// <para>
+    /// Internal rather than private so the microbenchmark host's verbatim
+    /// fingerprint baseline appends through the same untouched helper.
+    /// </para>
     /// </summary>
-    private static void AppendLengthPrefixed(IncrementalHash hash, string value, Span<byte> lenPrefix)
+    internal static void AppendLengthPrefixed(IncrementalHash hash, string value, Span<byte> lenPrefix)
     {
         var maxBytes = Encoding.UTF8.GetMaxByteCount(value.Length);
         byte[]? rented = maxBytes > 512 ? System.Buffers.ArrayPool<byte>.Shared.Rent(maxBytes) : null;

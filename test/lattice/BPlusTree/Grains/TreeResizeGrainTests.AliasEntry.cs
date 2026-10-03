@@ -22,6 +22,8 @@ public partial class TreeResizeGrainTests
         state.State.NewMaxInternalChildren = 64;
         state.State.ShardCount = ShardCount;
         state.State.SnapshotTreeId = snapshotTreeId;
+        state.State.OldPhysicalTreeId = TreeId;
+        state.State.OperationId = "op1";
     }
 
     [Test]

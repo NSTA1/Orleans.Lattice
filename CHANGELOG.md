@@ -66,6 +66,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - CRDT set provenance decode windows.** The `OrSet` and `RwSet` decoders each built an unsized `List<string>` per call purely to sort a key window. All four decode methods rent a right-sized pooled array now: 9-22% less allocated across state and current-value decodes. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
+
+- **Performance - Atomic and cross-tree fingerprint windows.** Both fingerprint paths allocated a scratch key array per call, the cross-tree one once per participant. They share a single pooled rental now: 192 bytes whatever the width, down from 4.3 KB and 16.3 KB at 512 keys. ([#4364](https://github.com/NSTA1/Orleans.Lattice/pull/4364)) (`Orleans.Lattice`)
+
 - **Performance - Sequence copy-out walk.** `Rga.ToList` walked its cached projection through a read-only wrapper, two virtual calls per element. It caches the wrapper's backing list and walks a span now: 40-65% faster on the copy-out itself. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
 
 - **Performance - CRDT provenance decode walks.** The version-vector current-value projection re-probed its dictionary once per replica; it sorts a pooled key/value window now, 11-22% less allocated. Five decoder delta walks resolve their dot lists to spans. ([#4316](https://github.com/NSTA1/Orleans.Lattice/pull/4316)) (`Orleans.Lattice`)
@@ -87,6 +91,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 ### Fixed
 
 - **Core - Reshard under atomic writes no longer duplicates keys.** A grow or shrink raced by `SetManyAtomicAsync` could leave a key on two leaves of one shard, so `CountAsync` over-counted and `ScanKeysAsync` skipped keys while point reads were correct. A saga's commit now sends a key a leaf split moved away to the leaf that holds it. ([#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)) (`Orleans.Lattice`)
+
+- **Core - Online resize no longer serves an atomic batch at an older round.** The resize now fences the old copy before moving the alias, so a router with a cached alias can no longer read the old copy after the new one has taken a write; a refused swap lifts the fence again. A key whose only pending batch is older than its committed value now serves the committed value, so a batch parked by a silo restart no longer pins an older round on one shard. ([#4360](https://github.com/NSTA1/Orleans.Lattice/issues/4360)) (`Orleans.Lattice`)
 
 - **Core - Atomic batches stay all-or-nothing across a silo restart.** A batch parked by a restart no longer hides later committed batches on some keys, and a batch committed after a leaf reactivated is no longer discarded on that leaf. ([#4347](https://github.com/NSTA1/Orleans.Lattice/issues/4347)) (`Orleans.Lattice`)
 
