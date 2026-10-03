@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Orleans.Lattice.Explorer.Core.Catalog;
 using Orleans.Lattice.Explorer.Core.Session;
 
@@ -157,6 +158,26 @@ public class UiPreferenceStoreTests
     }
 
     [Test]
+    public async Task EnsureLoaded_UndecryptableDocument_LoadsEmptyAndAcceptsWrites()
+    {
+        // Issue #4401: a document the current key ring cannot decrypt is permanent,
+        // not a transient prerender fault; the store must load empty rather than
+        // stay unloaded for the life of the circuit.
+        var backing = new CryptoThrowingBackingStore();
+        var store = CreateStore(backing);
+
+        await store.EnsureLoadedAsync();
+        await store.SetAsync("k", 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.IsLoaded, Is.True);
+            Assert.That(store.GetOrDefault("k", 0), Is.EqualTo(7));
+            Assert.That(backing.LastWritten, Is.Not.Null.And.Contains("\"k\""));
+        });
+    }
+
+    [Test]
     public async Task SetAsync_RoundTripsCatalogItemAcrossInstances()
     {
         var backing = new InMemoryUiPreferenceBackingStore();
@@ -226,6 +247,28 @@ public class UiPreferenceStoreTests
 
         public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
             => throw new InvalidOperationException("backing unreachable");
+    }
+
+    // A backing store whose persisted document cannot be decrypted (for example
+    // after a Data Protection key-ring rotation), as ProtectedLocalStorage reports it.
+    private sealed class CryptoThrowingBackingStore : IUiPreferenceBackingStore
+    {
+        public string? LastWritten { get; private set; }
+
+        public Task<string?> GetAsync(string key, CancellationToken cancellationToken = default)
+            => throw new CryptographicException("The key was not found in the key ring.");
+
+        public Task SetAsync(string key, string value, CancellationToken cancellationToken = default)
+        {
+            LastWritten = value;
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveAsync(string key, CancellationToken cancellationToken = default)
+        {
+            LastWritten = null;
+            return Task.CompletedTask;
+        }
     }
 
     // A backing store that yields before delegating, to force the continuations
