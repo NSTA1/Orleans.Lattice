@@ -17,7 +17,10 @@ namespace Orleans.Lattice.Schema;
 /// <item><description>builds a fresh destination physical tree by scanning source
 /// entries, transforming each value, revalidating it, and writing it into the
 /// destination - aborting and discarding the partial destination on the first
-/// offending value;</description></item>
+/// offending value. The destination is registered with the source's routing map,
+/// split allocation mark, structural pins and runtime configuration overrides
+/// (<see cref="DerivedTreeEntries.InheritingAsync"/>), so it lays keys out exactly
+/// as the source does and only the values change;</description></item>
 /// <item><description>cuts over by installing the target policy, then repointing
 /// the logical tree's alias to the destination together with the destination's
 /// shard map in one registry write, and arming the source to redirect stale
@@ -579,9 +582,14 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         if (state.State.ScanCursor is null)
         {
-            await grainFactory.GetLatticeRegistry().RegisterAsync(
-                state.State.DestinationTreeId!,
-                new Orleans.Lattice.BPlusTree.State.TreeRegistryEntry { DerivedFrom = TreeId });
+            // The destination inherits the logical tree's routing map, split
+            // allocation mark, structural pins and runtime overrides, so the build
+            // lays keys out exactly as the source does and the cutover, which
+            // carries the destination's map onto the logical tree, hands the tree
+            // back with the topology and sizing it had. Registered with defaults,
+            // it silently reset a resharded tree to the default shard count.
+            var inherited = await DerivedTreeEntries.InheritingAsync(grainFactory, TreeId, derivedFrom: TreeId);
+            await grainFactory.GetLatticeRegistry().RegisterAsync(state.State.DestinationTreeId!, inherited);
         }
 
         var source = grainFactory.GetGrain<ILattice>(TreeId);
