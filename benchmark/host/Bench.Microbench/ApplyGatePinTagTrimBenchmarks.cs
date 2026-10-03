@@ -69,7 +69,7 @@ public class ApplyGatePinTagTrimBenchmarks
 
     // ---- (3) one tag-carrying write's reconcile, in the converged steady
     //      state (the tags did not change) ----
-    private HashSet<string> _desiredTags = null!;
+    private string[] _desiredTags = null!;
     private string[] _currentTags = null!;
 
     /// <summary>Builds the inputs shared by the benchmark pairs.</summary>
@@ -144,7 +144,7 @@ public class ApplyGatePinTagTrimBenchmarks
             "pii:false",
             "retention:7y",
         ];
-        _desiredTags = new HashSet<string>(_currentTags, StringComparer.Ordinal);
+        _desiredTags = _currentTags;
     }
 
     // ========================================================================
@@ -315,18 +315,21 @@ public class ApplyGatePinTagTrimBenchmarks
     // ========================================================================
 
     /// <summary>
-    /// The prior shape: copy the current tag list into a <c>HashSet</c> purely
-    /// to answer <c>Contains</c>, and allocate both partition lists whether or
-    /// not anything changed.
+    /// The prior shape: hash <b>both</b> sides purely to answer <c>Contains</c> -
+    /// the caller deduplicated the desired tags into a <c>HashSet</c> before
+    /// calling, and the reconcile copied the current tag list into a second one -
+    /// then allocate both partition lists whether or not anything changed.
     /// </summary>
     [Benchmark]
     public int TagReconcile_Baseline_SetCopyAndEagerLists()
     {
+        var desiredSet = new HashSet<string>(_desiredTags, StringComparer.Ordinal);
+
         IReadOnlyList<string> current = _currentTags;
         var currentSet = new HashSet<string>(current, StringComparer.Ordinal);
 
         var toAdd = new List<string>();
-        foreach (var tag in _desiredTags)
+        foreach (var tag in desiredSet)
         {
             if (!currentSet.Contains(tag))
             {
@@ -337,7 +340,7 @@ public class ApplyGatePinTagTrimBenchmarks
         var toRemove = new List<string>();
         foreach (var tag in currentSet)
         {
-            if (!_desiredTags.Contains(tag))
+            if (!desiredSet.Contains(tag))
             {
                 toRemove.Add(tag);
             }
@@ -348,9 +351,10 @@ public class ApplyGatePinTagTrimBenchmarks
 
     /// <summary>
     /// The shipped shape: the <b>real production</b>
-    /// <c>LatticeTagIndexContext.ReconcileTagSet</c>, which answers membership
-    /// with a linear ordinal scan and allocates each partition list lazily, so
-    /// the converged case allocates nothing at all.
+    /// <c>LatticeTagIndexContext.ReconcileTagSet</c>, which takes the caller's
+    /// tag list directly, answers membership with a linear ordinal scan at this
+    /// width, and allocates each partition list lazily - so the converged case
+    /// allocates nothing at all.
     /// </summary>
     [Benchmark]
     public int TagReconcile_Optimized_ScanAndLazyLists()
