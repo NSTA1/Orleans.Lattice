@@ -55,7 +55,8 @@ internal sealed class CompiledTenant(
     /// </summary>
     /// <param name="subjectId">The subject id to test. Must not be <c>null</c>.</param>
     /// <returns><c>true</c> when the subject administers the tenant.</returns>
-    public bool IsAdmin(string subjectId) => admins.Contains(subjectId);
+    public bool IsAdmin(string subjectId) =>
+        !TenantAccessEntries.IsGroupShapedSubject(subjectId) && admins.Contains(subjectId);
 
     /// <summary>
     /// Returns <c>true</c> when the subject administers the tenant: its id is an
@@ -71,7 +72,7 @@ internal sealed class CompiledTenant(
         ArgumentNullException.ThrowIfNull(subjectId);
         ArgumentNullException.ThrowIfNull(groupIds);
 
-        if (admins.Contains(subjectId))
+        if (!TenantAccessEntries.IsGroupShapedSubject(subjectId) && admins.Contains(subjectId))
         {
             return true;
         }
@@ -95,7 +96,7 @@ internal sealed class CompiledTenant(
         ArgumentNullException.ThrowIfNull(subjectId);
         ArgumentNullException.ThrowIfNull(groupIds);
 
-        if (admins.Contains(subjectId))
+        if (!TenantAccessEntries.IsGroupShapedSubject(subjectId) && admins.Contains(subjectId))
         {
             return true;
         }
@@ -105,7 +106,8 @@ internal sealed class CompiledTenant(
             return false;
         }
 
-        return members.Contains(subjectId) || ContainsAny(admins, members, groupIds);
+        return (!TenantAccessEntries.IsGroupShapedSubject(subjectId) && members.Contains(subjectId))
+            || ContainsAny(admins, members, groupIds);
     }
 
     /// <summary>

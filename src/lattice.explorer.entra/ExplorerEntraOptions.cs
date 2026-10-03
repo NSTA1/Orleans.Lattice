@@ -41,6 +41,20 @@ public sealed class ExplorerEntraOptions
     public IList<string> AllowedAuthorityHosts { get; } = new List<string>();
 
     /// <summary>
+    /// The audiences an <em>advertised</em> State API audience may name. It is
+    /// consulted only when no <see cref="Scopes"/> are configured, so the
+    /// endpoint's advertisement is the sole source of the resource the operator's
+    /// token is minted for. When left empty the provider admits an <c>api://</c>
+    /// resource identifier, or an <c>https</c> resource whose host is the host of
+    /// the endpoint being signed in to; adding any value here replaces that
+    /// default rule with an exact-match allow-list. An advertised audience that is
+    /// not admitted is refused rather than used, so a hostile endpoint cannot
+    /// choose a foreign resource (for example Microsoft Graph) to have a token
+    /// minted for and handed to it.
+    /// </summary>
+    public IList<string> AllowedAudiences { get; } = new List<string>();
+
+    /// <summary>
     /// When <see langword="true"/>, sign-in uses the device-code flow (for
     /// headless/CLI hosts) instead of an interactive browser redirect. Defaults
     /// to <see langword="false"/>.
