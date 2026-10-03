@@ -61,10 +61,31 @@ public sealed class AppTreePrefixTenancyCompositionTests
         return tenant;
     }
 
+    /// <summary>
+    /// Builds a resolver with an authoritative compiled-policy snapshot (no
+    /// rebuild outstanding), so every test below decides from the substituted
+    /// engine exactly as before issue #4065 - the registry-confirmation path
+    /// taken during a non-authoritative snapshot is exercised separately by
+    /// <see cref="TenantContextResolverRegistryLagTests"/>.
+    /// </summary>
+    private static TenantContextResolver CreateResolver(ITenantPolicyEngine engine, ILatticeMembershipContext membership) =>
+        new(
+            engine,
+            membership,
+            AuthoritativePolicy(),
+            Substitute.For<ITenantRegistry>(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TenantContextResolver>.Instance);
+
+    private static CompiledTenantPolicySnapshotMaintainer AuthoritativePolicy() =>
+        TenantPolicyEpochTestCluster
+            .LeasedAsync(new TenantPolicyTestData.FakeTenantRegistry())
+            .GetAwaiter()
+            .GetResult();
+
     [Test]
     public void AppTreePrefix_composition_with_tenancy_unasserted_returns_the_bare_app_tree()
     {
-        var resolver = new TenantContextResolver(Substitute.For<ITenantPolicyEngine>(), Membership("alice"));
+        var resolver = CreateResolver(Substitute.For<ITenantPolicyEngine>(), Membership("alice"));
 
         var effective = LatticeTenantResolution.ComposeEffectiveTreeId(Resolve(resolver), AppTree);
 
@@ -75,7 +96,7 @@ public sealed class AppTreePrefixTenancyCompositionTests
     public void AppTreePrefix_composition_with_a_validated_tenant_yields_the_tenant_scoped_app_tree()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
 
         var effective = LatticeTenantResolution.ComposeEffectiveTreeId(Resolve(resolver), AppTree);
 
@@ -85,8 +106,8 @@ public sealed class AppTreePrefixTenancyCompositionTests
     [Test]
     public void AppTreePrefix_is_not_reserved_so_two_tenants_get_distinct_app_trees()
     {
-        var acmeResolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
-        var betaResolver = new TenantContextResolver(Engine("bob", Beta), Membership("bob"));
+        var acmeResolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
+        var betaResolver = CreateResolver(Engine("bob", Beta), Membership("bob"));
 
         LatticeActiveTenantContext.Current = Acme;
         var acme = LatticeTenantResolution.ComposeEffectiveTreeId(Resolve(acmeResolver), AppTree);
@@ -104,7 +125,7 @@ public sealed class AppTreePrefixTenancyCompositionTests
     public void AppTreePrefix_composition_attributes_the_composed_app_tree_to_its_tenant()
     {
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
 
         var effective = LatticeTenantResolution.ComposeEffectiveTreeId(Resolve(resolver), AppTree);
 
@@ -116,7 +137,7 @@ public sealed class AppTreePrefixTenancyCompositionTests
     {
         const string composed = "t/acme/a/crm/contacts";
         LatticeActiveTenantContext.Current = Acme;
-        var resolver = new TenantContextResolver(Engine("alice", Acme), Membership("alice"));
+        var resolver = CreateResolver(Engine("alice", Acme), Membership("alice"));
 
         var effective = LatticeTenantResolution.ComposeEffectiveTreeId(Resolve(resolver), composed);
 
