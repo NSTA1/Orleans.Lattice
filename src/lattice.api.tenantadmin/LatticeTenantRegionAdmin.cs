@@ -89,7 +89,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     public async Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsAsync(
         string tenantId, IReadOnlyCollection<string> allowedRegions, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var desired = ValidateRegionSet(allowedRegions, nameof(allowedRegions));
 
         await _authorizer.AuthorizeOperatorAsync(cancellationToken).ConfigureAwait(false);
@@ -146,7 +146,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     public async Task<TenantResidencyChangeResult> SetResidencyAsync(
         string tenantId, IReadOnlyCollection<string> residencyRegions, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var desired = ValidateRegionSet(residencyRegions, nameof(residencyRegions));
 
         var record = await _authorizer.AuthorizeTenantAdminAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -165,7 +165,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
                 TenantId = tenant.Value,
                 AddedRegions = [],
                 RemovedRegions = [],
-                Regions = BuildDescriptors(record),
+                Regions = TenantLifecycleMapping.DescribeRegions(record),
             };
         }
 
@@ -243,7 +243,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
             TenantId = tenant.Value,
             AddedRegions = added ?? (IReadOnlyList<string>)[],
             RemovedRegions = removed ?? (IReadOnlyList<string>)[],
-            Regions = BuildDescriptors(merged),
+            Regions = TenantLifecycleMapping.DescribeRegions(merged),
         };
     }
 
@@ -283,41 +283,14 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     public async Task<TenantRegionStatusReport> GetTenantRegionStatusAsync(
         string tenantId, CancellationToken cancellationToken = default)
     {
-        var tenant = ParseTenant(tenantId);
+        var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var record = await _authorizer.AuthorizeTenantAdminAsync(tenant, cancellationToken).ConfigureAwait(false);
 
         return new TenantRegionStatusReport
         {
             TenantId = tenant.Value,
-            Regions = BuildDescriptors(record),
+            Regions = TenantLifecycleMapping.DescribeRegions(record),
         };
-    }
-
-    private static IReadOnlyList<TenantRegionStatusDescriptor> BuildDescriptors(TenantRecord record)
-    {
-        var regionIds = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var regionId in record.AllowedRegionIds)
-        {
-            regionIds.Add(regionId);
-        }
-
-        foreach (var entry in record.RegionStatusEntries)
-        {
-            regionIds.Add(entry.Key);
-        }
-
-        var descriptors = new List<TenantRegionStatusDescriptor>(regionIds.Count);
-        foreach (var regionId in regionIds)
-        {
-            descriptors.Add(new TenantRegionStatusDescriptor
-            {
-                RegionId = regionId,
-                Status = Map(record.GetRegionStatus(regionId)),
-                IsAllowed = record.IsRegionAllowed(regionId),
-            });
-        }
-
-        return descriptors;
     }
 
     private static HashSet<string> ValidateRegionSet(IReadOnlyCollection<string> regions, string parameterName)
@@ -338,27 +311,4 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
 
         return set;
     }
-
-    private static TenantId ParseTenant(string tenantId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(tenantId);
-        if (!TenantId.TryParse(tenantId, out var tenant))
-        {
-            throw new ArgumentException(
-                $"'{tenantId}' is not a valid tenant id.", nameof(tenantId));
-        }
-
-        return tenant;
-    }
-
-    private static TenantRegionLifecycleStatus Map(TenantRegionStatus status) => status switch
-    {
-        TenantRegionStatus.Provisioning => TenantRegionLifecycleStatus.Provisioning,
-        TenantRegionStatus.Backfilling => TenantRegionLifecycleStatus.Backfilling,
-        TenantRegionStatus.Online => TenantRegionLifecycleStatus.Online,
-        TenantRegionStatus.Draining => TenantRegionLifecycleStatus.Draining,
-        TenantRegionStatus.Offline => TenantRegionLifecycleStatus.Offline,
-        TenantRegionStatus.Removed => TenantRegionLifecycleStatus.Removed,
-        _ => TenantRegionLifecycleStatus.None,
-    };
 }

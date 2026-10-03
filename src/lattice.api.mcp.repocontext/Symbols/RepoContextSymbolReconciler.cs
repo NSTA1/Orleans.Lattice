@@ -117,7 +117,7 @@ internal sealed class RepoContextSymbolReconciler
         var declaringFilesByFq = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
         var removeFilesByFq = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
 
-        foreach (var entry in Concat(added, updated, backfill))
+        foreach (var entry in RepoFileEntrySequence.Concat(added, updated, backfill))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var path = entry.RelativePath;
@@ -689,28 +689,6 @@ internal sealed class RepoContextSymbolReconciler
         foreach (var bytes in set.Elements())
         {
             yield return Encoding.UTF8.GetString(bytes);
-        }
-    }
-
-
-    private static IEnumerable<RepoFileEntry> Concat(
-        IReadOnlyList<RepoFileEntry> first,
-        IReadOnlyList<RepoFileEntry> second,
-        IReadOnlyList<RepoFileEntry> third)
-    {
-        foreach (var entry in first)
-        {
-            yield return entry;
-        }
-
-        foreach (var entry in second)
-        {
-            yield return entry;
-        }
-
-        foreach (var entry in third)
-        {
-            yield return entry;
         }
     }
 

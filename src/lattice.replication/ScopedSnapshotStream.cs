@@ -64,22 +64,10 @@ internal static class ScopedSnapshotStream
     {
         await foreach (var entry in source.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
-            if (InAnyRange(entry.Key, ranges))
+            if (LeafReReplayRanges.AnyContains(ranges, entry.Key))
             {
                 yield return entry;
             }
         }
-    }
-
-    private static bool InAnyRange(string? key, IReadOnlyList<LeafReReplayRange> ranges)
-    {
-        for (var i = 0; i < ranges.Count; i++)
-        {
-            if (ranges[i].Contains(key))
-            {
-                return true;
-            }
-        }
-        return false;
     }
 }

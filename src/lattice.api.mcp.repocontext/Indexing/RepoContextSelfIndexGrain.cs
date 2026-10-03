@@ -386,7 +386,7 @@ internal sealed class RepoContextSelfIndexGrain(
 
             var auditJitter = (long)(Random.Shared.NextDouble() * ScanCooldownJitter.Ticks);
             state.State.NextCoverageAuditAfterTicks =
-                SaturatingAddTicks(SaturatingAddTicks(nowTicks, options.CoverageDigestAuditInterval.Ticks), auditJitter);
+                TickArithmetic.SaturatingAdd(TickArithmetic.SaturatingAdd(nowTicks, options.CoverageDigestAuditInterval.Ticks), auditJitter);
         }
 
         // Digest first (issue #2486). When the per-page coverage digest is built, one
@@ -519,24 +519,7 @@ internal sealed class RepoContextSelfIndexGrain(
         // the reconcile on every tick - the busiest cadence in place of the
         // rarest one the operator configured.
         state.State.NextReconcileAfterTicks =
-            SaturatingAddTicks(SaturatingAddTicks(nowTicks, interval.Ticks), jitterTicks);
-    }
-
-    /// <summary>
-    /// <c>a + b</c> in ticks, clamped to <see cref="long.MaxValue"/> /
-    /// <see cref="long.MinValue"/> instead of wrapping, so an extreme configured
-    /// <see cref="RepoContextIndexingOptions.ReconcileInterval"/> cannot overflow a
-    /// scheduled reconcile deadline to a past instant.
-    /// </summary>
-    internal static long SaturatingAddTicks(long a, long b)
-    {
-        var sum = unchecked(a + b);
-        // Overflow iff the operands share a sign that the result does not.
-        if (((a ^ sum) & (b ^ sum)) < 0)
-        {
-            return b < 0 ? long.MinValue : long.MaxValue;
-        }
-        return sum;
+            TickArithmetic.SaturatingAdd(TickArithmetic.SaturatingAdd(nowTicks, interval.Ticks), jitterTicks);
     }
 
     /// <summary>

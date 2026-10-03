@@ -63,52 +63,14 @@ public readonly record struct OrFlagDelta
     /// </summary>
     /// <param name="other">The delta to compare against.</param>
     public bool Equals(OrFlagDelta other) =>
-        ListEqual(Enables, other.Enables) && ListEqual(Disables, other.Disables);
+        CrdtDeltaListEquality.ListEqual(Enables, other.Enables) && CrdtDeltaListEquality.ListEqual(Disables, other.Disables);
 
     /// <inheritdoc />
     public override int GetHashCode()
     {
         var hash = new HashCode();
-        AddList(ref hash, Enables);
-        AddList(ref hash, Disables);
+        CrdtDeltaListEquality.AddList(ref hash, Enables);
+        CrdtDeltaListEquality.AddList(ref hash, Disables);
         return hash.ToHashCode();
-    }
-
-    private static bool ListEqual(IReadOnlyList<OrSetDot>? left, IReadOnlyList<OrSetDot>? right)
-    {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        if (left is null || right is null || left.Count != right.Count)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < left.Count; i++)
-        {
-            if (!left[i].Equals(right[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    private static void AddList(ref HashCode hash, IReadOnlyList<OrSetDot>? list)
-    {
-        if (list is null)
-        {
-            hash.Add(0);
-            return;
-        }
-
-        hash.Add(list.Count);
-        foreach (var element in list)
-        {
-            hash.Add(element);
-        }
     }
 }

@@ -138,7 +138,7 @@ internal sealed class RepoContextContentReconciler
         var stopwatch = Stopwatch.StartNew();
         var lastHeartbeat = 0;
 
-        foreach (var entry in Concat(added, updated, backfill))
+        foreach (var entry in RepoFileEntrySequence.Concat(added, updated, backfill))
         {
             cancellationToken.ThrowIfCancellationRequested();
             var path = entry.RelativePath;
@@ -268,27 +268,6 @@ internal sealed class RepoContextContentReconciler
         catch (UnauthorizedAccessException)
         {
             return null;
-        }
-    }
-
-    private static IEnumerable<RepoFileEntry> Concat(
-        IReadOnlyList<RepoFileEntry> first,
-        IReadOnlyList<RepoFileEntry> second,
-        IReadOnlyList<RepoFileEntry> third)
-    {
-        foreach (var entry in first)
-        {
-            yield return entry;
-        }
-
-        foreach (var entry in second)
-        {
-            yield return entry;
-        }
-
-        foreach (var entry in third)
-        {
-            yield return entry;
         }
     }
 

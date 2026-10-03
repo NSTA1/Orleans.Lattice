@@ -99,7 +99,7 @@ internal sealed partial class ViewMaintainerGrain
         {
             var isParticipant = participantSet is not null
                 ? participantSet.Contains(registration.SourceTreeId)
-                : ContainsOrdinal(participants, registration.SourceTreeId);
+                : OrdinalStrings.Contains(participants, registration.SourceTreeId);
             if (isParticipant)
             {
                 waitSet.Add(registration.ViewName);
@@ -117,19 +117,6 @@ internal sealed partial class ViewMaintainerGrain
     /// case, so the scan avoids the set allocation on that path.
     /// </summary>
     private const int WaitSetParticipantSetThreshold = 8;
-
-    private static bool ContainsOrdinal(IReadOnlyList<string> items, string value)
-    {
-        for (var i = 0; i < items.Count; i++)
-        {
-            if (string.Equals(items[i], value, StringComparison.Ordinal))
-            {
-                return true;
-            }
-        }
-
-        return false;
-    }
 
     /// <summary>
     /// Handles one completed cross-tree atomic batch: registers this view's slice

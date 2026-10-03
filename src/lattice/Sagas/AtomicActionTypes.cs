@@ -64,7 +64,7 @@ public readonly record struct AtomicActionEntry(
     /// <param name="other">The entry to compare against.</param>
     public bool Equals(AtomicActionEntry other) =>
         string.Equals(Key, other.Key, StringComparison.Ordinal)
-        && BytesEqual(Value, other.Value)
+        && ByteArrayEquality.ContentEquals(Value, other.Value)
         && Delete == other.Delete;
 
     /// <inheritdoc />
@@ -80,10 +80,6 @@ public readonly record struct AtomicActionEntry(
         hash.Add(Delete);
         return hash.ToHashCode();
     }
-
-    private static bool BytesEqual(byte[]? left, byte[]? right) =>
-        ReferenceEquals(left, right)
-        || (left is not null && right is not null && left.AsSpan().SequenceEqual(right));
 }
 
 /// <summary>

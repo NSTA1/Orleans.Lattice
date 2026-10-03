@@ -44,7 +44,7 @@ public static class LatticeValueTransformTranslator
         ArgumentNullException.ThrowIfNull(transform);
         var parameter = transform.Parameters[0];
         var operations = new List<LatticeValueTransform>();
-        TranslateProjection<TOld>(Unwrap(transform.Body), parameter, operations);
+        TranslateProjection<TOld>(ExpressionTreeShapes.StripConversions(transform.Body), parameter, operations);
         return LatticeValueTransform.Passthrough(operations.ToArray());
     }
 
@@ -104,7 +104,7 @@ public static class LatticeValueTransformTranslator
 
     private static LatticeValueTransform TranslateValue<TOld>(Expression expression, ParameterExpression parameter)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
 
         switch (expression)
         {
@@ -131,11 +131,11 @@ public static class LatticeValueTransformTranslator
                     LatticeComputeOperator.Concat,
                     call.Arguments.Select(a => TranslateValue<TOld>(a, parameter)).ToArray());
 
-            case MemberExpression member when ReferencesParameter(member, parameter):
+            case MemberExpression member when ExpressionTreeShapes.ReferencesParameter(member, parameter):
                 return LatticeValueTransform.Member(TranslateMemberAccess(member, parameter));
 
             default:
-                if (ReferencesParameter(expression, parameter))
+                if (ExpressionTreeShapes.ReferencesParameter(expression, parameter))
                     throw Unsupported($"value expression '{expression}' (only a top-level parameter member access is supported on the value side)");
                 return LatticeValueTransform.Const(CaptureConstant(expression));
         }
@@ -146,7 +146,7 @@ public static class LatticeValueTransformTranslator
         ParameterExpression parameter,
         List<LatticeValueTransform> operands)
     {
-        expression = Unwrap(expression);
+        expression = ExpressionTreeShapes.StripConversions(expression);
         if (expression is BinaryExpression { NodeType: ExpressionType.Add } add && add.Type == typeof(string))
         {
             FlattenConcat<TOld>(add.Left, parameter, operands);
@@ -208,38 +208,6 @@ public static class LatticeValueTransformTranslator
         return LatticeConstant.Integer(Convert.ToInt64(value));
     }
 
-    private static Expression Unwrap(Expression expression)
-    {
-        while (expression is UnaryExpression { NodeType: ExpressionType.Convert or ExpressionType.ConvertChecked } unary)
-            expression = unary.Operand;
-        return expression;
-    }
-
-    private static bool ReferencesParameter(Expression expression, ParameterExpression parameter) =>
-        ParameterFinder.Contains(expression, parameter);
-
     private static NotSupportedException Unsupported(string what) =>
         new($"Unsupported value-transform construct: {what}. Client-side value-transform lowering supports a member-initialization body whose members are parameter member access, constants, null-coalescing (??), string concatenation (+ / string.Concat), and ternary conditionals (?:).");
-
-    private sealed class ParameterFinder : ExpressionVisitor
-    {
-        private readonly ParameterExpression _target;
-        private bool _found;
-
-        private ParameterFinder(ParameterExpression target) => _target = target;
-
-        public static bool Contains(Expression expression, ParameterExpression target)
-        {
-            var finder = new ParameterFinder(target);
-            finder.Visit(expression);
-            return finder._found;
-        }
-
-        protected override Expression VisitParameter(ParameterExpression node)
-        {
-            if (node == _target)
-                _found = true;
-            return base.VisitParameter(node);
-        }
-    }
 }
