@@ -237,6 +237,78 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <inheritdoc />
+    public async Task FenceMovedSlotsAsync(int[] slots, int[] newOwners, int virtualShardCount)
+    {
+        ArgumentNullException.ThrowIfNull(slots);
+        ArgumentNullException.ThrowIfNull(newOwners);
+        if (slots.Length != newOwners.Length)
+        {
+            throw new ArgumentException(
+                $"FenceMovedSlotsAsync requires one new owner per slot; got {slots.Length} slot(s) and {newOwners.Length} owner(s).",
+                nameof(newOwners));
+        }
+
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(virtualShardCount);
+        for (var i = 0; i < slots.Length; i++)
+        {
+            if ((uint)slots[i] >= (uint)virtualShardCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(slots),
+                    slots[i],
+                    $"Slot must be in [0, {virtualShardCount}).");
+            }
+
+            ArgumentOutOfRangeException.ThrowIfNegative(newOwners[i], nameof(newOwners));
+        }
+
+        EnsureInternalOrigin(LatticeOperation.Admin);
+        if (slots.Length == 0)
+        {
+            return;
+        }
+
+        var previousSlots = state.State.MovedAwaySlots;
+        var previousVsc = state.State.MovedAwayVirtualShardCount;
+
+        // A fence recorded under another virtual slot count cannot be read
+        // against this map, so it is replaced rather than merged.
+        var sameSpace = previousVsc == virtualShardCount && previousSlots is not null;
+        var next = sameSpace
+            ? new Dictionary<int, int>(previousSlots!)
+            : new Dictionary<int, int>(slots.Length);
+        var changed = !sameSpace;
+        for (var i = 0; i < slots.Length; i++)
+        {
+            if (!next.TryGetValue(slots[i], out var owner) || owner != newOwners[i])
+            {
+                next[slots[i]] = newOwners[i];
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            state.State.MovedAwaySlots = next;
+            state.State.MovedAwayVirtualShardCount = virtualShardCount;
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch
+            {
+                state.State.MovedAwaySlots = previousSlots;
+                state.State.MovedAwayVirtualShardCount = previousVsc;
+                throw;
+            }
+        }
+
+        var sorted = (int[])slots.Clone();
+        Array.Sort(sorted);
+        await MarkLeavesMovedAwayAsync(sorted, virtualShardCount);
+    }
+
     /// <summary>
     /// Clears every leaf and internal node of a retired shard and rewrites its
     /// record as an empty routing tombstone. Idempotent: a shard already reduced
