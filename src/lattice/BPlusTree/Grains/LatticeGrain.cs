@@ -2396,6 +2396,11 @@ internal sealed partial class LatticeGrain(
 
     public async Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default)
     {
+        // Taken before anything else so it never travels further down. Honoured
+        // only for an atomic-write saga's prepared dispatch (issue #4358).
+        var boundPhysicalTreeId = LatticeAtomicBindingContext.Take();
+        if (!LatticePreparedContext.Current) boundPhysicalTreeId = null;
+
         ThrowIfSystemTree();
         ThrowIfUserOriginSystemDataTree();
         ThrowIfProtectedView();
@@ -2453,10 +2458,21 @@ internal sealed partial class LatticeGrain(
                     StageTagTenant);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            await RetryOnStaleRoutingAsync(
-                (self: this, entries, stageTagTree, envelope),
-                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree, args.envelope),
+            var movedTo = await RetryOnStaleRoutingAsync(
+                (self: this, entries, stageTagTree, envelope, boundPhysicalTreeId),
+                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree, args.envelope, args.boundPhysicalTreeId),
                 cancellationToken);
+            if (movedTo is not null)
+            {
+                // The logical tree no longer resolves to the copy the saga's
+                // prepared writes are bound to. Placing them on the copy it
+                // resolves to now would leave the bound copy without them, so
+                // hand the move back to the saga to re-bind (issue #4358).
+                throw new StaleTreeRoutingException(
+                    logicalTreeId: TreeId,
+                    stalePhysicalTreeId: boundPhysicalTreeId!,
+                    destinationPhysicalTreeId: movedTo);
+            }
 
             // Publish one Set event per entry. Emitted only after all shard writes
             // have committed so subscribers never observe a Set for a key that
@@ -2491,10 +2507,11 @@ internal sealed partial class LatticeGrain(
         }
     }
 
-    private async Task SetManyAsyncCore(
+    private async Task<string?> SetManyAsyncCore(
         List<KeyValuePair<string, byte[]>> entries,
         KeyValuePair<string, object?> stageTagTree,
-        WriteEnvelopeBudget? envelope)
+        WriteEnvelopeBudget? envelope,
+        string? boundPhysicalTreeId)
     {
         var routeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         string physicalTreeId;
@@ -2502,6 +2519,21 @@ internal sealed partial class LatticeGrain(
         try
         {
             (physicalTreeId, shardMap) = await GetRoutingAsync();
+            if (boundPhysicalTreeId is not null
+                && !string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+            {
+                // This activation's cached pair addresses another copy than the
+                // one the saga's prepared writes are bound to - typically a pair
+                // cached before an alias swap. Re-read the registry row once; if
+                // the logical tree really has moved, report where rather than
+                // write the batch onto a copy the saga will not commit on
+                // (issue #4358).
+                (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true);
+                if (!string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+                {
+                    return physicalTreeId;
+                }
+            }
         }
         finally
         {
@@ -2728,6 +2760,8 @@ internal sealed partial class LatticeGrain(
                 stageTagTree, LatticeMetrics.StageFanOutTag,
                 StageTagTenant);
         }
+
+        return null;
 
         static async Task WriteToShardAsync(
             IShardRootGrain shard,
