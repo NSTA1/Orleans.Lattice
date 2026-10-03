@@ -1,4 +1,6 @@
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Testing;
+using Orleans.Runtime;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
@@ -22,6 +24,7 @@ public sealed class LeafSnapshotStorageCleanupIntegrationTests
 {
     private const string ManifestState = "leaf-snapshot";
     private const string SegmentState = "leaf-snapshot-segment";
+    private const string LeafState = "leaf";
 
     private SnapshotStorageCleanupClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
@@ -137,6 +140,10 @@ public sealed class LeafSnapshotStorageCleanupIntegrationTests
                 "THE ASSERTION. A purged tree's snapshot manifests must be deleted; before the fix every one stayed");
             Assert.That(after.Segments, Is.Empty, "and so must every snapshot segment row");
         });
+
+        // Issue #4419: the deactivation each clear requests must not write the
+        // leaf's row back.
+        await AssertLeafRowsStayDeletedAsync(leaves);
     }
 
     [Test]
@@ -180,5 +187,25 @@ public sealed class LeafSnapshotStorageCleanupIntegrationTests
             Assert.That(survivingRows.Manifests, Is.Not.Empty,
                 "a leaf still in the tree keeps its snapshot: the fix must not over-delete");
         });
+
+        // Issue #4419: a folded leaf's deactivation must not write its row back.
+        await AssertLeafRowsStayDeletedAsync(folded);
+    }
+
+    /// <summary>
+    /// Waits for the deactivations the clears requested to finish, then checks
+    /// that none of <paramref name="removed"/> has a <c>leaf</c> row (issue #4419).
+    /// </summary>
+    private async Task AssertLeafRowsStayDeletedAsync(IReadOnlyCollection<GrainId> removed)
+    {
+        var removedSet = removed.ToHashSet();
+        var management = _cluster.GrainFactory.GetGrain<IManagementGrain>(0);
+        await TestPoll.UntilAsync(
+            async () => !(await management.GetActiveGrains(removed.First().Type)).Any(removedSet.Contains),
+            "every removed leaf's activation to finish deactivating",
+            timeout: TimeSpan.FromSeconds(60));
+        Assert.That(_fixture.Storage.GrainIds(LeafState).Where(removedSet.Contains), Is.Empty,
+            "a removed leaf's own row must stay deleted; the deactivation after the clear used to write it back "
+            + "as a stub with no tree id");
     }
 }
