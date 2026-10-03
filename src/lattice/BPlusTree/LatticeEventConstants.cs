@@ -475,6 +475,18 @@ public static class LatticeEventConstants
     internal const string RoutedPhysicalTreeIdRequestContextKey = "ol.rpt";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key that carries the physical tree an
+    /// atomic-write saga's prepared writes are bound to (issue #4358). The saga
+    /// stamps it around its prepare dispatch; the routing tier takes it on
+    /// receipt (so it never travels further down) and refuses to place the
+    /// prepared batch on any other physical copy, raising
+    /// <see cref="StaleTreeRoutingException"/> instead so the saga re-binds.
+    /// It only narrows where a write may land, so it confers no capability.
+    /// See <see cref="Orleans.Lattice.LatticeAtomicBindingContext"/>.
+    /// </summary>
+    internal const string AtomicBoundPhysicalTreeRequestContextKey = "ol.abp";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key that carries the caller's active
     /// <see cref="TenantId"/> from the client edge down to the silo so a
     /// tenant-aware choke point can scope the operation to the tenant's

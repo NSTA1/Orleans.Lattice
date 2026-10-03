@@ -300,6 +300,25 @@ retry budget entirely: the shutdown-refused fast-path (writer-side drain
 refusal or post-deactivation leaf rejection) and the saturation
 fast-path - see [Shutdown back-pressure](#shutdown-back-pressure) below.
 
+The batch is bound to one physical copy of the tree: the copy the tree
+resolved to when the saga prepared. An alias swap - a resize or its undo, an
+explicit alias, a shadow-cutover restore or its revert, or a schema
+remediation cutover - can move the tree to another copy while the saga is in
+flight, and the routing activations behind `ILattice` each cache the copy they
+last resolved, so one that has not yet seen the swap still addresses the old
+copy. The dispatch therefore carries the bound copy, and the routing tier
+places the batch only there: a router whose cached routing names another copy
+re-reads the registry, and if the tree really has moved it refuses the batch
+rather than write it to a copy the saga will not commit on. The saga then
+re-binds to the copy the tree resolves to now and re-dispatches the whole
+batch there, without spending its retry budget. Before it records the commit
+decision the saga checks the binding once more and re-binds the same way if
+the tree moved after the dispatch; a swap that lands after the decision is
+recorded leaves the batch on its bound copy, where the terminal broadcast
+delivers it whole. A batch therefore commits wholly on one copy - kept or
+discarded with it - and never in part on each
+([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
+
 ### Phase 3 - Compensate (failure path only)
 
 No per-key compensation writes are issued. The prepare-phase writes were
