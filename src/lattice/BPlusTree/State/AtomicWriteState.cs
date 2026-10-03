@@ -347,4 +347,20 @@ internal sealed class AtomicWriteState
     /// </para>
     /// </summary>
     [Id(22)] public List<bool>? EntryDeletes { get; set; }
+
+    /// <summary>
+    /// The physical tree the saga's prepared writes were dispatched to: the tree
+    /// the logical id resolved to when <see cref="AtomicWritePhase.Execute"/>
+    /// last ran in full. Re-bound (and Execute re-run onto the new tree) when an
+    /// alias swap moves the logical tree before the commit decision is recorded,
+    /// and the target of the terminal broadcast when one moves it afterwards, so
+    /// a committed batch lands wholly on one physical copy and is never split
+    /// across an alias swap (issue #4336).
+    /// <para>
+    /// Wire-compatible: a missing field on legacy persisted state decodes to
+    /// <see langword="null"/>, in which case the saga broadcasts to the tree the
+    /// logical id resolves to, exactly as before this field existed.
+    /// </para>
+    /// </summary>
+    [Id(23)] public string? BoundPhysicalTreeId { get; set; }
 }

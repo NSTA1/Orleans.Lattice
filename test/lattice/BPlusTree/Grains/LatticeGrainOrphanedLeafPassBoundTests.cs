@@ -81,8 +81,7 @@ public sealed class LatticeGrainOrphanedLeafPassBoundTests
                 Slots = slots ?? Enumerable.Range(0, shardCount).ToArray(),
                 Version = 1,
             }));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = shardCount }));
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = shardCount });
 
         var shards = new IShardRootGrain[shardCount];
         for (var i = 0; i < shardCount; i++)

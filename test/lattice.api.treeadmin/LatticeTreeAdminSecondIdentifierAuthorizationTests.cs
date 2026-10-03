@@ -87,7 +87,7 @@ public sealed class LatticeTreeAdminSecondIdentifierAuthorizationTests
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
 
         Assert.That(gate.Requested, Does.Contain(Foreign));
-        registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -107,7 +107,7 @@ public sealed class LatticeTreeAdminSecondIdentifierAuthorizationTests
             Assert.That(result.IsAliased, Is.True);
             Assert.That(gate.Requested, Is.EqualTo(new[] { Owned, "orders-v2" }));
         });
-        await registry.Received(1).SetAliasAsync(Owned, "orders-v2");
+        await registry.Received(1).SwapAliasAsync(Owned, "orders-v2", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     // ----- SnapshotTree: the DESTINATION is a second authorization boundary -----

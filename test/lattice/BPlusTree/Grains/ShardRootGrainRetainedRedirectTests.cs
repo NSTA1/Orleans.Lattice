@@ -291,4 +291,63 @@ public class ShardRootGrainRetainedRedirectTests
         await grain.ClearRetainedRedirectAsync(OperationId);
         Assert.That(async () => await grain.GetAsync("k"), Throws.Nothing);
     }
+
+    // ========================================================================
+    // ReleaseRetainedRedirectAsync (issue #4336)
+    // ========================================================================
+
+    [Test]
+    public void ReleaseRetainedRedirectAsync_throws_when_logicalTreeId_is_empty()
+    {
+        var grain = CreateGrain(new FakePersistentState<ShardRootState>());
+        Assert.That(async () => await grain.ReleaseRetainedRedirectAsync(""),
+            Throws.InstanceOf<ArgumentException>());
+    }
+
+    [Test]
+    public async Task ReleaseRetainedRedirectAsync_clears_the_logical_trees_redirect_under_any_operation()
+    {
+        var state = StateWithRedirect(operationId: "alias:my-logical->elsewhere");
+        var grain = CreateGrain(state);
+        RequestContext.Set(MarkerKey, LogicalTreeId);
+
+        await grain.ReleaseRetainedRedirectAsync(LogicalTreeId);
+
+        Assert.That(state.State.RetainedRedirect, Is.Null);
+        Assert.That(async () => await grain.GetAsync("k"), Throws.Nothing,
+            "the logical tree resolves to this shard's tree again, so its traffic is served");
+    }
+
+    [Test]
+    public async Task ReleaseRetainedRedirectAsync_leaves_another_logical_trees_redirect()
+    {
+        var state = StateWithRedirect();
+        var grain = CreateGrain(state);
+
+        await grain.ReleaseRetainedRedirectAsync("another-logical");
+
+        Assert.That(state.State.RetainedRedirect, Is.Not.Null);
+    }
+
+    [Test]
+    public async Task ReleaseRetainedRedirectAsync_releases_a_redirect_with_no_recorded_logical_id()
+    {
+        var state = StateWithRedirect(logicalTreeId: string.Empty);
+        var grain = CreateGrain(state);
+
+        await grain.ReleaseRetainedRedirectAsync(LogicalTreeId);
+
+        Assert.That(state.State.RetainedRedirect, Is.Null);
+    }
+
+    [Test]
+    public async Task ReleaseRetainedRedirectAsync_is_a_no_op_with_no_redirect()
+    {
+        var state = new FakePersistentState<ShardRootState>();
+        var grain = CreateGrain(state);
+
+        await grain.ReleaseRetainedRedirectAsync(LogicalTreeId);
+
+        Assert.That(state.State.RetainedRedirect, Is.Null);
+    }
 }

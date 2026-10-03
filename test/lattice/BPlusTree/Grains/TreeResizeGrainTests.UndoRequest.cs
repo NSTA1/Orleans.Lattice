@@ -346,8 +346,9 @@ public partial class TreeResizeGrainTests
 
         await h.Grain.ProcessNextPhaseAsync();
 
+        // The only swap is the unwind's, back onto the old tree; never onto the copy.
         var registry = h.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(TreeId, Arg.Is<string>(p => p != TreeId), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.GrainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0")
             .DidNotReceive().EnterRejectingAsync(Arg.Any<string>());
         await h.GrainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
@@ -391,8 +392,9 @@ public partial class TreeResizeGrainTests
 
         await h.Grain.ProcessNextPhaseAsync();
 
+        // The only swap is the unwind's, back onto the old tree; never onto the copy.
         var registry = h.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(TreeId, Arg.Is<string>(p => p != TreeId), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await snapshot.Received(1).AbortAsync(UndoSnapshotSuffix);
         await h.GrainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/{UndoSnapshotSuffix}")
             .Received(1).DiscardDerivedPhysicalTreeAsync();
@@ -428,7 +430,7 @@ public partial class TreeResizeGrainTests
         await h.Grain.RunResizePassAsync();
 
         var registry = h.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+        await registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         Assert.That(h.State.State.InProgress, Is.False);
     }
 

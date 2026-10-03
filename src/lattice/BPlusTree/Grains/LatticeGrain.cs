@@ -511,6 +511,14 @@ internal sealed partial class LatticeGrain(
     // invalidation hooks below null this field; the next slow-path call
     // re-allocates against the fresh map.
     private IShardRootGrain?[]? _cachedShards;
+    // The physical tree whose shard references _cachedShards holds - always the
+    // physical tree of the published routing. A reference is reused only for a
+    // caller addressing that same tree (shard grain ids are `{physical}/{index}`,
+    // so an index alone does not identify a shard across an alias swap).
+    private string? _cachedShardsTreeId;
+    // Bumped by every routing invalidation, so a resolve that started before an
+    // invalidation never republishes the routing that invalidation discarded.
+    private long _routingEpoch;
     // Per-activation cached RoutingInfo. Populated by GetRoutingSlowAsync once
     // both _physicalTreeId and _shardMap are resolved; nulled by both
     // invalidation hooks alongside the rest of the routing state. Caching the
@@ -4423,24 +4431,6 @@ internal sealed partial class LatticeGrain(
         _healingEnsured = true;
     }
 
-    private async ValueTask<string> GetPhysicalTreeIdAsync()
-    {
-        if (_physicalTreeId is not null) return _physicalTreeId;
-
-        // System trees (e.g. _lattice_trees) must not resolve aliases - the
-        // registry itself is backed by an ILattice tree, so calling ResolveAsync
-        // here would create a circular call chain and deadlock.
-        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
-        {
-            _physicalTreeId = TreeId;
-            return _physicalTreeId;
-        }
-
-        var registry = grainFactory.GetLatticeRegistry();
-        _physicalTreeId = await registry.ResolveAsync(TreeId);
-        return _physicalTreeId;
-    }
-
     private bool? _hasMutationObservers;
 
     private bool HasMutationObservers =>
@@ -4466,7 +4456,10 @@ internal sealed partial class LatticeGrain(
         StampRoutedIdentity(routing.PhysicalTreeId);
         var shardIndex = routing.Map.Resolve(key);
         var cache = _cachedShards;
-        if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
+        if (cache is not null
+            && ReferenceEquals(_cachedShardsTreeId, routing.PhysicalTreeId)
+            && (uint)shardIndex < (uint)cache.Length
+            && cache[shardIndex] is { } existing)
             return existing;
         return ResolveShardSlow(routing.PhysicalTreeId, shardIndex);
     }
@@ -4475,6 +4468,22 @@ internal sealed partial class LatticeGrain(
     private IShardRootGrain ResolveShardSlow(string physicalTreeId, int shardIndex)
     {
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+
+        // The cache holds references for the physical tree of the routing this
+        // activation currently publishes, and only for it. An interleaved call
+        // still holding a snapshot of another physical tree (resolved before an
+        // alias swap, or after one this activation has not published yet) gets an
+        // uncached reference: caching it by index alone would hand the other
+        // tree's shard to every caller of the published routing.
+        var published = _cachedRouting?.PhysicalTreeId;
+        if (published is null || !string.Equals(published, physicalTreeId, StringComparison.Ordinal))
+            return shard;
+        if (!ReferenceEquals(_cachedShardsTreeId, published))
+        {
+            _cachedShards = null;
+            _cachedShardsTreeId = published;
+        }
+
         var cache = _cachedShards;
         if (cache is null)
         {
@@ -4540,7 +4549,10 @@ internal sealed partial class LatticeGrain(
         StampRoutedIdentity(physicalTreeId);
 
         var cache = _cachedShards;
-        if (cache is not null && (uint)shardIndex < (uint)cache.Length && cache[shardIndex] is { } existing)
+        if (cache is not null
+            && ReferenceEquals(_cachedShardsTreeId, physicalTreeId)
+            && (uint)shardIndex < (uint)cache.Length
+            && cache[shardIndex] is { } existing)
             return existing;
         return ResolveShardSlow(physicalTreeId, shardIndex);
     }
@@ -4599,29 +4611,73 @@ internal sealed partial class LatticeGrain(
 
     private async ValueTask<RoutingInfo> GetRoutingSlowAsync(CancellationToken cancellationToken)
     {
-        var physicalTreeId = await GetPhysicalTreeIdAsync();
-        if (_shardMap is null)
+        // The physical tree and the map that addresses its shards are resolved
+        // together from ONE registry row and cached as one pair; every
+        // invalidation drops both. Resolving them separately - or refreshing only
+        // the map after a stale-shard signal while the alias stayed cached - let
+        // an alias swap pair one copy with another copy's map, and nothing ever
+        // signalled that pair as stale again (torn reads that never healed).
+        string physicalTreeId;
+        ShardMap? shardMap = null;
+        int? shardCount = null;
+        var registered = false;
+        var epoch = _routingEpoch;
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            // System trees (e.g. _lattice_trees) must not resolve aliases - the
+            // registry itself is backed by an ILattice tree, so a registry read
+            // here would create a circular call chain and deadlock.
+            physicalTreeId = TreeId;
+        }
+        else
+        {
+            var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+            physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+            shardMap = entry?.ShardMap;
+            shardCount = entry?.ShardCount;
+            registered = entry is not null;
+        }
+
+        if (shardMap is null)
         {
             // A pure read (issue #4219): routing observes the tree and never
             // registers it. The default map for a tree with no row uses the
-            // default shard count, which is exactly what registering it pins.
-            var shardCount = (await optionsResolver.ResolveIfRegisteredAsync(TreeId))?.ShardCount
-                ?? LatticeConstants.DefaultShardCount;
-            if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+            // default shard count, which is exactly what registering it pins; a
+            // registered tree's pin comes from the same entry the alias was read
+            // from. System trees never have a custom shard map.
+            if (!registered && TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
             {
-                // System trees never have a custom shard map; using the default
-                // also avoids a circular registry call.
-                _shardMap = ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, shardCount);
+                shardCount = (await optionsResolver.ResolveIfRegisteredAsync(TreeId))?.ShardCount;
             }
-            else
-            {
-                var registry = grainFactory.GetLatticeRegistry();
-                _shardMap = await registry.GetShardMapAsync(TreeId)
-                    ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, shardCount);
-            }
+
+            shardMap = ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                shardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
         }
-        var routing = new RoutingInfo(physicalTreeId, _shardMap);
-        _cachedRouting = routing;
+
+        var routing = new RoutingInfo(physicalTreeId, shardMap);
+
+        // Calls that touch routing can interleave on this activation, so a slower
+        // resolve can finish after a newer one. Publish only when no invalidation
+        // has happened since this resolve started and nothing newer is already
+        // published: every alias swap re-versions the map above the row's
+        // previous one, so a lower version is an older registry row. The caller
+        // still gets the pair it read, which is self-consistent either way.
+        var published = _cachedRouting;
+        if (epoch == _routingEpoch && (published is null || published.Map.Version <= shardMap.Version))
+        {
+            if (published is not null
+                && !string.Equals(published.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
+            {
+                _cachedShards = null;
+                _cachedShardsTreeId = null;
+            }
+
+            _physicalTreeId = physicalTreeId;
+            _shardMap = shardMap;
+            _cachedRouting = routing;
+        }
+
         return routing;
     }
 
@@ -4693,7 +4749,9 @@ internal sealed partial class LatticeGrain(
         _physicalTreeId = null;
         _shardMap = null;
         _cachedShards = null;
+        _cachedShardsTreeId = null;
         _cachedRouting = null;
+        _routingEpoch++;
         return true;
     }
 
@@ -4725,17 +4783,24 @@ internal sealed partial class LatticeGrain(
         fault is not ILatticeDomainFault && TryInvalidateStaleAlias();
 
     /// <summary>
-    /// Invalidates the cached <see cref="ShardMap"/> only (preserves the
-    /// resolved physical tree ID). Used by <see cref="StaleShardRoutingException"/>
+    /// Invalidates the cached <see cref="ShardMap"/> so the next routing call
+    /// re-resolves it. Used by <see cref="StaleShardRoutingException"/>
     /// catch clauses to force a fresh map fetch on retry after an adaptive
     /// shard split has remapped virtual slots to a new physical shard.
+    /// The re-resolve reads the alias again together with the map, from the
+    /// same registry row, so a map written by an alias swap is never paired
+    /// with the physical tree the activation cached before it. The cached
+    /// physical tree id is left in place only as the "was resolved" marker
+    /// <see cref="TryInvalidateStaleAlias()"/> keys on.
     /// Always returns <c>true</c> so it can be used as a <c>when</c> filter.
     /// </summary>
     private bool InvalidateShardMap()
     {
         _shardMap = null;
         _cachedShards = null;
+        _cachedShardsTreeId = null;
         _cachedRouting = null;
+        _routingEpoch++;
         return true;
     }
 

@@ -806,16 +806,57 @@ internal sealed class TreeResizeGrain(
         }
         await Task.WhenAll(undoTasks);
 
-        // 3. Remove the alias so the logical tree maps back to the old physical tree.
-        await registry.RemoveAliasAsync(TreeId);
+        // 3. Move the logical tree back onto the old physical tree together with
+        //    the map that addresses its shards, in one registry write (#4336).
+        //    Removing the alias first and restoring the old row in a later step
+        //    left a window in which the old tree was routed by the resized copy's
+        //    map - and, after a second resize, the logical id's own retired shards
+        //    were routed at all.
+        var oldRow = state.State.OldRegistryEntry;
+        var oldMap = oldRow?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+            LatticeConstants.DefaultVirtualShardCount,
+            (oldRow?.ShardCount ?? state.State.ShardCount) is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
+        TreeRegistryEntry? swappedFrom;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+        }
+
+        // Stateless routing activations that cached the resized copy keep
+        // addressing it, and nothing else tells them the alias moved back: their
+        // writes would land on a copy this undo discards, and their reads would
+        // serve it. Arm the copy's shards to redirect logical-alias traffic onto
+        // the old tree before it is discarded, exactly as a restore revert arms
+        // the shadow it leaves (issue #4336). Skipped on a resumed undo whose swap
+        // had already landed: the copy was armed then.
+        if (string.Equals(swappedFrom?.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
+        {
+            await AliasCutoverShardMaps.ArmRedirectsAsync(
+                grainFactory,
+                snapshotTreeId,
+                AliasCutoverShardMaps.EffectiveMap(swappedFrom),
+                oldPhysical,
+                TreeId,
+                $"{opId}:undo",
+                CancellationToken.None);
+        }
 
         // 4. Discard the snapshot tree, releasing its WAL retention now
         //    (issue #3930); see the drain-window branch above.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
         await newDeletion.DiscardDerivedPhysicalTreeAsync();
 
-        // 5. Restore the original registry entry (or clear overrides if none existed).
-        await registry.UpdateAsync(TreeId, state.State.OldRegistryEntry ?? new TreeRegistryEntry());
+        // 5. Restore the original registry entry (or clear overrides if none
+        //    existed). The routing fields keep what step 3 wrote: the same alias
+        //    and slots, under a map version that never runs backwards for a
+        //    router or scan that compares it.
+        var swapped = await registry.GetEntryAsync(TreeId);
+        await registry.UpdateAsync(TreeId, (oldRow ?? new TreeRegistryEntry()) with
+        {
+            PhysicalTreeId = swapped?.PhysicalTreeId,
+            ShardMap = swapped?.ShardMap ?? oldRow?.ShardMap,
+            NextShardIndex = swapped is null ? oldRow?.NextShardIndex : swapped.NextShardIndex,
+        });
 
         // 6. Clear resize state.
         // Snapshot every field ResetResizeState clears so a transient
@@ -984,39 +1025,43 @@ internal sealed class TreeResizeGrain(
         var oldEntry = state.State.OldRegistryEntry;
         var current = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, "the resize alias swap");
-        var resized = await registry.GetEntryAsync(state.State.SnapshotTreeId!);
-        var resizedMap = resized?.ShardMap is { } map
-            ? new ShardMap
-            {
-                Slots = (int[])map.Slots.Clone(),
-                Version = Math.Max(current.ShardMap?.Version ?? 0L, map.Version) + 1,
-            }
-            : null;
+        var snapshotTreeId = state.State.SnapshotTreeId!;
+        var resized = await registry.GetEntryAsync(snapshotTreeId);
         var entry = current with
         {
             MaxLeafKeys = state.State.NewMaxLeafKeys,
             MaxInternalChildren = state.State.NewMaxInternalChildren,
             ShardCount = oldEntry?.ShardCount ?? state.State.ShardCount,
-            ShardMap = resizedMap,
-            NextShardIndex = resized?.NextShardIndex,
             WalPartitions = null,
             WalPlacement = null,
-            // Fences a split or fold bound to the old physical tree off the
-            // resized copy's map until SetAliasAsync below clears it (#4264).
-            AliasCutoverTarget = state.State.SnapshotTreeId,
         };
         await registry.UpdateAsync(TreeId, entry);
 
-        // Set alias to redirect to the new physical tree. System origin, as
-        // backup's shadow cutover does: the swap is library maintenance already
-        // authorized when the resize was accepted, and the phase timer that
-        // usually drives it carries no request context, so the registry's access
-        // gate would otherwise judge it as an anonymous user-origin alias change
-        // and refuse it on every tick (issue 4128). The ownership guard still
-        // runs: it binds system origin too.
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        // Set alias to redirect to the new physical tree, carrying the resized
+        // copy's map and split mark onto the logical entry in the same registry
+        // write (#4336): written separately, a reader resolving between the two
+        // paired the old tree with the resized copy's map. A swap resumed after it
+        // committed is skipped, so splits on the resized copy since are kept.
+        // System origin, as backup's shadow cutover does: the swap is library
+        // maintenance already authorized when the resize was accepted, and the
+        // phase timer that usually drives it carries no request context, so the
+        // registry's access gate would otherwise judge it as an anonymous
+        // user-origin alias change and refuse it on every tick (issue 4128). The
+        // ownership guard still runs: it binds system origin too.
+        if (!string.Equals(current.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
         {
-            await registry.SetAliasAsync(TreeId, state.State.SnapshotTreeId!);
+            var resizedMap = resized?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                entry.ShardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await registry.SwapAliasAsync(
+                    TreeId,
+                    snapshotTreeId,
+                    resizedMap,
+                    resized?.NextShardIndex,
+                    expectedPhysicalTreeId: current.PhysicalTreeId ?? TreeId);
+            }
         }
 
         var prevPhase = state.State.Phase;

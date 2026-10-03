@@ -721,14 +721,15 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
 
         var registry = _grainFactory.GetLatticeRegistry();
 
-        // Routing reads the shard map under the logical id, so swapping only the
-        // alias would address the target's shards by the logical tree's map and
-        // read every key the target placed by its own map as absent (#4263).
+        // Routing reads the shard map under the logical id, so the target's map is
+        // carried onto the logical entry in the same registry write as the alias
+        // (#4263, #4336), and the previous copy is armed to redirect routing
+        // activations that still cache it onto the target.
         await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(
             _grainFactory,
             effectiveTreeId,
             effectivePhysicalTreeId,
-            () => registry.SetAliasAsync(effectiveTreeId, effectivePhysicalTreeId)).ConfigureAwait(false);
+            cancellationToken).ConfigureAwait(false);
 
         var resolved = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false);
         return new TreeAliasResolution

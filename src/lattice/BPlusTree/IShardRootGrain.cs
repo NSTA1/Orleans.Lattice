@@ -1675,6 +1675,17 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// redirect being cleared.</param>
     Task ClearRetainedRedirectAsync(string operationId);
 
+    /// <summary>
+    /// Releases a redirect installed by <see cref="MarkRetainedRedirectAsync"/>
+    /// for traffic routed through <paramref name="logicalTreeId"/>, whichever
+    /// operation installed it, because that logical tree now resolves to this
+    /// shard's tree again (an explicit alias back onto it). A no-op when no
+    /// redirect is present or the redirect belongs to another logical tree; never
+    /// throws on an operation mismatch, unlike <see cref="ClearRetainedRedirectAsync"/>.
+    /// </summary>
+    /// <param name="logicalTreeId">The logical tree whose alias now resolves to this shard's tree.</param>
+    Task ReleaseRetainedRedirectAsync(string logicalTreeId);
+
     // ==========================================================================
     //  Saga prepare/commit-broadcast terminal-mark primitive
     // ==========================================================================

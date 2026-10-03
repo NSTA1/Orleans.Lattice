@@ -92,6 +92,9 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task RemoveAliasAsync(string treeId) => Task.CompletedTask;
 
+    public Task<TreeRegistryEntry?> SwapAliasAsync(string treeId, string physicalTreeId, ShardMap shardMap, int? nextShardIndex, string? expectedPhysicalTreeId) =>
+        Task.FromResult<TreeRegistryEntry?>(null);
+
     public Task SetShardMapAsync(string treeId, ShardMap map) => Task.CompletedTask;
 
     public Task SetPublishEventsAsync(string treeId, bool? enabled) => Task.CompletedTask;
