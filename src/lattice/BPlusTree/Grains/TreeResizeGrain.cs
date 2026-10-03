@@ -771,10 +771,8 @@ internal sealed class TreeResizeGrain(
         // runs rather than recreate it as a bare row with no structural pins
         // (issue #4270).
         var registry = grainFactory.GetLatticeRegistry();
-        if (await registry.GetEntryAsync(TreeId) is null)
-        {
-            throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
-        }
+        var logicalBefore = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
 
         // Defensively abort any snapshot activation that may have been
         // resurrected by crash recovery - a no-op when the snapshot has
@@ -802,15 +800,33 @@ internal sealed class TreeResizeGrain(
             await oldDeletion.RecoverPhysicalAsync();
         }
 
-        // 2. Clear shadow-forward on every old-tree shard so the tree becomes
-        //    writable again (lifts the Rejecting phase).
-        var undoTasks = new Task[shardIndices.Length];
-        for (int i = 0; i < shardIndices.Length; i++)
+        // Steps 2 to 4 mirror the forward swap's fence-before-flip order (#4362)
+        // so that no instant has both copies serving the logical tree (#4453):
+        // the copy the alias names is the only one that answers routed traffic,
+        // and the other refuses it with a stale-routing signal the routing tier
+        // retries on. Clearing the old copy's fence before the swap let a router
+        // that cached the old copy serve it while fresh routers used the resized
+        // copy; arming the resized copy after the swap let a router that cached
+        // the resized copy keep writing to a copy this undo discards.
+
+        // 2. Arm the resized copy's shards to redirect logical-alias traffic onto
+        //    the old tree before the alias moves back, exactly as a restore revert
+        //    arms the shadow it leaves (issue #4336). Until the swap lands, routed
+        //    callers retry against a copy that refuses them; the old copy is still
+        //    fenced, so neither copy serves them. Skipped on a resumed undo whose
+        //    swap had already landed: the copy was armed before it.
+        var undoRedirect = $"{opId}:undo";
+        if (string.Equals(logicalBefore.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
-            undoTasks[i] = shard.ClearShadowForwardAsync(opId);
+            await AliasCutoverShardMaps.ArmRedirectsAsync(
+                grainFactory,
+                snapshotTreeId,
+                AliasCutoverShardMaps.EffectiveMap(logicalBefore),
+                oldPhysical,
+                TreeId,
+                undoRedirect,
+                CancellationToken.None);
         }
-        await Task.WhenAll(undoTasks);
 
         // 3. Move the logical tree back onto the old physical tree together with
         //    the map that addresses its shards, in one registry write (#4336).
@@ -823,18 +839,22 @@ internal sealed class TreeResizeGrain(
             LatticeConstants.DefaultVirtualShardCount,
             (oldRow?.ShardCount ?? state.State.ShardCount) is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
         TreeRegistryEntry? swappedFrom;
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        try
         {
-            swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+            }
+        }
+        catch
+        {
+            await ReleaseUndoRedirectUnlessSwappedAsync(registry, oldPhysical, snapshotTreeId, logicalBefore, undoRedirect);
+            throw;
         }
 
-        // Stateless routing activations that cached the resized copy keep
-        // addressing it, and nothing else tells them the alias moved back: their
-        // writes would land on a copy this undo discards, and their reads would
-        // serve it. Arm the copy's shards to redirect logical-alias traffic onto
-        // the old tree before it is discarded, exactly as a restore revert arms
-        // the shadow it leaves (issue #4336). Skipped on a resumed undo whose swap
-        // had already landed: the copy was armed then.
+        // The swap's own read of the row is authoritative: a split that committed
+        // onto the resized copy after the read above allocated a shard the arm
+        // did not reach. Re-arming is idempotent for every shard already armed.
         if (string.Equals(swappedFrom?.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
         {
             await AliasCutoverShardMaps.ArmRedirectsAsync(
@@ -843,16 +863,27 @@ internal sealed class TreeResizeGrain(
                 AliasCutoverShardMaps.EffectiveMap(swappedFrom),
                 oldPhysical,
                 TreeId,
-                $"{opId}:undo",
+                undoRedirect,
                 CancellationToken.None);
         }
 
-        // 4. Discard the snapshot tree, releasing its WAL retention now
+        // 4. Only now clear shadow-forward on every old-tree shard so the tree
+        //    becomes writable again (lifts the Rejecting phase). Between the swap
+        //    and this step routed callers retry until the fence lifts.
+        var undoTasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
+            undoTasks[i] = shard.ClearShadowForwardAsync(opId);
+        }
+        await Task.WhenAll(undoTasks);
+
+        // 5. Discard the snapshot tree, releasing its WAL retention now
         //    (issue #3930); see the drain-window branch above.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
         await newDeletion.DiscardDerivedPhysicalTreeAsync();
 
-        // 5. Restore the original registry entry (or clear overrides if none
+        // 6. Restore the original registry entry (or clear overrides if none
         //    existed). The routing fields keep what step 3 wrote: the same alias
         //    and slots, under a map version that never runs backwards for a
         //    router or scan that compares it.
@@ -864,7 +895,7 @@ internal sealed class TreeResizeGrain(
             NextShardIndex = swapped is null ? oldRow?.NextShardIndex : swapped.NextShardIndex,
         });
 
-        // 6. Clear resize state.
+        // 7. Clear resize state.
         // Snapshot every field ResetResizeState clears so a transient
         // WriteStateAsync failure does not leave in-memory state below
         // the UndoResizeAsync top guard (!InProgress && !Complete),
@@ -1179,6 +1210,47 @@ internal sealed class TreeResizeGrain(
         {
             Logger.LogWarning(ex,
                 "Resize of tree {TreeId} could not lift the old copy's fence after a failed alias swap; it stays fenced until the swap is retried.",
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Releases the redirect an after-swap undo armed on the resized copy when
+    /// the swap back onto the old copy then failed, unless the registry shows the
+    /// alias did move - then the redirect is exactly what must stay. Without it a
+    /// refused swap would leave the tree unavailable: the alias would still name
+    /// a copy that refuses routed traffic, and the old copy is still fenced.
+    /// Best-effort, like <see cref="LiftFenceUnlessSwappedAsync"/>: it never masks
+    /// the swap's own failure, and a retried undo arms the copy again.
+    /// </summary>
+    private async Task ReleaseUndoRedirectUnlessSwappedAsync(
+        ILatticeRegistry registry,
+        string oldPhysical,
+        string snapshotTreeId,
+        TreeRegistryEntry armedFrom,
+        string undoRedirect)
+    {
+        if (!string.Equals(armedFrom.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal)) return;
+
+        try
+        {
+            var resolved = await registry.ResolveAsync(TreeId);
+            if (string.Equals(resolved, oldPhysical, StringComparison.Ordinal)) return;
+
+            using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+            var indices = AliasCutoverShardMaps.EffectiveMap(armedFrom).GetPhysicalShardIndices();
+            var tasks = new Task[indices.Count];
+            for (var i = 0; i < indices.Count; i++)
+            {
+                tasks[i] = grainFactory.GetGrain<IShardRootGrain>($"{snapshotTreeId}/{indices[i]}")
+                    .ClearRetainedRedirectAsync(undoRedirect);
+            }
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Undo of the resize of tree {TreeId} could not release the resized copy's redirect after a failed alias swap; it stays armed until the undo is retried.",
                 TreeId);
         }
     }
