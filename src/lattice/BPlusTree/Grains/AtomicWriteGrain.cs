@@ -249,6 +249,9 @@ internal sealed class AtomicWriteGrain(
             case AtomicWritePhase.Prepare:
             case AtomicWritePhase.Execute:
             case AtomicWritePhase.Compensate:
+                // A resume this late is past the deadline of the caller that
+                // last entered the saga, so an undecided saga is rolled back
+                // here rather than committed (RollBackUndecidedIfCallerGoneAsync).
                 try
                 {
                     await RunSagaAsync();
@@ -341,6 +344,8 @@ internal sealed class AtomicWriteGrain(
             await TryThrowFailureAsync();
             return;
         }
+
+        AdoptCallerDecisionDeadline();
 
         // Fresh saga - validate inputs, register the keepalive reminder first
         // (so a crash mid-Prepare still has a reminder-driven recovery path),
@@ -440,6 +445,8 @@ internal sealed class AtomicWriteGrain(
             await TryThrowFailureAsync();
             return AtomicWriteOutcome.Committed;
         }
+
+        AdoptCallerDecisionDeadline();
 
         if (state.State.Phase == AtomicWritePhase.NotStarted)
         {
@@ -2340,6 +2347,9 @@ internal sealed class AtomicWriteGrain(
         // targets the actual binding constraint.
         var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
 
+        // A saga nobody is waiting on any more does no further forward work.
+        await RollBackUndecidedIfCallerGoneAsync();
+
         if (state.State.Phase == AtomicWritePhase.Prepare)
         {
             // Crash before execute was persisted - replay Prepare.
@@ -2364,6 +2374,10 @@ internal sealed class AtomicWriteGrain(
             }
 
             await RebindAcrossAliasSwapAsync();
+
+            // The commit decision is next: the last point at which a saga whose
+            // caller has given up can still be rolled back instead.
+            await RollBackUndecidedIfCallerGoneAsync();
         }
 
         if (state.State.Phase == AtomicWritePhase.Compensate)
@@ -2543,6 +2557,80 @@ internal sealed class AtomicWriteGrain(
         if (txid == Guid.Empty) return Task.CompletedTask;
         var registry = RegistryFor(state.State.TreeId, txid);
         return TxRegistryWriteRetry.MarkDecisionAsync(registry, txid, committed);
+    }
+
+    /// <summary>
+    /// Records the decide-by deadline of the caller that has just entered the
+    /// saga (<see cref="LatticeSagaDecisionDeadlineContext"/>), replacing any
+    /// earlier caller's: a caller re-issuing its operation id waits afresh. A
+    /// caller that supplies none imposes none. Persisted with the saga's next
+    /// state write.
+    /// </summary>
+    private void AdoptCallerDecisionDeadline() =>
+        state.State.DecideByUtcTicks = LatticeSagaDecisionDeadlineContext.Current ?? 0;
+
+    /// <summary>
+    /// Rolls the saga back - pivots it to <see cref="AtomicWritePhase.Compensate"/> -
+    /// when it has not yet recorded a commit decision and nobody is waiting on
+    /// it any more: the deadline of the caller that last entered it
+    /// (<see cref="AtomicWriteState.DecideByUtcTicks"/>) has passed. That covers
+    /// a resume from the keepalive reminder too, which first fires a minute
+    /// after the caller entered - past any deadline a caller supplies. A saga
+    /// whose caller supplied no deadline is never rolled back here.
+    /// <para>
+    /// A saga's caller can be answered with a failure while the saga goes on:
+    /// its call timed out, or the silo it called through re-issued the saga
+    /// after a transient fault. Committing then makes the batch visible after
+    /// writes the caller issued once it had been told the batch failed, so a
+    /// later batch reads back at this one's older values. Rolling back keeps
+    /// the failure the caller saw true. A saga that already recorded its commit
+    /// (a crash between the decision and completion) is left to finish: the
+    /// decision made the batch visible, and the saga only delivers it. A
+    /// cross-tree sub-saga is never rolled back here, because its commit
+    /// decision belongs to its coordinator.
+    /// </para>
+    /// </summary>
+    private async Task RollBackUndecidedIfCallerGoneAsync()
+    {
+        if (state.State.Phase is not (AtomicWritePhase.Prepare or AtomicWritePhase.Execute))
+            return;
+        if (state.State.ExternalAuthorityKey is not null)
+            return;
+
+        var deadline = state.State.DecideByUtcTicks;
+        if (deadline <= 0 || DateTime.UtcNow.Ticks <= deadline)
+            return;
+
+        var txid = state.State.TransactionId;
+        if (txid != Guid.Empty
+            && await RegistryFor(state.State.TreeId, txid).GetRecordedStatusAsync(txid) == TxStatus.Committed)
+        {
+            return;
+        }
+
+        var reason = $"its commit decision was due by {new DateTime(deadline, DateTimeKind.Utc):O} for the caller waiting on it";
+        var prevPhase = state.State.Phase;
+        var prevFailureMessage = state.State.FailureMessage;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        state.State.Phase = AtomicWritePhase.Compensate;
+        state.State.FailureMessage =
+            $"the batch was not committed because {reason}; it is rolled back so that it cannot become visible after writes issued once its caller was answered.";
+        state.State.RetriesOnCurrentStep = 0;
+        try
+        {
+            await WriteSagaStateAsync("caller-gone-to-compensate");
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.FailureMessage = prevFailureMessage;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            throw;
+        }
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: rolled back because {Reason}.",
+            OperationKey, reason);
     }
 
     /// <summary>
