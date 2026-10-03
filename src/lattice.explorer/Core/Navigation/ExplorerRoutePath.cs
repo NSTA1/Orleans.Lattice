@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Text.Unicode;
 
 namespace Orleans.Lattice.Explorer.Core.Navigation;
 
@@ -373,37 +374,77 @@ public static class ExplorerRoutePath
 
     private static bool TryUnescape(ReadOnlySpan<char> value, out string result)
     {
-        if (value.IsEmpty)
+        if (value.IndexOf('%') < 0)
         {
-            result = string.Empty;
+            result = value.ToString();
             return true;
         }
 
         // Uri.UnescapeDataString does not reject a broken escape - it hands back
-        // '%zz' verbatim - so an address carrying one would silently resolve to a
-        // different id than the link intended. Validate first and report it, so
-        // the shell can say the link was not understood rather than quietly
-        // showing the wrong thing.
+        // '%zz', and an escaped byte run that is not UTF-8 such as '%FF',
+        // verbatim - so an address carrying one would silently resolve to a
+        // different id than the link intended. Decode strictly instead and report
+        // it, so the shell can say the link was not understood rather than
+        // quietly showing the wrong thing. Every escape decodes to at least one
+        // byte per three characters, so the text never outgrows the input.
+        var bytes = new byte[value.Length / 3];
+        var text = new char[value.Length];
+        var byteCount = 0;
+        var written = 0;
+
         for (var i = 0; i < value.Length; i++)
         {
-            if (value[i] != '%')
+            if (value[i] == '%')
             {
+                if (i + 2 >= value.Length ||
+                    !Uri.IsHexDigit(value[i + 1]) ||
+                    !Uri.IsHexDigit(value[i + 2]))
+                {
+                    result = string.Empty;
+                    return false;
+                }
+
+                bytes[byteCount++] = (byte)((Uri.FromHex(value[i + 1]) << 4) | Uri.FromHex(value[i + 2]));
+                i += 2;
                 continue;
             }
 
-            if (i + 2 >= value.Length ||
-                !Uri.IsHexDigit(value[i + 1]) ||
-                !Uri.IsHexDigit(value[i + 2]))
+            if (!TryFlushUtf8(bytes, ref byteCount, text, ref written))
             {
                 result = string.Empty;
                 return false;
             }
 
-            i += 2;
+            text[written++] = value[i];
         }
 
-        result = Uri.UnescapeDataString(value.ToString());
+        if (!TryFlushUtf8(bytes, ref byteCount, text, ref written))
+        {
+            result = string.Empty;
+            return false;
+        }
+
+        result = new string(text, 0, written);
         return true;
+    }
+
+    private static bool TryFlushUtf8(byte[] bytes, ref int byteCount, char[] text, ref int written)
+    {
+        if (byteCount == 0)
+        {
+            return true;
+        }
+
+        var status = Utf8.ToUtf16(
+            bytes.AsSpan(0, byteCount),
+            text.AsSpan(written),
+            out _,
+            out var charsWritten,
+            replaceInvalidSequences: false);
+
+        byteCount = 0;
+        written += charsWritten;
+        return status == OperationStatus.Done;
     }
 
     /// <summary>

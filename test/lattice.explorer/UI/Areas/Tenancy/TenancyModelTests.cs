@@ -113,6 +113,13 @@ public sealed class TenancyModelTests
     [TestCase(10L * 1024 * 1024, "10 MiB")]
     [TestCase(5L * 1024 * 1024 * 1024 * 1024, "5 TiB")]
     [TestCase(long.MaxValue, "8 EiB")]
+    [TestCase(1_047_552L, "1023 KiB")]
+    [TestCase(1_048_063L, "1023 KiB")]
+    // #4355's sweep missed this formatter: 1,048,064 and 1,048,575 bytes read
+    // "1024 KiB", and a byte short of a GiB "1024 MiB".
+    [TestCase(1_048_064L, "1 MiB")]
+    [TestCase(1_048_575L, "1 MiB")]
+    [TestCase((1L << 30) - 1, "1 GiB")]
     public void Bytes_read_in_binary_units(long value, string expected)
     {
         Assert.That(TenancyFormat.Bytes(value), Is.EqualTo(expected));

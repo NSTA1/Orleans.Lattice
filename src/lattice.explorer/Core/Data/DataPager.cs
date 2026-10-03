@@ -66,7 +66,8 @@ public sealed class DataPager(IDataReader reader)
     /// When the prior scan still had an open cursor, it is released best-effort
     /// after the new scan opens so its server-side cursor (and, for a snapshot
     /// scan, its WAL pin and baseline) is freed promptly rather than lingering
-    /// until the idle TTL.
+    /// until the idle TTL. A failed release is not reported: the new scan has
+    /// already opened and is in view, and the server reaps an idle cursor.
     /// </summary>
     public async Task ResetAsync(
         string treeId,
@@ -95,7 +96,16 @@ public sealed class DataPager(IDataReader reader)
         PageIndex = 0;
         _liveContinuation = page.HasMore ? page.ContinuationToken : null;
 
-        await CancelCursorAsync(oldTreeId, oldContinuation, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await CancelCursorAsync(oldTreeId, oldContinuation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            // The new scan is open and in view, so a superseded cursor that cannot
+            // be released (the caller lost access to its tree, or the call failed)
+            // must not report the reset as failed; the server reaps an idle cursor.
+        }
     }
 
     /// <summary>
