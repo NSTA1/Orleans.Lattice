@@ -160,16 +160,16 @@ alone can reach, and larger instances grow quickly.
 
 ## Claims in this directory that open issues own
 
-One issue that is still **open** owns claims made in this directory.
+No issue that is still **open** owns claims made in this directory.
 
-- **#2319** owns raising the Coyote harness's concurrency degree above zero.
-  #2325 corrected the two member names that promised schedule exploration the
-  harness does not perform; making the exploration real is #2319's.
-
-The three that used to appear here - **#2320** (the unordered decision-masking
+The four that used to appear here - **#2319** (verification artefacts named for
+what they could not exercise; the Coyote concurrency degree was deliberately not
+raised, see `CoyoteModelHarness`), **#2320** (the unordered decision-masking
 action, now `RegistryMask`), **#2325** (documentation and API overclaims in the
 atomicity surface, including the `k2` overlap discussed above) and **#2333**
 (the `DecisionDurability` prose and its refinement seam) - are all resolved.
+Further issues filed while closing them are about production behaviour, not
+claims made here: #4428, #4445 and #4448.
 
 The boundary is recorded in full under
 [territory owned by other open issues](Refinement.md#territory-owned-by-other-open-issues)

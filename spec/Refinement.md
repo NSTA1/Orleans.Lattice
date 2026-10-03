@@ -175,22 +175,15 @@ correct. **Re-populate it rather than deleting it** when its entries close: the
 job it does outlives any particular set of issues, and an empty section still
 tells a reader the question was asked.
 
-### #2319 owns verification artefacts named for what they cannot exercise
+### No open issue currently owns a claim here
 
-Two members of `CoyoteModelHarness` were renamed by #2325 to describe the
-single-operation determinism they actually establish, because their previous
-names promised interleaving and schedule exploration at a measured concurrency
-degree of zero. Renaming was the correction available to a documentation issue.
+Every issue that has owned territory in this directory is now closed. The
+section stays, empty of owners, so a later census can see the question was asked;
+re-populate it when an open issue next takes ownership of a claim made here.
 
-**Raising the concurrency degree above zero, so that names promising exploration
-would be honest, is #2319's and remains open.** A finding that a verification
-artefact in the atomicity surface explores fewer schedules than its purpose
-implies is #2319's; a finding that its *name or documentation* overstates what it
-does was #2325's and is closed.
+### Closed: #2319, #2320, #2325 and #2333
 
-### Closed: #2320, #2325 and #2333
-
-All three are resolved, and all are recorded here rather than deleted because a
+All four are resolved, and all are recorded here rather than deleted because a
 census that predates their fixes will still turn their findings up.
 
 - **#2333** owned `DecisionDurability`'s prose and its refinement seam. Its
@@ -200,6 +193,20 @@ census that predates their fixes will still turn their findings up.
   together, which was the issue's own instruction: because the three layers
   *compose* into the defect, fixing prose alone would have converted an honest
   narrow claim into a false broad one.
+- **#2319** owned verification artefacts named for what they cannot exercise.
+  #2325 renamed the harness members that promised schedule exploration at a
+  measured concurrency degree of zero; raising the degree was considered and
+  deliberately not done (it needs a `coyote rewrite` pass over the product
+  assembly, and every targeted race is already a choice point the models
+  explore), and `CoyoteModelHarness.Explore`'s remarks record why. Its other
+  instances were closed by making the artefacts reach their state:
+  `AtomicCommitVisibilityModel` drives `preparedHiddenByTombstoneOrExpiry` live
+  with a guard that fails if the gate's Hidden arm regresses, the other model
+  call sites state why that arm is outside their scope, a non-chaos
+  cross-cluster test drives the receiver's terminal tally through
+  `IReplicationApplier`, and `LinearizedTerminals` fires under a mutation that
+  perturbs `BroadcastStep`. A finding that a verification artefact here explores
+  fewer schedules than its purpose implies is now a new issue, not #2319's.
 - **#2320** owned the unordered decision-masking action. `ForgetDecision(t)`
   models only the **ordered** cleanup, whose conjuncts make every observation
   independent of the decision before it fires, so its passing said nothing about
