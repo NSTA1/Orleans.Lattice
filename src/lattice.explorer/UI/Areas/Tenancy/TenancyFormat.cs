@@ -279,7 +279,7 @@ internal static class TenancyFormat
     /// <param name="value">The number.</param>
     public static string Count(long value) => value.ToString("N0", CultureInfo.InvariantCulture);
 
-    /// <summary>A byte count in the largest binary unit that keeps it at or above one.</summary>
+    /// <summary>A byte count in the largest binary unit that keeps it at or above one, and below 1024 as written.</summary>
     /// <param name="value">The byte count.</param>
     public static string Bytes(long value)
     {
@@ -290,7 +290,10 @@ internal static class TenancyFormat
 
         double scaled = value;
         var unit = 0;
-        while (scaled >= 1024 && unit < ByteUnits.Length - 1)
+
+        // The unit is chosen on the figure as written, so a size that rounds up to
+        // 1024 moves to the next unit rather than reading "1024 KiB" (#4355).
+        while (Math.Round(scaled, scaled < 10 ? 1 : 0, MidpointRounding.AwayFromZero) >= 1024 && unit < ByteUnits.Length - 1)
         {
             scaled /= 1024;
             unit++;

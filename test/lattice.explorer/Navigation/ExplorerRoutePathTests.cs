@@ -428,6 +428,50 @@ public sealed class ExplorerRoutePathTests
         });
     }
 
+    // Regression: an escape whose bytes are not UTF-8 passed the hex check and
+    // Uri.UnescapeDataString handed it back verbatim, so '/explore/trees/%FF'
+    // selected a tree literally named '%FF' and read as merely Normalized.
+    [TestCase("/explore/trees/%FF/data")]
+    [TestCase("/explore/trees/a%C3(b")]
+    [TestCase("/explore/trees/%E2%82")]
+    [TestCase("/explore/trees/%C0%AF")]
+    [TestCase("/explore/trees/%ED%A0%80")]
+    public void Parse_EscapeThatIsNotUtf8InId_IsMalformedAndDropsTheSelection(string address)
+    {
+        var parsed = ExplorerRoutePath.Parse(address);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Malformed));
+            Assert.That(parsed.Route.Id, Is.EqualTo(string.Empty));
+            Assert.That(parsed.Route.Kind, Is.EqualTo("trees"));
+        });
+    }
+
+    [Test]
+    public void Parse_EscapeThatIsNotUtf8InQueryValue_IsMalformed()
+    {
+        var parsed = ExplorerRoutePath.Parse("/explore?tenant=acme%FF");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Malformed));
+            Assert.That(parsed.Route.Tenant, Is.EqualTo(string.Empty));
+        });
+    }
+
+    [Test]
+    public void Parse_Utf8EscapesInId_DecodeAndRoundTrip()
+    {
+        var parsed = ExplorerRoutePath.Parse("/explore/trees/caf%C3%A9%20%F0%9F%93%A6%2Forders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(parsed.Route.Id, Is.EqualTo("caf\u00E9 \U0001F4E6/orders"));
+            Assert.That(parsed.Status, Is.EqualTo(ExplorerRouteStatus.Canonical));
+        });
+    }
+
     [Test]
     public void Parse_SurfaceWithNoId_DropsTheSurfaceAndIsMalformed()
     {
