@@ -193,7 +193,9 @@ change, no policy change. The build then rewrites every value into a fresh
 destination tree, re-validating each one; an offender found at that stage aborts
 the same way and the partial destination is discarded (soft-deleted). Only a fully
 successful build cuts the logical tree over to the remediated destination: it
-installs the target policy, then repoints the tree via physical-tree aliasing, then
+installs the target policy, then repoints the tree via physical-tree aliasing - moving
+the destination's shard map onto the tree in the same registry write as the alias, so
+no reader pairs the source with the destination's map or the reverse - then
 arms a retained redirect that steers already-materialised readers to the new data.
 A remediation holds the tree's alias reservation from the moment it starts until it
 completes or aborts - including while an interrupted one waits to be requested

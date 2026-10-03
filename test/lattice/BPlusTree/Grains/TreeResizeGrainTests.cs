@@ -202,7 +202,7 @@ public partial class TreeResizeGrainTests
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
             e.MaxLeafKeys == 256 && e.MaxInternalChildren == 64));
-        await registry.Received(1).SetAliasAsync(TreeId, $"{TreeId}/resized/op1");
+        await registry.Received(1).SwapAliasAsync(TreeId, $"{TreeId}/resized/op1", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Reject));
     }
 
@@ -337,9 +337,9 @@ public partial class TreeResizeGrainTests
         await grainFactory.GetGrain<ITreeDeletionGrain>(TreeId)
             .Received(1).RecoverPhysicalAsync();
 
-        // Removed alias.
+        // Alias moved back onto the old tree with its map.
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.Received(1).RemoveAliasAsync(TreeId);
+        await registry.Received(1).SwapAliasAsync(TreeId, TreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
 
         // Discarded new tree (issue #3930): released, not merely deleted.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>($"{TreeId}/resized/op1");
@@ -411,7 +411,7 @@ public partial class TreeResizeGrainTests
         await grain.ProcessNextPhaseAsync();
 
         var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
-        await registry.Received(1).SetAliasAsync(TreeId, $"{TreeId}/resized/recovery");
+        await registry.Received(1).SwapAliasAsync(TreeId, $"{TreeId}/resized/recovery", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         Assert.That(state.State.Phase, Is.EqualTo(ResizePhase.Reject));
     }
 

@@ -253,6 +253,14 @@ public sealed class TelemetryModelTests
         });
     }
 
+    [TestCase(1_048_575d, "1 MiB")]
+    [TestCase(1_048_524d, "1023.9 KiB")]
+    [TestCase(1023.6d, "1 KiB")]
+    [TestCase(1023.4d, "1023 B")]
+    public void A_byte_reading_just_under_a_unit_boundary_reads_in_the_next_unit(double value, string expected) =>
+        // #4355: 1,048,575 bytes read "1024 KiB" and 1023.6 bytes "1024 B".
+        Assert.That(TelemetryFormat.Value(value, "By", TelemetryMeasurementSemantic.Level), Is.EqualTo(expected));
+
     [Test]
     public void Readings_are_written_in_their_unit()
     {

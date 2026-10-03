@@ -46,8 +46,7 @@ public class LatticeGrainProjectionAdminDriverTests
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult(shardMap));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = shardCount }));
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = shardCount });
 
         var shard = Substitute.For<IShardRootGrain>();
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>(), Arg.Any<string>()).Returns(shard);
@@ -262,8 +261,7 @@ public class LatticeGrainProjectionAdminDriverTests
         // Slots alternate between physical shard 0 and 1, so the fan-out addresses both.
         registry.GetShardMapAsync(Arg.Any<string>())
             .Returns(Task.FromResult<ShardMap?>(new ShardMap { Slots = [0, 1, 0, 1], Version = 1 }));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 }));
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry { MaxLeafKeys = 128, MaxInternalChildren = 128, ShardCount = 2 });
 
         // Route each physical shard id to its own substitute so the two lags differ.
         static IShardRootGrain ShardWithLag(long head, long checkpoint)

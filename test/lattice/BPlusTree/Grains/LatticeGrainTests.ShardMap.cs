@@ -37,13 +37,12 @@ public partial class LatticeGrainTests
         // delete against a tree nobody created stays a side-effect-free no-op
         // rather than provisioning one. Report every tree as registered.
         registry.ExistsAsync(Arg.Any<string>()).Returns(Task.FromResult(true));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = shardCount,
-            }));
+            });
 
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, baseOptions);
 
@@ -95,11 +94,13 @@ public partial class LatticeGrainTests
         SetupShardRoot(factory);
 
         await grain.GetAsync("k1");
+        var afterFirst = RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync));
         await grain.GetAsync("k2");
         await grain.GetAsync("k3");
 
         // Map fetched at most once per activation.
-        await registry.Received(1).GetShardMapAsync(treeId);
+        Assert.That(afterFirst, Is.GreaterThanOrEqualTo(1));
+        Assert.That(RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync)), Is.EqualTo(afterFirst));
     }
 
     [Test]
@@ -119,11 +120,15 @@ public partial class LatticeGrainTests
             return Task.FromResult<byte[]?>([1]);
         });
 
+        shardRoot.GetAsync("warm").Returns(Task.FromResult<byte[]?>(null));
+        await grain.GetAsync("warm");
+        var warmed = RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync));
+
         var result = await grain.GetAsync("k1");
 
         Assert.That(result, Is.EqualTo(new byte[] { 1 }));
-        // Map fetched twice - once initially, once after invalidation.
-        await registry.Received(2).GetShardMapAsync(treeId);
+        // Map fetched once more after the invalidation, together with the alias.
+        Assert.That(RoutingResolves(registry, nameof(ILatticeRegistry.GetShardMapAsync)), Is.EqualTo(warmed + 1));
     }
 
     [Test]
@@ -169,4 +174,13 @@ public partial class LatticeGrainTests
         factory.DidNotReceive().GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>());
         factory.DidNotReceive().GetGrain<IShardRootGrain>($"{treeId}/3", Arg.Any<string>());
     }
+
+    /// <summary>
+    /// Counts calls to <paramref name="method"/> on a substitute registry. Routing reads the
+    /// alias and the map from one entry read, which the substitute answers through its
+    /// alias and map stubs; options resolution reads entries too, so tests compare counts
+    /// across a step rather than asserting absolute totals.
+    /// </summary>
+    private static int RoutingResolves(ILatticeRegistry registry, string method) =>
+        registry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == method);
 }

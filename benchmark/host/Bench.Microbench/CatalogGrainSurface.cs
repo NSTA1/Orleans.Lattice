@@ -227,6 +227,9 @@ internal sealed class CatalogGrainSurface
 
         public Task RemoveAliasAsync(string treeId) => throw NotDriven();
 
+        public Task<TreeRegistryEntry?> SwapAliasAsync(string treeId, string physicalTreeId, ShardMap shardMap, int? nextShardIndex, string? expectedPhysicalTreeId) =>
+            throw NotDriven();
+
         public Task SetShardMapAsync(string treeId, ShardMap map) => throw NotDriven();
 
         public Task<ShardMap> ReassignSlotsAsync(

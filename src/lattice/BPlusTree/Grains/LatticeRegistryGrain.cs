@@ -498,6 +498,88 @@ internal sealed class LatticeRegistryGrain(
         if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
             throw new ArgumentException("Physical tree ID must differ from the logical tree ID.", nameof(physicalTreeId));
 
+        await EnsureAliasTargetAdmissibleAsync(treeId, physicalTreeId);
+
+        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
+        // Writing the alias completes any cutover that carried the target's map
+        // onto this entry first, so its in-progress marker is cleared with it.
+        var updated = existing with { PhysicalTreeId = physicalTreeId, AliasCutoverTarget = null };
+        await UpdateAsync(treeId, updated);
+        await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
+    }
+
+    public async Task<State.TreeRegistryEntry?> SwapAliasAsync(string treeId, string physicalTreeId, ShardMap shardMap, int? nextShardIndex, string? expectedPhysicalTreeId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(physicalTreeId);
+        ArgumentNullException.ThrowIfNull(shardMap);
+
+        // Every check runs before anything is written, so a refused swap leaves
+        // both the alias and the map exactly as they were.
+        var removing = string.Equals(treeId, physicalTreeId, StringComparison.Ordinal);
+        TreeRegistryEntry? existingRow;
+        if (removing)
+        {
+            await grainFactory.GetGrain<ITreeDeletionGrain>(treeId).EnsureAliasWritableAsync();
+
+            // Moving a tree back onto its own shards rewrites a row that must
+            // already exist; an upsert here would recreate a purged tree (#4270).
+            existingRow = await GetEntryCoreAsync(treeId)
+                ?? throw new LatticeTreeNotRegisteredException(treeId, nameof(SwapAliasAsync));
+        }
+        else
+        {
+            await EnsureAliasTargetAdmissibleAsync(treeId, physicalTreeId);
+            existingRow = await GetEntryCoreAsync(treeId);
+        }
+
+        var existing = existingRow ?? new TreeRegistryEntry();
+
+        // Expected-state fence: the caller read the copy it is replacing outside
+        // this turn, so a swap racing another alias change must not overwrite it.
+        var replacedPhysical = existing.PhysicalTreeId ?? treeId;
+        if (expectedPhysicalTreeId is not null
+            && !string.Equals(replacedPhysical, expectedPhysicalTreeId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Cannot swap the alias of tree '{treeId}': it now resolves to '{replacedPhysical}', "
+                + $"not the expected '{expectedPhysicalTreeId}'. Another alias change moved it; re-read and retry.");
+        }
+
+        // The alias and the map routing pairs with it are one row, written once:
+        // a reader resolving routing either before or after this write sees a
+        // physical tree together with the map that describes its shards, never
+        // one copy addressed by another copy's map. The map is re-versioned above
+        // both the row's current map and the supplied one, so every cached router
+        // and every map-version scan guard observes the change.
+        var updated = existing with
+        {
+            PhysicalTreeId = removing ? null : physicalTreeId,
+            ShardMap = new ShardMap
+            {
+                Slots = (int[])shardMap.Slots.Clone(),
+                Version = Math.Max(existing.ShardMap?.Version ?? 0L, shardMap.Version) + 1,
+            },
+            NextShardIndex = nextShardIndex,
+            AliasCutoverTarget = null,
+        };
+        await UpdateAsync(treeId, updated);
+        await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
+
+        // The row as it stood before the swap: its map is the final layout of the
+        // physical tree the alias just left, because a split or fold bound to that
+        // tree is refused once the alias moves off it (#4264).
+        return existingRow;
+    }
+
+    /// <summary>
+    /// Refuses an alias of <paramref name="treeId"/> onto
+    /// <paramref name="physicalTreeId"/> that would escalate the caller's
+    /// privilege, write onto a tree being deleted, nest a second level of
+    /// indirection, or that the ownership provider denies. Writes nothing.
+    /// </summary>
+    private async Task EnsureAliasTargetAdmissibleAsync(string treeId, string physicalTreeId)
+    {
         // The alias target is caller-supplied and is never re-authorized
         // downstream: routing resolves it and addresses its shards directly,
         // while every access gate on the facade has already been evaluated
@@ -524,27 +606,25 @@ internal sealed class LatticeRegistryGrain(
         if (!ownership.Allowed)
             throw new LatticeTreeOwnershipDeniedException(
                 ownership.Reason ?? "The ownership provider did not allow this alias.");
+    }
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
-        // Writing the alias completes any cutover that carried the target's map
-        // onto this entry first, so its in-progress marker is cleared with it.
-        var updated = existing with { PhysicalTreeId = physicalTreeId, AliasCutoverTarget = null };
-        await UpdateAsync(treeId, updated);
-
-        // Fire the alias-change observer only on an effective physical-identity
-        // change so a live shipper can rebind reactively (event-driven) instead
-        // of polling the registry every pump tick. An unaliased tree resolves to
-        // its own id, so the old effective physical is the prior alias or the
-        // logical id itself; a no-op re-set of the same alias is suppressed.
-        var oldPhysical = existing.PhysicalTreeId ?? treeId;
+    /// <summary>
+    /// Fires the alias-change observer only on an effective physical-identity
+    /// change so a live shipper can rebind reactively (event-driven) instead of
+    /// polling the registry every pump tick. An unaliased tree resolves to its
+    /// own id, so the old effective physical is the prior alias or the logical id
+    /// itself; a no-op re-set of the same alias is suppressed.
+    /// </summary>
+    private async Task PublishAliasChangeAsync(string treeId, string oldPhysicalTreeId, string newPhysicalTreeId)
+    {
         if (aliasObservers is { HasObservers: true }
-            && !string.Equals(oldPhysical, physicalTreeId, StringComparison.Ordinal))
+            && !string.Equals(oldPhysicalTreeId, newPhysicalTreeId, StringComparison.Ordinal))
         {
             await aliasObservers.PublishAsync(new TreeAliasChange
             {
                 TreeId = treeId,
-                OldPhysicalTreeId = oldPhysical,
-                NewPhysicalTreeId = physicalTreeId,
+                OldPhysicalTreeId = oldPhysicalTreeId,
+                NewPhysicalTreeId = newPhysicalTreeId,
             });
         }
     }

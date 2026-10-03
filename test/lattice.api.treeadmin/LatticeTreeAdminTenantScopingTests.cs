@@ -351,7 +351,7 @@ public sealed class LatticeTreeAdminTenantScopingTests
 
         // Composing only the logical id would alias a tenant's tree onto a bare,
         // cluster-global physical tree - a cross-tenant crossing.
-        await registry.Received(1).SetAliasAsync(AcmeTree, "t/acme/orders-v2");
+        await registry.Received(1).SwapAliasAsync(AcmeTree, "t/acme/orders-v2", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]

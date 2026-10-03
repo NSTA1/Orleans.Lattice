@@ -353,25 +353,15 @@ internal sealed class LatticeBackupRestoreService(
             await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
                 .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
 
-            // Carry the previous tree's map back with the alias (#4250): the commit
-            // moved the shadow's map onto the target and recorded the one it
-            // replaced on the shadow. Without this a revert onto a tree whose map
-            // differs from the shadow's reads most of its keys as absent.
-            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
-            {
-                await AliasCutoverShardMaps.PrepareRevertAsync(
-                    grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
-                    restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
-            }
-
-            if (string.Equals(restore.PreviousPhysicalTreeId, restore.TargetTreeId, StringComparison.Ordinal))
-            {
-                await registry.RemoveAliasAsync(restore.TargetTreeId).ConfigureAwait(false);
-            }
-            else
-            {
-                await registry.SetAliasAsync(restore.TargetTreeId, restore.PreviousPhysicalTreeId).ConfigureAwait(false);
-            }
+            // Carry the previous tree's map back with the alias, in one registry
+            // write (#4250, #4336): the commit moved the shadow's map onto the
+            // target and recorded the one it replaced on the shadow. Without this a
+            // revert onto a tree whose map differs from the shadow's reads most of
+            // its keys as absent, and a reader resolving between a separate map
+            // write and alias write would pair one copy with the other's map.
+            await AliasCutoverShardMaps.RevertAsync(
+                grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
+                restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
 
             if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
                 && !string.Equals(restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId, StringComparison.Ordinal))
@@ -594,15 +584,26 @@ internal sealed class LatticeBackupRestoreService(
             var replacedPhysical = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
             var replacedMap = await AliasCutoverShardMaps.PrepareCutoverAsync(
                 grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
-            if (armRedirect)
+            var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
+                || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
+            if (armRedirect && (replacedMap is null || !describesPrevious))
             {
-                var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
-                    || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
-                retainedRouting = replacedMap is not null && describesPrevious
-                    ? new RoutingInfo(previousPhysicalTreeId!, replacedMap)
-                    : await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken).ConfigureAwait(false);
+                // Resolved before the swap: a never-aliased previous tree's id is the
+                // target's own name, which the swap repoints at the shadow.
+                retainedRouting = await ResolveRetainedRoutingAsync(previousPhysicalTreeId!, cancellationToken)
+                    .ConfigureAwait(false);
             }
-            await registry.SetAliasAsync(targetTreeId, shadowPhysicalTreeId).ConfigureAwait(false);
+
+            // The alias and the shadow's map move in one registry write (#4336), so
+            // no reader pairs the shadow with the previous tree's map or the
+            // reverse. The map the swap replaced is the previous tree's final
+            // layout: a split on it can no longer commit once the alias has moved.
+            var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+            if (armRedirect && retainedRouting is null)
+            {
+                retainedRouting = new RoutingInfo(previousPhysicalTreeId!, finalReplacedMap ?? replacedMap!);
+            }
         }
 
         // Arm the retained (previous) physical tree to redirect logical-alias-

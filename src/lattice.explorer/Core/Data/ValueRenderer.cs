@@ -1,7 +1,9 @@
+using System.Buffers;
 using System.Globalization;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Unicode;
 
 namespace Orleans.Lattice.Explorer.Core.Data;
 
@@ -55,8 +57,6 @@ public static class ValueRenderer
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-
     /// <summary>Renders a value's bytes for display.</summary>
     /// <param name="bytes">The value bytes (a preview when <paramref name="truncated"/> is set).</param>
     /// <param name="truncated">Whether <paramref name="bytes"/> is a truncated preview.</param>
@@ -76,7 +76,7 @@ public static class ValueRenderer
             return new RenderedValue { Format = ValueFormat.Json, Content = json, Note = note };
         }
 
-        if (TryDecodeText(bytes, out var text))
+        if (TryDecodeText(bytes, truncated, out var text))
         {
             return new RenderedValue { Format = ValueFormat.Text, Content = text, Note = note };
         }
@@ -103,18 +103,21 @@ public static class ValueRenderer
         }
     }
 
-    private static bool TryDecodeText(byte[] bytes, out string text)
+    private static bool TryDecodeText(byte[] bytes, bool truncated, out string text)
     {
-        try
-        {
-            text = StrictUtf8.GetString(bytes);
-        }
-        catch (DecoderFallbackException)
+        // A truncated preview is cut at a byte budget rather than a character
+        // boundary, so it may end part-way through a character (#4353). Decoding it
+        // as a non-final block drops only that incomplete tail; bytes that are not
+        // UTF-8 anywhere else still make the value binary.
+        var chars = new char[bytes.Length];
+        var status = Utf8.ToUtf16(bytes, chars, out _, out var written, replaceInvalidSequences: false, isFinalBlock: !truncated);
+        if (status is not (OperationStatus.Done or OperationStatus.NeedMoreData))
         {
             text = string.Empty;
             return false;
         }
 
+        text = new string(chars, 0, written);
         foreach (var ch in text)
         {
             if (char.IsControl(ch) && ch is not '\t' and not '\n' and not '\r')

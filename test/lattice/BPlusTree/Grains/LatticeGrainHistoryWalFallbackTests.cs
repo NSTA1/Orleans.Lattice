@@ -37,14 +37,13 @@ public sealed class LatticeGrainHistoryWalFallbackTests
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(Arg.Any<string>()).Returns(c => Task.FromResult(c.Arg<string>()));
         registry.GetShardMapAsync(Arg.Any<string>()).Returns(Task.FromResult<ShardMap?>(null));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
+        registry.RouteEntriesThroughAliasAndMapStubs(_ => new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = 1,
                 HistoryRetentionMode = retention,
-            }));
+            });
 
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, new LatticeOptions { WalPartitions = 1 });
         return new LatticeGrain(

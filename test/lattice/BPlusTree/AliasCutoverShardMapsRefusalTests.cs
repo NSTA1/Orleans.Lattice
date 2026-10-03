@@ -37,33 +37,38 @@ public sealed class AliasCutoverShardMapsRefusalTests
     public async Task PrepareCutoverAsync_records_the_replaced_map_on_a_destination_with_no_row_yet()
     {
         // A restore or remediation copy is routinely addressed before its row is
-        // materialised; the carry is what first records it, so it must not refuse.
-        _registry.ResolveAsync(Logical).Returns(Task.FromResult(Logical));
+        // materialised; the prepare is what first records it, so it must not refuse.
         StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2 });
 
         await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
 
         await _registry.Received(1).UpdateAsync(Destination, Arg.Is<TreeRegistryEntry>(e => e.ReplacedShardMap != null));
+        await _registry.DidNotReceive().UpdateAsync(Logical, Arg.Any<TreeRegistryEntry>());
     }
 
     [Test]
-    public async Task PrepareCutoverAsync_into_a_never_created_target_creates_its_row_with_the_destination_map()
+    public async Task SwapCutoverAsync_into_a_never_created_target_swaps_with_the_destination_map()
     {
-        // A shadow-cutover restore into a fresh target id: the cutover is the
-        // genuine create of the logical row, so it must not be refused.
+        // A shadow-cutover restore into a fresh target id: the swap is the genuine
+        // create of the logical row, and it carries the destination's map with it.
         _registry.ResolveAsync(Logical).Returns(Task.FromResult(Logical));
         StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2), NextShardIndex = 3 });
 
-        await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
+        await AliasCutoverShardMaps.SwapCutoverAsync(_grains, Logical, Destination);
 
-        await _registry.Received(1).UpdateAsync(Logical, Arg.Is<TreeRegistryEntry>(e =>
-            e.ShardMap != null && e.ShardMap.Slots.SequenceEqual(Map(2).Slots) && e.NextShardIndex == 3));
+        await _registry.Received(1).SwapAliasAsync(
+            Logical,
+            Destination,
+            Arg.Is<ShardMap>(m => m.Slots.SequenceEqual(Map(2).Slots)),
+            3,
+            Logical);
+        await _registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
     }
 
     [Test]
     public async Task PrepareCutoverAsync_resumed_after_the_swap_with_no_destination_row_writes_nothing()
     {
-        _registry.ResolveAsync(Logical).Returns(Task.FromResult(Destination));
+        StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2, PhysicalTreeId = Destination });
 
         var replaced = await AliasCutoverShardMaps.PrepareCutoverAsync(_grains, Logical, Destination);
 
@@ -72,16 +77,18 @@ public sealed class AliasCutoverShardMapsRefusalTests
     }
 
     [Test]
-    public async Task PrepareRevertAsync_refuses_an_unregistered_logical_tree_without_writing()
+    public async Task RevertAsync_refuses_an_unregistered_logical_tree_without_writing()
     {
         _registry.ResolveAsync(Logical).Returns(Task.FromResult(Destination));
         StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3, ReplacedShardMap = Map(2) });
 
         var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(
-            () => AliasCutoverShardMaps.PrepareRevertAsync(_grains, Logical, Destination, previousPhysicalTreeId: Logical));
+            () => AliasCutoverShardMaps.RevertAsync(_grains, Logical, Destination, previousPhysicalTreeId: Logical));
 
         Assert.That(ex!.TreeId, Is.EqualTo(Logical));
         await _registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
+        await _registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     private void StubEntry(string treeId, TreeRegistryEntry entry) =>

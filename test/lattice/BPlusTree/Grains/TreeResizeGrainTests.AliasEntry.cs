@@ -58,7 +58,7 @@ public partial class TreeResizeGrainTests
             && e.HistoryRetentionWindowTicks == TimeSpan.FromHours(6).Ticks
             && e.MaxCacheValueBytes == 4096
             && e.WalMaxRetainedBytes == 1 << 20));
-        await registry.Received(1).SetAliasAsync(TreeId, snapshotTreeId);
+        await registry.Received(1).SwapAliasAsync(TreeId, snapshotTreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), TreeId);
     }
 
     [Test]
@@ -80,10 +80,15 @@ public partial class TreeResizeGrainTests
         // The WAL layout describes the retired copy. The routing is the resized
         // copy's, which here was registered without a map (an unsplit source).
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
-            e.ShardMap == null
-            && e.NextShardIndex == null
-            && e.WalPartitions == null
+            e.WalPartitions == null
             && e.WalPlacement == null));
+        var defaultSlots = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, ShardCount).Slots;
+        await registry.Received(1).SwapAliasAsync(
+            TreeId,
+            $"{TreeId}/resized/op1",
+            Arg.Is<ShardMap>(m => m.Slots.SequenceEqual(defaultSlots)),
+            null,
+            TreeId);
     }
 
     [Test]
@@ -112,12 +117,12 @@ public partial class TreeResizeGrainTests
 
         // Dropping the map would route the split slot back to shard 0 of the
         // resized copy, which the copy never populated for it (issue 3880).
-        await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
-            e.ShardMap != null
-            && e.ShardMap.Slots[0] == 3
-            && e.ShardMap.Slots.SequenceEqual(slots)
-            && e.ShardMap.Version == 8
-            && e.NextShardIndex == 3));
+        await registry.Received(1).SwapAliasAsync(
+            TreeId,
+            snapshotTreeId,
+            Arg.Is<ShardMap>(m => m.Slots[0] == 3 && m.Slots.SequenceEqual(slots)),
+            3,
+            TreeId);
     }
 
     [Test]
@@ -140,11 +145,11 @@ public partial class TreeResizeGrainTests
         // back to its first physical copy - long since retired - in between.
         await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
             e.PhysicalTreeId == previousCopy));
-        await registry.Received(1).SetAliasAsync(TreeId, snapshotTreeId);
+        await registry.Received(1).SwapAliasAsync(TreeId, snapshotTreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), previousCopy);
     }
 
     [Test]
-    public async Task SwapAlias_marks_the_map_carry_so_an_in_flight_split_cannot_commit_onto_it()
+    public async Task SwapAlias_moves_the_alias_and_the_map_in_one_registry_write()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();
         var snapshotTreeId = $"{TreeId}/resized/op1";
@@ -155,13 +160,31 @@ public partial class TreeResizeGrainTests
 
         await grain.SwapAliasAsync();
 
-        // The map carry and the alias flip are two registry calls; the marker
-        // fences the gap between them (issue #4264). The flip clears it.
-        Received.InOrder(() =>
-        {
-            registry.UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e => e.AliasCutoverTarget == snapshotTreeId));
-            registry.SetAliasAsync(TreeId, snapshotTreeId);
-        });
+        // Written as a separate map carry and alias flip, a reader resolving
+        // between them paired the old tree with the resized copy's map (#4336).
+        // The sizing write leaves routing alone; the swap moves both at once.
+        await registry.Received(1).UpdateAsync(TreeId, Arg.Is<TreeRegistryEntry>(e =>
+            e.ShardMap == null && e.AliasCutoverTarget == null && e.PhysicalTreeId == null));
+        await registry.Received(1).SwapAliasAsync(TreeId, snapshotTreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), TreeId);
+        await registry.DidNotReceive().SetAliasAsync(Arg.Any<string>(), Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task SwapAlias_resumed_after_the_swap_does_not_swap_again()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var snapshotTreeId = $"{TreeId}/resized/op1";
+        PrepareSwap(state, snapshotTreeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(TreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { ShardCount = ShardCount, PhysicalTreeId = snapshotTreeId }));
+
+        await grain.SwapAliasAsync();
+
+        // A second swap would overwrite the logical map, and any split the
+        // resized copy committed onto it since, with the copy's original map.
+        await registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
     [Test]
@@ -180,6 +203,7 @@ public partial class TreeResizeGrainTests
 
         Assert.That(ex!.TreeId, Is.EqualTo(TreeId));
         await registry.DidNotReceive().UpdateAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry>());
-        await registry.DidNotReceive().SetAliasAsync(TreeId, snapshotTreeId);
+        await registry.DidNotReceive().SwapAliasAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 }

@@ -90,6 +90,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Core - Atomic batches stay all-or-nothing across a silo restart.** A batch parked by a restart no longer hides later committed batches on some keys, and a batch committed after a leaf reactivated is no longer discarded on that leaf. ([#4347](https://github.com/NSTA1/Orleans.Lattice/issues/4347)) (`Orleans.Lattice`)
 
+- **Core - Alias swaps no longer tear reads or atomic batches.** An explicit alias, a resize swap or undo, a shadow-cutover restore or revert, and a schema remediation cutover now move the alias and the shard map that describes the new copy together, and routing reads both as one pair, so readers see the whole old copy or the whole new one. Before, a reader could see some keys missing and others at stale values, and a warmed router could stay that way. An explicit alias now redirects routers still on the copy it replaced, and an atomic batch in flight during a swap commits wholly on one copy. ([#4336](https://github.com/NSTA1/Orleans.Lattice/issues/4336)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Schema`)
+
 - **Core - Delete, recover and purge reach every shard.** A tree re-pinned to fewer shards while empty, and an aliased tree split after its alias was set, no longer leave shards readable after delete or in storage after purge. ([#4234](https://github.com/NSTA1/Orleans.Lattice/issues/4234)) (`Orleans.Lattice`)
 
 - **Core - Resize and restore revert no longer recreate a missing tree.** A resize swap or undo, or a restore revert, against a tree whose registry row is gone now fails as not found instead of writing back a row with no sizing. ([#4270](https://github.com/NSTA1/Orleans.Lattice/issues/4270)) (`Orleans.Lattice`)
@@ -222,6 +224,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Explorer - JSON values show their text as written.** The Data tab, history and dead letters no longer turn accented letters, non-Latin scripts and `< > & ' +` into `\uXXXX` escapes when they lay out a JSON value; characters beyond the Basic Multilingual Plane, such as emoji, still are. ([#4325](https://github.com/NSTA1/Orleans.Lattice/issues/4325)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - App consent review agrees with the cluster on prefixes.** An approved key prefix now covers a key or narrower prefix under it, as activation does, so the review no longer reports a gap that would not fail, flags drift, or asks to re-consent for a scope already approved. ([#4326](https://github.com/NSTA1/Orleans.Lattice/issues/4326)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Value previews say when the value goes on.** A text value whose preview ends part-way through a character shows as text rather than a hex dump, and a key's one-line preview ends in `...` whenever the value continues, including a binary value's hex. ([#4353](https://github.com/NSTA1/Orleans.Lattice/issues/4353), [#4354](https://github.com/NSTA1/Orleans.Lattice/issues/4354)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry and Data areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355)) (`Orleans.Lattice.Explorer.UI`)
 
 ### Security
 
