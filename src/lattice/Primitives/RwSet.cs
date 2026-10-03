@@ -509,35 +509,107 @@ public sealed class RwSet : ICrdt<RwSet>
         }
     }
 
+    /// <summary>
+    /// Folds a delta's per-element dots into the accumulated map. Two trims
+    /// over the walk that shipped before, both on the replication apply path.
+    /// <para>
+    /// First, the source is resolved to its backing span where its runtime
+    /// shape allows it. A delta's collection is declared
+    /// <see cref="IReadOnlyList{T}"/> because it is serialised public surface,
+    /// so the previous loop paid an interface call for the indexer <b>and</b>
+    /// another for the re-read of <c>Count</c> in the loop condition, on every
+    /// dot, with <see cref="OrSetDeltaDot"/> copied whole out of each.
+    /// </para>
+    /// <para>
+    /// Second, the base64 scratch rental is hoisted to the whole walk. The
+    /// previous shape opened an exception-handling region <i>per element</i>
+    /// and rented and returned a pooled buffer per oversized element, so a
+    /// delta carrying n large elements paid n rent/return round trips where
+    /// one suffices. The rental grows monotonically and is returned once; the
+    /// buffer is only ever read back as <c>buffer[..written]</c>, so content
+    /// left by a previous element is never observable.
+    /// </para>
+    /// </summary>
     private static void UnionDeltaDots(Dictionary<string, List<OrSetDot>> target, IReadOnlyList<OrSetDeltaDot>? source)
     {
         if (source is not { Count: > 0 }) return;
         Span<char> scratch = stackalloc char[MaxStackBase64Chars];
         var lookup = target.GetAlternateLookup<ReadOnlySpan<char>>();
-        for (var i = 0; i < source.Count; i++)
+        char[]? rented = null;
+        try
         {
-            var dot = source[i];
-            var element = dot.Element;
-            if (element is null) continue;
-            var charCount = Base64CharCount(element.Length);
-            char[]? rented = charCount > scratch.Length ? ArrayPool<char>.Shared.Rent(charCount) : null;
-            Span<char> buffer = rented ?? scratch;
-            try
+            if (CrdtDeltaListSpan.TryGetSpan(source, out var span))
             {
-                Convert.TryToBase64Chars(element, buffer, out var written);
-                var key = buffer[..written];
-                if (!lookup.TryGetValue(key, out var dots))
+                for (var i = 0; i < span.Length; i++)
                 {
-                    dots = [];
-                    target[new string(key)] = dots;
+                    ref readonly var dot = ref span[i];
+                    AddDeltaDot(target, lookup, dot.Element, dot.ReplicaId, dot.Counter, scratch, ref rented);
                 }
-                var entry = new OrSetDot { ReplicaId = dot.ReplicaId, Counter = dot.Counter };
-                if (!dots.Contains(entry)) dots.Add(entry);
             }
-            finally
+            else
             {
-                if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                var count = source.Count;
+                for (var i = 0; i < count; i++)
+                {
+                    var dot = source[i];
+                    AddDeltaDot(target, lookup, dot.Element, dot.ReplicaId, dot.Counter, scratch, ref rented);
+                }
             }
         }
+        finally
+        {
+            if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// Keys one delta dot by the base64 encoding of its element and folds it
+    /// into the accumulated map, using <paramref name="scratch"/> when the
+    /// encoding fits and a caller-owned pooled rental when it does not.
+    /// <para>
+    /// The rental is threaded by reference rather than taken and returned here
+    /// so that a delta carrying n oversized elements pays one rent/return round
+    /// trip instead of n, and so that the exception-handling region guarding it
+    /// is opened once for the whole walk instead of once per element. It grows
+    /// monotonically and the previous rental is returned before it is replaced,
+    /// so the pool is never leaked into. Content left by a previous element is
+    /// never observable: the buffer is only ever read back as
+    /// <c>buffer[..written]</c>.
+    /// </para>
+    /// </summary>
+    private static void AddDeltaDot(
+        Dictionary<string, List<OrSetDot>> target,
+        Dictionary<string, List<OrSetDot>>.AlternateLookup<ReadOnlySpan<char>> lookup,
+        byte[]? element,
+        string replicaId,
+        long counter,
+        Span<char> scratch,
+        ref char[]? rented)
+    {
+        if (element is null) return;
+        var charCount = Base64CharCount(element.Length);
+        Span<char> buffer;
+        if (charCount > scratch.Length)
+        {
+            if (rented is null || rented.Length < charCount)
+            {
+                if (rented is not null) ArrayPool<char>.Shared.Return(rented);
+                rented = ArrayPool<char>.Shared.Rent(charCount);
+            }
+            buffer = rented;
+        }
+        else
+        {
+            buffer = scratch;
+        }
+        Convert.TryToBase64Chars(element, buffer, out var written);
+        var key = buffer[..written];
+        if (!lookup.TryGetValue(key, out var dots))
+        {
+            dots = [];
+            target[new string(key)] = dots;
+        }
+        var entry = new OrSetDot { ReplicaId = replicaId, Counter = counter };
+        if (!dots.Contains(entry)) dots.Add(entry);
     }
 }
