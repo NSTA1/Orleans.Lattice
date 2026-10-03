@@ -1580,11 +1580,11 @@ internal interface IShardRootGrain : IGrainWithStringKey
     //  trees (e.g. online resize). During the operation, each last-writer-wins
     //  mutation on this shard (not a typed CRDT delta or a bulk append) is
     //  mirrored in parallel to the shard with the same index on the
-    //  destination tree. After the registry alias has been
-    //  atomically swapped, the shard rejects new operations with
+    //  destination tree. Immediately before the registry alias is
+    //  atomically swapped, the shard starts rejecting new operations with
     //  StaleTreeRoutingException so the caller's LatticeGrain can refresh
     //  its cached routing snapshot and retry against the destination tree.
-    //  The four transitions are idempotent under a matching operationId and
+    //  The transitions are idempotent under a matching operationId and
     //  refused under a mismatched one.
 
     /// <summary>
@@ -1619,13 +1619,30 @@ internal interface IShardRootGrain : IGrainWithStringKey
 
     /// <summary>
     /// Transitions this shard into <see cref="ShadowForwardPhase.Rejecting"/>.
-    /// Called by the coordinator after the registry alias has been atomically
-    /// redirected to the destination tree. Subsequent operations against this
-    /// shard throw <see cref="StaleTreeRoutingException"/>. Idempotent;
-    /// refused with <see cref="InvalidOperationException"/> on an
+    /// Called by the coordinator immediately before the registry alias is
+    /// atomically redirected to the destination tree, so no router whose
+    /// cached alias predates the swap can read this shard once the destination
+    /// has taken a write. Subsequent operations against this shard throw
+    /// <see cref="StaleTreeRoutingException"/>; an operation already past the
+    /// gate is still mirrored to the destination. Idempotent; refused with
+    /// <see cref="InvalidOperationException"/> on an
     /// <paramref name="operationId"/> mismatch.
     /// </summary>
     Task EnterRejectingAsync(string operationId);
+
+    /// <summary>
+    /// Returns this shard from <see cref="ShadowForwardPhase.Rejecting"/> to
+    /// <see cref="ShadowForwardPhase.Drained"/>, so it serves and mirrors again.
+    /// Called by the coordinator only when the alias swap that
+    /// <see cref="EnterRejectingAsync"/> fenced for did not happen - the
+    /// registry refused or failed it - so the tree does not stay unavailable
+    /// until the swap is retried. Safe because a rejecting shard accepts
+    /// nothing, so it and the destination still hold the same data. A no-op
+    /// when the shard is not rejecting or has no shadow-forward state;
+    /// refused with <see cref="InvalidOperationException"/> on an
+    /// <paramref name="operationId"/> mismatch.
+    /// </summary>
+    Task ExitRejectingAsync(string operationId);
 
     /// <summary>
     /// Clears this shard's shadow-forward state entirely. Used by the

@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// <see cref="ShardRootGrain"/>: lifecycle transitions, the reject gate,
 /// and per-mutation-path forwarding to the destination shard.
 /// </summary>
-public class ShardRootGrainShadowForwardTests
+public partial class ShardRootGrainShadowForwardTests
 {
     private const string TreeId = "src-tree";
     private const string DestTreeId = "src-tree/resized/op-1";

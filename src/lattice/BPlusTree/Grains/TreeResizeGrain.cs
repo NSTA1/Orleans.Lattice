@@ -18,13 +18,18 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// CRDT delta apply or a bulk append is shadow-forwarded to the destination.
 /// The snapshot's routing-map-driven shard copy is described on
 /// <see cref="TreeSnapshotGrain"/>.</description></item>
-/// <item><description><see cref="ResizePhase.Swap"/> - set alias so the logical tree ID
-/// points to the new physical tree, carrying over the routing map the copy
-/// followed.</description></item>
-/// <item><description><see cref="ResizePhase.Reject"/> - transition every shard of the
+/// <item><description><see cref="ResizePhase.Swap"/> - fence every old physical shard the
+/// snapshot shadow-forwarded into the Rejecting phase, then set alias so the
+/// logical tree ID points to the new physical tree, carrying over the routing
+/// map the copy followed. Fencing first means no router whose cached alias
+/// predates the swap can read the old copy once the new one has taken a write;
+/// it gets <see cref="StaleTreeRoutingException"/> and retries until the alias
+/// moves.</description></item>
+/// <item><description><see cref="ResizePhase.Reject"/> - confirm every shard of the
 /// old physical tree the snapshot shadow-forwarded - the pinned range and every
 /// shard the routing map names, including one an adaptive split allocated above
-/// the pinned count - to the Rejecting phase so any lingering client request
+/// the pinned count - is in the Rejecting phase (idempotent; the swap already
+/// moved them there) so any lingering client request
 /// that reaches one of them throws <see cref="StaleTreeRoutingException"/> and
 /// retries against the new alias target.</description></item>
 /// <item><description><see cref="ResizePhase.Cleanup"/> - soft-delete the old physical
@@ -1037,31 +1042,62 @@ internal sealed class TreeResizeGrain(
         };
         await registry.UpdateAsync(TreeId, entry);
 
-        // Set alias to redirect to the new physical tree, carrying the resized
-        // copy's map and split mark onto the logical entry in the same registry
-        // write (#4336): written separately, a reader resolving between the two
-        // paired the old tree with the resized copy's map. A swap resumed after it
-        // committed is skipped, so splits on the resized copy since are kept.
-        // System origin, as backup's shadow cutover does: the swap is library
-        // maintenance already authorized when the resize was accepted, and the
-        // phase timer that usually drives it carries no request context, so the
-        // registry's access gate would otherwise judge it as an anonymous
-        // user-origin alias change and refuse it on every tick (issue 4128). The
-        // ownership guard still runs: it binds system origin too.
-        if (!string.Equals(current.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
+        // Fence the old physical copy BEFORE the alias moves. Once the alias
+        // names the resized copy, writers with fresh routing write there and
+        // nothing mirrors those writes back, so an old shard still serving
+        // would hand a router whose cached alias predates the swap the rounds
+        // it held at the flip - a committed batch read back at its
+        // predecessor until the old shards rejected. That gap used to be a
+        // whole phase tick wide (the reject ran on the next tick), and far
+        // wider when a silo restart stalled the tick. Rejecting first leaves
+        // no instant at which the old copy answers after the resized copy has
+        // taken a write: a stale-routed caller gets StaleTreeRoutingException
+        // and retries until the alias moves. Every write the old copy accepted
+        // before rejecting was mirrored to the resized copy, which therefore
+        // holds everything when it does. The cost is availability, not
+        // correctness: between the fence and the flip the tree's callers
+        // retry, so the entry rewrite above is ordered ahead of the fence and
+        // the flip is the only step left between them. A swap that fails
+        // after fencing lifts the fence again unless the alias did move (see
+        // LiftFenceUnlessSwappedAsync), so a refused or failed flip - an
+        // ownership guard that refuses it until an operator intervenes, say -
+        // leaves the tree serving from the old copy rather than retrying
+        // against it; the next phase tick fences and flips again.
+        try
         {
-            var resizedMap = resized?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                entry.ShardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
-            using (LatticeAccessGateContext.EnterSystemOrigin())
+            await EnterRejectingOnOldShardsAsync();
+
+            // Set alias to redirect to the new physical tree, carrying the resized
+            // copy's map and split mark onto the logical entry in the same registry
+            // write (#4336): written separately, a reader resolving between the two
+            // paired the old tree with the resized copy's map. A swap resumed after it
+            // committed is skipped, so splits on the resized copy since are kept.
+            // System origin, as backup's shadow cutover does: the swap is library
+            // maintenance already authorized when the resize was accepted, and the
+            // phase timer that usually drives it carries no request context, so the
+            // registry's access gate would otherwise judge it as an anonymous
+            // user-origin alias change and refuse it on every tick (issue 4128). The
+            // ownership guard still runs: it binds system origin too.
+            if (!string.Equals(current.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
             {
-                await registry.SwapAliasAsync(
-                    TreeId,
-                    snapshotTreeId,
-                    resizedMap,
-                    resized?.NextShardIndex,
-                    expectedPhysicalTreeId: current.PhysicalTreeId ?? TreeId);
+                var resizedMap = resized?.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+                    LatticeConstants.DefaultVirtualShardCount,
+                    entry.ShardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    await registry.SwapAliasAsync(
+                        TreeId,
+                        snapshotTreeId,
+                        resizedMap,
+                        resized?.NextShardIndex,
+                        expectedPhysicalTreeId: current.PhysicalTreeId ?? TreeId);
+                }
             }
+        }
+        catch
+        {
+            await LiftFenceUnlessSwappedAsync(registry);
+            throw;
         }
 
         var prevPhase = state.State.Phase;
@@ -1096,16 +1132,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     internal async Task RejectOldShardsAsync()
     {
-        var oldPhysical = state.State.OldPhysicalTreeId!;
-        var opId = state.State.OperationId!;
-        var shardIndices = OldShardIndices;
-        var tasks = new Task[shardIndices.Length];
-        for (int i = 0; i < shardIndices.Length; i++)
-        {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
-            tasks[i] = shard.EnterRejectingAsync(opId);
-        }
-        await Task.WhenAll(tasks);
+        await EnterRejectingOnOldShardsAsync();
 
         var prevPhase = state.State.Phase;
         state.State.Phase = ResizePhase.Cleanup;
@@ -1118,6 +1145,60 @@ internal sealed class TreeResizeGrain(
             state.State.Phase = prevPhase;
             throw;
         }
+    }
+
+    /// <summary>
+    /// Returns the old physical shards to <c>ShadowForwardPhase.Drained</c>
+    /// after a swap that fenced them failed, unless the registry shows the
+    /// alias already moved - then the fence is exactly what must stay. A flip
+    /// that failed in transport may still have landed; the registry read
+    /// settles which. Best-effort: it never masks the swap's own failure, and
+    /// a shard it cannot reach stays fenced until the next tick's swap.
+    /// </summary>
+    private async Task LiftFenceUnlessSwappedAsync(ILatticeRegistry registry)
+    {
+        try
+        {
+            var resolved = await registry.ResolveAsync(TreeId);
+            if (string.Equals(resolved, state.State.SnapshotTreeId, StringComparison.Ordinal))
+                return;
+
+            var oldPhysical = state.State.OldPhysicalTreeId!;
+            var opId = state.State.OperationId!;
+            var shardIndices = OldShardIndices;
+            var tasks = new Task[shardIndices.Length];
+            for (int i = 0; i < shardIndices.Length; i++)
+            {
+                var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
+                tasks[i] = shard.ExitRejectingAsync(opId);
+            }
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Resize of tree {TreeId} could not lift the old copy's fence after a failed alias swap; it stays fenced until the swap is retried.",
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Moves every old physical shard this resize shadow-forwards (see
+    /// <see cref="TreeResizeState.ShardIndices"/>) into
+    /// <c>ShadowForwardPhase.Rejecting</c>. Idempotent per shard.
+    /// </summary>
+    private async Task EnterRejectingOnOldShardsAsync()
+    {
+        var oldPhysical = state.State.OldPhysicalTreeId!;
+        var opId = state.State.OperationId!;
+        var shardIndices = OldShardIndices;
+        var tasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
+            tasks[i] = shard.EnterRejectingAsync(opId);
+        }
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>

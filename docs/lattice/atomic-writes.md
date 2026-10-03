@@ -781,6 +781,13 @@ instant, with any number of parked sagas.
   overwrite that row. A parked saga therefore never shadows a later
   batch that has committed, and a later in-flight batch never shadows an
   older one that has.
+- **A key covered by one saga's prepare that a newer row supersedes**
+  resolves to the row, whatever that saga's outcome. A restart can
+  record a saga's commit and lose its commit on the way to one leaf (an
+  online resize's copy, whose shard could not log it while its silo shut
+  down), leaving that saga's older value pending there while every later
+  batch commits beside it; the leaf serves the later batches, as its
+  siblings do.
 - **A leaf rebuilt by activation replay** drains each replayed commit
   with a stamp derived from the rows it writes and that saga's own
   prepares, never from a clock that has already absorbed a later saga's

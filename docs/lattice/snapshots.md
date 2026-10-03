@@ -46,8 +46,8 @@ shard before it reports itself complete, so writes to the source after that
 point no longer reach the destination, the destination can be written to or
 deleted independently, and the source can be snapshotted online (or resized)
 again. The shadow-forward that ResizeAsync runs its internal online snapshot
-under is not released here - the resize coordinator carries it on through its
-swap, then moves the source shards into their rejecting phase; it clears the
+under is not released here - the resize coordinator carries it on and moves the
+source shards into their rejecting phase immediately before its swap; it clears the
 shadow-forward itself only when the resize is undone, and on a completed resize
 the old physical tree is soft-deleted and later purged instead.
 
