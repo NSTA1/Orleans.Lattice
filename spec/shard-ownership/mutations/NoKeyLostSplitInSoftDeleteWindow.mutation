@@ -1,0 +1,25 @@
+# Pairs with NoKeyLost. Bounds the extent of the split/resize interlock: an
+# adaptive split is refused only while a resize is in flight and is allowed on
+# the resized copy during the completed resize's soft-delete window (the rule
+# first proposed for #4452). The old copy still mirrors index-for-index into
+# the resized copy and a saga stays bound to it (#4369), so a split that moves
+# k2 to s2 on the resized copy takes the mirrored prepare onward, but the
+# terminal the bound saga sends after the split has committed reaches only the
+# resized copy's s1. The s2 bucket is never resolved, and once the registry
+# forgets the saga it reads as a revert of an acknowledged commit.
+MODULE: NoKeyLostSplitInSoftDeleteWindow
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a split on the resized copy during the soft-delete window strands the bound saga's bucket on the split target
+PERTURBS: SplitBegin
+
+--- FIND
+SplitBegin ==
+    /\ sp = "idle"
+    /\ rs = "migrating" \/ rz \in {"idle", "purged", "undone"}
+--- REPLACE
+SplitBegin ==
+    /\ sp = "idle"
+\* MUTATION: the interlock covers only a resize in flight, not its soft-delete window.
+    /\ rs = "migrating" \/ rz \notin {"snap", "copied", "swapped", "undoing"}
+--- END

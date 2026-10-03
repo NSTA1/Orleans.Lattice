@@ -1,0 +1,22 @@
+# Pairs with SagaCompletes. Reproduces current production: a saga bound to the
+# old copy keeps sending its terminals there, and once the purge has cleared
+# that copy and unregistered it, AppendTxTerminalAsync (a non-write that does
+# not answer a purged tree as empty) refuses with InvalidOperationException.
+# MarkOneShardAsync follows only stale-routing refusals, so the broadcast fails
+# on every retry and the saga never completes; the resized copy's mirrored
+# buckets stay unresolved behind it.
+MODULE: SagaCompletesPurgedCopyRefusesTerminal
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: a saga bound to a purged old copy can never deliver its terminals
+PERTURBS: SagaTerminal
+
+--- FIND
+    /\ s \in TermTargets \ told
+    /\ told' = told \cup {s}
+--- REPLACE
+    /\ s \in TermTargets \ told
+\* MUTATION: the purged old copy refuses the terminal outright.
+    /\ ~Gone(bound)
+    /\ told' = told \cup {s}
+--- END
