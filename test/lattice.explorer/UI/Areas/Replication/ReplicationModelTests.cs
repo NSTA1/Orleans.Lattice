@@ -45,6 +45,15 @@ public sealed class ReplicationModelTests
         });
     }
 
+    [TestCase(1_048_575L, "1.0 MB")]
+    [TestCase(1_048_064L, "1.0 MB")]
+    [TestCase(1_048_063L, "1023 KB")]
+    [TestCase(1_073_741_823L, "1.0 GB")]
+    [TestCase(1023L, "1023 B")]
+    public void A_size_just_under_a_unit_boundary_reads_in_the_next_unit(long bytes, string expected) =>
+        // #4355: 1,048,575 bytes read "1024 KB".
+        Assert.That(ReplicationFormat.Bytes(bytes), Is.EqualTo(expected));
+
     [Test]
     public void Format_writes_counts_sizes_backlogs_and_contact_times()
     {

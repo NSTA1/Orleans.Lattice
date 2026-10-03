@@ -86,27 +86,49 @@ internal static class DataValueRendering
     /// <param name="bytes">The value bytes.</param>
     /// <param name="truncated">Whether the bytes are a preview.</param>
     /// <param name="maximum">The most characters to return.</param>
+    /// <returns>
+    /// The preview, ending in <c>...</c> whenever the value continues beyond it: when the
+    /// text is longer than <paramref name="maximum"/>, when a hex preview leaves bytes out,
+    /// or when the bytes are themselves only a preview.
+    /// </returns>
     public static string Inline(byte[] bytes, bool truncated, int maximum = 160)
     {
         ArgumentNullException.ThrowIfNull(bytes);
         var rendered = ValueRenderer.Render(bytes, truncated);
+        var hexBytes = Math.Min(bytes.Length, maximum / 2);
         var text = rendered.Format == ValueFormat.Json
             ? Compact(bytes) ?? rendered.Content
             : rendered.Format == ValueFormat.Hex
-                ? Convert.ToHexString(bytes.AsSpan(0, Math.Min(bytes.Length, maximum / 2))).ToLowerInvariant()
+                ? Convert.ToHexString(bytes.AsSpan(0, hexBytes)).ToLowerInvariant()
                 : rendered.Content;
         text = text.ReplaceLineEndings(" ");
-        return text.Length > maximum ? string.Concat(text.AsSpan(0, maximum - 3), "...") : text;
+
+        // Two hex digits per byte fill the cell exactly, so the length check alone
+        // never marks the bytes a hex preview leaves out (#4354).
+        var continues = truncated || (rendered.Format == ValueFormat.Hex && hexBytes < bytes.Length);
+        return text.Length > maximum || continues
+            ? string.Concat(text.AsSpan(0, Math.Min(text.Length, maximum - 3)), "...")
+            : text;
     }
 
     /// <summary>A byte count for a person: <c>512 B</c>, <c>12.4 KiB</c>.</summary>
     /// <param name="bytes">The count.</param>
-    public static string Size(long bytes) => bytes switch
+    /// <returns>
+    /// The count in the largest unit whose figure, as written, is below 1024, so a size
+    /// just under a boundary reads <c>1 MiB</c> rather than <c>1024 KiB</c>.
+    /// </returns>
+    public static string Size(long bytes)
     {
-        < 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} B"),
-        < 1024 * 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024d:0.#} KiB"),
-        _ => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024d * 1024d):0.#} MiB"),
-    };
+        if (bytes < 1024)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} B");
+        }
+
+        var kib = bytes / 1024d;
+        return Math.Round(kib, 1, MidpointRounding.AwayFromZero) < 1024
+            ? string.Create(CultureInfo.InvariantCulture, $"{kib:0.#} KiB")
+            : string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024d * 1024d):0.#} MiB");
+    }
 
     private static string FormatText(ValueFormat format) => format switch
     {

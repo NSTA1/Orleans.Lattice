@@ -124,6 +124,15 @@ public sealed class ClusterReadingTests
         });
     }
 
+    [TestCase(1_048_575L, "1.0 MiB")]
+    [TestCase(1_048_524L, "1023.9 KiB")]
+    [TestCase(1_073_741_823L, "1.0 GiB")]
+    [TestCase(1024L, "1.0 KiB")]
+    [TestCase(1023L, "1023 B")]
+    public void A_size_just_under_a_unit_boundary_reads_in_the_next_unit(long bytes, string expected) =>
+        // #4355: 1,048,575 bytes read "1024.0 KiB".
+        Assert.That(ClusterFormat.Bytes(bytes), Is.EqualTo(expected));
+
     [Test]
     public void The_stylesheet_address_derives_from_the_one_content_base_path_and_ships()
     {

@@ -23,7 +23,10 @@ internal static class BackupsFormat
         string[] units = ["B", "KiB", "MiB", "GiB", "TiB"];
         double value = bytes;
         var unit = 0;
-        while (Math.Abs(value) >= 1024 && unit < units.Length - 1)
+
+        // The unit is chosen on the figure as written, so a size that rounds up to
+        // 1024 moves to the next unit rather than reading "1024 KiB" (#4355).
+        while (Math.Abs(Math.Round(value, unit == 0 ? 0 : 1, MidpointRounding.AwayFromZero)) >= 1024 && unit < units.Length - 1)
         {
             value /= 1024;
             unit++;
