@@ -2043,7 +2043,7 @@
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "concurrency": {
-        "rule": "Enumeration is scoped to the caller resolved subject and its resolved groups and omits tenants the caller cannot see; with delegated tenant access administration on, a tenant reached through a member entry or a group entry is listed.",
+        "rule": "Enumeration is scoped to the caller resolved subject and its resolved groups and omits tenants the caller cannot see; with delegated tenant access administration on, a tenant reached through a member entry or a group entry is listed. A group never admits to a tenant that is not group-aware (the reserved default tenant, or one compiled with the feature off), even when the group id is in its admin set.",
         "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs"
       },
       "sources": [

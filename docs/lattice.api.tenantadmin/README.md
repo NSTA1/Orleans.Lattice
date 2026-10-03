@@ -302,7 +302,10 @@ gets an empty list. It asks the tenant policy engine with the caller's resolved
 groups, and so does the accessibility check in `GetTenantAsync`: while delegated
 tenant access administration is on, a tenant the caller may act as through a member
 entry or a group entry - for example a member only through one of the tenant's
-groups - is listed and readable; while it is off, only the exact-id admin set counts. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
+groups - is listed and readable; while it is off, only the exact-id admin set counts.
+A group never admits to a tenant that is not group-aware: the reserved `default`
+tenant, or a tenant compiled while the feature was off, is reached only through an
+exact-id admin entry, even when one of the caller's group ids is in its admin set. `GetTenantAsync` deliberately unifies "no such tenant" and "you may
 not see this tenant" into a single `TenantNotFoundException`, so no caller can probe
 for the existence of a tenant outside its authority.
 
