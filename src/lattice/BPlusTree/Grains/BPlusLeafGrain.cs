@@ -4418,7 +4418,76 @@ internal sealed partial class BPlusLeafGrain(
         // tree id bound, and gets NotDriven for the life of the deployment.
         await UnregisterMaterialiserPinsAsync();
 
+        // Stop any new snapshot capture, and let one already under way land,
+        // before the snapshot storage is deleted below (issue #4383). A capture
+        // suspended on its store write would otherwise land after the delete and
+        // leave a fresh snapshot behind for a leaf that no longer exists.
+        _snapshotStorageRetired = true;
+        await WaitForSnapshotCaptureToDrainAsync();
+
         await state.ClearStateAsync();
-        context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
+        try
+        {
+            // The leaf's snapshot lives in separate grain-state rows keyed by the
+            // leaf's own identity: a manifest row and one row per segment. They
+            // used to be left behind by every path that removes a leaf - purge,
+            // retirement, empty-leaf reclaim and orphan repair all funnel through
+            // here - so they accumulated in storage for good (issue #4383).
+            //
+            // Deleted only AFTER the leaf's own state, because a leaf that still
+            // has state may still be activated and rehydrated from its snapshot,
+            // and one whose snapshot is gone but whose checkpoint still claims the
+            // trimmed prefix cannot activate at all - which would leave no way to
+            // retry this clear. A cleared leaf has no tree id and never hydrates.
+            //
+            // A failure propagates. Every caller treats a throw as "clear still
+            // owed" and retries - the shard root's owed-clear record for reclaim
+            // and orphan repair, the tree-deletion retry for purge and retirement
+            // - and re-running this method on a leaf whose state is already
+            // cleared is idempotent and resumes the snapshot clear where it left off.
+            await ClearSnapshotStorageAsync();
+        }
+        finally
+        {
+            context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "Tree purged"));
+        }
+    }
+
+    /// <summary>
+    /// Waits, for at most <see cref="SnapshotCaptureDrainTimeout"/>, for a
+    /// snapshot capture already under way on this activation to finish.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The capture did not finish in time; the clear must be retried.</exception>
+    private async Task WaitForSnapshotCaptureToDrainAsync()
+    {
+        if (_snapshotCaptureDrained is not { } drained)
+        {
+            return;
+        }
+
+        try
+        {
+            await drained.Task.WaitAsync(SnapshotCaptureDrainTimeout).ConfigureAwait(true);
+        }
+        catch (TimeoutException ex)
+        {
+            throw new InvalidOperationException(
+                $"Leaf {context.GrainId} could not be cleared: a snapshot capture was still in flight after {SnapshotCaptureDrainTimeout}. The clear stays owed and is retried.",
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Deletes this leaf's snapshot storage: the manifest row and every segment
+    /// row (issue #4383). A leaf without a Guid key has no snapshot grain.
+    /// </summary>
+    private Task ClearSnapshotStorageAsync()
+    {
+        if (!context.GrainId.TryGetGuidKey(out var leafKey, out _))
+        {
+            return Task.CompletedTask;
+        }
+
+        return grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey).ClearAsync(CancellationToken.None);
     }
 }
