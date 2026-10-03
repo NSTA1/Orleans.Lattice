@@ -176,8 +176,8 @@ internal sealed partial class LatticeGrain
         }
 
         // The map the live shard cursors were opened under, and the shard each
-        // one reads: a row is taken only from the shard that map routes its key
-        // to (issue #4361). See ScanOwnership.
+        // one reads: when several cursors hold a row for the same key, the value
+        // is taken from the key's owner (issue #4361). See ScanOwnership.
         var routedMap = shardMap0;
         var liveShards = physicalShards;
 
@@ -305,11 +305,27 @@ internal sealed partial class LatticeGrain
             var idx = pq.Dequeue();
             var entry = cursors[idx].Current;
 
-            // A row on a shard the map does not route its key to - a copy left by a
-            // migration's backstop - is never the key's value: the owner yields it,
-            // or the moved-slot reconciliation drains it (issue #4361).
-            if ((isSystemTree || ScanOwnership.IsRoutedRow(routedMap, liveShards, idx, entry.Key))
-                && (yielded is null || yielded.Add(entry.Key)))
+            // Every cursor holding a row for this key is tied with it at the top of
+            // the queue. A shard can hold a copy of a key whose slot it does not own
+            // (an atomic write's cross-migration backstop writes the whole batch into
+            // every split shard it may reach), so the value comes from the key's
+            // owner rather than whichever copy dequeued first (issue #4361). Only the
+            // value is chosen here: which keys are yielded, and their order, are
+            // exactly as before.
+            List<int>? ties = null;
+            while (pq.TryPeek(out var tiedIdx, out var tiedKey)
+                && string.Equals(tiedKey, entry.Key, StringComparison.Ordinal))
+            {
+                pq.Dequeue();
+                (ties ??= new List<int>(2)).Add(tiedIdx);
+            }
+
+            if (ties is not null && !isSystemTree)
+            {
+                entry = cursors[ScanOwnership.PickOwnerRow(routedMap, liveShards, idx, ties, entry.Key)].Current;
+            }
+
+            if (yielded is null || yielded.Add(entry.Key))
             {
                 // Advance the merge frontier for every key the merge passes,
                 // independently of the access-gate visibility prune, so
@@ -338,6 +354,15 @@ internal sealed partial class LatticeGrain
             await cursors[idx].MoveNextAsync();
             if (cursors[idx].HasCurrent)
                 pq.Enqueue(idx, cursors[idx].Current.Key);
+            if (ties is not null)
+            {
+                foreach (var tiedIdx in ties)
+                {
+                    await cursors[tiedIdx].MoveNextAsync();
+                    if (cursors[tiedIdx].HasCurrent)
+                        pq.Enqueue(tiedIdx, cursors[tiedIdx].Current.Key);
+                }
+            }
         }
     }
 

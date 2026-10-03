@@ -223,12 +223,6 @@ internal sealed partial class LatticeGrain
                 pq.Enqueue(i, cursors[i].Current!);
         }
 
-        // The map the live shard cursors were opened under, and the shard each
-        // one reads: a key is taken only from the shard that map routes it to
-        // (issue #4361). See ScanOwnership.
-        var routedMap = shardMap0;
-        var liveShards = physicalShards;
-
         // System trees never split - skip reconciliation entirely.
         // For non-system trees the cross-cursor dedup set grows to roughly
         // the scan window size (~hundreds-to-thousands of keys). Pre-sizing
@@ -373,10 +367,8 @@ internal sealed partial class LatticeGrain
 
             // Cross-cursor dedup: the same key may appear in an injected
             // memory cursor if the old owner produced it before the split
-            // committed. Suppress silently. A key on a shard the map does not
-            // route it to is never taken from that shard (issue #4361).
-            if ((isSystemTree || ScanOwnership.IsRoutedRow(routedMap, liveShards, idx, key))
-                && (yielded is null || yielded.Add(key)))
+            // committed. Suppress silently.
+            if (yielded is null || yielded.Add(key))
             {
                 // Advance the merge frontier for every key the merge passes
                 // (used by reconciliation to drop drained keys behind it),

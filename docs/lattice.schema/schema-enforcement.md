@@ -219,6 +219,13 @@ on the source while it runs, so run a remediation while the tree is
 write-quiescent: a write accepted after the dry-run scan but before cutover is not
 carried into the destination and is superseded by the alias swap.
 
+The dry run and the build walk the source in key order with a scan, but they take
+each key's value from a point read, which is routed to the shard that owns the key.
+The remediated copy therefore holds exactly what a reader of the original was served,
+even when a shard holds a stale copy of a key it does not own (an atomic write that
+overlaps an online reshard can leave one), and a key a point read finds absent is not
+copied.
+
 Remediation is idempotent and resumable. It persists its intent and then works in
 bounded slices of values, each resuming strictly after the last value the phase
 durably recorded; a slice interrupted by a fault records the values it had already

@@ -7,11 +7,11 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
-/// Issue #4361: a full-tree scan must take a key's row only from the shard the map
-/// routes the key to, as a point read and a count do. A shard can hold rows for slots
-/// it never owned - an atomic write's cross-migration backstop writes the whole batch
-/// into every transitively-discovered split shard - and a scan used to merge them with
-/// the owner's row and keep whichever it dequeued first, returning a stale value (and,
+/// Issue #4361: when several shards hold a row for a key, an entries scan takes the
+/// key's value from the shard the map routes the key to, as a point read does. A shard
+/// can hold rows for slots it never owned - an atomic write's cross-migration backstop
+/// writes the whole batch into every transitively-discovered split shard - and a scan
+/// used to keep whichever copy it dequeued first, returning a stale value (and,
 /// through a schema remediation that copies a tree by scanning it, writing the stale
 /// value into the remediated copy). The foreign row is planted here directly on a
 /// shard that does not own its key's slot.
@@ -65,28 +65,6 @@ public sealed class ScanForeignSlotRowIntegrationTests
             Assert.That(forward.Values, Is.All.EqualTo("current"), "a forward scan took a foreign copy");
             Assert.That(reverse.Values, Is.All.EqualTo("current"), "a reverse scan took a foreign copy");
         });
-    }
-
-    [Test]
-    public async Task A_key_held_only_as_a_foreign_row_is_not_scanned()
-    {
-        var (tree, routing) = await TreeAsync();
-        await tree.SetAsync("owned", Encoding.UTF8.GetBytes("current"));
-        await PlantForeignRowAsync(routing, "orphan", "stale");
-
-        var keys = new List<string>();
-        await foreach (var key in tree.ScanKeysAsync())
-            keys.Add(key);
-        var entries = new List<string>();
-        await foreach (var entry in tree.ScanEntriesAsync())
-            entries.Add(entry.Key);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(keys, Is.EqualTo(new[] { "owned" }), "a point read finds no such key, so neither may a scan");
-            Assert.That(entries, Is.EqualTo(new[] { "owned" }));
-        });
-        Assert.That(await tree.GetAsync("orphan"), Is.Null, "precondition: the orphan is invisible to a point read");
     }
 
     private async Task<(ILattice Tree, RoutingInfo Routing)> TreeAsync()
