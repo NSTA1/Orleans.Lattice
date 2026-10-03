@@ -134,6 +134,90 @@ internal static class AtomicVisibilityGate
 
         return PendingReadOutcome.FallThroughToPreSaga;
     }
+
+    /// <summary>
+    /// Chooses which of several prepared mutations covering the <b>same key</b> on
+    /// one leaf decides how a reader resolves that key, so that
+    /// <see cref="ResolveKey"/> is fed the bucket that actually determines the
+    /// key's visible value. Returns the index of the deciding candidate, or
+    /// <c>-1</c> when <paramref name="candidates"/> is empty.
+    /// </summary>
+    /// <param name="candidates">
+    /// Every prepared mutation covering the key, each with its saga's recorded
+    /// outcome (resolved against the read's single registry view), the orphan
+    /// guard, whether the leaf's committed row already supersedes it, and the
+    /// prepared value's HLC timestamp.
+    /// </param>
+    /// <returns>
+    /// The index of the candidate to resolve the key against through
+    /// <see cref="ResolveKey"/>, or <c>-1</c> when no candidate decides, in which
+    /// case the reader serves the leaf's committed row exactly as if the key had
+    /// no prepare at all.
+    /// </returns>
+    /// <remarks>
+    /// <para>
+    /// <b>Why more than one bucket can cover a key.</b> A saga whose prepares
+    /// landed but whose decision has not been recorded keeps its bucket for as
+    /// long as it stays undecided - most visibly when a silo restart parks the
+    /// saga (the caller sees <see cref="LatticeShuttingDownException"/>) and the
+    /// leaf's reactivation replays the prepare from the write-ahead log. Every
+    /// later saga that writes the same key then prepares a second bucket beside
+    /// it. A shard split's retroactive sweep can likewise leave an orphan beside a
+    /// newer prepare.
+    /// </para>
+    /// <para>
+    /// <b>The rule.</b> The key's visible value is what the saga terminals will
+    /// leave on this leaf, so only a bucket whose terminal would actually change
+    /// the row can decide. That is an <see cref="TxStatus.Indeterminate"/> saga
+    /// (which hides the key - the strictly weaker answer wins, because the
+    /// registry cannot say whether that saga's value is the one the key settles
+    /// on), or a <see cref="TxStatus.Committed"/> saga whose terminal has not been
+    /// applied here (which surfaces its prepared value, newest HLC first when
+    /// several have committed) - in both cases only when the leaf's committed row
+    /// does not already supersede the prepare, because the commit drain skips a
+    /// prepare that a newer, non-migrated row dominates (the orphan-drain guard
+    /// in <c>BPlusLeafGrain.ApplyTxCommit</c>), so such a bucket never lands.
+    /// <see cref="TxStatus.InFlight"/> and <see cref="TxStatus.Aborted"/> buckets,
+    /// and already-terminal orphans, are invisible to readers whatever their age,
+    /// so they never decide.
+    /// </para>
+    /// <para>
+    /// <b>The defect it closes.</b> The multi-key read paths used to keep whichever
+    /// bucket dictionary enumeration reached first. A long-undecided saga's bucket
+    /// then shadowed a newer, already-committed saga's bucket on some leaves: those
+    /// leaves fell through to the pre-saga value while sibling leaves surfaced the
+    /// committed one, so a reader saw the committed batch on some keys and not on
+    /// others - a torn read that repeated for every later batch until the stuck
+    /// saga resolved. Picking the newest bucket alone (as the single-key paths did)
+    /// is not sufficient either: a newer in-flight bucket then shadows an older
+    /// bucket whose saga has committed but has not yet drained here, which tears
+    /// that older saga in the same way.
+    /// </para>
+    /// </remarks>
+    public static int SelectDecidingPrepare(ReadOnlySpan<PreparedCandidate> candidates)
+    {
+        var newestCommitted = -1;
+        var newestIndeterminate = -1;
+        for (var i = 0; i < candidates.Length; i++)
+        {
+            var candidate = candidates[i];
+            if (candidate.SupersededByRow)
+                continue;
+
+            if (candidate.Status == TxStatus.Indeterminate)
+            {
+                if (newestIndeterminate < 0 || candidate.Timestamp.CompareTo(candidates[newestIndeterminate].Timestamp) > 0)
+                    newestIndeterminate = i;
+            }
+            else if (candidate.Status == TxStatus.Committed && !candidate.AlreadyTerminal)
+            {
+                if (newestCommitted < 0 || candidate.Timestamp.CompareTo(candidates[newestCommitted].Timestamp) > 0)
+                    newestCommitted = i;
+            }
+        }
+
+        return newestIndeterminate >= 0 ? newestIndeterminate : newestCommitted;
+    }
 }
 
 /// <summary>

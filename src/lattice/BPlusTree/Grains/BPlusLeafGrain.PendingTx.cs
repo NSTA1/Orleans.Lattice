@@ -139,6 +139,34 @@ internal sealed partial class BPlusLeafGrain
     private HashSet<Guid>? _recentlyTerminal;
 
     /// <summary>
+    /// Set while the activation-replay self-terminalise sweep
+    /// (<see cref="SelfTerminaliseResolvedPreparesAsync"/>) lands a decision
+    /// through <see cref="ApplyTxCommit"/>. That sweep runs outside any
+    /// <see cref="LatticeApplyOffsetContext"/> scope, but it drains a saga
+    /// after pass 1 has absorbed every partition, exactly like a deferred
+    /// pass-2 terminal, so it must stamp the drained values the replay way.
+    /// Only ever set around a synchronous <see cref="ApplyTxCommit"/> call.
+    /// </summary>
+    private bool _replayTerminalStamping;
+
+    /// <summary>
+    /// Applies a saga commit on behalf of activation replay outside an apply
+    /// scope, with replay stamping (see <see cref="_replayTerminalStamping"/>).
+    /// </summary>
+    private void ApplyReplayTxCommit(Guid transactionId)
+    {
+        _replayTerminalStamping = true;
+        try
+        {
+            ApplyTxCommit(transactionId);
+        }
+        finally
+        {
+            _replayTerminalStamping = false;
+        }
+    }
+
+    /// <summary>
     /// Whether this leaf has already applied the terminal for <paramref name="txid"/>,
     /// so a surviving pending bucket for it is a late-arriving shadow-forward orphan.
     /// This is the orphan-guard input to <see cref="AtomicVisibilityGate.ResolveKey"/>.
@@ -547,7 +575,8 @@ internal sealed partial class BPlusLeafGrain
             // migrated HLC is observed atomically here and the resulting
             // terminalStamp strictly dominates it via HLC.Tick's
             // strict-greater semantic.
-            var baseTerminalStamp = state.State.Clock;
+            var replayStamping = _replayTerminalStamping || LatticeApplyOffsetContext.Current is not null;
+            var baseTerminalStamp = replayStamping ? default : state.State.Clock;
             foreach (var kvp in bucket)
             {
                 if (Cache.TryGetRow(kvp.Key, out var preExisting))
@@ -581,7 +610,32 @@ internal sealed partial class BPlusLeafGrain
                     if (preExisting.Timestamp.CompareTo(baseTerminalStamp) > 0)
                         baseTerminalStamp = preExisting.Timestamp;
                 }
+
+                if (replayStamping && kvp.Value.Timestamp.CompareTo(baseTerminalStamp) > 0)
+                    baseTerminalStamp = kvp.Value.Timestamp;
             }
+            // Replay stamping (activation replay and its self-terminalise sweep).
+            // The foreground stamp is the leaf clock at the moment the terminal
+            // arrived, and the deterministic-replay argument below assumes replay
+            // sees that same clock. It does not when a terminal is deferred to
+            // pass 2 of a multi-partition replay (or drained by the pass-2.5
+            // self-terminalise sweep): by then pass 1 has absorbed every
+            // partition, including the prepares of LATER sagas on the same keys,
+            // so the leaf clock already sits above them. Stamping with it lifts
+            // this (earlier) saga's drained values above those later prepares,
+            // and when a later saga's terminal arrives the orphan-drain guard
+            // below reads that as "a strictly-later saga already drained this
+            // key" and discards the later saga's committed value - an acknowledged
+            // batch that stays invisible on this leaf while every other leaf
+            // shows it. So replay stamps from the keys it actually writes: just
+            // past the higher of their existing rows and this bucket's own
+            // prepares. That never exceeds the foreground stamp (the foreground
+            // clock already dominated both), so every skip the guard makes on
+            // the foreground path it still makes here, and a saga that prepared
+            // after this one drained still out-ranks it.
+            var maxBase = replayStamping || baseTerminalStamp.CompareTo(state.State.Clock) > 0
+                ? baseTerminalStamp
+                : state.State.Clock;
             // Counter-only bump past the higher of state.State.Clock and
             // baseTerminalStamp. The bump is load-bearing for cache-delta
             // visibility: ApplyTxTerminalAsync publishes the pre-bump
@@ -596,15 +650,13 @@ internal sealed partial class BPlusLeafGrain
             // (it reads DateTimeOffset.UtcNow.Ticks, so foreground and
             // terminal-replay produce different WallClockTicks values). A
             // counter-only bump - construct a new HLC with the same
-            // WallClockTicks and Counter+1 - is bit-identical across
-            // foreground and replay because the WAL's AdvanceProjectionClock
-            // calls have already deterministically reconstructed
-            // state.State.Clock on the replay path. Every drained entry on
-            // both paths thus carries the same Timestamp, which is the
-            // invariant the cross-saga LWW dominance checks rely on.
-            var maxBase = baseTerminalStamp.CompareTo(state.State.Clock) > 0
-                ? baseTerminalStamp
-                : state.State.Clock;
+            // WallClockTicks and Counter+1 - is deterministic for a given
+            // base. The foreground base is the leaf clock; the replay base is
+            // derived from the written keys alone (see "Replay stamping"
+            // above), so a replayed drain is stamped at or below the stamp the
+            // foreground drain carried and never above any prepare that
+            // arrived after it - which is the ordering the cross-saga LWW
+            // dominance checks below rely on.
             var terminalStamp = new Orleans.Lattice.HybridLogicalClock
             {
                 WallClockTicks = maxBase.WallClockTicks,
@@ -872,7 +924,12 @@ internal sealed partial class BPlusLeafGrain
     /// stale-read exposure when an orphaned older prepare lingers in
     /// the pending map. Idempotent re-replays of the same
     /// <c>(txid, key)</c> use the same timestamp and produce a fixed
-    /// point under this tie-break.
+    /// point under this tie-break. The newest bucket is only the
+    /// starting point: when another bucket also covers the key, the
+    /// read paths resolve the key against the bucket that decides it
+    /// (<see cref="SelectPendingForKeyAsync"/>), because a newer
+    /// in-flight prepare must not shadow an older one whose saga has
+    /// committed.
     /// </para>
     /// </summary>
     private bool TryFindPendingForKey(string key, out Guid txid, out LwwValue<byte[]> pendingValue)
@@ -1107,7 +1164,7 @@ internal sealed partial class BPlusLeafGrain
             switch (decision)
             {
                 case TxStatus.Committed:
-                    ApplyTxCommit(txid);
+                    ApplyReplayTxCommit(txid);
                     break;
                 case TxStatus.Aborted:
                     ApplyTxAbort(txid);
@@ -1170,7 +1227,7 @@ internal sealed partial class BPlusLeafGrain
         switch (recorded)
         {
             case TxStatus.Committed:
-                ApplyTxCommit(txid);
+                ApplyReplayTxCommit(txid);
                 break;
             case TxStatus.Aborted:
                 ApplyTxAbort(txid);
@@ -1228,12 +1285,28 @@ internal sealed partial class BPlusLeafGrain
             pendingBound += bucket.Count;
         var pendingKeys = new Dictionary<string, (Guid, LwwValue<byte[]>)>(
             Math.Min(pendingBound, PendingReadKeyCapacityLimit));
+        // Keys covered by more than one saga's bucket. Resolved below, once the
+        // outcomes are known, through AtomicVisibilityGate.SelectDecidingPrepare;
+        // first-bucket-wins let a long-undecided saga shadow a committed one.
+        // Captured here, before the registry await, so the selection reads the
+        // same pending set the rest of this snapshot does.
+        Dictionary<string, List<(Guid txid, LwwValue<byte[]> value)>>? contested = null;
         foreach (var (txid, bucket) in _pendingTx)
         {
             txids.Add(txid);
             foreach (var (key, value) in bucket)
             {
-                pendingKeys.TryAdd(key, (txid, value));
+                if (pendingKeys.TryAdd(key, (txid, value)))
+                    continue;
+
+                contested ??= new Dictionary<string, List<(Guid, LwwValue<byte[]>)>>(StringComparer.Ordinal);
+                if (!contested.TryGetValue(key, out var candidates))
+                {
+                    candidates = [pendingKeys[key]];
+                    contested[key] = candidates;
+                }
+
+                candidates.Add((txid, value));
             }
         }
 
@@ -1255,6 +1328,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 filtered[t] = ambient.TryGetValue(t, out var s) ? s : TxStatus.InFlight;
             }
+            SelectContestedPrepares(pendingKeys, contested, filtered);
             return (filtered, pendingKeys);
         }
 
@@ -1265,6 +1339,7 @@ internal sealed partial class BPlusLeafGrain
         // range holds no prepare still completes.
         if (LatticeRegistrySnapshotContext.IsUnavailable)
         {
+            SelectContestedPrepares(pendingKeys, contested, UnavailableOutcomes);
             return (UnavailableOutcomes, pendingKeys);
         }
 
@@ -1280,6 +1355,7 @@ internal sealed partial class BPlusLeafGrain
             // tree-id stamp was not what the code did.
             var hidden = new Dictionary<Guid, TxStatus>(txids.Count);
             foreach (var t in txids) hidden[t] = TxStatus.Indeterminate;
+            SelectContestedPrepares(pendingKeys, contested, hidden);
             return (hidden, pendingKeys);
         }
 
@@ -1299,9 +1375,112 @@ internal sealed partial class BPlusLeafGrain
                 treeId, key: null, pendingKeys.Count, txids, ex);
         }
 
+        SelectContestedPrepares(pendingKeys, contested, outcomes);
         return (outcomes, pendingKeys);
     }
 
+    /// <summary>
+    /// Re-points every key covered by more than one saga's bucket at the bucket
+    /// that decides its visibility under <paramref name="outcomes"/>, using
+    /// <see cref="AtomicVisibilityGate.SelectDecidingPrepare"/>, and drops the key
+    /// from <paramref name="pendingKeys"/> when no bucket decides, so the read
+    /// serves the committed row. A no-op on the steady-state path where no key is
+    /// contested, and under the <see cref="UnavailableOutcomes"/> sentinel, where
+    /// the read throws on reaching any prepared key whichever bucket it holds.
+    /// </summary>
+    private void SelectContestedPrepares(
+        Dictionary<string, (Guid txid, LwwValue<byte[]> value)> pendingKeys,
+        Dictionary<string, List<(Guid txid, LwwValue<byte[]> value)>>? contested,
+        Dictionary<Guid, TxStatus> outcomes)
+    {
+        if (contested is null || ReferenceEquals(outcomes, UnavailableOutcomes))
+            return;
+
+        var view = new TxDecisionView(outcomes);
+        foreach (var (key, candidates) in contested)
+        {
+            var chosen = SelectDecidingCandidate(key, candidates, view);
+            if (chosen < 0)
+                pendingKeys.Remove(key);
+            else
+                pendingKeys[key] = candidates[chosen];
+        }
+    }
+
+    /// <summary>
+    /// Applies <see cref="AtomicVisibilityGate.SelectDecidingPrepare"/> to the
+    /// buckets covering <paramref name="key"/>, resolving each saga's outcome
+    /// through <paramref name="view"/>, the orphan guard through this leaf's
+    /// terminal record, and supersession through the same comparison the commit
+    /// drain's orphan-drain guard makes in <see cref="ApplyTxCommit"/>. Returns
+    /// <c>-1</c> when no bucket decides.
+    /// </summary>
+    private int SelectDecidingCandidate(
+        string key, List<(Guid txid, LwwValue<byte[]> value)> candidates, TxDecisionView view)
+    {
+        var hasRow = Cache.TryGetRow(key, out var row);
+        var resolved = new PreparedCandidate[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var (txid, value) = candidates[i];
+            // A CRDT-delta prepare is folded into the row rather than LWW-merged,
+            // so the drain never skips it and no row supersedes it.
+            var foldsDelta = _pendingTxDeltas is not null
+                && _pendingTxDeltas.TryGetValue(txid, out var deltas)
+                && deltas.ContainsKey(key);
+            var superseded = hasRow
+                && !foldsDelta
+                && !row.IsMigrated
+                && row.Timestamp.CompareTo(value.Timestamp) > 0;
+            resolved[i] = new PreparedCandidate(view.Resolve(txid), IsRecentlyTerminal(txid), superseded, value.Timestamp);
+        }
+
+        return AtomicVisibilityGate.SelectDecidingPrepare(resolved);
+    }
+
+    /// <summary>
+    /// Single-key counterpart of <see cref="SelectContestedPrepares"/>: given the
+    /// newest bucket <see cref="TryFindPendingForKey"/> found for
+    /// <paramref name="key"/>, returns the bucket that decides the key's
+    /// visibility when more than one saga has prepared it, together with that
+    /// saga's resolved outcome. When no bucket decides, the outcome is
+    /// <see cref="TxStatus.InFlight"/>, which the visibility gate resolves to the
+    /// committed row. Each candidate's outcome is resolved through
+    /// <see cref="ResolvePendingStatusAsync"/>, so an ambient fan-out snapshot is
+    /// honoured exactly as on the single-bucket path. When only one bucket covers
+    /// the key the outcome is <see langword="null"/> and the caller resolves it as
+    /// before, with no allocation and no extra await.
+    /// </summary>
+    private async ValueTask<(Guid txid, LwwValue<byte[]> value, TxStatus? status)> SelectPendingForKeyAsync(
+        string key, Guid newestTxid, LwwValue<byte[]> newestValue)
+    {
+        List<(Guid txid, LwwValue<byte[]> value)>? candidates = null;
+        if (_pendingTx is { Count: > 1 })
+        {
+            foreach (var (id, bucket) in _pendingTx)
+            {
+                if (id == newestTxid || !bucket.TryGetValue(key, out var value))
+                    continue;
+
+                candidates ??= [(newestTxid, newestValue)];
+                candidates.Add((id, value));
+            }
+        }
+
+        if (candidates is null)
+            return (newestTxid, newestValue, null);
+
+        var statuses = new Dictionary<Guid, TxStatus>(candidates.Count);
+        foreach (var (txid, _) in candidates)
+        {
+            statuses[txid] = await ResolvePendingStatusAsync(txid, key);
+        }
+
+        var chosen = SelectDecidingCandidate(key, candidates, new TxDecisionView(statuses));
+        return chosen < 0
+            ? (newestTxid, newestValue, TxStatus.InFlight)
+            : (candidates[chosen].txid, candidates[chosen].value, statuses[candidates[chosen].txid]);
+    }
     /// <summary>
     /// Sentinel outcome map returned by <see cref="SnapshotPendingForReadAsync"/>
     /// under a <see cref="LatticeRegistrySnapshotContext.IsUnavailable"/>
