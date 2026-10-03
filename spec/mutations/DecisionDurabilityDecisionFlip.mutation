@@ -16,7 +16,7 @@ Next ==
 DecisionFlip(t) ==
     /\ decision[t] = "committed"
     /\ decision' = [decision EXCEPT ![t] = "aborted"]
-    /\ UNCHANGED <<phase, vote, terminal, pend, orphanDone, forgotten, revision>>
+    /\ UNCHANGED <<phase, vote, terminal, pend, orphanDone, forgotten, masked, revision>>
 
 Next ==
     \/ \E t \in Txns : DecisionFlip(t)

@@ -1,0 +1,39 @@
+# Pairs with MonotonicVisibility. This is production's retention > 0 hazard,
+# kept as a standing check. The tombstone retention window elapses (the
+# registry reports Indeterminate, so the gate hides the key), and then
+# PruneExpired physically purges the row while a prepared bucket is still
+# resident on a leaf that never applied the terminal (the registry now reports
+# the txid absent, so InFlight, so the gate falls through to the pre-saga
+# value). A key a reader saw post-saga is later seen pre-saga, with a hidden
+# observation in between.
+#
+# It ADDS an action rather than perturbing one. The base's only row-retiring
+# action, ForgetDecision, is the ordered cleanup, and this purge is the
+# unordered one the base deliberately does not have (see "The registry
+# decision record's retention window" in Refinement.md). It is here for what
+# it shows about the property: MonotonicVisibility used to be stated over a
+# single step, and that form stays CLEAN on this mutant because no single step
+# goes from post to pre. The behaviour-level statement fires.
+MODULE: MonotonicVisibilityPurgeAfterMask
+TARGET: MonotonicVisibility
+CLASS: Temporal
+SUMMARY: purges a masked registry row while a prepared bucket is still resident, so a key seen post-saga is later seen pre-saga via hidden
+
+--- FIND
+Next ==
+    \/ \E t \in Txns : PrepareTx(t)
+--- REPLACE
+\* MUTATION: PruneExpired retires an expired (masked) row with no drain
+\* ordering against the participants. Unfair, like RegistryMask.
+PruneExpired(t) ==
+    /\ masked[t]
+    /\ decision[t] # "inflight"
+    /\ ~forgotten[t]
+    /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, masked>>
+
+Next ==
+    \/ \E t \in Txns : PruneExpired(t)
+    \/ \E t \in Txns : PrepareTx(t)
+--- END

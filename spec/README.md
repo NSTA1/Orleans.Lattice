@@ -46,10 +46,17 @@ interleaving of the protocol's decision and broadcast steps.
   the linearization point. `ForgetDecision` models the saga's post-fan-out
   cleanup: it retires the row (so `RegistryView` reverts to in-flight) without
   changing the outcome, and only once every participant has drained.
-- **Reader visibility** (`ObservedPrepared`, `SurfaceViaGate`) - the per-key
-  gate that resolves how a read of a key carrying a pending mutation is
-  answered, resolved against one decision snapshot so a saga is all-or-nothing
-  visible.
+  `RegistryMask` models the registry declining to report the saga's outcome
+  (`masked`, production's `Indeterminate`: an aged-out row it still stores, or
+  a delegated cross-tree txid whose coordinator cannot be dialled), with no
+  ordering against the participants or even the decision.
+- **Reader visibility** (`Observed`, `SurfaceViaGate`) - the per-key gate that
+  resolves how a read of a key carrying a pending mutation is answered, resolved
+  against one registry view so a saga is all-or-nothing visible. A read has
+  three outcomes, not two: the post-saga value, the pre-saga value, or
+  `"hidden"` when the registry has declined to report the decision - the gate's
+  `Indeterminate` arm, which asserts nothing about the saga and so is never
+  treated as a pre-saga read.
 - **Reshard / migration** (`ShadowForwardOrphan`, `OrphanDrain`) - an abstract
   online shard-split step that shadow-forwards a stale prepared write onto a
   leaf that already applied the saga's terminal, and the leaf's discard of
@@ -65,22 +72,31 @@ Safety invariants (checked at every reachable state):
 | Invariant | Meaning |
 |-----------|---------|
 | `TypeOK` | State stays well-typed. |
-| `AllOrNothing` | Atomicity: within one saga every key resolves identically for a snapshot reader - never a split view. |
-| `VisibilityMatchesDecision` | A key is post-saga-visible exactly when the tree-wide decision is committed (sharpest safety statement; implies `AllOrNothing` and `StrictIsolation`). |
+| `AllOrNothing` | Atomicity: within one saga a snapshot reader never sees one key post-saga and another pre-saga - never a split view. A hidden key is compatible with either. |
+| `VisibilityMatchesDecision` | A key is post-saga-visible only when the tree-wide decision is committed, and pre-saga-visible only when it is not (sharpest safety statement; implies `AllOrNothing` and `StrictIsolation`). |
 | `StrictIsolation` | An in-flight or aborted saga is never surfaced as committed. |
 | `CommitIntegrity` | Commit implies every participant acked; abort implies at least one nack. |
 | `LinearizedTerminals` | No leaf applies a commit / abort terminal before the registry recorded that decision (decision-before-broadcast). |
 | `NoMixedTerminals` | A saga never applies commit on one leaf and abort on another. |
 
-Action / temporal properties:
+Action and temporal properties (`DecisionDurability` and `RevisionMonotonic` are
+single-step action properties; `MonotonicVisibility` is a safety property stated
+over whole behaviours; the last three are liveness properties):
 
 | Property | Meaning |
 |----------|---------|
 | `DecisionDurability` | Once terminal, the registry decision never flips to the other terminal, and its row is never retired while a written key has not yet applied its terminal (its prepared bucket is still undrained). |
-| `MonotonicVisibility` | Once a key is post-saga-visible it stays visible (even across a reshard). |
+| `MonotonicVisibility` | Once a key has been observed post-saga it is never observed pre-saga at any later state (even across a reshard, or while the registry declines to report the decision). Going hidden is not a reversion, but it cannot launder one: post, then hidden, then pre is a violation, which is why the property is stated over the behaviour rather than over one step. |
 | `RevisionMonotonic` | The registry revision counter never decreases. |
-| `Termination` | Every saga terminates (under weak fairness of saga progress). |
-| `EveryCommittedKeyReadable` | Every committed saga's keys eventually all become readable. |
+| `Termination` | Every saga terminates (under weak fairness of saga progress). Fails on a protocol defect under that fairness, not only without it. |
+| `EveryCommittedKeyReadable` | Every committed saga's keys are eventually all materialised at their post-saga value on their own leaf. Not entailed by any invariant; for a committed saga it coincides with `NoStrandedPrepare` (see its comment in the spec). |
+| `NoStrandedPrepare` | Every participant of a decided saga eventually applies the saga's terminal. The only one of the three liveness properties that sees an aborted saga's stranded bucket. |
+
+All three liveness properties fail on protocol defects under the fairness the
+spec asserts. `Termination` and `NoStrandedPrepare` each have one the other two
+miss; `EveryCommittedKeyReadable`'s is also caught by `NoStrandedPrepare`, with
+which it coincides for a committed saga. The paired mutations in
+[`mutations/`](mutations/README.md) are the standing demonstration.
 
 ## The bounded instance
 
@@ -130,37 +146,30 @@ re-run of TLC, not one conjunct.
 
 The deeper limit is that the model abstracts values away entirely: even with the
 conjunct in place, "which of two committed writers does a reader of `k2` observe" is
-not a question this instance can ask, because `ObservedPrepared` returns a
-boolean rather than a value. A cross-saga *visibility* property needs a value
+not a question this instance can ask, because `Observed` returns which side of
+the saga a read lands on rather than a value. A cross-saga *visibility* property needs a value
 domain, which is a larger change than that conjunct.
 
 To widen the instance, declare the new model values on the `CONSTANTS` line of
 `AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
 matching model-value assignments to `AtomicCommit.cfg`. The state space stays
-small for the default instance (several thousand distinct states), but no
+small for the default instance (31,684 distinct states), but no
 protocol action's guard refers to another saga, so the sagas' reachable states
 combine as a product: every saga added multiplies the count by what one saga
 alone can reach, and larger instances grow quickly.
 
 ## Claims in this directory that open issues own
 
-Two issues that are still **open** own claims made in this directory.
+No issue that is still **open** owns claims made in this directory.
 
-- **#2320** owns the *unguarded* decision-masking action. `ForgetDecision`
-  models the saga's ordered post-fan-out cleanup and passes every property
-  precisely because its guards make every observation independent of the
-  decision before it fires. A retention window masking a row while a prepared
-  bucket is still live has no such ordering behind it, violates
-  `MonotonicVisibility` and `VisibilityMatchesDecision`, and is deliberately not
-  modelled here. **`ForgetDecision` does not discharge #2320.**
-- **#2319** owns raising the Coyote harness's concurrency degree above zero.
-  #2325 corrected the two member names that promised schedule exploration the
-  harness does not perform; making the exploration real is #2319's.
-
-The two that used to appear here - **#2325** (documentation and API overclaims
-in the atomicity surface, including the `k2` overlap discussed above) and
-**#2333** (the `DecisionDurability` prose and its refinement seam) - are both
-resolved.
+The four that used to appear here - **#2319** (verification artefacts named for
+what they could not exercise; the Coyote concurrency degree was deliberately not
+raised, see `CoyoteModelHarness`), **#2320** (the unordered decision-masking
+action, now `RegistryMask`), **#2325** (documentation and API overclaims in the
+atomicity surface, including the `k2` overlap discussed above) and **#2333**
+(the `DecisionDurability` prose and its refinement seam) - are all resolved.
+Further issues filed while closing them are about production behaviour, not
+claims made here: #4428, #4445 and #4448.
 
 The boundary is recorded in full under
 [territory owned by other open issues](Refinement.md#territory-owned-by-other-open-issues)
@@ -272,7 +281,14 @@ The depth of the complete state graph search is 17.
 All seven invariants and all five temporal properties held; no deadlock. That run
 predates #2612, which added the `forgotten` variable and the `ForgetDecision`
 action and strengthened `DecisionDurability`, so these counts describe the earlier
-model, not the current one. The current specification is model-checked in CI by
+model, not the current one. After #2320 added `masked` and `RegistryMask` and
+#2321 added `NoStrandedPrepare`, a local run on tla2tools v1.7.4 checked all seven
+invariants and all six temporal properties over 29,929 distinct states at depth 21
+(124,625 generated), clean. The review that followed (PR #4424) dropped
+`RegistryMask`'s decision guard and restated `MonotonicVisibility` and
+`EveryCommittedKeyReadable`; the same toolchain then checked all seven
+invariants and all six action and temporal properties over 31,684 distinct
+states at depth 21 (134,633 generated), clean, with deadlock checking on. The current specification is model-checked in CI by
 `TlcModelCheckTests.The_base_specification_holds`, against the tla2tools v1.7.4
 release the workflows pin (see [CI decision](#ci-decision)).
 
@@ -308,14 +324,16 @@ image cache in a couple of seconds. The second was right about what TLC *was*
 being asked to do, and is the part that changed: the fixture no longer only
 checks that the specification holds. It checks that each paired **mutant** makes
 its property fire - by name for an invariant or action property, and for the
-two liveness properties by way of a single-property configuration, because TLC
+temporal properties by way of a single-property configuration, because TLC
 does not name the property in a temporal violation. That is a claim about the
 specification's own diagnostic power, and unlike the design it tracks, it
 regresses silently the moment somebody weakens a property - which is exactly
 the failure the atomicity audit (epic #2299) found four times over.
 
-Each of the twelve properties is paired with a mutation, and each pairing runs
-as a two-arm experiment: the generated single-property model must be **clean**
+Each of the thirteen properties is paired with at least one mutation, every
+protocol action in `Next` is perturbed by at least one (issue #2322, gated by
+`SpecActionMutationCoverageTests`), and each pairing runs as a two-arm
+experiment: the generated single-property model must be **clean**
 against the unmutated specification and **violated** against the mutant. The
 control arm is what makes a red mutant evidence rather than merely a red run,
 and it is the standing proof that the fixture is not vacuous. See

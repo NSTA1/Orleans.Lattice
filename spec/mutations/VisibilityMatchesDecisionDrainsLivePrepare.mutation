@@ -1,0 +1,24 @@
+# Pairs with VisibilityMatchesDecision. The orphan discard loses its
+# already-terminal guard, so it discards a LIVE prepared bucket - one whose
+# terminal has not reached the leaf - as though it were a late orphan. For a
+# committed saga that removes the only thing the gate could surface, and the
+# key reads at its pre-saga value. MigrationTerminalCore.DecideBucketAction
+# returns DiscardOrphan only when alreadyTerminal is set for exactly this
+# reason.
+MODULE: VisibilityMatchesDecisionDrainsLivePrepare
+TARGET: VisibilityMatchesDecision
+CLASS: Invariant
+SUMMARY: discards a live prepared bucket as an orphan before its terminal lands, so a committed key reads pre-saga
+PERTURBS: OrphanDrain
+
+--- FIND
+OrphanDrain(t, k) ==
+    /\ k \in Written(t)
+    /\ terminal[t][k] # "none"
+    /\ pend[t][k] = "pending"
+--- REPLACE
+\* MUTATION: the already-terminal guard is dropped from the discard.
+OrphanDrain(t, k) ==
+    /\ k \in Written(t)
+    /\ pend[t][k] = "pending"
+--- END

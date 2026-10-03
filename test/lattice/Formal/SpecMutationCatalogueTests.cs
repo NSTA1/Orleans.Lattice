@@ -31,7 +31,7 @@ public sealed class SpecMutationCatalogueTests
     /// </summary>
     private const int ExpectedInvariantCount = 7;
 
-    private const int ExpectedTemporalPropertyCount = 5;
+    private const int ExpectedTemporalPropertyCount = 6;
 
     private static string SpecDirectory => Path.Combine(HygieneRepository.FindRepoRoot(), "spec");
 
@@ -46,18 +46,28 @@ public sealed class SpecMutationCatalogueTests
     /// <summary>
     /// Completeness, driven by the model rather than by a hand-maintained list.
     /// Every name in the base cfg's INVARIANTS and PROPERTIES blocks must have
-    /// a mutation, so adding a property without pairing it fails here.
+    /// at least one mutation, so adding a property without pairing it fails
+    /// here.
     /// <para>
     /// This is the gate that keeps #2323 closed rather than merely satisfied
     /// once. A pairing rule that covers today's properties but not tomorrow's
     /// decays into exactly the state the audit found.
+    /// </para>
+    /// <para>
+    /// At least one, not exactly one. A property may be the one that catches
+    /// defects in several protocol actions, and issue #2322 asks for each
+    /// action's claim to ship with a mutation of its own; requiring one
+    /// mutation per property would force those into a single file or leave the
+    /// action rows unpaired. What must stay unique is the mutation, so two
+    /// files cannot claim to be the same experiment.
     /// </para>
     /// </summary>
     [Test]
     public void Every_property_the_base_model_checks_has_a_mutation()
     {
         var checkedProperties = SpecMutationCatalogue.ReadCheckedProperties(BaseConfig);
-        var paired = Mutations().Select(m => m.Target).ToArray();
+        var mutations = Mutations();
+        var paired = mutations.Select(m => m.Target).Distinct(StringComparer.Ordinal).ToArray();
 
         Assert.That(
             checkedProperties,
@@ -72,7 +82,10 @@ public sealed class SpecMutationCatalogueTests
             + $"Model checks: [{string.Join(", ", checkedProperties.Order(StringComparer.Ordinal))}]. "
             + $"Mutations target: [{string.Join(", ", paired.Order(StringComparer.Ordinal))}].");
 
-        Assert.That(paired, Is.Unique, "two mutations target the same property; each needs its own.");
+        Assert.That(
+            mutations.Select(m => m.Module),
+            Is.Unique,
+            "two mutations generate the same module name, so one mutant would overwrite the other.");
     }
 
     /// <summary>
@@ -166,6 +179,61 @@ public sealed class SpecMutationCatalogueTests
                     $"'{name}' is a temporal property and must appear in spec/AtomicCommit.cfg's PROPERTIES "
                     + "block for TLC to check it over behaviours.");
             }
+        });
+    }
+
+    /// <summary>
+    /// The <c>DEADLOCK: off</c> header is what licenses TLC's
+    /// <c>-deadlock</c> switch, and nothing else may. This pins the mapping
+    /// without a JVM: a mutation declaring the header gets exactly the switch,
+    /// every other mutation gets no extra options at all. Whether a declaring
+    /// mutation actually needs it is checked by <see cref="TlcModelCheckTests"/>,
+    /// which runs it once with the check left on.
+    /// </summary>
+    [Test]
+    public void Deadlock_declarations_map_to_the_TLC_switch_and_nothing_else()
+    {
+        var mutations = Mutations();
+
+        Assert.That(
+            mutations.Where(m => m.DeadlockCheckDisabled),
+            Is.Not.Empty,
+            "no mutation declares DEADLOCK: off, so this mapping is checked over nothing. If that is now "
+            + "intended, delete this test together with the header's support.");
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in mutations)
+            {
+                Assert.That(
+                    mutation.TlcOptions,
+                    Is.EqualTo(mutation.DeadlockCheckDisabled ? new[] { SpecMutation.DeadlockSwitch } : Array.Empty<string>()),
+                    $"mutation '{mutation.Name}' would run TLC with options its header does not declare.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The header's parse rules: <c>off</c> is the only accepted value, an
+    /// absent header leaves the deadlock check on, and anything else - a typo,
+    /// or <c>on</c>, which is the default and so reads like a decision while
+    /// deciding nothing - is refused rather than quietly falling back.
+    /// </summary>
+    [Test]
+    public void A_deadlock_header_is_off_or_absent()
+    {
+        static SpecMutation ParseWith(string header) => SpecMutationCatalogue.Parse(
+            "DeadlockHeaderControl",
+            "MODULE: DeadlockHeaderControl\nTARGET: Termination\nCLASS: Temporal\nSUMMARY: control\n"
+            + header
+            + "\n--- FIND\nx\n--- REPLACE\ny\n--- END\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ParseWith("DEADLOCK: off\n").DeadlockCheckDisabled, Is.True);
+            Assert.That(ParseWith(string.Empty).DeadlockCheckDisabled, Is.False);
+            Assert.That(() => ParseWith("DEADLOCK: on\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("DEADLOCK: Off\n"), Throws.InvalidOperationException);
         });
     }
 

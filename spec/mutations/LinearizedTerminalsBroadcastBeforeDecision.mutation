@@ -5,6 +5,7 @@ MODULE: LinearizedTerminalsBroadcastBeforeDecision
 TARGET: LinearizedTerminals
 CLASS: Invariant
 SUMMARY: lets a participant apply a commit terminal before the registry records the decision
+PERTURBS: BroadcastStep
 
 --- FIND
     /\ phase[t] \in {"committing", "aborting"}

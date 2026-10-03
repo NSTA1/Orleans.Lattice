@@ -1,0 +1,23 @@
+# Pairs with MonotonicVisibility. This is issue #2320's experiment kept as a
+# standing check. The registry stops reporting a decision it still holds, and
+# instead of saying so (Indeterminate, which the gate hides) it reports the row
+# as absent. Absent resolves to InFlight, the gate falls the key through to its
+# pre-saga value, and a committed write a reader has already seen reverts. That
+# was production's behaviour before AtomicVisibilityGate learnt the
+# Indeterminate arm. No clock appears in the trace: the reversion depends only
+# on the order of the mask relative to the broadcast.
+MODULE: MonotonicVisibilityMaskReportsAbsent
+TARGET: MonotonicVisibility
+CLASS: Temporal
+SUMMARY: reports a masked registry row as absent rather than indeterminate, so a committed key reverts to pre-saga
+PERTURBS: RegistryMask
+
+--- FIND
+    /\ masked' = [masked EXCEPT ![t] = ~masked[t]]
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, forgotten, revision>>
+--- REPLACE
+\* MUTATION: the masked row is reported as absent, which a reader resolves to
+\* InFlight, instead of as Indeterminate. No drain ordering protects it.
+    /\ forgotten' = [forgotten EXCEPT ![t] = TRUE]
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, masked, revision>>
+--- END
