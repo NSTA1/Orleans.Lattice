@@ -40,7 +40,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <c>Rejecting</c>: every operation (read or write) throws
 /// <see cref="StaleTreeRoutingException"/>, signalling the calling
 /// <c>LatticeGrain</c> to refresh its cached alias + shard-map snapshot and
-/// retry against the destination tree.
+/// retry against the destination tree. A mutation that passed the gate before
+/// the phase was set is still mirrored, because the resize fences the old copy
+/// before it moves the alias.
 /// </description></item>
 /// </list>
 /// </summary>
@@ -77,8 +79,16 @@ internal sealed partial class ShardRootGrain
     {
         var sf = state.State.ShadowForward;
         if (sf is null) return null;
+        // Rejecting still forwards: the gate refuses every operation that
+        // arrives once the phase is set, so the only mutations that get this
+        // far are ones that passed the gate before it - an interleaved batch
+        // whose turn yielded, or a terminal mid-flight. Those were accepted
+        // while this copy was live, and the resize fences the old copy before
+        // it moves the alias, so dropping their mirror would leave an
+        // acknowledged write on a copy no router reads.
         if (sf.Phase != ShadowForwardPhase.Draining
-            && sf.Phase != ShadowForwardPhase.Drained) return null;
+            && sf.Phase != ShadowForwardPhase.Drained
+            && sf.Phase != ShadowForwardPhase.Rejecting) return null;
         if (string.IsNullOrEmpty(sf.DestinationPhysicalTreeId)) return null;
         // Defensive: refuse to forward to ourselves.
         if (string.Equals(sf.DestinationPhysicalTreeId, TreeId, StringComparison.Ordinal))
@@ -250,6 +260,28 @@ internal sealed partial class ShardRootGrain
         }
 
         sf.Phase = ShadowForwardPhase.Rejecting;
+        await WriteShardStateAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task ExitRejectingAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        var sf = state.State.ShadowForward;
+        if (sf is null)
+        {
+            return;
+        }
+        if (!string.Equals(sf.OperationId, operationId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Shard '{context.GrainId.Key}' is participating in shadow-forward operation '{sf.OperationId}'; refused ExitRejectingAsync under different operationId '{operationId}'.");
+
+        if (sf.Phase != ShadowForwardPhase.Rejecting)
+        {
+            return;
+        }
+
+        sf.Phase = ShadowForwardPhase.Drained;
         await WriteShardStateAsync();
     }
 

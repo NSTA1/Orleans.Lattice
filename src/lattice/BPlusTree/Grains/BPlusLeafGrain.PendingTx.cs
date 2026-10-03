@@ -1310,6 +1310,16 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        // A lone bucket that the committed row already supersedes cannot decide
+        // the key whatever its saga's outcome, so it is dropped before any outcome
+        // is resolved; when nothing else is pending the read needs no registry
+        // view at all.
+        DropSupersededSinglePrepares(pendingKeys, contested);
+        if (pendingKeys.Count == 0)
+        {
+            return (EmptyOutcomes, EmptyPendingKeys);
+        }
+
         // Linearizable-scan fast path: when the lattice-level fan-out
         // has stamped a per-scan registry snapshot via
         // LatticeRegistrySnapshotContext, every leaf in the scan must
@@ -1418,24 +1428,76 @@ internal sealed partial class BPlusLeafGrain
     private int SelectDecidingCandidate(
         string key, List<(Guid txid, LwwValue<byte[]> value)> candidates, TxDecisionView view)
     {
-        var hasRow = Cache.TryGetRow(key, out var row);
         var resolved = new PreparedCandidate[candidates.Count];
         for (var i = 0; i < candidates.Count; i++)
         {
             var (txid, value) = candidates[i];
-            // A CRDT-delta prepare is folded into the row rather than LWW-merged,
-            // so the drain never skips it and no row supersedes it.
-            var foldsDelta = _pendingTxDeltas is not null
-                && _pendingTxDeltas.TryGetValue(txid, out var deltas)
-                && deltas.ContainsKey(key);
-            var superseded = hasRow
-                && !foldsDelta
-                && !row.IsMigrated
-                && row.Timestamp.CompareTo(value.Timestamp) > 0;
+            var superseded = IsPrepareSupersededByRow(key, txid, value);
             resolved[i] = new PreparedCandidate(view.Resolve(txid), IsRecentlyTerminal(txid), superseded, value.Timestamp);
         }
 
         return AtomicVisibilityGate.SelectDecidingPrepare(resolved);
+    }
+
+    /// <summary>
+    /// Whether this leaf's committed row for <paramref name="key"/> already
+    /// supersedes saga <paramref name="txid"/>'s prepared <paramref name="value"/>,
+    /// by the same comparison the commit drain's orphan-drain guard makes in
+    /// <see cref="ApplyTxCommit"/>: a newer, non-migrated row means the drain
+    /// skips the prepare, so the prepare can never become the key's visible value
+    /// whatever its saga's outcome. A CRDT-delta prepare is folded into the row
+    /// rather than LWW-merged, so the drain never skips it and no row supersedes it.
+    /// </summary>
+    private bool IsPrepareSupersededByRow(string key, Guid txid, in LwwValue<byte[]> value)
+    {
+        if (!Cache.TryGetRow(key, out var row) || row.IsMigrated)
+            return false;
+
+        if (_pendingTxDeltas is not null
+            && _pendingTxDeltas.TryGetValue(txid, out var deltas)
+            && deltas.ContainsKey(key))
+            return false;
+
+        return row.Timestamp.CompareTo(value.Timestamp) > 0;
+    }
+
+    /// <summary>
+    /// Drops from <paramref name="pendingKeys"/> every key covered by a single
+    /// saga's bucket that this leaf's committed row already supersedes (see
+    /// <see cref="IsPrepareSupersededByRow"/>), so the read serves the row. Keys
+    /// covered by more than one bucket are left to
+    /// <see cref="SelectContestedPrepares"/>, which applies the same supersession
+    /// through <see cref="AtomicVisibilityGate.SelectDecidingPrepare"/>.
+    /// <para>
+    /// A single bucket is superseded when its saga's terminal never reached this
+    /// leaf while later writes to the key did: a saga parked by a silo restart
+    /// after its commit was recorded, whose terminal was lost on the way here
+    /// (a resize's shadow-forwarded copy, say). Resolving that lone bucket
+    /// through <see cref="AtomicVisibilityGate.ResolveKey"/> surfaced its
+    /// committed prepare - an older round - over the newer rows every later saga
+    /// drained, so the leaf served a stale round while sibling leaves served the
+    /// current one.
+    /// </para>
+    /// </summary>
+    private void DropSupersededSinglePrepares(
+        Dictionary<string, (Guid txid, LwwValue<byte[]> value)> pendingKeys,
+        Dictionary<string, List<(Guid txid, LwwValue<byte[]> value)>>? contested)
+    {
+        List<string>? superseded = null;
+        foreach (var (key, (txid, value)) in pendingKeys)
+        {
+            if (contested is not null && contested.ContainsKey(key))
+                continue;
+
+            if (IsPrepareSupersededByRow(key, txid, value))
+                (superseded ??= []).Add(key);
+        }
+
+        if (superseded is null)
+            return;
+
+        foreach (var key in superseded)
+            pendingKeys.Remove(key);
     }
 
     /// <summary>
@@ -1449,7 +1511,9 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="ResolvePendingStatusAsync"/>, so an ambient fan-out snapshot is
     /// honoured exactly as on the single-bucket path. When only one bucket covers
     /// the key the outcome is <see langword="null"/> and the caller resolves it as
-    /// before, with no allocation and no extra await.
+    /// before, with no allocation and no extra await - unless the committed row
+    /// already supersedes that bucket, when the outcome is
+    /// <see cref="TxStatus.InFlight"/> so the read serves the row.
     /// </summary>
     private async ValueTask<(Guid txid, LwwValue<byte[]> value, TxStatus? status)> SelectPendingForKeyAsync(
         string key, Guid newestTxid, LwwValue<byte[]> newestValue)
@@ -1468,7 +1532,13 @@ internal sealed partial class BPlusLeafGrain
         }
 
         if (candidates is null)
-            return (newestTxid, newestValue, null);
+        {
+            // A lone bucket the committed row supersedes cannot decide the key
+            // (see DropSupersededSinglePrepares); InFlight resolves to the row.
+            return IsPrepareSupersededByRow(key, newestTxid, newestValue)
+                ? (newestTxid, newestValue, TxStatus.InFlight)
+                : (newestTxid, newestValue, null);
+        }
 
         var statuses = new Dictionary<Guid, TxStatus>(candidates.Count);
         foreach (var (txid, _) in candidates)
