@@ -423,7 +423,10 @@ internal sealed partial class BPlusLeafGrain
                 // drive's replay-based predicate cannot score a release whose
                 // leaf has no applied data. The #3103 arm is NOT counted for a
                 // never-written leaf: it resolves to (Zero, -1), the block pin.
-                if (IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
+                // Nor is a scanned-through partition with no durable snapshot
+                // coverage: it keeps the block until a capture covers it (issue
+                // #4523).
+                if (offset >= 0 && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
                 {
                     releases++;
                 }
@@ -445,6 +448,15 @@ internal sealed partial class BPlusLeafGrain
             {
                 releases++;
             }
+        }
+
+        // Issue #4523: a never-written leaf none of whose scanned-through
+        // partitions is snapshot-covered resolves every partition to the block
+        // pin the activation seed already published, so it publishes nothing -
+        // the same no-op as the #3453 early return above.
+        if (neverWritten && releases == 0)
+        {
+            return 0;
         }
 
         // Issue #3643: the frontier_pin barrier elides the pin-store call when
@@ -1169,7 +1181,10 @@ internal sealed partial class BPlusLeafGrain
     /// clock is <see cref="HybridLogicalClock.Zero"/>, the partition holds no
     /// live row, and its <b>persisted</b> checkpoint <c>X &gt;= 0</c> records
     /// only entries the replay skipped as another leaf's work. Resolves to
-    /// <c>(Zero, X)</c>: for such a leaf every release above collapses to
+    /// <c>(Zero, min(X, covered))</c> when a durable snapshot covers the
+    /// partition, and to the block pin otherwise (issues #4456 and #4523): a
+    /// release is never published above durable snapshot coverage. For such a
+    /// leaf every release above collapses to
     /// <c>(Zero, -1)</c>, the block pin itself, so this is the only release its
     /// encoding can express. Only the flush paths opt in; the activation seed
     /// does not (see <see cref="SeedDurableMaterialiserFrontierAsync"/>).
