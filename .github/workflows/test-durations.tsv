@@ -87,10 +87,12 @@
 # full TlcModelCheckTests runs on one 4-way host, 32.8 -> 19.9 min wall-clock):
 # Replication EventualConvergence 0.43, ShardOwnership 0.65, ReplicationWal 0.66,
 # AtomicCommit/Backup 0.71, the remainder 0.54. The pin and atomic-backup shards
-# were folded into convergence and formal-tlc respectively. The `rest` row is
+# were folded into convergence and formal-tlc respectively, and formal-tlc also
+# carries the BackupIncremental module that landed alongside, priced by the same
+# local-to-CI factor as the other Backup* cases. The `rest` row is
 # the 2026-10-04 run's non-TLC remainder. Replace all five with measured medians
 # at the next refresh.
-lattice	formal-tlc	deterministic	5.3
+lattice	formal-tlc	deterministic	5.6
 lattice	formal-tlc-shard-ownership	deterministic	4.1
 lattice	formal-tlc-convergence	deterministic	4.0
 lattice	formal-tlc-replication-wal	deterministic	3.8

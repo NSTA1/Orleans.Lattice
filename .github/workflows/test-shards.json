@@ -104,7 +104,7 @@
       {
         "shard": "formal-tlc",
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base and variant runs of every module, the AtomicCommit, AtomicCommitCrossCluster and Backup* mutants, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 18 test-minutes."
+        "note": "Every other TLC case: the base and variant runs of every module, the AtomicCommit, AtomicCommitCrossCluster and Backup* (including BackupIncremental) mutants, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 19 test-minutes."
       },
       {
         "shard": "rest",
