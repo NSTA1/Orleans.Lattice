@@ -137,7 +137,8 @@ Each loses no behaviour the instance can distinguish.
   write of `k1` and `k2` bound to one physical copy, with its prepares, its
   re-binds, its decision and its terminal broadcast.
 - **Retention** (retention module only): `RegistryMask`, `RegistryForget`,
-  `DeliverLate` and `Reactivate`.
+  `DeliverLate` and `Reactivate`, and a leaf split of the split destination's
+  leaf (`LeafSplit`) that moves a shadow marker to a fresh sibling (#4545).
 - **A later write** (`LaterWrite`) of `k2`, which gives `NoResurrection` a newer
   value to protect.
 - **Stamps and migrated rows** (ownership module only): a row holds a version of
@@ -166,6 +167,7 @@ notes list each one with its issue.
 | `ResizeCompletes` | liveness | both | A resize that started is purged or undone. |
 | `SagaCompletes` | liveness | both | A saga that started completes. |
 | `RoutingConverges` | liveness | ownership | Eventually the registry's own pair serves every key. |
+| `ReadableOnceComplete` | invariant | retention | Once a saga has completed, and while its row is neither retired nor masked, no read at the owner is gated (#4545). |
 | `NoStrandedBucket` | liveness | retention | A decided saga's bucket on a copy that can still become the tree is eventually consumed, unless the registry retired the row first. |
 
 Every liveness property can fail on a protocol defect under the fairness the
@@ -219,6 +221,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
 | #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
 | #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design) | `NoKeyLostMigrationImportDropped` |
+| #4545 | A shadow marker installed after its terminal is copied by a leaf split to a sibling that never sees the terminal, gating the key after the saga completed (found by 10238ade's CI triage) | `ReadableOnceCompleteDeadMarkerTransferred`, `ReadableOnceCompleteMarkerWithoutSelfCheck` |
 | #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false; fixed, #4528) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
@@ -248,7 +251,7 @@ workstation (wall clock includes JVM start-up):
 
 ```
 ShardOwnership:          80,612 distinct states, depth 26, clean, 1 min 03 s
-ShardOwnershipRetention: 82,155 distinct states, depth 24, clean, 1 min 36 s
+ShardOwnershipRetention: 112,548 distinct states, depth 25, clean, 2 min 10 s (under load)
 ```
 
 The current specifications are model-checked in CI by
@@ -264,4 +267,4 @@ TLC's own state counts.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `ShardOwnership` | 7 | 5 | 27 | 44 | 37 | 80,612 |
-| `ShardOwnershipRetention` | 5 | 4 | 25 | 27 | 32 | 82,155 |
+| `ShardOwnershipRetention` | 6 | 4 | 26 | 29 | 34 | 112,548 |

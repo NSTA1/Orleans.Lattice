@@ -27,7 +27,8 @@ own name.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
-  the discarded copy's refusal to the old copy.
+  the discarded copy's refusal to the old copy. `ReadableOnceCompleteMarkerWithoutSelfCheck`
+  is #4545's fix without its self-verifying marker.
 - **Pairings.** Every other mutation pairs an action with a property, so that
   every action in each module's `Next` is perturbed by at least one mutation
   and every checked property fires under at least one.
@@ -127,6 +128,8 @@ declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same wa
 | [`OwnerMonotonicRetainedAbortOverturns`](../mutations-retention/OwnerMonotonicRetainedAbortOverturns.mutation) | `OwnerMonotonic` | Invariant | `SagaAbort` | an abort overwrites a recorded commit, so a key already read committed reverts |
 | [`OwnerMonotonicRetainedSnapshotDropsBuckets`](../mutations-retention/OwnerMonotonicRetainedSnapshotDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `SnapCopy` | the snapshot copies committed entries only, so a commit decided before the flip reverts on the resized copy |
 | [`OwnerMonotonicSweepIndeterminateLeavesMarker`](../mutations-retention/OwnerMonotonicSweepIndeterminateLeavesMarker.mutation) | `OwnerMonotonic` | Invariant | `SplitSweep` | the sweep replays an Indeterminate prepare that the destination refuses, leaving only an activation-scoped marker |
+| [`ReadableOnceCompleteDeadMarkerTransferred`](../mutations-retention/ReadableOnceCompleteDeadMarkerTransferred.mutation) | `ReadableOnceComplete` | Invariant | `DeliverLate`, `LeafSplit` | a marker installed after its terminal is copied to a fresh sibling leaf, which gates the key after the saga completed |
+| [`ReadableOnceCompleteMarkerWithoutSelfCheck`](../mutations-retention/ReadableOnceCompleteMarkerWithoutSelfCheck.mutation) | `ReadableOnceComplete` | Invariant | none (edits `LeafGated`) | without the self-check, a leaf that lost its terminal memory takes a late marker that gates the key after the saga completed |
 | [`ResizeCompletesFenceNeverLands`](../mutations-retention/ResizeCompletesFenceNeverLands.mutation) | `ResizeCompletes` | Temporal | `ResizeFence` | the fence step records nothing, so the flip never becomes enabled |
 | [`ResizeCompletesUndoNeverClears`](../mutations-retention/ResizeCompletesUndoNeverClears.mutation) | `ResizeCompletes` | Temporal | `UndoClear` | the undo's last step never records that the undo finished |
 | [`SagaCompletesCompletionNeverRecorded`](../mutations-retention/SagaCompletesCompletionNeverRecorded.mutation) | `SagaCompletes` | Temporal | `SagaComplete` | the saga never records its completion once the broadcast has visited every target |

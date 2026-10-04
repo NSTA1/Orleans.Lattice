@@ -78,7 +78,8 @@ registry answer as in flight (#4473), a saga that never completes once the
 copy it is bound to is discarded by an undo (#4474) or, as an old copy, purged
 (#4475), saga values installed at a stamp that overwrites a later write (#4522), a
 migration import dropped over a destination row the saga already resolved
-(#4564), and, found by the review of this coverage, a router that cached the
+(#4564), a shadow marker a leaf split strands on a sibling that never sees the
+terminal (#4545), and, found by the review of this coverage, a router that cached the
 old copy reading empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 

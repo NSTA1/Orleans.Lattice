@@ -24,7 +24,7 @@ PERTURBS: SplitSweep
 --- FIND
                ELSE /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
                                    IF <<x, s>> \in dests /\ k = k2 THEN b ELSE pend[x][s][k]]]]
-                    /\ UNCHANGED <<row, term>>
+                    /\ UNCHANGED <<row, term, lk, lt>>
     /\ sp' = "swept"
 --- REPLACE
 \* MUTATION: an Indeterminate replay is refused; only the marker lands where no bucket is.
@@ -33,6 +33,6 @@ PERTURBS: SplitSweep
                                    THEN IF view # "indeterminate" THEN b
                                         ELSE IF pend[x][s][k] = "none" THEN "mark" ELSE pend[x][s][k]
                                    ELSE pend[x][s][k]]]]
-                    /\ UNCHANGED <<row, term>>
+                    /\ UNCHANGED <<row, term, lk, lt>>
     /\ sp' = "swept"
 --- END
