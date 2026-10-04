@@ -269,6 +269,17 @@ internal sealed class CatalogGrainSurface
             string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves) =>
             throw NotDriven();
 
+        public Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+            string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew) =>
+            throw NotDriven();
+
+        public Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired) =>
+            throw NotDriven();
+
+        public Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+            string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId) =>
+            throw NotDriven();
+
         private static NotSupportedException NotDriven() =>
             new("The catalog-enumeration workload drives only the registry read surface " +
                 "(enumerate, GetEntryAsync, GetEntriesAsync). Implement the member here if a new " +
