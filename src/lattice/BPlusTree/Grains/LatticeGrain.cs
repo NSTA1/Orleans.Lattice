@@ -2543,8 +2543,7 @@ internal sealed partial class LatticeGrain(
         try
         {
             (physicalTreeId, shardMap) = await GetRoutingAsync();
-            if (boundPhysicalTreeId is not null
-                && !string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+            if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
             {
                 // This activation's cached pair addresses another copy than the
                 // one the saga's prepared writes are bound to - typically a pair
@@ -2553,7 +2552,7 @@ internal sealed partial class LatticeGrain(
                 // write the batch onto a copy the saga will not commit on
                 // (issue #4358).
                 (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true);
-                if (!string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+                if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
                 {
                     return physicalTreeId;
                 }
@@ -4772,7 +4771,7 @@ internal sealed partial class LatticeGrain(
         // previous one, so a lower version is an older registry row. The caller
         // still gets the pair it read, which is self-consistent either way.
         var published = _cachedRouting;
-        if (epoch == _routingEpoch && (published is null || published.Map.Version <= shardMap.Version))
+        if (RoutingPairPublishGate.ShouldPublish(epoch, _routingEpoch, published?.Map.Version, shardMap.Version))
         {
             if (published is not null
                 && !string.Equals(published.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))

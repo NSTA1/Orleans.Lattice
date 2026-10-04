@@ -1,0 +1,18 @@
+# Pairs with ResizeCompletes. EnterRejectingAsync returns without moving the
+# shard into Rejecting, so the flip, which waits for every shard to be fenced,
+# never becomes enabled and a resize nobody undoes never completes. The fence
+# step stays weakly fair; it simply achieves nothing.
+MODULE: ResizeCompletesFenceNoOp
+TARGET: ResizeCompletes
+CLASS: Temporal
+SUMMARY: fencing a shard has no effect, so the alias flip never becomes enabled
+PERTURBS: ResizeFence
+
+--- FIND
+    /\ s \in rzShards \ fence
+    /\ fence' = fence \cup {s}
+--- REPLACE
+    /\ s \in rzShards \ fence
+\* MUTATION: the fence is not recorded.
+    /\ fence' = fence
+--- END

@@ -1,0 +1,18 @@
+# Pairs with OwnerMonotonic. The decision is not terminal-stable: an abort may
+# overwrite a recorded commit, so the shards the commit's terminals have not
+# reached discard their buckets and a key readers already saw committed reads
+# its pre-saga value.
+MODULE: OwnerMonotonicAbortOverturnsCommit
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: an abort overwrites a recorded commit, so a key already read committed reverts
+PERTURBS: SagaAbort
+
+--- FIND
+SagaAbort ==
+    /\ sg = "exec"
+--- REPLACE
+SagaAbort ==
+\* MUTATION: an abort may overwrite a recorded decision.
+    /\ sg \in {"exec", "decided"}
+--- END

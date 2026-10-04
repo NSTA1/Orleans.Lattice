@@ -1,0 +1,18 @@
+# Pairs with AtomicOnOwner. The saga checkpoints k1 as dispatched when it
+# starts, before dispatching it, so it decides with only k2 prepared and the
+# batch commits torn.
+MODULE: AtomicOnOwnerRetainedStartCheckpointsEntry
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the saga records an entry as dispatched before dispatching it, so the batch commits torn
+PERTURBS: SagaStart
+
+--- FIND
+    /\ bound' = alias
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
+--- REPLACE
+    /\ bound' = alias
+\* MUTATION: k1 is checkpointed as dispatched without being dispatched.
+    /\ prepped' = {k1}
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
+--- END

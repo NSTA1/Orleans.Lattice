@@ -1,0 +1,15 @@
+# Pairs with NoKeyLost. The purge clears the copy the alias names instead of
+# the retired one, the hazard CleanupOldTreeAsync guards on a tree's first
+# resize, where the old copy's id is the logical id.
+MODULE: NoKeyLostPurgeClearsLiveCopy
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the purge clears the live copy's rows instead of the retired copy's
+PERTURBS: ResizePurge
+
+--- FIND
+    /\ row' = [row EXCEPT ![T] = [s \in Shards |-> [k \in Keys |-> Absent]]]
+--- REPLACE
+\* MUTATION: the purge reaches the live copy.
+    /\ row' = [row EXCEPT ![R] = [s \in Shards |-> [k \in Keys |-> Absent]]]
+--- END

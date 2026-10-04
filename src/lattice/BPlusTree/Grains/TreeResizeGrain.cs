@@ -1192,7 +1192,7 @@ internal sealed class TreeResizeGrain(
         try
         {
             var resolved = await registry.ResolveAsync(TreeId);
-            if (string.Equals(resolved, state.State.SnapshotTreeId, StringComparison.Ordinal))
+            if (!ResizeFence.LiftsFenceAfterFailedFlip(resolved, state.State.SnapshotTreeId))
                 return;
 
             var oldPhysical = state.State.OldPhysicalTreeId!;

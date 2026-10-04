@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. The resize captures its shard set from the pinned
+# shard count alone, ignoring a shard a completed split allocated above it
+# (the #3880 shape), so that shard is neither copied, mirrored nor fenced and
+# the resized copy lacks its keys.
+MODULE: NoKeyLostResizeCapturesPinnedShardsOnly
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the resize captures only the pinned shard, so a split-allocated shard is neither copied nor forwarded
+PERTURBS: ResizeBegin
+
+--- FIND
+    /\ rzShards' = {s1, rmap}
+--- REPLACE
+\* MUTATION: the split-allocated shard is not captured.
+    /\ rzShards' = {s1}
+--- END

@@ -1,0 +1,18 @@
+# Pairs with OwnerMonotonic. The registry retires the saga's row as soon as the
+# saga has decided rather than once its terminal fan-out has completed, so a
+# bucket the fan-out has not yet resolved is read against an absent row - as
+# InFlight - and a committed key reads its pre-saga value again.
+MODULE: OwnerMonotonicForgetBeforeFanOut
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: the registry forgets a decided saga before its terminals land, so a committed key reverts
+PERTURBS: RegistryForget
+
+--- FIND
+RegistryForget ==
+    /\ sg = "done"
+--- REPLACE
+RegistryForget ==
+\* MUTATION: the row is retired once the saga decides, not once it completes.
+    /\ sg \in {"decided", "done"}
+--- END

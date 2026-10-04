@@ -21,6 +21,8 @@ be quiet about one.
 | Directory | Module | What it specifies |
 |-----------|--------|-------------------|
 | [`atomic-commit/`](atomic-commit/README.md) | `AtomicCommit` | The multi-leaf prepare / commit / abort saga, the per-tree transaction-registry decision, and reader visibility. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnership` | Who serves a key across an adaptive split, an online reshard and an online resize with its fence, flip, undo and purge, with stale routers and an atomic-write saga bound to one physical copy. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipRetention` | What the registry's mask and retirement, a late forwarded prepare and a leaf reactivation do to a saga bound across a split and a resize. The companion of `ShardOwnership`; the seam between the two is described in that directory's README. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table
