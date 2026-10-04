@@ -738,6 +738,7 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        PublishActivationReadPositions();
         StartPhaseTimer();
         return Task.CompletedTask;
     }
@@ -1790,6 +1791,7 @@ internal sealed partial class ReplicationShipperGrain(
         await state.WriteStateAsync();
         _pendingCursorWrites = 0;
         _oldestPendingCursorWriteUtc = DateTime.MinValue;
+        PublishDurableReadPositions();
 
         var durableCursor = state.State.Cursor;
         if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
@@ -2459,6 +2461,11 @@ internal sealed partial class ReplicationShipperGrain(
         // registry on the first bind or once the backstop interval has elapsed,
         // so an idle tree does not pay a registry read every tick.
         await MaybeRefreshSourceIdentityAsync(options, partitions);
+
+        // Hold every entry of the bound log this shipper has not durably
+        // acknowledged against the WAL GC on any silo, before the first read
+        // (issue #4579).
+        await EnsureReadPositionsPublishedAsync();
 
 
         // and _partitionPageIndex always reset (they're tick-scoped);

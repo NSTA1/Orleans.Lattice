@@ -136,6 +136,17 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
         string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves) =>
         throw NotUsed();
 
+    public Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew) =>
+        throw NotUsed();
+
+    public Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired) =>
+        throw NotUsed();
+
+    public Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId) =>
+        throw NotUsed();
+
     private static NotSupportedException NotUsed() =>
         new("FakeLatticeRegistry only implements the registry surface the microbench uses; " +
             "the WAL-placement and adaptive-shard members are never reached (null WAL catalog, ShardCount=1). " +

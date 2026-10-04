@@ -81,6 +81,10 @@ internal sealed partial class ReplicationShipperGrain
             return;
         }
 
+        // Hold every partition from offset 0 while the rewind reads each head,
+        // so no GC pass on any silo trims between the read and the rewind
+        // (issue #4579): the rewound positions are below the published ones.
+        HoldPublishedReadPositionsAtZero();
         for (var p = 0; p < _partitionCount; p++)
         {
             var grain = _partitionGrainCache[p] ??=
@@ -93,6 +97,9 @@ internal sealed partial class ReplicationShipperGrain
             }
         }
 
+        // Every rewound position is at or below its partition's lowest retained
+        // entry, so publishing it before the write releases nothing retained.
+        PublishDurableReadPositions();
         Array.Clear(_ackedNext);
         state.State.ReseedRequiredEpoch = null;
         state.State.ReseedRequiredSinceUtcTicks = 0;
