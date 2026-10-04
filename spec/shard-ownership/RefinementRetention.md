@@ -44,7 +44,6 @@ may still hold any pair the registry ever published.
 | Intended design in the base | Production today | Issue | Mutation reproducing production |
 |---|---|---|---|
 | The split's sweep resolves an Indeterminate answer to the recorded decision behind it, as the #4445 leaf refusal does (`SplitSweep`) | The pre-check reads `GetStatusAsync` and treats Indeterminate as InFlight; the replay is refused at the destination, leaving only an activation-scoped shadow marker | #4473 | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
-| A delayed forwarded prepare is refused once the registry holds a decision, whatever the leaf remembers (`DeliverLate`) | The leaf refuses only when its activation remembers applying the terminal | #4445 | `NoResurrectionLatePrepareActivationMemory` |
 | A routed operation on a purged old copy is refused, so the caller refreshes its pair (`Gone` in `RoutedRefused`) | A routed read answers as the empty tree and a routed write is accepted, re-seeding the purged copy; a routing activation that cached the old pair across `SoftDeleteDuration` is never told to refresh | #4503 | `NoResurrectionRetainedPurgedCopyServesEmpty` |
 | The online snapshot carries prepared buckets (`SnapCopy`) | It copies committed entries only | #4455 | `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | A terminal a purged old copy refuses is delivered to the copy it mirrored into, following that copy's own layout; one the copy an undo discarded refuses counts as delivered (`SagaTerminal`, `TermTargets`) | The broadcast fails on a purged copy, and re-sends to the old copy after an undo | #4475, #4474 | in `ShardOwnership`: `SagaCompletesPurgedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
@@ -55,10 +54,11 @@ mirrors into the resized one, which is the base's `SplitBegin`.
 `NoKeyLostSplitInSoftDeleteWindow` stays as the standing check on the rule the
 fix first proposed, which stopped at the end of the resize.
 
-#4445's fix (PR #4461) makes production refuse on the recorded decision, which
-is the base's `DeliverLate`; it reaches this branch through `main`. When it has,
-the `DeliverLate` row moves to `Yes` with its regression test, after that test
-is shown red against the mutation.
+The late-prepare refusal (#4445) left this table when its fix landed (#4461):
+production refuses a forwarded prepare on the registry's recorded decision,
+resolving an Indeterminate answer to the verdict behind it, which is the base's
+`DeliverLate`. `NoResurrectionLatePrepareActivationMemory` stays as the standing
+check on the activation-memory refusal it replaced.
 
 `TermTargets` follows the copy the terminal goes to rather than the bound copy.
 This module found why that matters: after a purge the resized copy may split,
@@ -116,7 +116,7 @@ That is the intended design #4475's fix has to meet.
 | `SagaComplete` | The broadcast finished; the caller is acknowledged | `AtomicWriteGrain.CompleteSagaAsync`. | Yes: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard`. |
 | `RegistryMask` | The registry stops, or resumes, reporting the decision | `TxRegistryGrain.GetStatusAsync` answering `TxStatus.Indeterminate` for an expired tombstone or an unreachable cross-tree coordinator. **Environment action, over-approximating:** it may toggle at any point after the decision and before the row is retired, whatever the participants have seen; production's retention mask follows the fan-out and its snapshot pin is what clears it, and a dial failure has no ordering at all, so every Indeterminate answer production gives is one the model can give. Before the decision the registry reads InFlight whatever the mask, so the guard loses nothing. | Yes: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight`. |
 | `RegistryForget` | The saga's row leaves the registry | `TxRegistryGrain.ForgetAsync` from the completed saga (`AtomicWriteGrain`'s retention keepalive), and the prune behind it. **Environment action, not fair:** retirement may never happen. | Yes: `AtomicWriteGrainTests.ReceiveReminder_keepalive_on_a_completed_saga_arms_retention_and_forgets_the_decision`. |
-| `DeliverLate` | A delayed shadow-forwarded prepare reaches the split destination | The split hot-path forward through `ShardRootGrain.ForwardShadowAsync`, refused at the leaf by `BPlusLeafGrain.IsLatePrepareForTerminalTransaction`. Refusing on the recorded decision is the intended design (#4445). **Environment action:** delivery is unfair and may happen at any time, which is what a forward outliving its deadline can do. | Partial: `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it` pins the refusal production has. It reads per-activation memory, so a late prepare arriving before the terminal or after a reactivation is bucketed until #4445's fix reaches this branch. |
+| `DeliverLate` | A delayed shadow-forwarded prepare reaches the split destination | The split hot-path forward through `ShardRootGrain.ForwardShadowAsync`, refused at the leaf by `BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync` when the activation remembers the terminal or, for a prepare marked forwarded (`LatticeForwardedPrepareContext`), when the registry reports the saga decided, following an Indeterminate answer to the recorded verdict (#4445). **Environment action:** delivery is unfair and may happen at any time, which is what a forward outliving its deadline can do. | Yes: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided`, `BPlusLeafGrainTests.Forwarded_prepare_after_a_reactivation_is_refused_when_the_registry_reports_the_saga_committed`, `BPlusLeafGrainTests.Forwarded_prepare_is_refused_on_the_recorded_verdict_behind_a_masked_decision` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. |
 | `LaterWrite(p)` | A client write of `k2` through the current pair | A routed write through `LatticeGrain`, mirrored by `ShardRootGrain.ForwardShadowAsync` while the shard forwards. | Yes: `ShardRootGrainShadowForwardTests.SetAsync_forwards_during_draining`. |
 | `Reactivate(c, s)` | A leaf activation is replaced | A new `BPlusLeafGrain` activation: `_recentlyTerminal` and `_shadowedSagas` start empty; prepared buckets are rebuilt by replay. **Environment action:** unfair and at most once. `Next` offers it on the split destination only, because nothing reaches any other shard after its terminal, so a reactivation there would only spend the budget. | Yes: `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx` pins that replay rebuilds the buckets the model keeps across a reactivation. |
 | `Stutter` | Quiescence | Not a protocol step: a stuttering successor once nothing is in flight. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
@@ -126,7 +126,7 @@ That is the intended design #4475's fix has to meet.
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
 | `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Yes: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip` and `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`. |
-| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. The registry-based refusal lands with #4445's fix, and a read through a pair naming the purged old copy answers empty (#4503). |
+| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. A read through a pair naming the purged old copy answers empty (#4503). |
 | `AtomicOnOwner` | A fresh reader that gets an answer for both keys sees the batch on both or on neither. | Yes: `AtomicWriteGrainTests.ExecuteAsync_binds_its_prepared_dispatch_to_the_copy_it_prepared_on`. |
 | `OwnerMonotonic` | A fresh reader's value never moves backwards across a mask, a retirement, a late forward or a reactivation; a hidden read in between does not launder a reversion. | Partial: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight` and `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx`. A sweep under Indeterminate leaves only a marker that a reactivation loses (#4473), and a decision before a flip reverts on the resized copy (#4455). |
 | `SplitCompletes` | A split that opened its window finishes. | Yes: `TreeShardSplitGrainTests.ProcessNextPhase_drives_the_shadow_write_phase_through_the_full_split_pass`. |
@@ -183,7 +183,6 @@ check inside the harness's per-run budget.
 
 | Issue | Claim it owns |
 |-------|---------------|
-| #4445 | The late-prepare refusal's dependence on per-activation memory (`DeliverLate`, `NoResurrection`). |
 | #4455 | Prepared buckets in the online snapshot (`SnapCopy`, `OwnerMonotonic`). |
 | #4473 | The sweep treating Indeterminate as InFlight (`SplitSweep`, `OwnerMonotonic`). |
 | #4474 | A terminal the copy an undo discarded refuses (`SagaTerminal`). |

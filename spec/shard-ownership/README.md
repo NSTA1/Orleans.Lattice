@@ -194,8 +194,8 @@ standing mutation. The refinement notes record which are fixed.
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
 | #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
-#4445 (a late forwarded orphan read past the terminal) was being fixed
-elsewhere; its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
+#4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
+(#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
 module showed the stale read needs no reactivation at all.
 
 ## How to run TLC
