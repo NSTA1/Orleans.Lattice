@@ -308,10 +308,10 @@ public sealed class SnapshotFrozenBaselineWalGcClusterFixture
             ?? throw new InvalidOperationException("Silo IServiceProvider was not captured by the fixture.");
         var registry = services.GetRequiredService<IWalCursorRegistry>();
 
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         HybridLogicalClock? last = null;
         var stableObservations = 0;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             var min = await registry.GetMinCursorAsync(treeId);
             if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)

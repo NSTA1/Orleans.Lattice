@@ -146,7 +146,7 @@ public class LwwRegisterConvergenceChaosTests
     private static async Task<VersionedValue[]> SampleUntilConvergedAsync(
         MultiSiteClusterFixture fixture, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         VersionedValue[] states;
         do
         {
@@ -170,7 +170,7 @@ public class LwwRegisterConvergenceChaosTests
 
             await Task.Delay(50);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         return states;
     }

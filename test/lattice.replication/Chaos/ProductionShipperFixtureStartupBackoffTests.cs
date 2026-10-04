@@ -83,8 +83,8 @@ public class ProductionShipperFixtureStartupBackoffTests
 
         var stopwatch = Stopwatch.StartNew();
         await aLattice.SetAsync("k", Encoding.UTF8.GetBytes("v"));
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
-        while (await bLattice.GetAsync("k") is null && DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
+        while (await bLattice.GetAsync("k") is null && Environment.TickCount64 < deadline)
         {
             await Task.Delay(50);
         }

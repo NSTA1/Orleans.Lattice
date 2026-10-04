@@ -177,7 +177,7 @@ public class LatticeTopologySnapshotIntegrationTests
     {
         foreach (var shardIndex in shardIndices)
         {
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
             while (true)
             {
                 var (entry, live, tomb, low, high) = await WalkLeafTopologyAsync(tree, shardIndex);
@@ -193,7 +193,7 @@ public class LatticeTopologySnapshotIntegrationTests
                         && topology.HighKeyExclusive == high);
 
                 if (reconciled) break;
-                if (DateTime.UtcNow > deadline)
+                if (Environment.TickCount64 > deadline)
                 {
                     Assert.Fail(
                         $"shard {shardIndex} topology did not reconcile after reshard: " +

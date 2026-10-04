@@ -104,8 +104,8 @@ public partial class WalShardGrainTests
         long expected,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             if (await gate.InnerHighestOffsetAsync() >= expected)
             {

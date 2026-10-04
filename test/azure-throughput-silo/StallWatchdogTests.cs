@@ -262,8 +262,8 @@ public class StallWatchdogTests
         var run = watchdog.RunAsync(cts.Token);
         // Poll for the fire flag to flip. Bounded by the cancellation
         // timeout above so a regression fails the test in ~2s.
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (!watchdog.HasFiredForTesting && DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(2).TotalMilliseconds;
+        while (!watchdog.HasFiredForTesting && Environment.TickCount64 < deadline)
         {
             await Task.Delay(20);
         }
@@ -307,8 +307,8 @@ public class StallWatchdogTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var run = watchdog.RunAsync(cts.Token);
 
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!watchdog.HasFiredForTesting && DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        while (!watchdog.HasFiredForTesting && Environment.TickCount64 < deadline)
         {
             await Task.Delay(20);
         }

@@ -99,7 +99,7 @@ public sealed class RepoContextHostIntegrationTests
     private static async Task WaitForReadyAsync(WebApplication app)
     {
         using var client = app.GetTestServer().CreateClient();
-        var deadline = DateTime.UtcNow.AddSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
 
         HttpStatusCode status;
         do
@@ -112,7 +112,7 @@ public sealed class RepoContextHostIntegrationTests
 
             await Task.Delay(100, Ct);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         Assert.Fail(
             $"The host did not report ready within the timeout: {RepoContextHostBuilder.ReadinessPath} last returned {status}.");
@@ -260,8 +260,8 @@ public sealed class RepoContextHostIntegrationTests
     private static async Task<RepoIndexProgress> PollUntilTerminalAsync(
         IRepoIndexRunner runner, string repoId)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(60);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var progress = await runner.GetProgressAsync(repoId);
             if (progress.Status is RepoIndexStatus.Completed or RepoIndexStatus.Failed)

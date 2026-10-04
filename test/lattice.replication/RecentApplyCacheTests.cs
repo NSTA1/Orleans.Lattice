@@ -262,10 +262,10 @@ public class RecentApplyCacheTests
             thread.Start();
         }
 
-        var deadline = DateTime.UtcNow + budget;
+        var deadline = Environment.TickCount64 + (long)budget.TotalMilliseconds;
         var unfinished = threads.Count(thread =>
         {
-            var remaining = deadline - DateTime.UtcNow;
+            var remaining = TimeSpan.FromMilliseconds(deadline - Environment.TickCount64);
             return !thread.Join(remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero);
         });
 

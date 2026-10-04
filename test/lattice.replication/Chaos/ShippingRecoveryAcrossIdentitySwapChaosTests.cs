@@ -250,8 +250,8 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
     private static async Task WaitForPresenceAsync(ILattice peer, IEnumerable<string> keys, TimeSpan timeout)
     {
         var keysArr = keys.ToArray();
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var allPresent = true;
             foreach (var k in keysArr)
