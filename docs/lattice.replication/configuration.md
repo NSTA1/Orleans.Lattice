@@ -205,7 +205,7 @@ Retry budget before a poison inbound entry is moved to the dead-letter queue. Ra
 
 ### `DeadLetterQueueCapacity`
 
-Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. See [Dead-Letter Queue](dead-letter-queue.md).
+Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. A full queue never evicts: it refuses further parks and holds the affected replication link back (the link reports Stalled) until parked entries are replayed or discarded, because every parked entry was acknowledged and evicting it would lose the write. See [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure).
 
 ### `CausalBufferMaxEntries`
 
