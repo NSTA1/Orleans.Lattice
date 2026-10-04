@@ -58,8 +58,8 @@ public class AntiEntropyMultiSiteDriftChaosTests
     private static async Task WaitForKeysAsync(ILattice peer, IEnumerable<string> keys, TimeSpan timeout)
     {
         var keysArr = keys.ToArray();
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var allPresent = true;
             foreach (var k in keysArr)
@@ -94,8 +94,8 @@ public class AntiEntropyMultiSiteDriftChaosTests
             Assert.That(await author.GetAsync(k), Is.Not.Null, $"author should hold '{k}'");
         }
 
-        var deadline = DateTime.UtcNow + settle;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)settle.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var missing = false;
             foreach (var k in keys)

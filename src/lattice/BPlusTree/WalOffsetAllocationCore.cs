@@ -40,4 +40,16 @@ internal static class WalOffsetAllocationCore
         nextOffset = offset + 1;
         return offset;
     }
+
+    /// <summary>
+    /// The next offset a recovering shard activation assigns, given the highest
+    /// offset its storage provider holds: one past it, so a recovered allocator
+    /// never reissues a stored (and therefore possibly acknowledged) offset. An
+    /// empty WAL reports <c>-1</c> and recovers to <c>0</c>. Used by activation,
+    /// by the post-failure resync and by the test seam, so all three recover by
+    /// the identical rule.
+    /// </summary>
+    /// <param name="highestStoredOffset">The provider's highest stored offset, or <c>-1</c> when empty.</param>
+    /// <returns>The next offset to assign.</returns>
+    public static long RecoveredNextOffset(long highestStoredOffset) => highestStoredOffset + 1;
 }

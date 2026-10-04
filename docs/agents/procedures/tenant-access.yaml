@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_tenant_group_upsert and the other delegated tenant access tools"
     source: "src/lattice.api.mcp/Tools/TenantAdmin/TenantAccessToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/tenantadmin.json and, for each MCP tool used (lattice_tenant_access_posture, lattice_tenant_explain, lattice_tenant_group_member_add, lattice_tenant_group_upsert, lattice_tenant_member_add, lattice_tenant_rule_put), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/tenantadmin.json"
   - id: feature-enabled
     check: "LatticeTenancyOptions.DelegatedAccessAdministrationEnabled is true; GetPostureAsync reports Enabled."
     source: "src/lattice.tenancy/LatticeTenancyOptions.cs#LatticeTenancyOptions.DelegatedAccessAdministrationEnabled"
@@ -74,13 +77,23 @@ failure_modes:
     signal: "ExplainAsync reports DecidingLayer Platform."
     effect: "The tenant rule has no effect on that request."
     response: "Ask a platform operator to change the operator rule; a tenant rule cannot override it."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
   mechanism: "Remove the rule, the member-set entry and the group; removing the group cascades its edges, entries and tenant rules."
   steps:
-    - "ILatticeTenantPolicyAdmin.RemoveRuleAsync"
-    - "ILatticeTenantDirectoryAdmin.RemoveMemberAsync"
-    - "ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
+    - action: "Remove the tenant rule that granted the access."
+      api: "ILatticeTenantPolicyAdmin.RemoveRuleAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs#RemoveRuleAsync"
+    - action: "Remove the member-set entry that was added."
+      api: "ILatticeTenantDirectoryAdmin.RemoveMemberAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveMemberAsync"
+    - action: "Remove the group, which cascades its edges, entries and tenant rules."
+      api: "ILatticeTenantDirectoryAdmin.RemoveGroupAsync"
+      source: "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantDirectoryAdmin.cs#RemoveGroupAsync"
   source: "docs/lattice.api.tenantadmin/README.md"
 concurrency:
   - rule: "Cap-governed additions are verified after the write and withdrawn when over the cap; concurrent racers may all be refused."

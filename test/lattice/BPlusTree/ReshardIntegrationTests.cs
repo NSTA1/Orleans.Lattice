@@ -46,8 +46,8 @@ public partial class ReshardIntegrationTests
 
     private async Task WaitForReshardAsync(ILattice tree, TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(60));
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(60)).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             if (await tree.IsReshardCompleteAsync()) return;
             await Task.Delay(200);

@@ -87,9 +87,9 @@ public sealed class EntryHistoryReadIntegrationTests
         // whole non-parallel test assembly is saturating the box and each async
         // grain round-trip in this loop slows down, which surfaces as a flaky
         // "did not catch up" failure rather than a genuine convergence stall. A
-        // generous wall-clock deadline removes that timing sensitivity while
+        // generous monotonic deadline removes that timing sensitivity while
         // still failing fast on a real stall.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         long lag;
         do
         {
@@ -102,7 +102,7 @@ public sealed class EntryHistoryReadIntegrationTests
 
             await Task.Delay(20);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         Assert.Fail($"History view '{viewName}' did not catch up to the source head (residual lag {lag}).");
     }

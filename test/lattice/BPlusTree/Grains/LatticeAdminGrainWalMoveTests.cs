@@ -430,6 +430,22 @@ public sealed partial class LatticeAdminGrainWalMoveTests
     }
 
     [Test]
+    public async Task A_move_flips_the_placement_of_its_partition_to_the_target()
+    {
+        var harness = CreateHarness();
+        harness.Source.Seed(0, 1, 2);
+        harness.QuiesceScript.Add(() => Quiesced(highest: 2));
+
+        await Admin(harness).ExecuteWalMoveAsync(TreeId, Move(0, SecondaryKey));
+
+        await harness.Registry.Received(1).UpdateWalPlacementAsync(
+            TreeId,
+            Arg.Any<long>(),
+            Arg.Is<IReadOnlyCollection<(int Partition, string ProviderKey)>>(
+                moves => moves.Count == 1 && moves.First().Partition == 0 && moves.First().ProviderKey == SecondaryKey));
+    }
+
+    [Test]
     public void A_move_aborts_when_the_placement_changes_during_convergence()
     {
         var harness = CreateHarness();

@@ -111,7 +111,7 @@ public sealed partial class TenancyRegionsTests
     {
         var cut = RenderStatuses(("eu-west", TenantRegionLifecycleStatus.Online), ("us-east", TenantRegionLifecycleStatus.Draining));
         cut.WaitUntil(() => cut.Find(".lt-tenancy-following"));
-        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True);
+        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True, "the section is following before it is left");
 
         cut.Instance.Dispose();
 
@@ -135,7 +135,7 @@ public sealed partial class TenancyRegionsTests
         {
             Assert.That(Pill(cut, "us-east"), Is.EqualTo("Draining"));
             Assert.That(Announcement(cut), Is.Empty);
-            Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 0, TimeSpan.FromSeconds(10)), Is.True);
+            Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 0, TimeSpan.FromSeconds(10)), Is.True, "a reading taken for a caller who has signed out stops the follow");
         });
     }
 
@@ -174,7 +174,7 @@ public sealed partial class TenancyRegionsTests
             Assert.That(Pill(cut, "us-east"), Is.EqualTo("Draining"));
             Assert.That(cut.Find(".lt-tenancy-following"), Is.Not.Null);
         });
-        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True);
+        Assert.That(SpinWait.SpinUntil(() => Time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True, "a drain started by a residency edit is followed");
     }
 
     [Test]
@@ -257,7 +257,7 @@ public sealed partial class TenancyRegionsTests
     private int Reads() => Cluster.Calls.Count(call => call == nameof(FakeTenancyCluster.GetTenantRegionStatusAsync));
 
     private void ReadsReach(int expected) =>
-        Assert.That(SpinWait.SpinUntil(() => Reads() == expected, TimeSpan.FromSeconds(10)), Is.True, $"the section reads the regions {expected} time(s)");
+        FollowBarriers.ReadsReach(Reads, expected, "the section");
 
     private void AdvanceFollow(TimeSpan? delta = null)
     {

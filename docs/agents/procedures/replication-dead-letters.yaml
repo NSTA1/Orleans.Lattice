@@ -1,0 +1,102 @@
+schema: lattice.agents/procedure/v1
+id: replication-dead-letters
+name: "Inspect, replay or discard replication dead letters"
+surfaces:
+  in_process:
+    api: "ILatticeReplicationDeadLetters.ListAsync / CountAsync / ReplayAsync / DiscardAsync"
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ILatticeReplicationDeadLetters"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/replication.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/replication.json"
+  - id: tree-identified
+    check: "The operator has the tree id whose per-tree dead-letter queue is being inspected."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ListAsync"
+  - id: reason-reviewed
+    check: "The parked entry reason is reviewed before replay or discard so the operator can fix mode, tenant, schema, causal or restore-fence causes first."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - id: restore-fence-clear-for-replay
+    check: "A replay deferred by a coordinated restore receive fence should be retried only after the restore completes."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+steps:
+  - n: 1
+    action: "Count the per-tree queue to decide whether a triage pass is needed."
+    api: "ILatticeReplicationDeadLetters.CountAsync"
+    expects: "Returns the current cached count for the tree."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#CountAsync"
+  - n: 2
+    action: "List parked entries in ascending entry id order."
+    api: "ILatticeReplicationDeadLetters.ListAsync"
+    expects: "Returns DeadLetterEntry records including EntryId, Entry, FailureReason, RetryCount and EnqueuedAtTicks."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ListAsync"
+  - n: 3
+    action: "Correct the root cause indicated by the parked reason before replay."
+    api: "operator remediation"
+    expects: "Mode mismatch, tenant gating, schema/config faults, causal skew or peer reachability has been addressed."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - n: 4
+    action: "Replay an entry that should now apply or terminally filter through the canonical applier."
+    api: "ILatticeReplicationDeadLetters.ReplayAsync"
+    expects: "A non-null, non-deferred ApplyResult removes the parked entry; Deferred true leaves it parked."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
+  - n: 5
+    action: "Discard only after validating that the parked entry should never be applied."
+    api: "ILatticeReplicationDeadLetters.DiscardAsync"
+    expects: "Returns true when the entry was removed and false when the id was already absent."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
+postconditions:
+  - check: "Replay removes a parked entry on any non-throwing, non-deferred return, including Applied false."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - check: "Replay that returns Deferred true applies nothing and leaves the entry parked for a later replay."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
+  - check: "Discard removes the entry without attempting to apply it."
+    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
+failure_modes:
+  - id: mode-mismatch
+    signal: "dead_letter.enqueued reason mode_mismatch or the FailureReason indicates receiver merge-mode disagreement."
+    effect: "The entry was not applied because the wire mode disagreed with the receiver's resolved mode."
+    response: "Resolve replication mode configuration, then replay."
+  - id: causal-dependency-gate
+    signal: "dead_letter.enqueued reason hlc_skew after causal buffer overflow, often after bootstrap under load."
+    effect: "The evicted entry is preserved but the original delivery was acknowledged."
+    response: "Wait for apply.buffered_entries to drain, then replay; raise causal buffer limits if the rate persists."
+  - id: tenant-gate
+    signal: "dead_letter.enqueued reason foreign_tenant, tenant_offline or tenant_suspended."
+    effect: "The receiver acknowledged the batch and parked the entry until tenant state permits it."
+    response: "Create, relocate or reinstate the tenant, then replay."
+  - id: schema-or-unknown
+    signal: "dead_letter.enqueued reason schema or unknown."
+    effect: "The decorator exhausted MaxApplyRetries or a causal-buffer drain failed terminally."
+    response: "Fix malformed payload, schema/configuration or infrastructure causes before replay."
+  - id: restore-fence-deferred
+    signal: "ReplayAsync returns ApplyResult with Deferred true."
+    effect: "The entry remains parked because a coordinated restore receive fence still blocks inbound apply."
+    response: "Wait for the restore fence to lift and replay the same entry again."
+  - id: fifo-eviction
+    signal: "dead_letter.removed reason evicted rises while enqueuing new dead letters."
+    effect: "The oldest parked entry was removed to respect DeadLetterQueueCapacity."
+    response: "Increase capacity or triage faster; inspect remaining entries before further evictions."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "Discard is irreversible, and replay may apply or terminally filter the write before removing the parked entry. Use backups or application-level correction for an unwanted data effect."
+  steps: []
+  source: "docs/lattice.replication/dead-letter-queue.md"
+concurrency:
+  - rule: "List and count are pure reads served from the per-tree dead-letter cache."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - rule: "Replay routes through the canonical applier rather than the failure-tracking decorator, so a deterministic failure does not re-park itself in a loop."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - rule: "A coordinated restore receive-fence deferral leaves the dead-letter entry parked instead of removing it."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+  - rule: "When the queue is at capacity, enqueue evicts the oldest entry first."
+    source: "docs/lattice.replication/dead-letter-queue.md"
+sources:
+  - "docs/lattice.replication/dead-letter-queue.md"
+  - "docs/lattice.replication/replication-apply.md"
+  - "src/lattice.replication/ILatticeReplicationDeadLetters.cs"
+  - "src/lattice.replication/LatticeReplicationDeadLetters.cs"
+  - "src/lattice.replication/DeadLetterTrackingReplicationApplier.cs"

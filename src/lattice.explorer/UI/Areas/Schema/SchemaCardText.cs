@@ -70,7 +70,7 @@ internal static class SchemaCardText
             },
             SchemaCardKind.Pattern => "must match the pattern " + card.Pattern,
             SchemaCardKind.Encoding => card.Encoding == LatticeSchemaEncodingKind.Utf8 ? "must be well-formed UTF-8" : "must be one JSON document",
-            SchemaCardKind.MaxSize => "must be at most " + Number(card.MaxBytes) + " bytes",
+            SchemaCardKind.MaxSize => "must be at most " + Number(card.MaxBytes) + " " + Plural(card.MaxBytes.Trim(), "byte"),
             _ => "must satisfy a custom rule",
         };
     }

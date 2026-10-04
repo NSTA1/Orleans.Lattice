@@ -135,7 +135,7 @@ internal sealed class TwoSiteClusterFixture
     /// </summary>
     private static async Task WarmUpReminderServiceAsync(TestCluster cluster)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
         for (var i = 0; i < 4; i++)
         {
             var tree = cluster.Client.GetGrain<ILattice>($"reminder-warmup-{i}");
@@ -148,7 +148,7 @@ internal sealed class TwoSiteClusterFixture
                 }
                 catch (OrleansException ex) when (
                     ex.Message.Contains("Reminder Service is still initializing", StringComparison.Ordinal)
-                    && DateTime.UtcNow < deadline)
+                    && Environment.TickCount64 < deadline)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(250));
                 }
