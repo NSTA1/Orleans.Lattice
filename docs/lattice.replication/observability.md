@@ -285,7 +285,7 @@ Genuine causal dependencies are not enforced through this counter: an entry that
 
 ## Fall-off-the-log detection (`peer.fell_off_log` / `peer.fell_off_log_suppressed`)
 
-The fall-off detector compares a peer's per-origin high-water-mark with an oldest-available HLC for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest entry the peer authored within a bounded window at the head of each WAL partition - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)).
+The fall-off detector compares a peer's per-origin high-water-mark with the oldest retained local WAL entry this receiver still has for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest entry the peer authored within a bounded window at the head of each WAL partition - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)). This metric is not the source-side WAL trim detector; a sender that trims past its shipper cursor requests a re-seed in-band and, if the transport does not carry that request, remains stalled while saga records are withheld.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
