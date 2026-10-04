@@ -969,6 +969,12 @@ internal sealed class FileWalShard : IDisposable
     /// sibling compacted, which is the ambiguity issue #3206 measured on a
     /// live estate and exists to remove.
     /// </para>
+    /// <para>
+    /// The reclaimed-bytes counter is primed once per trigger arm, exactly as
+    /// the compaction count is (issue #3226): both carry
+    /// <see cref="LatticeMetrics.TagTrigger"/>, so an arm that has never
+    /// reclaimed anything reads as a zero series rather than an absent one.
+    /// </para>
     /// </summary>
     private void PrimeCompactionCounters()
     {
@@ -982,7 +988,9 @@ internal sealed class FileWalShard : IDisposable
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
-        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
 
         // The gate-input samples are armed from the shard's true post-recovery
         // state rather than a synthetic zero, so the very first scrape after a
@@ -1386,6 +1394,11 @@ internal sealed class FileWalShard : IDisposable
     /// which averages one threshold test per shard and hides a stranded
     /// majority behind an active minority.
     /// </para>
+    /// <para>
+    /// Both also carry the <see cref="LatticeMetrics.TagTrigger"/> of the arm
+    /// that ran, so the bytes each arm released can be read per arm alongside
+    /// how often it fired (issue #3226).
+    /// </para>
     /// </summary>
     private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
     {
@@ -1397,7 +1410,7 @@ internal sealed class FileWalShard : IDisposable
         LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, trigger, _tenantTag);
         if (reclaimedBytes > 0)
         {
-            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, _tenantTag);
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, trigger, _tenantTag);
         }
     }
 
