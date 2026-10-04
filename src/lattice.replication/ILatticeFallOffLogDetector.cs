@@ -3,14 +3,13 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Receiver-side fall-off-the-log detector. The inbound apply path
-/// (or the transport layer that owns the apply path) calls
-/// <see cref="CheckAndTriggerAsync"/> when it has acquired the
-/// sender's oldest available WAL entry HLC for a given tree. The
-/// detector compares that HLC against the receiver's per-origin
-/// high-water-mark; when the local HWM is strictly older the receiver
-/// has fallen off the sender's log and cannot resume incremental
-/// replication without a fresh snapshot. The detector then emits the
+/// Receiver-side fall-off-the-log detector. The maintenance path calls
+/// <see cref="CheckAndTriggerAsync"/> with the oldest retained local
+/// WAL entry that was authored by a given origin. The detector compares
+/// that local reading against the receiver's per-origin high-water-mark;
+/// when the local HWM is strictly older the receiver has fallen off its
+/// own local log for that origin and cannot safely use that local stream
+/// without a fresh snapshot. The detector then emits the
 /// <see cref="LatticeReplicationMetrics.PeerFellOffLog"/> metric and,
 /// when
 /// <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
@@ -18,14 +17,14 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ILatticeBootstrapCoordinator.BootstrapAsync"/> for the
 /// affected tree.
 /// <para>
-/// The sender's oldest-available HLC is supplied by the caller rather
-/// than fetched by the detector itself: the detector lives on the
-/// receiver side and has no inherent path to the remote WAL. A
-/// future transport revision will plumb the sender's oldest HLC
-/// through the batch envelope so each inbound apply naturally
-/// populates the parameter; until then, callers can use
-/// <see cref="ILatticeWalIntrospection"/> in a co-located test
-/// fixture to introspect the sender's WAL directly.
+/// This is not the cross-cluster source-WAL trim detector. A sender that
+/// trims records before its shipper reads them observes the sequence gap
+/// in <c>IWalShardGrain.ReadShippingAsync</c>,
+/// records <see cref="ReplicationBatch.ReseedAfterEpoch"/>, and asks the
+/// receiver to re-seed on subsequent pushes. A transport that does not
+/// carry that batch field cannot deliver the request; the sender then
+/// keeps saga records withheld and the link remains stalled until an
+/// operator re-seeds or the transport is fixed.
 /// </para>
 /// <para>
 /// The coordinator's idempotency contract handles concurrent
@@ -71,10 +70,11 @@ public interface ILatticeFallOffLogDetector
     /// boundary.
     /// </param>
     /// <param name="senderOldestAvailableHlc">
-    /// The sender's oldest still-available WAL entry HLC. The
-    /// detector compares this value against the receiver's per-origin
-    /// high-water-mark; lag is detected when the local HWM is
-    /// strictly less than this value.
+    /// The oldest retained WAL entry HLC the caller is comparing
+    /// against. The built-in maintenance caller supplies the receiver's
+    /// local oldest entry for <paramref name="sourceClusterId"/>, not the
+    /// remote sender's WAL floor. Lag is detected when the receiver's
+    /// local HWM is strictly less than this value.
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed at every grain hop.</param>
     /// <returns>

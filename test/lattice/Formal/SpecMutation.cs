@@ -113,6 +113,27 @@ public sealed record SpecMutation
     public const string DeadlockSwitch = "-deadlock";
 
     /// <summary>
+    /// The model-size overrides applied to the mutant arm only, from the
+    /// optional <c>BOUNDS:</c> header: comma-separated <c>Name = value</c>
+    /// assignments to a bound the specification declares or defines.
+    /// <para>
+    /// A mutant has to show one counterexample, not hold over the whole
+    /// instance, and a temporal mutant pays for the full state graph before TLC
+    /// reports it. Running it on the smallest instance that still exhibits the
+    /// violation saves that cost without weakening anything the experiment
+    /// asserts: the control arm, which is where "the property holds on the
+    /// base" is decided, is built by <see cref="BuildConfig"/> and never sees
+    /// these assignments, so it still checks the module's own bounds; and the
+    /// mutant arm still has to report exactly its target, so an override that
+    /// shrinks the instance below the violation leaves the mutant clean and
+    /// fails the experiment rather than passing it. A name the specification
+    /// does not have would be accepted by TLC and silently ignored, so
+    /// <see cref="SpecMutationCatalogueTests"/> refuses one without a toolchain.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<CfgAssignment> Bounds { get; init; } = [];
+
+    /// <summary>
     /// The exact text TLC emits when <see cref="Target"/> is violated.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
@@ -205,7 +226,18 @@ public sealed record SpecMutation
     /// uses to bound it. Only the checked-property blocks are replaced.
     /// </para>
     /// </summary>
-    public string BuildConfig(string baseConfig)
+    public string BuildConfig(string baseConfig) => BuildConfig(baseConfig, []);
+
+    /// <summary>
+    /// Builds the cfg for the mutant arm: <see cref="BuildConfig"/> plus a
+    /// <c>CONSTANTS</c> block holding <see cref="Bounds"/>, so the mutant runs
+    /// on the smaller instance its header declares while the control arm keeps
+    /// the module's own bounds. Identical to <see cref="BuildConfig"/> for a
+    /// mutation that declares no bounds.
+    /// </summary>
+    public string BuildMutantConfig(string baseConfig) => BuildConfig(baseConfig, Bounds);
+
+    private string BuildConfig(string baseConfig, IReadOnlyList<CfgAssignment> bounds)
     {
         ArgumentNullException.ThrowIfNull(baseConfig);
 
@@ -215,6 +247,17 @@ public sealed record SpecMutation
         builder.AppendLine();
         builder.AppendLine(SpecMutationCatalogue.CarriedConfiguration(baseConfig));
         builder.AppendLine();
+
+        if (bounds.Count > 0)
+        {
+            builder.AppendLine("CONSTANTS");
+            foreach (var bound in bounds)
+            {
+                builder.AppendLine($"    {bound.Name} = {bound.Value}");
+            }
+
+            builder.AppendLine();
+        }
 
         builder.AppendLine("INVARIANTS");
         builder.AppendLine($"    {SpecMutationCatalogue.TypeInvariant}");
@@ -385,7 +428,46 @@ public static class SpecMutationCatalogue
                 ? perturbs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 : [],
             DeadlockCheckDisabled = ParseDeadlock(metadata, name),
+            Bounds = ParseBounds(metadata, name),
         };
+    }
+
+    /// <summary>
+    /// Reads the optional <c>BOUNDS:</c> header: one or more comma-separated
+    /// <c>Name = value</c> assignments, where the value is an integer or an
+    /// identifier. A definition override (<c>&lt;-</c>), an empty entry, a
+    /// repeated name or anything else is refused, because a malformed bound
+    /// that TLC silently ignored would run the mutant at full size and look
+    /// like a bound that worked.
+    /// </summary>
+    private static IReadOnlyList<CfgAssignment> ParseBounds(IDictionary<string, string> metadata, string name)
+    {
+        if (!metadata.TryGetValue("BOUNDS", out var value))
+        {
+            return [];
+        }
+
+        var bounds = new List<CfgAssignment>();
+        foreach (var entry in value.Split(','))
+        {
+            var match = Regex.Match(entry.Trim(), @"^([A-Za-z][A-Za-z0-9_]*)\s*=\s*([0-9]+|[A-Za-z][A-Za-z0-9_]*)$");
+            if (!match.Success)
+            {
+                throw new InvalidOperationException(
+                    $"{name}.mutation declares 'BOUNDS: {value}'. Each entry must be 'Name = value', with an integer "
+                    + "or identifier value, separated by commas.");
+            }
+
+            var bound = new CfgAssignment(match.Groups[1].Value, IsOverride: false, match.Groups[2].Value);
+            if (bounds.Any(b => string.Equals(b.Name, bound.Name, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException($"{name}.mutation declares the bound '{bound.Name}' twice.");
+            }
+
+            bounds.Add(bound);
+        }
+
+        return bounds;
     }
 
     /// <summary>

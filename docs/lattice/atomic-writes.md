@@ -427,6 +427,27 @@ value a split migrates in above the destination's clock. That covers:
 A resize copy stamps its mirrored writes with its own clock, which does not
 order them against `P`.
 
+### A later write the split imports is not dropped over the saga's value
+
+A split destination drops a migration import - a write the source shadow-forwards
+in, or the final drain of the moved slots - over a row the destination wrote itself.
+Such a row is logically newer than any import, even one stamped higher on the
+source's clock. A saga value the destination stored at a `P` carried from the
+source is not such a row: `P` was minted on the source, so the value is on the
+source's clock lineage, and it is stored migrated. A write acknowledged on the
+source after the prepare is stamped above `P`, so its import replaces the saga's
+value by last-writer-wins, and a stale import below `P` loses to it. Earlier the
+destination dropped every import over the saga's value, so once the map moved the
+key read the saga's older value and the acknowledged write was lost
+([#4564](https://github.com/NSTA1/Orleans.Lattice/issues/4564)). A saga value at a
+stamp minted on the destination, and any write the destination accepts itself,
+still drop an import.
+
+The provenance is durable: the write-ahead log records whether each stored value is
+migrated - an import, a sibling hand-off, a prepare carrying a `P` from the
+source, and the drain or backstop that stores it - and replay restores it, so a
+destination that reactivates mid-split admits the same imports it would have.
+
 ### Sharded decision registry
 
 A tree's decision registry can be split into

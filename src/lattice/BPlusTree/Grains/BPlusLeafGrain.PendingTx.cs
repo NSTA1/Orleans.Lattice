@@ -2244,7 +2244,7 @@ internal sealed partial class BPlusLeafGrain
         // last-writer-wins at that stamp, so a write acknowledged after the
         // prepare survives; a key without one keeps the pre-#4522 fresh stamp.
         // Captured before the drain below discards the bucket's classification.
-        var missingStamps = CollectBackstopOriginalStamps(transactionId, missingKeys, bucket, strandedPrepared);
+        var missingStamps = CollectBackstopOriginalStamps(transactionId, missingKeys, bucket, strandedPrepared, out var missingMigrated);
 
         // Hot-path short-circuit: a duplicate terminal delivery with
         // nothing new to do. The flip side already ran (alreadyFlipped),
@@ -2490,11 +2490,13 @@ internal sealed partial class BPlusLeafGrain
                 // A row at or above P is a write acknowledged after the prepare
                 // and stands; the key is still recorded as backstopped below.
                 var keyStamp = stamp;
+                var migrated = false;
                 if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
                 {
                     if (IsRowAtOrAboveOriginalStamp(kvp.Key, originalStamp))
                         continue;
                     keyStamp = originalStamp;
+                    migrated = missingMigrated is not null && missingMigrated.Contains(kvp.Key);
                     state.State.Clock = Orleans.Lattice.HybridLogicalClock.Merge(state.State.Clock, originalStamp);
                 }
                 else
@@ -2520,6 +2522,7 @@ internal sealed partial class BPlusLeafGrain
                         IsPrepared = false,
                         IsBackstop = true,
                         ShardIndex = shardIndex,
+                        IsMigrated = migrated,
                     };
 
                     // Emit the WAL append on the LeafWriteDuration
@@ -2553,13 +2556,18 @@ internal sealed partial class BPlusLeafGrain
                     Timestamp = keyStamp,
                     OriginClusterId = origin,
                     VectorClock = vc,
+                    IsMigrated = migrated,
                 };
                 StoreEntry(kvp.Key, value);
-                // Backstop is a non-migration write: any prior
-                // migration-provenance marker for this key is now
-                // stale and must be cleared so a subsequent saga's
-                // orphan-drain guard does not mistake the backstop
-                // write for a migration import.
+                // A backstop at a fresh stamp, or at an original stamp minted
+                // on this shard, is a non-migration write: any prior
+                // migration-provenance marker for this key is now stale and
+                // must be cleared so a subsequent saga's orphan-drain guard
+                // does not mistake it for a migration import. One stored at
+                // an original stamp carried from another shard is on that
+                // shard's clock lineage, so it stays migrated and a later
+                // migration import competes with it by last-writer-wins
+                // (issue #4564).
             }
 
             if (anyFreshStamp)

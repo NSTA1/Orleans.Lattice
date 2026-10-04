@@ -7,6 +7,7 @@ MODULE: EventualConvergenceObserverRelativeTieBreak
 TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: the LWW tie-break ranks the observer's own write lowest, so tied writes resolve differently per site (#2891)
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
 LwwRank(x, w) == Rank(w.o)

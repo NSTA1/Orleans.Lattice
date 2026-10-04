@@ -48,7 +48,9 @@ range delete matched, the cross-tree operation id and participants, and
 whether a prepared write's stamp is its prepare's original stamp (see
 [A commit applies each value at its prepare stamp](atomic-writes.md#a-commit-applies-each-value-at-its-prepare-stamp);
 the field is additive, so a record written before it existed reads as not
-original). The WAL
+original), and whether the stored value is migrated (see
+[A later write the split imports is not dropped over the saga's value](atomic-writes.md#a-later-write-the-split-imports-is-not-dropped-over-the-sagas-value);
+also additive, read as not migrated on an older record). The WAL
 stores each envelope as its durable twin, `WalRecord` - the shape that is
 encoded onto storage and shipped to replication peers, which also carries the
 causal+ dependency summary - and a storage provider or `IMutationObserver` sees

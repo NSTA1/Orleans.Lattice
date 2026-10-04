@@ -17,15 +17,19 @@ namespace Orleans.Lattice.Tests.Formal;
 /// runners; a case with no group runs in the <c>formal-tlc</c> shard, which
 /// claims the rest of <see cref="TlcModelCheckTests"/>. A new module therefore
 /// runs whether or not anybody adds it here. Each group was sized from measured
-/// per-case durations to about 4-6 minutes of wall-clock on a 4-core runner.
+/// per-case durations to about 4-5 minutes of wall-clock on a 4-core runner.
+/// </para>
+/// <para>
+/// SHARE A CONTROL WHERE YOU CAN. <see cref="TlcModelCheckTests"/> runs each
+/// distinct control arm once per test process, so mutants that share a
+/// control (the same module, target property and options) are cheaper in one
+/// shard than split across two: every Replication EventualConvergence mutant
+/// shares one control and so lives in <see cref="Convergence"/>.
 /// </para>
 /// </summary>
 internal static class TlcCiShard
 {
-    /// <summary>The Replication EventualConvergencePin* mutants, 5-6 minutes each.</summary>
-    public const string ConvergencePin = "TlcShardConvergencePin";
-
-    /// <summary>The other Replication EventualConvergence* (temporal) mutants.</summary>
+    /// <summary>The Replication EventualConvergence* (temporal) mutants, which share one control arm.</summary>
     public const string Convergence = "TlcShardConvergence";
 
     /// <summary>The other Replication mutants, plus the WalDurability and WalMove mutants.</summary>
@@ -33,9 +37,6 @@ internal static class TlcCiShard
 
     /// <summary>The ShardOwnership and ShardOwnershipRetention mutants.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
-
-    /// <summary>The AtomicCommit, AtomicCommitCrossCluster and Backup* mutants.</summary>
-    public const string AtomicBackup = "TlcShardAtomicBackup";
 
     /// <summary>
     /// The shard category of <paramref name="mutation"/> of
@@ -50,11 +51,6 @@ internal static class TlcCiShard
         var name = module.Name;
         if (string.Equals(name, "Replication", StringComparison.Ordinal))
         {
-            if (mutation.Name.StartsWith("EventualConvergencePin", StringComparison.Ordinal))
-            {
-                return ConvergencePin;
-            }
-
             return mutation.Name.StartsWith("EventualConvergence", StringComparison.Ordinal)
                 ? Convergence
                 : ReplicationWal;
@@ -65,17 +61,7 @@ internal static class TlcCiShard
             return ReplicationWal;
         }
 
-        if (name.StartsWith("ShardOwnership", StringComparison.Ordinal))
-        {
-            return ShardOwnership;
-        }
-
-        if (name.StartsWith("AtomicCommit", StringComparison.Ordinal) || name.StartsWith("Backup", StringComparison.Ordinal))
-        {
-            return AtomicBackup;
-        }
-
-        return null;
+        return name.StartsWith("ShardOwnership", StringComparison.Ordinal) ? ShardOwnership : null;
     }
 
     /// <summary>
