@@ -105,4 +105,15 @@ internal readonly record struct PendingMutationSnapshot
     /// fold.
     /// </summary>
     [Id(10)] public LatticeMergeMode Mode { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="Timestamp"/> is the prepare's original stamp (the
+    /// source leaf's prepare was marked, issue #4522). The retroactive sweep
+    /// carries the stamp to the destination only when this is
+    /// <see langword="true"/>, so the destination buckets the prepare AT it and
+    /// marks it. Legacy snapshots, and those from an older silo, decode to
+    /// <see langword="false"/>: the destination keeps the pre-#4522 unmarked
+    /// drain.
+    /// </summary>
+    [Id(11)] public bool StampIsOriginal { get; init; }
 }

@@ -1136,7 +1136,8 @@ internal sealed class TreeShardSplitGrain(
         try
         {
             await PreparedBucketSweep.RunAsync(
-                grainFactory, TreeId, leafId.Value, target, sortedSlots, virtualShardCount, progress);
+                grainFactory, TreeId, leafId.Value, target, sortedSlots, virtualShardCount, progress,
+                carryOriginalStamps: true);
         }
         finally
         {

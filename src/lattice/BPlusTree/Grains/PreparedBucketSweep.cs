@@ -43,6 +43,17 @@ internal static class PreparedBucketSweep
     /// <paramref name="target"/>. Not work-bounded: the caller's recovery contract
     /// is to re-run the whole sweep, and its cost is bounded by saga concurrency.
     /// </summary>
+    /// <param name="carryOriginalStamps">
+    /// Whether each marked prepare's original stamp P travels with it (issue
+    /// #4522): the replayed prepare is bucketed AT P and marked, and a decided
+    /// saga's backstop is applied under last-writer-wins at P, so a write
+    /// acknowledged after the prepare survives on the target. Sound only when
+    /// every write the target holds for the swept slots is stamped on the same
+    /// clock lineage as P - an adaptive split, whose shadow-forward ships each
+    /// plain write at its source stamp. An online resize copy mints its own
+    /// stamps for mirrored writes, which P does not order, so it passes
+    /// <see langword="false"/> and keeps the dominating backstop stamp.
+    /// </param>
     internal static async Task RunAsync(
         IGrainFactory grainFactory,
         string decisionTreeId,
@@ -50,7 +61,8 @@ internal static class PreparedBucketSweep
         IShardRootGrain target,
         int[] sortedSlots,
         int virtualShardCount,
-        PreparedBucketSweepProgress progress)
+        PreparedBucketSweepProgress progress,
+        bool carryOriginalStamps = false)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(decisionTreeId);
@@ -100,7 +112,11 @@ internal static class PreparedBucketSweep
                     Dictionary<string, byte[]>? committedValues = null;
                     if (!snapshot.IsTombstone && snapshot.Value is not null)
                         committedValues = new Dictionary<string, byte[]>(1) { [snapshot.Key] = snapshot.Value };
-                    await target.AppendTxTerminalAsync(snapshot.TransactionId, committed: true, committedValues);
+                    using (LatticeOriginalPrepareStampContext.With(
+                        carryOriginalStamps ? OriginalStamps([snapshot]) : null))
+                    {
+                        await target.AppendTxTerminalAsync(snapshot.TransactionId, committed: true, committedValues);
+                    }
                     progress.Replayed++;
                     continue;
                 }
@@ -116,7 +132,7 @@ internal static class PreparedBucketSweep
                 // as a participant via RecordAffectedLeafIfPreparedAsync,
                 // so any saga broadcast that runs AFTER this point
                 // will reach destination.
-                await ReplayPreparedSnapshotAsync(target, snapshot, decisionTreeId);
+                await ReplayPreparedSnapshotAsync(target, snapshot, decisionTreeId, carryOriginalStamps);
                 progress.Replayed++;
 
                 // Install the destination-side shadow marker for
@@ -204,9 +220,31 @@ internal static class PreparedBucketSweep
                             committedValues[snap.Key] = snap.Value;
                     }
                 }
-                await target.AppendTxTerminalAsync(txid, committed, committedValues);
+                using (LatticeOriginalPrepareStampContext.With(
+                    committed && carryOriginalStamps ? OriginalStamps(perTxSnapshots[txid]) : null))
+                {
+                    await target.AppendTxTerminalAsync(txid, committed, committedValues);
+                }
             }
         }
+    }
+
+    /// <summary>
+    /// The original stamp of each marked, live-valued snapshot, keyed by key, or
+    /// <see langword="null"/> when none is marked. An unmarked snapshot's stamp
+    /// may be a forwarding destination's own clock rather than the prepare's,
+    /// so it is never carried (issue #4522).
+    /// </summary>
+    private static Dictionary<string, HybridLogicalClock>? OriginalStamps(IEnumerable<PendingMutationSnapshot> snapshots)
+    {
+        Dictionary<string, HybridLogicalClock>? stamps = null;
+        foreach (var snapshot in snapshots)
+        {
+            if (snapshot.StampIsOriginal && !snapshot.IsTombstone && snapshot.Value is not null)
+                (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[snapshot.Key] = snapshot.Timestamp;
+        }
+
+        return stamps;
     }
 
     /// <summary>
@@ -229,7 +267,8 @@ internal static class PreparedBucketSweep
     /// preserved verbatim.
     /// </para>
     /// </summary>
-    internal static async Task ReplayPreparedSnapshotAsync(IShardRootGrain target, PendingMutationSnapshot snapshot, string registryTreeId)
+    internal static async Task ReplayPreparedSnapshotAsync(
+        IShardRootGrain target, PendingMutationSnapshot snapshot, string registryTreeId, bool carryOriginalStamp = false)
     {
         var previousTxId = LatticeTransactionContext.Current;
         LatticeTransactionContext.Set(snapshot.TransactionId);
@@ -245,6 +284,16 @@ internal static class PreparedBucketSweep
             using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
             using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
             using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);
+            // Issue #4522: carry the prepare's original stamp when the source
+            // leaf's prepare was marked and the caller's target orders writes on
+            // P's clock lineage, so the target buckets it AT P and marks it.
+            // Clear any prepared route so the replay is never classified as an
+            // original prepare by route.
+            using var routeScope = LatticeOriginalPrepareStampContext.WithoutPreparedRoute();
+            using var stampScope = LatticeOriginalPrepareStampContext.With(
+                carryOriginalStamp && snapshot.StampIsOriginal
+                    ? new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal) { [snapshot.Key] = snapshot.Timestamp }
+                    : null);
             // Carry the typed CRDT delta so the destination leaf's prepared
             // commit records it in its pending-tx delta side-map and folds it
             // on the saga's terminal (the per-replica union) rather than
