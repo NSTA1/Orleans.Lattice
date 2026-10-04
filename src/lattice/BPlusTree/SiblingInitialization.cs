@@ -112,4 +112,15 @@ internal readonly record struct SiblingInitialization
     /// </para>
     /// </summary>
     [Id(8)] public long[]? WalHeadsAtBirth { get; init; }
+
+    /// <summary>
+    /// The donor's hybrid logical clock at split time (issue #4522), or the
+    /// default when an older donor sent none. The sibling merges it into its own
+    /// clock, so every write the sibling stamps is above every stamp the donor
+    /// minted - in particular above a prepare stamp P of a key the sibling now
+    /// owns. Without it a newborn sibling's clock starts below P, a write
+    /// acknowledged after the prepare could be stamped below P, and a terminal
+    /// applying the saga's value at its own P would overwrite that later write.
+    /// </summary>
+    [Id(9)] public HybridLogicalClock DonorClock { get; init; }
 }

@@ -115,6 +115,12 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// registry a leaf consults before bucketing a prepare (issue #4445); only a
     /// forwarding shard or the split sweep may assert it.
     /// </para>
+    /// <para>
+    /// The prepared-route marker and the original-prepare-stamp map are included
+    /// because a leaf honours them to decide the stamp a saga's value is applied
+    /// at (issue #4522); only the routing tier, a forwarding shard, the split
+    /// sweep, and the saga's terminal delivery may assert them.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -130,6 +136,8 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
         LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
+        LatticeEventConstants.PreparedRouteRequestContextKey,
+        LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
     ];
 
     /// <inheritdoc />

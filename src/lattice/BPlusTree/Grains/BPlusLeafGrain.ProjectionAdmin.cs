@@ -133,6 +133,7 @@ internal sealed partial class BPlusLeafGrain
         // deterministically by replaying every prepared mutation whose
         // terminal has not yet replayed.
         _pendingTx = null;
+        _unmarkedPrepares = null;
         _pendingTxOffsets = null;
         _pendingTxBatches = null;
         _recentlyTerminal = null;

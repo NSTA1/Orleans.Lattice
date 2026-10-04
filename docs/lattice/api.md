@@ -220,10 +220,14 @@ Single-key operations transparently retry when a concurrent topology
 change invalidates their routing - an adaptive split or reshard that
 moved the key's virtual slot to another shard, or an online resize (or
 other shadow-cutover swap) that redirected the tree to a new physical
-tree. The retry refreshes routing and tries again for up to a 60-second
-wall-clock budget; only a topology that is still changing when that
-budget runs out surfaces the last internal stale-routing fault to the
-caller, as an exception of a non-public type.
+tree. The retry refreshes routing and tries again: a write for up to a
+60-second wall-clock budget, a read (`GetAsync`, `GetWithVersionAsync`,
+`ExistsAsync`, and `GetManyAsync`) for five sixths of the silo's response
+timeout (25 seconds at the default 30), so the fault reaches the caller
+before its own request times out. After the first two retries a read
+waits between attempts, doubling from 1 ms up to 50 ms. Only a topology
+that is still changing when the budget runs out surfaces the last internal
+stale-routing fault to the caller, as an exception of a non-public type.
 
 #### Batch
 
