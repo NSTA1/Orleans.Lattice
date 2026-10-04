@@ -41,7 +41,7 @@ internal sealed partial class LatticeGrain
         var policy = Options.RetryPolicy;
         using var hlcScope = LatticeHlcOverrideContext.Current is null
             ? LatticeHlcOverrideContext.With(key.Value.Timestamp)
-            : NullScope.Instance;
+            : NoOpDisposable.Instance;
 
         if (policy is null)
         {
@@ -72,7 +72,7 @@ internal sealed partial class LatticeGrain
         var policy = Options.RetryPolicy;
         using var hlcScope = LatticeHlcOverrideContext.Current is null
             ? LatticeHlcOverrideContext.With(key.Value.Timestamp)
-            : NullScope.Instance;
+            : NoOpDisposable.Instance;
 
         if (policy is null)
         {
@@ -114,10 +114,4 @@ internal sealed partial class LatticeGrain
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 turn).Unwrap();
-
-    private sealed class NullScope : IDisposable
-    {
-        internal static readonly NullScope Instance = new();
-        public void Dispose() { }
-    }
 }

@@ -71,7 +71,7 @@ public partial class SchemaOperationStatus : IDisposable
         {
             if (_follower?.Status is { } status)
             {
-                return StageOf(status);
+                return SchemaOperations.StageOf(status);
             }
 
             if (_local is { } local && (_follower is null || _follower.NotFound))
@@ -405,23 +405,6 @@ public partial class SchemaOperationStatus : IDisposable
         SchemaOperationKinds.AdvanceAndMigrate => AdvanceAndMigratePhases,
         _ => RemediationPhases,
     };
-
-    private static SchemaOperationStage StageOf(LatticeOperationStatus status)
-    {
-        if (!status.IsTerminal)
-        {
-            return SchemaOperationStage.Running;
-        }
-
-        return status.State switch
-        {
-            LatticeOperationState.Succeeded => SchemaOperationStage.Completed,
-            LatticeOperationState.Cancelled => SchemaOperationStage.Cancelled,
-            LatticeOperationState.Failed when status.Result.TryGetValue(SchemaOperationResultKeys.Outcome, out var outcome)
-                && string.Equals(outcome, SchemaOperationResultKeys.Aborted, StringComparison.Ordinal) => SchemaOperationStage.Aborted,
-            _ => SchemaOperationStage.Failed,
-        };
-    }
 
     private sealed record StageItem(int Index, SchemaOperationStage Stage, string Title);
 }

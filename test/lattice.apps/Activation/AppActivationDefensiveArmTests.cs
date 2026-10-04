@@ -172,9 +172,9 @@ public sealed class AppActivationDefensiveArmTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(AppSubscriptionScopeCoverage.IsCovered(requested, unknownException), Is.False,
+            Assert.That(AppScopeCoverage.IsCovered(requested, unknownException), Is.False,
                 "an unrecognised exception kind must fail closed");
-            Assert.That(AppSubscriptionScopeCoverage.IsCovered(requested, knownException), Is.True,
+            Assert.That(AppScopeCoverage.IsCovered(requested, knownException), Is.True,
                 "positive control: a recognised exception over the same tree does approve it");
         });
     }
