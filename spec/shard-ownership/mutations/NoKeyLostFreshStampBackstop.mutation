@@ -11,9 +11,8 @@ CLASS: Invariant
 SUMMARY: the terminal's backstop installs over a later write with a dominating stamp
 
 --- FIND
-    ELSE IF pend[c][s][k] = "old" \/ MapOf(CopyMap(c), k) = s THEN Max(row[c][s][k], SagaV)
+    ELSE IF MapOf(CopyMap(c), k) = s THEN LWW(row[c][s][k], SagaV)
 --- REPLACE
-    ELSE IF pend[c][s][k] = "old" THEN Max(row[c][s][k], SagaV)
-\* MUTATION: the backstop is stamped above the row, whatever the row holds.
-    ELSE IF MapOf(CopyMap(c), k) = s THEN SagaV
+\* MUTATION: the backstop is installed at a fresh stamp above the row, whatever the row holds.
+    ELSE IF MapOf(CopyMap(c), k) = s THEN FreshV
 --- END

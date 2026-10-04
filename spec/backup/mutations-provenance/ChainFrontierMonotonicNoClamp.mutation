@@ -1,0 +1,16 @@
+# Pairs with ChainFrontierMonotonic. The provenance frontier that regresses:
+# an increment takes its cut from its own delta alone, so an increment that
+# saw no writes - or only a peer's writes stamped below the base's frontier -
+# carries the chain's frontier backwards.
+MODULE: ChainFrontierMonotonicNoClamp
+TARGET: ChainFrontierMonotonic
+CLASS: Invariant
+SUMMARY: an increment's cut is its delta's high-water, not clamped to its base's
+PERTURBS: CaptureIncremental
+
+--- FIND
+                                  cut |-> IF high < last.cut THEN last.cut ELSE high,
+--- REPLACE
+                                  \* MUTATION: no clamp to the base.
+                                  cut |-> high,
+--- END

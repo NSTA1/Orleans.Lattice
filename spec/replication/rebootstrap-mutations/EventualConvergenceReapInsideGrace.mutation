@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. The grace period is what
+# stops a late write the tombstone beats from resurrecting the key at s; without it
+# s holds the old value and r holds the delete.
+MODULE: EventualConvergenceReapInsideGrace
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a tombstone is reaped while a write it beats is still on its way, which then resurrects the key
+PERTURBS: Reap
+
+--- FIND
+    /\ \A i \in (cursor[<<r, s>>] + 1)..Len(wal[r]) : wal[r][i].h > reg[s].h
+--- REPLACE
+\* MUTATION: no grace period.
+    /\ TRUE
+--- END

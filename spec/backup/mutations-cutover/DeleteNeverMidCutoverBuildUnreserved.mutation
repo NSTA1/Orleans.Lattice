@@ -1,0 +1,16 @@
+# Pairs with DeleteNeverMidCutover. The restore builds its shadow without
+# taking the alias reservation, so the tree can be deleted under it.
+MODULE: DeleteNeverMidCutoverBuildUnreserved
+TARGET: DeleteNeverMidCutover
+CLASS: Invariant
+SUMMARY: the shadow build takes no alias reservation
+PERTURBS: Build
+
+--- FIND
+    /\ reserved' = TRUE
+    /\ rp' = "built"
+--- REPLACE
+    \* MUTATION: no reservation.
+    /\ reserved' = FALSE
+    /\ rp' = "built"
+--- END

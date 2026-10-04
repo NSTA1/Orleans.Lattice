@@ -1,0 +1,16 @@
+# Pairs with ProvenanceCoversCaptured. A replicated apply stores the row
+# without its origin stamp, so a capture attributes a peer's write to nobody:
+# a real origin silently missing from a successful backup, the failure the
+# empty-origin guard in BuildProvenance exists to keep loud.
+MODULE: ProvenanceCoversCapturedApplyDropsStamp
+TARGET: ProvenanceCoversCaptured
+CLASS: Invariant
+SUMMARY: a replicated apply loses its origin stamp
+PERTURBS: ReplicatedApply
+
+--- FIND
+         /\ log' = Append(log, [author |-> "o1", stamp |-> "o1", hlc |-> h])
+--- REPLACE
+         \* MUTATION: the row is stored unstamped.
+         /\ log' = Append(log, [author |-> "o1", stamp |-> "", hlc |-> h])
+--- END

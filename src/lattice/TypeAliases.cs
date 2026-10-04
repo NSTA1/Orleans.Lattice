@@ -271,6 +271,9 @@ internal static class TypeAliases
     internal const string LeafDeleteResult = "ol.ldr";
     internal const string ShardRangeDeletePage = "ol.srd";
 
+    /// <summary>Alias for one bounded batch of a shard's range clock probe (issue #4530).</summary>
+    internal const string ShardRangeClockPage = "ol.src";
+
     // Work-bounded shard count batch (issue 1971).
     // Note "ol.scp" is NOT free - Orleans.Lattice.Scaling.ComputePressure owns
     // it, and aliases share one registry across every loaded package.

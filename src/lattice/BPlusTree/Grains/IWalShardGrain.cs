@@ -210,6 +210,18 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the lowest sequence number this shard still stores, or
+    /// <c>-1</c> when it stores nothing (empty, or trimmed through its last
+    /// entry). Read from the storage provider, so it reflects every
+    /// <see cref="IWalStorageProvider.TrimAsync"/> and is not clamped by a
+    /// transient hole below an in-flight flush: every entry the shard still
+    /// retains has a sequence at or above the returned value. The transaction
+    /// registry's decision-purge guard reads it (issue #4508).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the approximate number of retained on-wire payload bytes
     /// currently persisted in this WAL shard, or <c>-1</c> when the
     /// configured <see cref="IWalStorageProvider"/> does not support byte

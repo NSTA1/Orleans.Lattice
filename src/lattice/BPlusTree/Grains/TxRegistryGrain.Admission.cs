@@ -30,6 +30,7 @@ internal sealed partial class TxRegistryGrain
     internal const long AdmissionEstimateAuthorityBytes = 192;
     internal const long AdmissionEstimateSnapshotPinBytes = 384;
     internal const long AdmissionEstimatePinnedTxidBytes = 48;
+    internal const long AdmissionEstimateWalGenerationBytes = 64;
 
     /// <summary>
     /// Count-weighted estimate of the registry's persisted row size. Reads
@@ -54,6 +55,7 @@ internal sealed partial class TxRegistryGrain
         return AdmissionEstimateBaseBytes
             + (s.Decisions.Count * AdmissionEstimateDecisionBytes)
             + (s.ForgottenAt.Count * AdmissionEstimateForgottenAtBytes)
+            + (s.ForgetWalGenerations.Count * AdmissionEstimateWalGenerationBytes)
             + (s.Participants.Count * AdmissionEstimateParticipantsBytes)
             + (s.TerminalArrivals.Count * AdmissionEstimateTerminalArrivalsBytes)
             + (s.ExpectedTerminals.Count * AdmissionEstimateExpectedTerminalsBytes)
@@ -107,6 +109,7 @@ internal sealed partial class TxRegistryGrain
     /// </summary>
     private async Task PruneExpiredForAdmissionAsync()
     {
+        await RefreshWalPurgeGuardAsync();
         var pruned = PruneExpired(TimeProvider.GetUtcNow(), Retention);
         if (!pruned.Any)
         {
@@ -147,6 +150,8 @@ internal sealed partial class TxRegistryGrain
                     if (entry.HadDecision)
                         state.State.Decisions[entry.Txid] = entry.Decision;
                     state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
+                    if (entry.WalGeneration is { } walGeneration)
+                        state.State.ForgetWalGenerations[entry.Txid] = walGeneration;
                 }
 
                 state.State.TombstoneRetirementEpoch -= retired;

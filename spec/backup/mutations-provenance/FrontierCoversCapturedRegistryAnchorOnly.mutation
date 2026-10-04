@@ -1,0 +1,16 @@
+# Pairs with FrontierCoversCaptured. The #3758 defect: a full capture takes
+# its cut from the registry-snapshot anchor alone, which production always
+# records as zero, so every full backup is stamped at HLC 0 below the writes
+# it holds, and the first increment on it drains with no WAL pin.
+MODULE: FrontierCoversCapturedRegistryAnchorOnly
+TARGET: FrontierCoversCaptured
+CLASS: Invariant
+SUMMARY: a full capture's cut is the zero registry anchor, not the captured high-water (#3758)
+PERTURBS: CaptureFull
+
+--- FIND
+                       cut |-> IF 0 > HighHlc(I) THEN 0 ELSE HighHlc(I),
+--- REPLACE
+                       \* MUTATION: the anchor alone.
+                       cut |-> 0,
+--- END

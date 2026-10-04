@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted. A restore, revert, purge or alias rebind
+# removes the key without a delete; if the tree generation does not change, the
+# reconcile turns that absence into a delete, which a later revert can never undo.
+MODULE: ReconcileDeletesOnlyDeletedRestoreUnseen
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: a restore, purge or rebind does not change the tree generation, so its absence is reconciled as a delete
+PERTURBS: Restore
+
+--- FIND
+    /\ gen' = 1
+--- REPLACE
+\* MUTATION: the tree generation does not change.
+    /\ gen' = gen
+--- END
