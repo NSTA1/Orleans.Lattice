@@ -1,0 +1,14 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. LatticeFallOffLogDetector is
+# what requests the re-bootstrap; without it the entries the trim skipped never reach r.
+MODULE: EventualConvergenceFallOffUndetected
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a trim past the receiver is not detected, so no re-bootstrap repairs the entries it skipped
+PERTURBS: Trim
+
+--- FIND
+    /\ fellOff' = TRUE
+--- REPLACE
+\* MUTATION: fall-off is not detected.
+    /\ fellOff' = fellOff
+--- END

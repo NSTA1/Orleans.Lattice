@@ -1,0 +1,14 @@
+# Pairs with TypeOK in ReplicationReBootstrap. A leaf clock that jumps by the number
+# of writes already authored takes an HLC outside the declared domain.
+MODULE: TypeOkReBootstrapHlcRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: stamps a write with an HLC beyond the declared domain, so TypeOK fires
+PERTURBS: Write
+
+--- FIND
+    /\ LET w == [o |-> o, h |-> h, del |-> d]
+--- REPLACE
+\* MUTATION: the stamped HLC runs ahead of the chosen one.
+    /\ LET w == [o |-> o, h |-> h + Cardinality(authored), del |-> d]
+--- END

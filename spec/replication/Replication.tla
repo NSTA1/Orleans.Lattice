@@ -479,10 +479,11 @@ Restart(x) ==
 (* then resumes at the trim point t, any position from the cursor to the   *)
 (* log's end, and the entries in between reach BootTarget only through the *)
 (* snapshot. So the snapshot must carry every row BootSource holds,        *)
-(* tombstones included: production's export skips a tombstoned key and    *)
-(* the drain does not clear the receiver's copy, so a delete behind the    *)
-(* trim point is never delivered (#4504, mutation                          *)
-(* EventualConvergenceSnapshotDropsDeletes).                               *)
+(* tombstones included. Until #4544 (the fix for #4504) production's      *)
+(* export skipped a tombstoned key, and the drain does not clear the       *)
+(* receiver's copy, so a delete behind the trim point was never delivered  *)
+(* (mutation EventualConvergenceSnapshotDropsDeletes). No tombstone is     *)
+(* reaped here; ReplicationReBootstrap.tla covers a reaped one (#4537).    *)
 (***************************************************************************)
 Bootstrap ==
     /\ ~booted
