@@ -812,14 +812,52 @@ reader. Two cases still ship as prepared rows:
 - An `Indeterminate` saga with no stored verdict, such as a cross-tree
   delegation whose coordinator could not be reached.
 - A saga whose row has already been purged reads as absent. Its export
-  carries the split the source itself serves (#2318).
+  carries the split the source itself serves (#4508).
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the
 leaf scan's pending-transaction read step - which honors
 the frozen registry scope - so the receiver observes the post-saga
-value directly without a separate prepared/terminal round trip. The
+value directly without a separate prepared/terminal round trip. A
+bucket of such a saga that the terminal has not yet drained is also
+emitted as a committed row by the prepared rows pass, because the scan
+need not enumerate a key held only in a pending bucket. The
 same applies in reverse for `Aborted`: the prepared mutation is
 correctly dropped from the committed pass and not shipped as a
 prepared row.
+
+**Decision rows: pre-cut saga records re-shipped after the bootstrap.**
+The source shipper resumes from its own per-partition cursors after a
+bootstrap. A peer that fell off the log resumes from the oldest entry
+the source still retains, which can sit below the snapshot's cut. A
+saga's prepares and its terminals live in different partitions, each
+trimmed to its own floor. So the stream can re-ship a prepare from
+before the cut whose terminal was already trimmed (#4482). Staged on
+the receiver, that prepare would wait in a pending bucket for a
+terminal that never comes.
+
+The export therefore ends with one **decision row** per saga the
+source still stores a decision for. A decision row has no key or
+value; it carries the transaction id and `SettledDecision` (`true` for
+a commit). An aged-out row is resolved to its recorded verdict first,
+whether or not it has a resident bucket. The drain records each
+outcome in the receiver's transaction registry and retires it under
+the receiver's own decision retention.
+
+The receiver then settles a replicated prepare against any decision
+its registry already holds, instead of staging it (the read uses the
+recorded verdict behind an aged-out row):
+
+- A commit is applied as a committed write at the prepare's source
+  clock. Last-writer-wins keeps it below any newer write on the key,
+  and it is a no-op over the snapshot row.
+- An abort is dropped.
+
+A receiver that predates the decision slot sees a row with no value
+that is neither prepared nor a tombstone, which its drain skips.
+
+One residual remains: a saga whose decision the source has already
+purged cannot be exported. A pre-cut prepare of such a saga, retained
+in the source's log past its decision retention with its terminal's
+partition trimmed, can still strand on a bootstrapped receiver (#4508).
 

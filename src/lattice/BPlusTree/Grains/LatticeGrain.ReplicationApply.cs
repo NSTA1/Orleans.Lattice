@@ -517,6 +517,17 @@ internal sealed partial class LatticeGrain
         // The terminal mark that arrives subsequently via
         // ApplyTxTerminalAsync flips the pending bucket into the
         // visible projection.
+        // A receiver whose registry already holds this saga's decision
+        // settles the prepare against it instead of staging it (#4482).
+        if (await TrySettleReplicatedPrepareAsync(
+                transactionId,
+                () => mode != LatticeMergeMode.LwwRegister && delta is not null
+                    ? ApplyCrdtDeltaPreparedCommittedAsync(key, mode, delta, expiresAtTicks, originClusterId)
+                    : ApplySetAsync(key, value, sourceHlc, originClusterId, sourceVectorClock, expiresAtTicks)))
+        {
+            return;
+        }
+
         LatticeTransactionContext.Set(transactionId);
         using (LatticeAtomicBatchContext.With(
             atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
@@ -571,6 +582,13 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
 
+        if (await TrySettleReplicatedPrepareAsync(
+                transactionId,
+                () => ApplyDeleteAsync(key, sourceHlc, originClusterId, sourceVectorClock)))
+        {
+            return;
+        }
+
         LatticeTransactionContext.Set(transactionId);
         using (LatticeAtomicBatchContext.With(
             atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
@@ -580,6 +598,64 @@ internal sealed partial class LatticeGrain
         using (LatticeHlcOverrideContext.With(sourceHlc))
         {
             await DeleteAsync(key);
+        }
+    }
+
+    /// <summary>
+    /// Settles a replicated prepare against a decision this receiver's
+    /// transaction registry already holds, instead of staging it in a pending
+    /// bucket (#4482). A saga record the source's write-ahead log retained from
+    /// before a snapshot bootstrap's cut can be re-shipped after the bootstrap,
+    /// and its terminal may already be trimmed; the bootstrap recorded the
+    /// snapshot's settled sagas in this registry, so a prepare for one of them
+    /// would otherwise be staged where no terminal will ever drain it.
+    /// <list type="bullet">
+    ///   <item><description><see cref="TxStatus.Committed"/>: the prepare is
+    ///   applied as a committed write at its source clock. Last-writer-wins at
+    ///   that clock keeps it below any newer write the key already holds, and
+    ///   makes it a no-op over the snapshot row the bootstrap installed. It
+    ///   also heals a prepare that arrives after its saga's terminal.</description></item>
+    ///   <item><description><see cref="TxStatus.Aborted"/>: the prepare is dropped.</description></item>
+    ///   <item><description>Otherwise the prepare is staged as before.</description></item>
+    /// </list>
+    /// A registry row whose tombstone aged out reads as
+    /// <see cref="TxStatus.Indeterminate"/>; the recorded verdict behind it is
+    /// used, as the leaf's own sweep does, because this finishes work the
+    /// receiver owns rather than answering a reader.
+    /// </summary>
+    /// <returns><see langword="true"/> when the prepare was settled and must not be staged.</returns>
+    private async Task<bool> TrySettleReplicatedPrepareAsync(Guid transactionId, Func<Task> applyCommitted)
+    {
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, TreeId, transactionId);
+        var status = await registry.GetStatusAsync(transactionId);
+        if (status == TxStatus.Indeterminate)
+        {
+            status = await registry.GetRecordedStatusAsync(transactionId);
+        }
+
+        switch (status)
+        {
+            case TxStatus.Committed:
+                await applyCommitted();
+                return true;
+            case TxStatus.Aborted:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Folds a typed CRDT delta a settled-committed saga's prepare carried into
+    /// the key's current state, under the origin's identity, with the
+    /// absolute expiry the prepare carried.
+    /// </summary>
+    private async Task ApplyCrdtDeltaPreparedCommittedAsync(
+        string key, LatticeMergeMode mode, byte[] delta, long expiresAtTicks, string originClusterId)
+    {
+        using (LatticeOriginContext.With(originClusterId))
+        {
+            await ApplyCrdtDeltaGuardedAsync(key, mode, delta, expiresAtTicks, CancellationToken.None);
         }
     }
 

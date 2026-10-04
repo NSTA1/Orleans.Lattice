@@ -68,7 +68,7 @@ namespace Orleans.Lattice.Replication;
 /// ships whole rather than split (#4481). An Indeterminate saga with no stored
 /// verdict (an unreachable cross-tree delegation) still ships as prepared rows,
 /// and a row already purged reads as absent and exports the split the source
-/// itself serves (#2318).
+/// itself serves (#4508).
 /// </para>
 /// <para>
 /// <b>Performance note.</b> The default implementation pays one
@@ -173,7 +173,9 @@ internal sealed class LatticeSnapshotProvider(
         // bootstrap) it is emitted and LWW dominates the prepare-time
         // HLC stamped on the pending bucket, so the post-saga value
         // is the steady-state result either way.
-        await foreach (var prepared in EnumeratePreparedAsync(treeName, snap0, asOfHlc, cancellationToken)
+        var recordedResolved = new HashSet<Guid>();
+        await foreach (var prepared in EnumeratePreparedAsync(
+                treeName, snap0, recordedResolved, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return prepared;
@@ -240,6 +242,49 @@ internal sealed class LatticeSnapshotProvider(
                 };
             }
         }
+
+        // Decision rows (#4482): every saga the source still STORES a decision
+        // for, settled as of this export. The source's write-ahead log can
+        // still retain a saga record from before the cut - a prepare in one
+        // partition whose terminal's partition was already trimmed - and the
+        // incremental stream re-ships it after the bootstrap. The receiver
+        // records these outcomes in its registry and settles a re-shipped
+        // prepare against them instead of staging it where no terminal will
+        // drain it. An aged-out row with no resident bucket is resolved to its
+        // recorded verdict here, exactly as the prepared pass resolves one
+        // over a bucket (#4481). A row the source has already purged cannot
+        // be exported, so a pre-cut prepare of that saga can still strand on
+        // the receiver; that residual is the source's to close.
+        foreach (var (txid, decided) in snap0?.ToList() ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = decided;
+            if (status == TxStatus.Indeterminate && recordedResolved.Add(txid))
+            {
+                var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                    .GetRegistry(_grainFactory, treeName, txid)
+                    .GetRecordedStatusAsync(txid)
+                    .ConfigureAwait(false);
+                if (recorded is TxStatus.Committed or TxStatus.Aborted)
+                {
+                    snap0[txid] = recorded;
+                    status = recorded;
+                }
+            }
+
+            if (status is TxStatus.Committed or TxStatus.Aborted)
+            {
+                yield return new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    // No value: a receiver that predates the decision slot
+                    // skips a committed row that carries none.
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = status == TxStatus.Committed,
+                };
+            }
+        }
     }
 
     /// <summary>
@@ -272,6 +317,7 @@ internal sealed class LatticeSnapshotProvider(
     private async IAsyncEnumerable<SnapshotEntry> EnumeratePreparedAsync(
         string treeName,
         Dictionary<Guid, TxStatus> snap0,
+        HashSet<Guid> recordedResolved,
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -308,8 +354,6 @@ internal sealed class LatticeSnapshotProvider(
 
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
         var physicalShardIndices = shardMap.GetPhysicalShardIndices();
-        var recordedResolved = new HashSet<Guid>();
-        var recordedCommitted = new HashSet<Guid>();
 
         foreach (var shardIndex in physicalShardIndices)
         {
@@ -363,7 +407,7 @@ internal sealed class LatticeSnapshotProvider(
                     // apply. An Indeterminate with no stored verdict (an
                     // unreachable cross-tree delegation) still ships as
                     // prepared rows, and a row already purged reads as absent
-                    // and exports the split the source itself serves (#2318).
+                    // and exports the split the source itself serves (#4508).
                     if (snap0.TryGetValue(m.TransactionId, out var status)
                         && status == TxStatus.Indeterminate
                         && recordedResolved.Add(m.TransactionId))
@@ -375,14 +419,11 @@ internal sealed class LatticeSnapshotProvider(
                         if (recorded is TxStatus.Committed or TxStatus.Aborted)
                         {
                             snap0[m.TransactionId] = recorded;
-                            if (recorded == TxStatus.Committed)
-                            {
-                                recordedCommitted.Add(m.TransactionId);
-                            }
                         }
                     }
 
-                    var resolvedFromRecord = recordedCommitted.Contains(m.TransactionId);
+                    var committedBucket = snap0.TryGetValue(m.TransactionId, out status)
+                        && status == TxStatus.Committed;
 
                     if (hasUpperBound && m.Timestamp > asOfHlc)
                     {
@@ -393,13 +434,18 @@ internal sealed class LatticeSnapshotProvider(
                         continue;
                     }
 
-                    if (resolvedFromRecord)
+                    if (committedBucket)
                     {
-                        // A recorded commit behind an aged-out row ships as
-                        // the committed value the source's leaf sweep will
-                        // install. The committed-projection pass need not
-                        // enumerate a key held only in a pending bucket, so
-                        // this pass emits it. A committed delete ships as a
+                        // A resident bucket of a committed saga - one snap0
+                        // has as Committed whose terminal has not drained this
+                        // leaf yet, or a recorded commit behind an aged-out
+                        // row - ships as the committed value the terminal (or
+                        // the source's leaf sweep) will install. The
+                        // committed-projection pass need not enumerate a key
+                        // held only in a pending bucket, so this pass emits
+                        // it; without it such a saga left the export entirely
+                        // and the receiver depended on the incremental stream
+                        // re-shipping its prepares. A committed delete ships as a
                         // committed tombstone row, not as an absence: a
                         // bootstrap can land on a receiver copy that still
                         // holds the key's older value (a peer that fell off
