@@ -1134,7 +1134,7 @@ invariants:
     violation_modes:
       - "An entry is applied before a causal dependency from another origin is present locally."
       - "The entry's own-origin diagonal or receiver self-component is not exempted and the buffer deadlocks."
-      - "A bounded buffer eviction is silent."
+      - "A bounded buffer eviction is silent instead of dead-lettered before durable removal."
     detection_signals:
       - type: metric
         name: "orleans.lattice.replication.apply.causal_violations_blocked"
@@ -1148,7 +1148,7 @@ invariants:
     remediation:
       - step: "Park entries with unsatisfied causal dependencies in the per-tree bounded causal-apply buffer."
         source: "docs/lattice.replication/replication-apply.md"
-      - step: "Retry parked entries each time a later apply advances the local vector clock."
+      - step: "Drain parked entries after parks, relevant high-water-mark advances, bootstrap handoff, first touch after restart, and each maintenance tick."
         source: "docs/lattice.replication/replication-apply.md"
       - step: "Monitor causal_violations_blocked, buffered_entries, and dependency_wait together."
         source: "docs/lattice.replication/observability.md"

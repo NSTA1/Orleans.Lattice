@@ -74,7 +74,7 @@ internal sealed class BootstrapCoordinatorState
     /// <summary>
     /// The <see cref="SnapshotStream.AsOfHlc"/> reported by the most
     /// recent <see cref="ISnapshotProvider.ExportAsync"/> call. Pinned
-    /// on <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// on <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// during <see cref="LatticeBootstrapState.IncrementalHandoff"/>.
     /// </summary>
     [Id(5)] public HybridLogicalClock SnapshotAsOfHlc { get; set; }

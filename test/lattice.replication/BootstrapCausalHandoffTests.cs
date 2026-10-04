@@ -121,6 +121,7 @@ public partial class BootstrapCausalHandoffTests
     private sealed class HandoffHarness
     {
         public required ReplicationApplier Applier { get; init; }
+        public required Fakes.FakePersistentState<CausalApplyBufferState> BufferState { get; init; }
         public required IGrainFactory Factory { get; init; }
         public required IOptionsMonitor<LatticeReplicationOptions> Monitor { get; init; }
         public required IReplicationApplyGrain Apply { get; init; }
@@ -220,9 +221,13 @@ public partial class BootstrapCausalHandoffTests
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
 
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new OverridesReplicationContext());
+        var (_, bufferState) = CausalBufferTestWiring.Wire(factory, applier, monitor, Tree);
+
         return new HandoffHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, replicationContext: new OverridesReplicationContext()),
+            Applier = applier,
+            BufferState = bufferState,
             Factory = factory,
             Monitor = monitor,
             Apply = apply,

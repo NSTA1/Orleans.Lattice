@@ -108,6 +108,15 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
     internal const string ReplicationMaintenanceState = "olr.ms";
 
+    /// <summary>Alias for <see cref="Grains.ICausalApplyBufferGrain"/>.</summary>
+    internal const string ICausalApplyBufferGrain = "olr.gk";
+
+    /// <summary>Alias for <see cref="Grains.CausalApplyBufferState"/>.</summary>
+    internal const string CausalApplyBufferState = "olr.cb";
+
+    /// <summary>Alias for <see cref="Grains.ParkedCausalEntry"/>.</summary>
+    internal const string ParkedCausalEntry = "olr.cr";
+
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
 

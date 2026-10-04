@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>:
 /// the snapshot is cut at the producer's causal-stable frontier
 /// (<c>min(consumer VC)</c>), so a receiver pinning that frontier on
-/// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/> can
+/// <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/> can
 /// safely accept the first incremental entry under the dependency
 /// check without parking it. When no consumer has reported a vector
 /// yet (the common case for a single-peer cluster, a fresh deployment

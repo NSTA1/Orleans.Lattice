@@ -56,8 +56,9 @@ public partial class BPlusLeafGrainTests
         public int SaveCount { get; private set; }
         public List<long> SavedOffsets { get; } = new();
 
-        public InMemorySnapshotStore()
+        public InMemorySnapshotStore(LeafSnapshotBlob? seed = null)
         {
+            Latest = seed;
             Stub = Substitute.For<ILeafSnapshotStorageGrain>();
             Stub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
