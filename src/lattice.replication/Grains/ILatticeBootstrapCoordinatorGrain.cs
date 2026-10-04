@@ -74,6 +74,17 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the export epoch of the last full bootstrap from
+    /// <paramref name="sourceClusterId"/> that reached
+    /// <see cref="LatticeBootstrapState.LiveIncremental"/>, or
+    /// <see langword="null"/> when none has (issue #4534). Interleaves with a
+    /// running bootstrap so the receive path never queues behind one.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
+
+    /// <summary>
     /// Operator override (issue #4526): lifts the read fence a failed bootstrap
     /// left up over a partial import and stops its automatic re-drive, so reads
     /// may observe the partial import until a later bootstrap completes. Refused

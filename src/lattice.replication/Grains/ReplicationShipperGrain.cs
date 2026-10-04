@@ -1356,6 +1356,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TargetClusterId = _peerClusterId,
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
+                ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                 // Payload is empty on the framing path - the
                 // transport consumes EncodedEnvelope. Bytes-only
                 // transports that need a serialised form are not
@@ -1399,6 +1400,8 @@ internal sealed partial class ReplicationShipperGrain(
         // still stamps its pin, and that is precisely the window in
         // which the producer must not trim.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+
+        await MaybeClearReseedAsync(ack);
 
         if (!ack.Accepted)
         {
@@ -2104,6 +2107,7 @@ internal sealed partial class ReplicationShipperGrain(
                         TargetClusterId = _peerClusterId,
                         TreeName = _treeName,
                         OriginClusterId = options.ClusterId,
+                        ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                         Payload = ReadOnlyMemory<byte>.Empty,
                         Envelope = null,
                         EncodedEnvelope = encodedEnvelope,
@@ -2480,6 +2484,7 @@ internal sealed partial class ReplicationShipperGrain(
         // frontier so the entries after it are not re-shipped every tick.
         // Without holds the two are equal.
         PrepareTerminalHoldsForTick(partitions);
+        ReportReseedState();
 
         for (var p = 0; p < partitions; p++)
         {
@@ -2726,6 +2731,13 @@ internal sealed partial class ReplicationShipperGrain(
             if (IsPoisonedSagaRecord(in winningRecord))
             {
                 await ParkPoisonedRecordAsync(winningRecord, minPartition, winningShipping.Sequence, cancellationToken);
+                continue;
+            }
+
+            // The peer lost records in a trimmed gap and awaits a re-seed:
+            // any saga could be missing a member, so none is delivered (#4534).
+            if (ReseedRequired && IsSagaRecord(in winningRecord))
+            {
                 continue;
             }
 
@@ -3423,6 +3435,11 @@ internal sealed partial class ReplicationShipperGrain(
             _partitionPages[partition] = null;
             return;
         }
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
+        {
+            // A trim removed records this shipper never delivered (#4534).
+            await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+        }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
         _partitionHeadDecoded[partition] = false;
@@ -3542,6 +3559,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TargetClusterId = _peerClusterId,
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
+                ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                 Payload = ReadOnlyMemory<byte>.Empty,
                 Envelope = null,
                 EncodedEnvelope = encodedEnvelope,
