@@ -355,8 +355,7 @@ CaptureFail(l) ==
 (* release is bounded by the snapshot coverage the leaf has recorded, when *)
 (* it holds one: a recovery from that snapshot restarts from its coverage, *)
 (* not from the persisted checkpoint.                                      *)
-(* THE BOUND IS THE INTENDED DESIGN, NOT PRODUCTION'S (#4456): production   *)
-(* releases the persisted checkpoint whatever the leaf's coverage.         *)
+(* Production matches it since #4456 was fixed (LeafDurablePinCore).       *)
 (***************************************************************************)
 ClockLive(l) == clk[l] \/ cache[l] # {}
 

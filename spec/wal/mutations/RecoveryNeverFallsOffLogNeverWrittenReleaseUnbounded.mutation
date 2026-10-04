@@ -1,5 +1,5 @@
-# Pairs with RecoveryNeverFallsOffLog, and reproduces production's never-written
-# release (#3453): ResolveDurablePinForPartition publishes (Zero, persisted
+# Pairs with RecoveryNeverFallsOffLog, and reproduces the never-written release
+# (#3453) production had until issue #4456 was fixed: it published (Zero, persisted
 # checkpoint) for a leaf whose clock is Zero and which holds no row, ahead of and
 # independently of its recorded snapshot coverage. A never-written leaf can hold
 # an empty snapshot below its checkpoint (the zero-coverage repair captures one),

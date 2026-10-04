@@ -87,14 +87,18 @@ internal static class LeafDurablePinCore
         // never the current one: an over-report can never be withdrawn and every
         // replay starts from the persisted offset (#3476).
         //
-        // Not bounded by coverageOffset. A never-written leaf can hold an empty
-        // snapshot below X; trimming past that snapshot's coverage makes the next
-        // activation rehydrate it and latch stale over a prefix it never owned
-        // (issue #4456). Kept verbatim here so the extraction is
-        // behaviour-preserving; the WAL durability model records the gap.
+        // Bounded by coverageOffset when the leaf holds a snapshot (issue #4456).
+        // A never-written leaf can hold an empty snapshot below X; trimming past
+        // that snapshot's coverage would make the next activation rehydrate it and
+        // latch stale over a prefix it never owned. With no coverage the release
+        // stays at X: a cold activation replays under the -1 sentinel, and after the
+        // #2404 reset a partition the snapshot does not cover reads from -1 too, so
+        // neither can fall off the log.
         if (releaseNeverWrittenScannedThrough && !hasLiveData && persistedCheckpoint >= 0)
         {
-            return new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, persistedCheckpoint);
+            return new LeafDurablePinDecision(
+                LeafDurablePinKind.ReleaseNeverWritten,
+                coveredOffset >= 0 ? Math.Min(persistedCheckpoint, coveredOffset) : persistedCheckpoint);
         }
 
         // Data-bearing partition, or a durably-checkpointed partition whose cache

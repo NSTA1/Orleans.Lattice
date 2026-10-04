@@ -77,16 +77,29 @@ public sealed class LeafDurablePinCoreTests
     }
 
     /// <summary>
-    /// Pins production's current behaviour, which issue #4456 records as a
-    /// defect: the never-written release is not bounded by the snapshot coverage
-    /// the leaf holds. The fix for #4456 must change this assertion deliberately.
+    /// Issue #4456: a never-written leaf's release is bounded by the snapshot
+    /// coverage it holds, so the GC never trims past what a rehydrate of that
+    /// snapshot restarts from. With no coverage the release stays at the persisted
+    /// checkpoint (#3453).
     /// </summary>
     [Test]
-    public void The_never_written_release_is_not_bounded_by_snapshot_coverage_issue_4456()
+    public void The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456()
     {
-        Assert.That(
-            Resolve(current: 2, persisted: 2, covered: 1, liveData: false, releaseNeverWritten: true),
-            Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 2)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                Resolve(current: 2, persisted: 2, covered: 1, liveData: false, releaseNeverWritten: true),
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 1)),
+                "coverage below the persisted checkpoint bounds the release");
+            Assert.That(
+                Resolve(current: 2, persisted: 2, covered: 5, liveData: false, releaseNeverWritten: true),
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 2)),
+                "coverage above it leaves the persisted checkpoint as the bound");
+            Assert.That(
+                Resolve(current: 2, persisted: 2, covered: -1, liveData: false, releaseNeverWritten: true),
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 2)),
+                "with no snapshot the #3453 release stays at the persisted checkpoint");
+        });
     }
 
     [Test]

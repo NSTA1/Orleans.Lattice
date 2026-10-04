@@ -78,14 +78,15 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
 Building the model against production surfaced four durability defects. Each was
 reproduced against the real `BPlusLeafGrain` before it was filed (except #4467,
 found in source by the fix session and reproduced only by the model so far). The
-model specifies the INTENDED design for each, and a standing mutation reproduces
-current production behaviour so the property keeps firing on it:
+model specifies the INTENDED design for each, and a mutation reproduced production's
+behaviour so the property kept firing on it until the fix landed. All four are now
+fixed, and those mutations are ordinary regression checks:
 
 | Issue | Defect | Standing mutation |
 |-------|--------|-------------------|
 | #4450 | A snapshot that fails to load falls through to a cold replay of a WAL trimmed under its coverage; the leaf comes up silently missing acknowledged writes. **Fixed by #4470**: the replay now fails closed. | `ReadPositionHonestLoadFailureColdReplays`, now an ordinary regression mutation |
 | #4451 | A capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection, licensing the GC to trim rows that exist nowhere else. **Fixed by #4489**: an unanchored capture claims only what has been re-read. | `TrimCoveredBySnapshotColdCaptureOverclaims`, now an ordinary regression mutation |
-| #4456 | A never-written leaf releases its block pin at its persisted checkpoint above its snapshot's coverage, and its next activation latches stale. | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded` |
+| #4456 | A never-written leaf releases its block pin at its persisted checkpoint above its snapshot's coverage, and its next activation latches stale. **Fixed by #4497**: the release is bounded by coverage. | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded`, now an ordinary regression mutation |
 | #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm`, now an ordinary regression mutation |
 
 The model also showed that one proposed fix for #4450 - cold-starting whenever the
