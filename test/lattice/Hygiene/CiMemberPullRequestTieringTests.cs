@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class CiMemberPullRequestTieringTests
+public sealed partial class CiMemberPullRequestTieringTests
 {
     private const string WorkflowDirectory = ".github/workflows";
     private const string TierScopeScript = WorkflowDirectory + "/tier-scope.py";
@@ -265,10 +265,31 @@ public sealed class CiMemberPullRequestTieringTests
     private static string Describe(string input, IReadOnlyDictionary<string, string> decision) =>
         "(" + input + " -> " + string.Join(", ", decision.Select(pair => pair.Key + "=" + pair.Value)) + ")";
 
-    private static Dictionary<string, string> DecideTierScope(string eventName, string baseRef)
+    private static Dictionary<string, string> DecideTierScope(
+        string eventName,
+        string baseRef,
+        string[]? changedFiles = null)
     {
-        var (exitCode, stdout, stderr) = RunPython(
-            [Path.Combine(RepoRoot, TierScopeScript), "--event", eventName, "--base-ref", baseRef]);
+        List<string> arguments = [Path.Combine(RepoRoot, TierScopeScript), "--event", eventName, "--base-ref", baseRef];
+        var work = changedFiles is null ? null : Directory.CreateTempSubdirectory("tierscope-");
+        if (work is not null)
+        {
+            var changedFile = Path.Combine(work.FullName, "changed-files.txt");
+            File.WriteAllLines(changedFile, changedFiles!);
+            arguments.AddRange(["--changed-files", changedFile]);
+        }
+
+        (int ExitCode, string StandardOutput, string StandardError) result;
+        try
+        {
+            result = RunPython(arguments);
+        }
+        finally
+        {
+            work?.Delete(recursive: true);
+        }
+
+        var (exitCode, stdout, stderr) = result;
 
         Assert.That(exitCode, Is.Zero, "tier-scope.py failed: " + stderr);
 
@@ -295,9 +316,9 @@ public sealed class CiMemberPullRequestTieringTests
         string? Skip,
         IReadOnlyList<string> ExcludedTiers);
 
-    private static IReadOnlyList<PlannedItem> Plan(string[] packages, string? skipTiers)
+    private static IReadOnlyList<PlannedItem> Plan(string[] packages, string? skipTiers, string? skipTlcReason = null)
     {
-        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix);
+        var (exitCode, _, stderr) = RunPlanner(packages, skipTiers, out var matrix, skipTlcReason);
 
         Assert.That(exitCode, Is.Zero, "plan-test-matrix.py failed: " + stderr);
 
@@ -330,7 +351,8 @@ public sealed class CiMemberPullRequestTieringTests
     private static (int ExitCode, string StandardOutput, string StandardError) RunPlanner(
         string[] packages,
         string? skipTiers,
-        out string matrix)
+        out string matrix,
+        string? skipTlcReason = null)
     {
         var work = Directory.CreateTempSubdirectory("tiering-");
 
@@ -353,6 +375,11 @@ public sealed class CiMemberPullRequestTieringTests
             if (skipTiers is not null)
             {
                 arguments.AddRange(["--skip-tiers", skipTiers, "--skip-reason", "member pull request (test)"]);
+            }
+
+            if (skipTlcReason is not null)
+            {
+                arguments.AddRange(["--skip-tlc-reason", skipTlcReason]);
             }
 
             var result = RunPython(arguments);

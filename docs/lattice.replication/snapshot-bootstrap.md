@@ -59,8 +59,8 @@ before calling `AddLatticeReplication`.
   clear, stamped with the tombstone's own HLC, and the bootstrap drain
   applies it as a delete. Without it a receiver that bootstraps in place
   over an existing copy - a peer that fell off the log and is
-  re-bootstrapped by the fall-off detector, or an operator re-seed over
-  existing data - kept the old value of every key the source deleted
+  re-bootstrapped by either the receiver-side local detector or the
+  sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key the source deleted
   while it was behind, permanently, because the delete's WAL record is
   behind the source's trim point and the incremental stream never
   delivers it (#4504). Last-writer-wins resolves a tombstone row against
@@ -429,11 +429,12 @@ The bootstrap state machine that drains an `ISnapshotProvider` export
 on the receiver, applies every entry through the local apply seam
 preserving the source HLC, and merges the snapshot's causal-stable
 frontier into the per-tree high-water-mark grain ships as the public
-`ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
+`ILatticeBootstrapCoordinator` seam. Triggered by the receiver-side local fall-off
 detector (when the per-tree maintenance pass finds a peer's per-origin
 high-water mark behind the oldest entry that peer authored in the head
-window of the local WAL partitions - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
-re-seed flows.
+window of the local WAL partitions), by the source shipper's sequence-gap
+re-seed request after a sender WAL trim, and by operator-driven re-seed flows.
+See [Auto-Bootstrap](auto-bootstrap.md).
 
 | Type | Shape | Purpose |
 |------|-------|---------|
@@ -531,6 +532,18 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
   pivots to `Failed` as the terminal outcome. Set
   `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
   entirely (fail-fast).
+- **A deferred entry is never skipped.** The applier can defer an entry
+  (`ApplyResult.Deferred`): a cross-cluster restore saga's receive fence
+  has paused inbound apply for the tree, or the entry duplicates one still
+  in flight on the receiver. Nothing else re-sends a snapshot row, so the
+  drain stops at the first deferred entry, without counting it or folding
+  its clock into the handoff seal, and fails the attempt. The deferral
+  consumes a slot of the same `BootstrapTransientRetry` budget whatever the
+  classifier says, and each retry re-opens the full export; once the budget
+  is spent the bootstrap fails with the import started, so the tree stays
+  read-fenced and is re-driven until a drain applies every entry. The
+  handoff is never pinned past a deferred entry
+  ([#4604](https://github.com/NSTA1/Orleans.Lattice/issues/4604)).
 - **Source HLC + origin preservation.** Every snapshot entry is
   applied through `IReplicationApplier.ApplyAsync`, the same canonical
   inbound apply seam used by live-incremental replication, carrying
@@ -601,8 +614,8 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
   high-water-mark store *after* every snapshot entry has been
   applied, first sealing the source cluster's own coordinate at or
   above the highest HLC the drain applied and the oldest
-  source-authored entry the local WAL still retains, so the fall-off
-  detector cannot read the retained baselines as a trim gap. The
+  source-authored entry the local WAL still retains, so the receiver-side
+  fall-off detector cannot read the retained baselines as a local trim gap. The
   merge takes the pointwise maximum with the vector already held,
   clears any legacy pinned floor (the `AsOfHlc` passed alongside it is
   currently ignored), and drains the durable causal-apply buffer. The
@@ -761,7 +774,7 @@ _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
 
 ## Operator-driven re-seed
 
-Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the auto-bootstrap path, so every re-seed - operator-driven or detector-driven - flows through one state machine.
+Beyond the receiver-side local auto-bootstrap path (`ILatticeFallOffLogDetector`) and the sender-side trim-gap request path, the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the automatic paths, so every re-seed - operator-driven, detector-driven, or sender-requested - flows through one state machine.
 
 | Type | Shape | Purpose |
 |------|-------|---------|

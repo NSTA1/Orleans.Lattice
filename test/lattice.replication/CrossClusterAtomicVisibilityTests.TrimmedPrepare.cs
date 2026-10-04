@@ -161,6 +161,57 @@ public partial class CrossClusterAtomicVisibilityTests
         });
     }
 
+    [Test]
+    public async Task Bootstrap_whose_export_opened_before_the_reseed_epoch_does_not_clear_the_marker()
+    {
+        const string tree = "ccv-shipper-stale-reseed-echo";
+        var txid = Guid.NewGuid();
+        var ticks = DateTime.UtcNow.Ticks;
+        var walEncoder = new ReplicationShipperGrainTests.StubWalRecordEncoder();
+        var feeds = new[]
+        {
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+        };
+        feeds[0].Append(PreparedSet(tree, "trimmed", 2, txid, Hlc(ticks, 2), index: 1));
+        feeds[0].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "retained-plain",
+            Value = new byte[] { 4 },
+            Timestamp = Hlc(ticks, 3),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+        feeds[0].TrimmedThrough = 1;
+
+        var requested = new List<long?>();
+        var transport = Substitute.For<IReplicationTransport>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var batch = call.Arg<ReplicationBatch>();
+                requested.Add(batch.ReseedAfterEpoch);
+                return Task.FromResult(new ReplicationAck
+                {
+                    Accepted = true,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = batch.ReseedAfterEpoch,
+                });
+            });
+
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport);
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(requested, Has.Some.EqualTo(0L),
+                "the stale completed bootstrap epoch is echoed back to the shipper");
+            Assert.That(shipper.ReseedRequired, Is.True,
+                "an export epoch equal to the marker opened before the gap was recorded and must not clear it");
+        });
+    }
+
     private static double? ReseedSeconds(ReplicationPeerStats stats, string tree) =>
         stats.ReadStatusPage(new ReplicationPeerStatusReadRequest { TreeId = tree, Limit = 10 })
             .Single(r => r.Direction == ReplicationContactDirection.Outbound)

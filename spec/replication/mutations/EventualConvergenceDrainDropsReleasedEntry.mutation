@@ -7,6 +7,7 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: a drained entry is removed from the buffer without being applied
 PERTURBS: Drain
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
                /\ val' = Merged(x, r)

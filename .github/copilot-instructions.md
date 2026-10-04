@@ -473,15 +473,20 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     build if a push-triggered lane runs any other job on a member push, or its
     copy of the rule drifts from `ci.yml`'s.
   - **A member pull request into an integration branch skips the Coyote and
-    chaos tiers; nothing else does.** When a pull request's base is a
-    `*/epic/**` branch, `ci.yml` runs the deterministic tier only (which still
-    carries the TLC fixtures), plans it onto at most six legs instead of ten,
-    and keeps every guard step and the `content-gates` job. A pull request
-    into `main` or `release/**` - including the integration branch's own pull
-    request into `main` - and the integration-branch push lane run every tier.
+    chaos tiers, and the TLC shards when its diff touches no TLC input;
+    nothing else does.** When a pull request's base is a `*/epic/**` branch,
+    `ci.yml` runs the deterministic tier only, plans it onto at most six legs
+    instead of ten, and keeps every guard step and the `content-gates` job.
+    The TLC shards (`"tlc": true` in `test-shards.json`) still run on such a
+    member whenever its diff touches a `.tla`, `.cfg`, manifest or mutation
+    file under `spec/`, the Formal harness, a workflow, or a build file; only a
+    member that touches none of those, so cannot change any TLC verdict, skips
+    them. A pull request into `main` or `release/**` - including the
+    integration branch's own pull request into `main` - and the
+    integration-branch push lane run every tier and every TLC shard.
     The rule lives in `.github/workflows/tier-scope.py`; the skipped items are
     listed as NOT RUN on the run summary, and the `build-and-test` verdict fails
-    any run that skipped a tier outside a member pull request.
+    any run that skipped a tier or the TLC shards outside a member pull request.
     `CiMemberPullRequestTieringTests` pins both directions. The cost is
     attribution: a Coyote or chaos regression surfaces on the bucket's push
     lane or its pull request into `main`, not on the member that caused it.
