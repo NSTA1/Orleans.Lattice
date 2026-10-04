@@ -153,6 +153,7 @@ internal sealed partial class BPlusLeafGrain
         // is what actually makes the rebuild indistinguishable from one, which
         // is the property the comment above claims.
         _shadowedSagas = null;
+        _shadowMarkerStamps = null;
 
         // Drop the cached XxHash128 hasher so the rebuild's first
         // contribution allocates a fresh instance. The cached hasher
