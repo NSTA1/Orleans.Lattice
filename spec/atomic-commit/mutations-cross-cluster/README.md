@@ -27,6 +27,7 @@ transport assumption or its read view already does.
 | `RAllOrNothingMarksOnFirstTerminal` | `RAllOrNothing` | Invariant | `DeliverTerminal` | the receiver tally is final on any arrival |
 | `RAllOrNothingDecisionShipsUncountedTerminal` | `RAllOrNothing` | Invariant | `OriginDecide` | the decision step ships an unstamped terminal ahead of the broadcast |
 | `RAllOrNothingBarrierDecidesOnFirstTree` | `RAllOrNothing` | Invariant | `ReceiverNotify` | the cross-tree barrier decides on its first arrival |
+| `RAllOrNothingSettleKeyByKey` | `RAllOrNothing` | Invariant | `Bootstrap`, `DeliverPrepare` | under the #4482 receiver settle, a decided saga's undrained buckets are exported without committed rows, so re-shipped prepares settle it one key at a time |
 | `RAllOrNothingNotifyBeforeRegister` | `RAllOrNothing` | Invariant | `DeliverTerminal`, `ReceiverRegister`, `ReceiverNotify` | the barrier is notified before the delegation is registered |
 | `RAllOrNothingDialFailureDropsDelegation` | `RAllOrNothing` | Invariant | `DialFault` | a failed dial forgets the delegation, so the tree reads InFlight |
 | `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` | `RAllOrNothing` | Invariant | - (read view) | an undiallable delegation reads InFlight, as the snapshot read paths answer it (#4448) |
@@ -51,6 +52,13 @@ under TLC's parallel search. `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` is
 the exception by construction - its defect is a terminal that can never be
 delivered, which leaves no enabled action - so it declares `DEADLOCK: off`, and
 the harness's third arm confirms the deadlock is real.
+
+Every safety property is a state invariant, so TLC checks it in every
+reachable state: a receiver reader observing between any two steps - between
+two prepare arrivals of one saga, say - needs no reader action to be modelled.
+`RAllOrNothingSettleKeyByKey` is the witness: its counterexample is a reader
+between two re-shipped prepares of a saga the receiver already holds as
+committed.
 
 The ordering a terminal waits for in the base is stated over the prepares still
 **outstanding**, never over every prepare the saga wrote. That is what lets a

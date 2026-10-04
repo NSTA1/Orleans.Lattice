@@ -107,7 +107,11 @@ it covers; the perturbations are listed in the pull request that added this note
   retained pre-cut saga records (issue #4482; under the intended txid dedupe, still
   for a saga whose decision the origin has purged, issue #4508), and exports a stranded origin
   prepare with no outcome (issue #4481). The base reaches no stranded origin
-  prepare, for the reason `AtomicCommit`'s base does not.
+  prepare, for the reason `AtomicCommit`'s base does not. The base exports a
+  decided saga's still-resident buckets as committed rows; once a receiver
+  settles re-shipped prepares against an exported decision (#4482's design),
+  that is what keeps the settle atomic, and without it a reader between two
+  prepare arrivals sees the saga split (`RAllOrNothingSettleKeyByKey`).
 - **The receiver registry is never masked by retention.** No receiver-side
   `ForgetAsync` runs, so a receiver decision row is never tombstoned; the only
   `Indeterminate` a receiver registry gives is the failed dial.

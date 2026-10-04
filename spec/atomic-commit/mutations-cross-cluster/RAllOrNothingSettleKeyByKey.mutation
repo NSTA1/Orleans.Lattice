@@ -1,0 +1,62 @@
+# Pairs with RAllOrNothing, and shows that a receiver reader observing
+# BETWEEN two prepare arrivals is in scope: RAllOrNothing is a state
+# invariant, so it is checked in every state, including each one between two
+# re-shipped prepares. #4482's intended receiver design is applied (the export
+# ships a decision row for every saga the origin stores; the receiver's prepare
+# seam settles a re-shipped pre-cut prepare against it, materialised on
+# Committed and dropped on Aborted; pre-cut records are re-shipped). The
+# defect is in the export: a decided saga whose buckets have not drained yet
+# is exported with its decision row but without committed rows for those
+# buckets, so the receiver serves every key pre-saga under a committed
+# decision. Each re-shipped prepare then settles its OWN key post-saga as a
+# last-writer-wins write, and a reader between two arrivals sees one key
+# post-saga and the other pre-saga. Exporting such a saga's resident buckets as
+# committed rows (the base's ExportRow) is what keeps the settle atomic.
+# The omission is keyed to a saga NONE of whose buckets has drained, where
+# every key is otherwise pre-saga, so the counterexample is the key-by-key
+# window rather than a partial snapshot.
+MODULE: RAllOrNothingSettleKeyByKey
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a decided saga's undrained buckets are exported without committed rows, so re-shipped prepares settle it one key at a time
+PERTURBS: Bootstrap, DeliverPrepare
+
+--- FIND
+    IF snap = "committed" THEN "post"
+--- REPLACE
+\* MUTATION: no committed rows for a decided saga none of whose buckets has drained.
+    IF snap = "committed" THEN (IF \A j \in XKeys : pend[T][j] = "pending" THEN "pre" ELSE "post")
+--- END
+--- FIND
+    /\ \E snap \in Snap0 :
+         /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
+         /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
+    /\ outbox' = {}
+    /\ rconn' = TRUE
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, registryVars, barrierVars>>
+--- REPLACE
+    /\ \E snap \in Snap0 :
+         /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
+         /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
+\* MUTATION: the export's decision row is recorded on the receiver.
+         /\ rdec' = [rdec EXCEPT !["A"] = IF snap \in {"committed", "aborted"} THEN snap ELSE rdec["A"]]
+\* MUTATION: any pre-cut record still retained is shipped again.
+    /\ outbox' \in SUBSET outbox
+    /\ rconn' = TRUE
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, barrierVars>>
+--- END
+--- FIND
+    /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars>>
+--- REPLACE
+\* MUTATION: a prepare is settled by txid against the recorded decision.
+    /\ rpend' = IF rterm[m.key] = "none" /\ rdec[TreeOf(m.key)] = "inflight" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF rdec[TreeOf(m.key)] = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars>>
+--- END
+--- FIND
+    IF forgotten[T] THEN {"indeterminate", "inflight"} ELSE {Origin!RegistryView(T)}
+--- REPLACE
+\* MUTATION: a stored aged-out row exports its recorded verdict.
+    IF forgotten[T] THEN {decision[T]} ELSE {Origin!RegistryView(T)}
+--- END
