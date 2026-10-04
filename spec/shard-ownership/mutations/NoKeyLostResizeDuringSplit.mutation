@@ -1,0 +1,33 @@
+# Pairs with NoKeyLost. Reproduces current production (#4452) from the resize
+# side: the resize starts while a split is in flight. Writes acknowledged on
+# the split target T/s2 after the split commits are never mirrored to R, and
+# the flip routes k2 to R/s1, which does not hold them.
+#
+# The base has no split-abandon path (its interlock makes one unreachable), so
+# in this mutant a flip can strand a split mid-flight. A second edit lets that
+# split count as finished, standing for AbandonRetargetedSplitAsync, so the
+# mutant cannot deadlock and the invariant is the only thing TLC can report.
+MODULE: NoKeyLostResizeDuringSplit
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a resize starts with a split in flight, so writes on the split target are lost at the flip
+PERTURBS: ResizeBegin
+
+--- FIND
+    /\ rs # "migrating"
+    /\ sp \in {"idle", "done"}
+    /\ rz' = "snap"
+--- REPLACE
+    /\ rs # "migrating"
+\* MUTATION: no interlock with an in-flight split.
+    /\ rz' = "snap"
+--- END
+
+--- FIND
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+--- REPLACE
+    /\ sg \in {"idle", "done"}
+\* MUTATION: a split the flip stranded counts as finished (AbandonRetargetedSplitAsync).
+    /\ sp \in {"idle", "done"} \/ alias # spCopy
+--- END

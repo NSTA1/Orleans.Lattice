@@ -1,0 +1,17 @@
+# Pairs with UniqueOwner. Reproduces the undo half of #4357: the undo moves the
+# alias back without arming the resized copy's redirect, so a router whose
+# cached pair names R keeps reading and writing R.
+MODULE: UniqueOwnerUndoArmsNothing
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: the undo arms no redirect on the resized copy, so a stale router keeps using it
+PERTURBS: UndoArm
+
+--- FIND
+    /\ redir' = TRUE
+    /\ rz' = "undoing"
+--- REPLACE
+\* MUTATION: no redirect is armed.
+    /\ redir' = redir
+    /\ rz' = "undoing"
+--- END

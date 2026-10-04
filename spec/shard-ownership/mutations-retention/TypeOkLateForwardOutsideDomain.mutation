@@ -1,0 +1,17 @@
+# Pairs with TypeOK. The type invariant is a gate too: a delivered late
+# forward records a state outside the three the module declares, which TypeOK
+# must reject.
+MODULE: TypeOkLateForwardOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a delivered late forward records a state outside its domain
+PERTURBS: DeliverLate
+
+--- FIND
+    /\ late = "inflight"
+    /\ late' = "delivered"
+--- REPLACE
+    /\ late = "inflight"
+\* MUTATION: an undeclared state.
+    /\ late' = "lost"
+--- END

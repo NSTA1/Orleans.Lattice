@@ -47,14 +47,18 @@ internal static class LeafReplayStartPolicy
 
     /// <summary>Decides the replay start.</summary>
     /// <param name="rehydrated">The snapshot rehydrate repopulated the cache.</param>
-    /// <param name="cacheEmpty">The entry cache is empty after the rehydrate step.</param>
+    /// <param name="cacheUnanchored">
+    /// The entry cache is empty after the rehydrate step, or holds only the partial
+    /// remains of a cold rebuild that has not converged (issue #4467) - either way
+    /// it does not hold every row through the persisted checkpoint.
+    /// </param>
     /// <param name="snapshotLoadFailed">
     /// The rehydrate declined because a snapshot could not be loaded, as opposed to
     /// the store reporting none.
     /// </param>
-    internal static Start Decide(bool rehydrated, bool cacheEmpty, bool snapshotLoadFailed)
+    internal static Start Decide(bool rehydrated, bool cacheUnanchored, bool snapshotLoadFailed)
     {
-        if (rehydrated || !cacheEmpty)
+        if (rehydrated || !cacheUnanchored)
             return Start.Warm;
 
         return snapshotLoadFailed ? Start.FailClosed : Start.Cold;

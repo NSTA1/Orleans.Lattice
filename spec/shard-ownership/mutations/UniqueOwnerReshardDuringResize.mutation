@@ -1,0 +1,48 @@
+# Pairs with UniqueOwner. The reshard drops its interlock with an in-flight
+# resize, so the split it drives commits on T during the resize, with the same
+# outcome as UniqueOwnerSplitDuringResize. It shows a reshard's split is safe
+# only because of the reshard's own interlock, which production does have.
+#
+# The base has no split-abandon path (its interlock makes one unreachable), so
+# in this mutant a flip can strand a split mid-flight. A second edit lets that
+# split count as finished, standing for AbandonRetargetedSplitAsync, and lets a
+# reshard whose one split has been dispatched count as finished too, standing for
+# the further splits production would dispatch (the instance has one). So the
+# mutant cannot deadlock and the invariant is the only thing TLC can report.
+MODULE: UniqueOwnerReshardDuringResize
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: a reshard starts during a resize, so its split leaves a stale router serving the split target after the flip
+PERTURBS: ReshardStart
+
+--- FIND
+ReshardStart ==
+    /\ rs = "idle"
+    /\ sp = "idle"
+    /\ rz \in {"idle", "purged", "undone"}
+--- REPLACE
+ReshardStart ==
+    /\ rs = "idle"
+    /\ sp = "idle"
+\* MUTATION: no interlock with an in-flight resize.
+--- END
+
+--- FIND
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+--- REPLACE
+    /\ sg \in {"idle", "done"}
+\* MUTATION: a split the flip stranded counts as finished (AbandonRetargetedSplitAsync).
+    /\ sp \in {"idle", "done"} \/ alias # spCopy
+--- END
+
+--- FIND
+    /\ rs # "migrating"
+
+Stutter ==
+--- REPLACE
+\* MUTATION: so does a reshard whose one split has been dispatched.
+    /\ rs # "migrating" \/ sp # "idle"
+
+Stutter ==
+--- END

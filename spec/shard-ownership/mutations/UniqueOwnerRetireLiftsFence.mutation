@@ -1,0 +1,19 @@
+# Pairs with UniqueOwner. Retiring the old copy clears its Rejecting phase
+# instead of keeping it, so a router whose cached pair names T is served by T
+# again while the alias names R.
+MODULE: UniqueOwnerRetireLiftsFence
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: retiring the old copy lifts its fence, so a stale router is served by it again
+PERTURBS: ResizeRetire
+
+--- FIND
+ResizeRetire ==
+    /\ rz = "swapped"
+    /\ fence' = rzShards
+--- REPLACE
+ResizeRetire ==
+    /\ rz = "swapped"
+\* MUTATION: the fence is cleared at retirement.
+    /\ fence' = {}
+--- END

@@ -1,0 +1,20 @@
+# Pairs with OwnerMonotonic. Reproduces current production (#4455): the online
+# snapshot copies committed entries only, so a batch prepared on the old copy
+# before the snapshot has no bucket on the resized copy, and a commit decided
+# before the flip reverts there.
+MODULE: OwnerMonotonicRetainedSnapshotDropsBuckets
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: the snapshot copies committed entries only, so a commit decided before the flip reverts on the resized copy
+PERTURBS: SnapCopy
+
+--- FIND
+    /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                 IF x = R /\ s \in rzShards /\ pend[R][s][k] = "none"
+                 THEN pend[T][s][k] ELSE pend[x][s][k]]]]
+    /\ rz' = "copied"
+--- REPLACE
+\* MUTATION: prepared buckets are not copied.
+    /\ UNCHANGED pend
+    /\ rz' = "copied"
+--- END

@@ -1,0 +1,18 @@
+# Pairs with NoResurrection. Reproduces production before #4445 was fixed: the
+# destination refuses a late prepare only when its activation remembers
+# applying the saga's terminal. A delayed shadow-forwarded prepare that arrives
+# after the decision and a newer write - before the terminal, or after a
+# reactivation forgot it - is bucketed with a newer stamp and served over the
+# newer row.
+MODULE: NoResurrectionLatePrepareActivationMemory
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: the late-prepare refusal reads per-activation memory, so a late orphan serves a stale value
+PERTURBS: DeliverLate
+
+--- FIND
+    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy)
+--- REPLACE
+\* MUTATION: the refusal consults the activation's terminal memory.
+    /\ IF term[spCopy][s2] \/ Gone(spCopy)
+--- END

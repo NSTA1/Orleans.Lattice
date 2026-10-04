@@ -1,0 +1,17 @@
+# Pairs with NoResurrection. Retiring the old copy lifts its fence instead of
+# keeping every captured shard fenced, so a router that cached the old copy is
+# served it again after a newer write landed on the resized copy.
+MODULE: NoResurrectionRetireDropsFence
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: retiring the old copy lifts its fence, so a stale reader is served the old copy again
+PERTURBS: ResizeRetire
+
+--- FIND
+    /\ rz = "swapped"
+    /\ fence' = rzShards
+--- REPLACE
+    /\ rz = "swapped"
+\* MUTATION: the soft-deleted copy is unfenced.
+    /\ fence' = {}
+--- END

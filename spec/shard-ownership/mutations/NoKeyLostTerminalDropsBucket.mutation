@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. Applying the terminal clears the prepared bucket
+# without draining it or applying the committed-values backstop, so an
+# acknowledged batch is held nowhere.
+MODULE: NoKeyLostTerminalDropsBucket
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the terminal discards the bucket instead of draining it
+PERTURBS: SagaTerminal
+
+--- FIND
+       IN /\ row' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
+                        IF <<x, y>> \in hit THEN TermRow(x, y, k) ELSE row[x][y][k]]]]
+--- REPLACE
+\* MUTATION: nothing is drained into the projection.
+       IN /\ row' = row
+--- END

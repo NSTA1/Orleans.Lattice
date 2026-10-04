@@ -59,11 +59,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // on this shard's chain (computed by fanning out GetClockAsync over
 // the affected-leaves subset and Tick-ing once over the max - for the
 // untouched leaves contribute no prepare for this saga, so their
-// clocks are irrelevant to the invariant). Receivers merge inbound
-// records by HLC across WAL partitions, so this invariant guarantees
-// every prepare on a shard is observed before the terminal that
-// resolves it - without which a Zero-stamped terminal would always
+// clocks are irrelevant to the invariant). Consumers that merge WAL
+// partitions by HLC rely on it to sort a terminal after the prepares it
+// resolves - without which a Zero-stamped terminal would always
 // sort ahead of non-Zero prepares and flush an empty pending bucket.
+// It is not by itself an ordering guarantee across partitions: leaf
+// clocks are independent, so an unrelated higher-HLC entry can sit ahead
+// of a prepare in its partition. The replication shipper therefore holds
+// each terminal until every prepare of its saga is acknowledged by the
+// peer (ReplicationShipperGrain.TerminalHold.cs, issue #4480).
 internal sealed partial class ShardRootGrain
 {
     private bool _commitLogWriterResolved;

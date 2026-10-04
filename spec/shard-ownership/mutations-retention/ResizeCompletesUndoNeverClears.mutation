@@ -1,0 +1,18 @@
+# Pairs with ResizeCompletes. The undo's last step lifts the fence but never
+# records that the undo finished, so the resize stays undoing.
+MODULE: ResizeCompletesUndoNeverClears
+TARGET: ResizeCompletes
+CLASS: Temporal
+SUMMARY: the undo's last step never records that the undo finished
+PERTURBS: UndoClear
+
+--- FIND
+    /\ fence' = {}
+    /\ rz' = "undone"
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir,
+--- REPLACE
+    /\ fence' = {}
+\* MUTATION: the undo is never recorded as finished.
+    /\ rz' = "undoing"
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir,
+--- END

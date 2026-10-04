@@ -247,7 +247,8 @@ internal sealed class TreeResizeGrain(
             throw new InvalidOperationException(
                 $"A reshard is already in progress for tree '{TreeId}'; resize refused until reshard completes.");
 
-        if (state.State.Complete)
+        var priorComplete = state.State.Complete;
+        if (priorComplete)
         {
             state.State.Complete = false;
         }
@@ -279,7 +280,7 @@ internal sealed class TreeResizeGrain(
             return;
         }
 
-        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren);
+        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren, priorComplete);
         await StartCoordinatorAsync();
     }
 
@@ -326,10 +327,13 @@ internal sealed class TreeResizeGrain(
 
     /// <summary>
     /// Persists the resize intent with <see cref="ResizePhase.Snapshot"/> phase,
-    /// then kicks off the offline snapshot to the new physical tree.
+    /// then kicks off the offline snapshot to the new physical tree. Refuses,
+    /// restoring the state it replaced, when a shard migration is in flight on
+    /// the tree (issue #4452); <paramref name="priorComplete"/> is whether that
+    /// state recorded a completed resize the caller already cleared in memory.
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren, bool priorComplete = false)
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var operationId = Guid.NewGuid().ToString("N");
@@ -397,6 +401,34 @@ internal sealed class TreeResizeGrain(
             state.State.OldRegistryEntry = prevOldRegistryEntry;
             state.State.ShardIndices = prevShardIndices;
             throw;
+        }
+
+        // Interlock with adaptive splits and online consolidations (issue
+        // #4452): the shard set and map above are fixed for the whole resize,
+        // so a migration in flight now would commit a map the resize never
+        // carries. The intent is persisted first, so a migration that opens its
+        // record after this read sees the resize and backs out itself (see
+        // ShardMigrationResizeInterlock).
+        if (await ShardMigrationResizeInterlock.FindMigratingShardAsync(grainFactory, currentPhysical, shardIndices)
+            is { } migrating)
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.NewMaxLeafKeys = prevNewMaxLeafKeys;
+            state.State.NewMaxInternalChildren = prevNewMaxInternalChildren;
+            state.State.OperationId = prevOperationId;
+            state.State.ShardCount = prevShardCount;
+            state.State.Complete = prevComplete || priorComplete;
+            state.State.SnapshotTreeId = prevSnapshotTreeId;
+            state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
+            state.State.OldRegistryEntry = prevOldRegistryEntry;
+            state.State.ShardIndices = prevShardIndices;
+
+            // Restoring a completed predecessor keeps it undoable for the rest of
+            // its soft-delete window.
+            await WriteResizeStateAsync();
+            throw new InvalidOperationException(
+                $"A shard split or consolidation is in progress on shard {migrating} of tree '{TreeId}'; resize refused until it completes.");
         }
 
         // Initiate the online snapshot from current physical tree to new tree.
@@ -583,14 +615,22 @@ internal sealed class TreeResizeGrain(
 
     private async Task ExecuteUndoAsync()
     {
-        await ReserveAliasAsync();
+        _undoRunning++;
         try
         {
-            await UndoResizeCoreAsync();
+            await ReserveAliasAsync();
+            try
+            {
+                await UndoResizeCoreAsync();
+            }
+            finally
+            {
+                if (!state.State.InProgress) await ReleaseAliasAsync();
+            }
         }
         finally
         {
-            if (!state.State.InProgress) await ReleaseAliasAsync();
+            _undoRunning--;
         }
     }
 
@@ -1192,7 +1232,7 @@ internal sealed class TreeResizeGrain(
         try
         {
             var resolved = await registry.ResolveAsync(TreeId);
-            if (string.Equals(resolved, state.State.SnapshotTreeId, StringComparison.Ordinal))
+            if (!ResizeFence.LiftsFenceAfterFailedFlip(resolved, state.State.SnapshotTreeId))
                 return;
 
             var oldPhysical = state.State.OldPhysicalTreeId!;
@@ -1398,6 +1438,89 @@ internal sealed class TreeResizeGrain(
     /// </remarks>
     public Task<bool> IsIdleAsync() =>
         Task.FromResult(!DurableResizeState.InProgress);
+
+    /// <summary>
+    /// How long <see cref="HoldsShardMigrationsAsync"/> waits for one old-copy
+    /// shard to say whether it still mirrors before counting it as mirroring.
+    /// </summary>
+    internal static readonly TimeSpan MirrorProbeTimeout = TimeSpan.FromSeconds(5);
+
+    // Turns that are running an undo. The undo moves the alias, clears the old
+    // copy's fence and rewrites the logical registry row before it resets the
+    // resize state, so the persisted state alone cannot show it is under way.
+    private int _undoRunning;
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Interleaving is safe because every answer that is not established from
+    /// state already persisted, and consistent with the state the running turn
+    /// holds, is <see langword="true"/>: a resize turn sets the in-memory state
+    /// before it persists it, so a turn that has started a resize, completed one
+    /// or begun to unwind one shows as a difference between the two (or as a
+    /// running undo) and is answered <see langword="true"/> until it has settled.
+    /// Only a completed resize whose persisted and in-memory state agree, with no
+    /// undo pending or running, reaches the shard probes, and only shards that
+    /// all report they mirror nowhere - or elsewhere - can make it
+    /// <see langword="false"/>.
+    /// </remarks>
+    public async Task<bool> HoldsShardMigrationsAsync()
+    {
+        var durable = DurableResizeState;
+        var live = state.State;
+        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
+        {
+            return true;
+        }
+
+        if (durable.Complete != live.Complete
+            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
+            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
+            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        if (!durable.Complete) return false;
+
+        // A completed resize that names no copies never mirrored. Shadow-
+        // forwarding starts only in the snapshot InitiateResizeStateAsync launches
+        // after it persisted both ids in the same write as InProgress, and both
+        // are cleared together only by ResetResizeState, after an undo has
+        // cleared the mirror. The state is reached by the empty-tree fast path,
+        // which re-pins the registry in place and records Complete with no copy;
+        // holding there would block every split of a tree sized that way for good.
+        if (!durable.HasUndoTargets) return false;
+
+        var oldPhysical = durable.OldPhysicalTreeId!;
+        var resized = durable.SnapshotTreeId!;
+        var shardIndices = OldShardIndices;
+        var probes = new Task<string?>[shardIndices.Length];
+        for (var i = 0; i < shardIndices.Length; i++)
+        {
+            probes[i] = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}")
+                .GetMirrorDestinationAsync()
+                .WaitAsync(MirrorProbeTimeout);
+        }
+
+        try
+        {
+            await Task.WhenAll(probes);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex,
+                "Could not establish whether the copy tree {TreeId}'s resize replaced still mirrors into {Resized}; shard migrations stay held.",
+                TreeId, resized);
+            return true;
+        }
+
+        foreach (var probe in probes)
+        {
+            if (string.Equals(probe.Result, resized, StringComparison.Ordinal)) return true;
+        }
+
+        return false;
+    }
 
     /// <inheritdoc />
     /// <remarks>

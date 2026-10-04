@@ -750,11 +750,14 @@ The atomic-commit models described above are the part of the tier this file
 covers in depth, not its whole population. The WAL durability models, the distributed-lock
 admission model (`LockAdmissionModel`), the atomic-action execution model
 (`AtomicActionExecutionModel`), and the reshard forward-window model
-(`ReshardForwardWindowModel`) use the same harness and category; their properties
+(`ReshardForwardWindowModel`), and the shard-ownership models (`ResizeFenceModel`,
+`SagaCopyBindingModel`, `RoutingPairPublishModel`; see the shard-ownership property
+catalogue below) use the same harness and category; their properties
 are catalogued in [`docs/lattice/verified-wal.md`](../../docs/lattice/verified-wal.md),
 [`docs/lattice/verified-lock.md`](../../docs/lattice/verified-lock.md),
 [`docs/lattice/verified-atomic-action.md`](../../docs/lattice/verified-atomic-action.md),
-and [`docs/lattice/verified-atomic-commit.md`](../../docs/lattice/verified-atomic-commit.md).
+[`docs/lattice/verified-atomic-commit.md`](../../docs/lattice/verified-atomic-commit.md),
+and [`docs/lattice/verified-shard-ownership.md`](../../docs/lattice/verified-shard-ownership.md).
 
 ### How to add a new Coyote model
 
@@ -971,6 +974,38 @@ production detectors, each proven red by perturbing production, in
 | `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
 | `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
+
+### Shard-ownership property catalogue (epic #4430, issue #4434)
+
+Key ownership across adaptive split, reshard, online resize and undo is
+specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
+(routing, the operations, the saga's binding) and `ShardOwnershipRetention`
+(the registry's mask and retirement, late forwarded prepares and leaf
+reactivation, over a saga bound across a split and a resize). The seam between
+them, and what composing them would add, is described in that directory's
+README; coverage of one module is not coverage of the other. Three ownership
+decisions are extracted into pure cores the grains call - `ResizeFence`,
+`SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
+guard tests remove one rule and must find the violation. Every TLA+ property
+below is paired with at least one mutation that makes it fire; the Coyote
+encoding is listed where one exists.
+
+| TLA+ property | Module | Plain-language property | Coyote encoding | Guard tests (prove non-vacuous) |
+|---------------|--------|-------------------------|-----------------|---------------------------------|
+| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`. |
+| `NoKeyLost` | both | The owner holds every acknowledged value. | TLA+ only. | Mutations, e.g. `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow`. |
+| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`. |
+| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
+| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
+| `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
+| `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
+| `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
+| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
+
+Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
+`..._only_the_..._assertion_fires`) that disables exactly the assertion it
+targets and requires a clean run. The assurance document is
+[`docs/lattice/verified-shard-ownership.md`](../../docs/lattice/verified-shard-ownership.md).
 
 ## Browser UI tier
 

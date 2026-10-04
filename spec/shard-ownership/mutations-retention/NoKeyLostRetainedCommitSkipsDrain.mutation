@@ -1,0 +1,19 @@
+# Pairs with NoKeyLost. The split moves the map without its final
+# authoritative drain, so a write the source acknowledged before the freeze is
+# missing from the destination the map now routes to.
+MODULE: NoKeyLostRetainedCommitSkipsDrain
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the split moves the map without its final drain, so the destination misses an acknowledged write
+PERTURBS: SplitCommit
+
+--- FIND
+       IN row' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                     IF k = k2 /\ s = s2 /\ (x = c \/ (x = R /\ ResizeMirrors(c, s2)))
+                     THEN Max(row[x][s][k], v) ELSE row[x][s][k]]]]
+    /\ alias = spCopy
+--- REPLACE
+\* MUTATION: no final drain before ReassignSlotsAsync.
+       IN UNCHANGED row
+    /\ alias = spCopy
+--- END
