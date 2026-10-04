@@ -584,11 +584,11 @@ checkpoints within the time bound. (A graceful deactivation also
 flushes - see below.)
 
 Re-shipping is safe because the receiver absorbs repeats without relying
-on its per-origin high-water mark, which drops nothing: an entry at or
-below the snapshot-pinned causal floor is dropped, a recently applied
-`(origin, HLC, key, op)` identity is suppressed by the shadow-forward
-identity cache, and anything else re-applies idempotently under per-key
-last-writer-wins. A silo crash inside the deferred-persist window
+on its per-origin high-water mark or any snapshot floor, neither of
+which drops point writes: a recently applied `(origin, HLC, key, op)`
+identity is suppressed by the shadow-forward identity cache, and
+anything else re-applies idempotently under per-key last-writer-wins. A
+silo crash inside the deferred-persist window
 therefore costs at most `ShipCursorWriteInterval x ShipBatchSize`
 entries of wasteful re-shipping and no data is lost. Lowering
 `ShipCursorWriteMaxDelay` only ever makes the durable cursor fresher; it

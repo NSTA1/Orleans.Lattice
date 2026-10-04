@@ -58,15 +58,18 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_apply_duration_tags_peer_for_hwm_dedup()
+    public async Task ApplyAsync_apply_duration_tags_peer_for_shadow_forward_dedup()
     {
+        // A point write below the per-origin HWM is not a dedup (#1060,
+        // #4463 - there is no HLC drop threshold); an exact re-delivery
+        // is, through the shadow-forward identity cache.
+        var (applier, _, _, hwm) = CreateApplier();
+        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
+        await applier.ApplyAsync(SetEntry("k", Hlc(50)));
+
         using var collector = new MeterCollector<double>(
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyDurationName);
-        var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
-
         await applier.ApplyAsync(SetEntry("k", Hlc(50)));
 
         Assert.That(collector.Measurements, Has.Count.EqualTo(1));
@@ -74,7 +77,7 @@ public partial class ReplicationApplierTests
         Assert.Multiple(() =>
         {
             Assert.That(HasPeer(only.Tags, RemoteCluster), Is.True);
-            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeDedup), Is.True);
+            Assert.That(HasOutcome(only.Tags, LatticeReplicationMetrics.OutcomeShadowForwardDedup), Is.True);
         });
     }
 

@@ -73,7 +73,7 @@ internal sealed class ChangeFeed(
         //     consumer's resume contract degrades to "yield every
         //     locally-authored entry" and the consumer is responsible
         //     for de-duplicating against entries it has already seen
-        //     (the apply pipeline's pinned-floor and exact-identity dedup,
+        //     (the apply pipeline's exact-identity dedup,
         //     plus the idempotent leaf-level re-apply, already handle this
         //     for replication consumers). The HLC cursor is preserved on the public
         //     signature for source-compat; new callers should migrate
