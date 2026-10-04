@@ -140,4 +140,29 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(5)]
     public Dictionary<Guid, PoisonedSaga> PoisonedSagas { get; set; } = new();
+
+    /// <summary>
+    /// The tree's snapshot export epoch at the moment this shipper found a
+    /// forced gap - a write-ahead-log trim past its unacknowledged cursor that
+    /// lost records the peer never received (issue #4534) - or <c>null</c> when
+    /// no re-seed is outstanding. While set, the shipper withholds every saga
+    /// record (prepares and terminals) from the peer, because a saga that lost
+    /// a record in the gap would otherwise be delivered torn, and keeps shipping
+    /// plain writes. It is cleared once the peer acknowledges a full bootstrap
+    /// whose export epoch is greater (<see cref="ReplicationAck.BootstrapEpoch"/>),
+    /// after which every partition is re-shipped from its lowest retained entry.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state decodes to
+    /// <see langword="null"/>, the steady state.
+    /// </remarks>
+    [Id(6)]
+    public long? ReseedRequiredEpoch { get; set; }
+
+    /// <summary>
+    /// When <see cref="ReseedRequiredEpoch"/> was set, in UTC ticks, for the
+    /// re-seed age alarm; <c>0</c> when no re-seed is outstanding.
+    /// </summary>
+    [Id(7)]
+    public long ReseedRequiredSinceUtcTicks { get; set; }
 }

@@ -224,6 +224,13 @@ public partial class ReplicationShipperGrainTests
         /// </summary>
         public Func<CancellationToken, Task>? OnReadShipping { get; set; }
 
+        /// <summary>
+        /// Models a WAL trim: entries with a sequence below this value are no
+        /// longer stored, so a shipping read from below it returns the first
+        /// retained entry onward (issue #4534).
+        /// </summary>
+        public long TrimmedThrough { get; set; }
+
         public void Append(WalRecord entry) => Entries.Add(entry);
 
         /// <summary>
@@ -254,6 +261,10 @@ public partial class ReplicationShipperGrainTests
                 throw ThrowOnRead;
             }
             cancellationToken.ThrowIfCancellationRequested();
+            if (fromSequence < TrimmedThrough && TrimmedThrough < Entries.Count)
+            {
+                fromSequence = TrimmedThrough;
+            }
             if (fromSequence >= Entries.Count)
             {
                 return new WalShardShippingPage

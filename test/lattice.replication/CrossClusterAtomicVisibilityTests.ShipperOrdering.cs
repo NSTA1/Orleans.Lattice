@@ -81,7 +81,8 @@ public partial class CrossClusterAtomicVisibilityTests
         string tree,
         ReplicationShipperGrainTests.StubReplogShardGrain[] feeds,
         ReplicationShipperGrainTests.StubWalRecordEncoder walEncoder,
-        IReplicationTransport transport)
+        IReplicationTransport transport,
+        ReplicationPeerStats? peerStats = null)
     {
         var options = new LatticeReplicationOptions
         {
@@ -107,7 +108,7 @@ public partial class CrossClusterAtomicVisibilityTests
             context, Substitute.For<IReminderRegistry>(), NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, Substitute.For<IReplicationBatchEncoder>(), walEncoder,
             Substitute.For<IWalCursorRegistry>(), factory, new FakePersistentState<ReplicationShipperState>(),
-            new ReplicationPeerStats(), Substitute.For<ILatticeMergeModeResolver>(),
+            peerStats ?? new ReplicationPeerStats(), Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         shipper.InitializeForTesting(tree, TwoSiteClusterFixture.SiteBClusterId);
         return shipper;

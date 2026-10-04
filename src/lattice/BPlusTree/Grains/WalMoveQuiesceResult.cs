@@ -9,7 +9,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see langword="true"/> when the fence was raised and the shard drained;
 /// <see langword="false"/> when the activation's resolved placement version did
 /// not match the coordinator's expected version (the coordinator must abort and
-/// re-read placement).
+/// re-read placement), or when <paramref name="DrainIncomplete"/> is set.
 /// </param>
 /// <param name="HighestOffsetInclusive">
 /// The highest durable offset on the source provider after the drain, or
@@ -18,6 +18,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </param>
 /// <param name="ObservedPlacementVersion">The placement version the activation resolved its provider against.</param>
 /// <param name="ProviderKey">The catalog key the activation's provider was resolved under.</param>
+/// <param name="DrainIncomplete">
+/// <see langword="true"/> when the fence was raised but provider writes the
+/// activation stopped waiting for (force-faulted by the drain budget, or
+/// abandoned by a flush deadline) may still land, so the source tail is not yet
+/// stable (issue #4525). The coordinator must not copy from it.
+/// </param>
 [GenerateSerializer]
 [Alias(TypeAliases.WalMoveQuiesceResult)]
 [Immutable]
@@ -25,4 +31,5 @@ internal readonly record struct WalMoveQuiesceResult(
     [property: Id(0)] bool Quiesced,
     [property: Id(1)] long HighestOffsetInclusive,
     [property: Id(2)] long ObservedPlacementVersion,
-    [property: Id(3)] string ProviderKey);
+    [property: Id(3)] string ProviderKey,
+    [property: Id(4)] bool DrainIncomplete = false);
