@@ -44,6 +44,15 @@ internal sealed class ChangeFeed(
 {
     private const int PageSize = 256;
 
+    /// <summary>
+    /// How long one call waits for a partition's durable read to reach the
+    /// tail the call captured (#4511) before failing. Settable for tests.
+    /// </summary>
+    internal TimeSpan TailCatchUpLimit { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Delay between catch-up reads while a partition holds a transient hole.</summary>
+    internal TimeSpan TailCatchUpPollInterval { get; init; } = TimeSpan.FromMilliseconds(10);
+
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly ILatticeMergeModeResolver _modeResolver = modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
@@ -149,117 +158,230 @@ internal sealed class ChangeFeed(
         // per-tree configuration entry.
         var resolvedMode = _modeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
 
+        // Saga terminals (#4511). WAL partitions are not HLC-ordered in append
+        // order and are read one after another, so a terminal can be read on
+        // one partition while a prepare it resolves is appended to a partition
+        // this call has already read. Emitted in HLC order alone, the terminal
+        // could reach a consumer ahead of that prepare, and a bridge applying
+        // the feed to a peer would commit the saga split. Two rules close it:
+        // after the first pass the call captures every partition's tail and
+        // reads each partition up to it, waiting out a transient hole below
+        // an in-flight flush (see CatchUpPartitionAsync), so the call yields
+        // exactly the offsets below those tails - and a saga's prepares are appended
+        // before it decides, which precedes every terminal append, so a
+        // terminal below the tails has every prepare it resolves below them
+        // too. Terminals are then emitted after every other record of the
+        // call, so HLC skew cannot place one ahead of its prepares.
         var collected = new List<WalRecord>();
+        var terminals = new List<WalRecord>();
+        var resume = new long[partitions];
+        var shards = new IWalShardGrain[partitions];
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var grain = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
+            shards[partition] = _grainFactory.GetGrain<IWalShardGrain>($"{treeName}/{partition}");
+
             // Phase D1c: per-partition resume offset. The cursor entry
             // is the offset of the NEXT entry to read (exclusive
             // lower bound). Partitions absent from the cursor return 0
             // (every entry yielded). No off-by-one dance is required
             // because the cursor semantics align directly with
             // IWalShardGrain.ReadAsync's `fromSequence` argument.
-            var nextSequence = cursor.GetOffsetForPartition(partition);
-            while (true)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            resume[partition] = await DrainPartitionAsync(
+                shards[partition], cursor.GetOffsetForPartition(partition), long.MaxValue,
+                includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
+        }
 
-                var page = await grain.ReadAsync(nextSequence, PageSize, cancellationToken).ConfigureAwait(false);
-                var pageEntries = page.Entries;
-                if (pageEntries.Count == 0)
-                {
-                    break;
-                }
-
-                for (var i = 0; i < pageEntries.Count; i++)
-                {
-                    var sequenced = pageEntries[i];
-                    var entry = sequenced.Entry;
-
-                    // Tombstone-reap envelopes are local structural
-                    // cleanup records (see `ReplicationShipperGrain.ShouldShip`
-                    // for the full rationale). They are produced by
-                    // `BPlusLeafGrain.CompactTombstonesAsync`, carry
-                    // `MutationKind.Tombstone`, and have no defined
-                    // receiver-side apply rule because every peer
-                    // cluster reaps independently against its own
-                    // copy of the data. Skip them at the change-feed
-                    // boundary so bootstrap consumers do not observe
-                    // them either.
-                    if (entry.Op == MutationKind.Tombstone)
-                    {
-                        continue;
-                    }
-
-                    // Receiver-apply foreign-origin filter. Under the
-                    // WAL-as-sole-durability-boundary contract, every
-                    // leaf commit - including entries installed by
-                    // `IReplicationApplier` on this cluster - is
-                    // captured by the per-shard WAL. The change-feed
-                    // contract documented on `IChangeFeed` is narrower:
-                    // "locally-authored writes only". An apply-installed
-                    // entry stamps `OriginClusterId` with the *source*
-                    // cluster id (set by
-                    // `LatticeOriginContext.With(originClusterId)`
-                    // inside `LatticeGrain.ApplySetAsync` /
-                    // `ApplyDeleteAsync` / `ApplyDeleteRangeAsync`), so
-                    // an entry whose origin is set and does not match
-                    // the local cluster id is by construction an
-                    // apply-installed record - drop it before any
-                    // downstream filter sees it. Empty-origin entries
-                    // are durability-only authoring records produced
-                    // by the local `ICommitLogWriter` path and remain
-                    // eligible; local-origin entries are governed by
-                    // the optional `includeLocalOrigin` filter below.
-                    //
-                    // This deliberately differs from
-                    // `ReplicationShipperGrain.ShouldShip`, which drops an
-                    // empty-origin entry because the receiver's per-origin
-                    // high-water mark has nothing to key it on. A bootstrap
-                    // consumer wants every locally-authored record; a peer
-                    // can only dedup one with an origin. The divergence
-                    // cannot strand a saga terminal (issue #2324): on a
-                    // replicated tree `WalCommitLogWriter` fills an empty
-                    // origin from the configured cluster id before the
-                    // append, terminals included, so a terminal reaching
-                    // either drain carries the local origin. That is pinned
-                    // by WalCommitLogWriterTests' SagaTerminalOrigin cases.
-                    if (entry.OriginClusterId is { Length: > 0 } applyOrigin
-                        && !string.Equals(applyOrigin, localClusterId, StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    if (!includeLocalOrigin
-                        && entry.OriginClusterId is { } origin
-                        && string.Equals(origin, localClusterId, StringComparison.Ordinal))
-                    {
-                        continue;
-                    }
-
-                    // Re-stamp Mode from the resolver resolved above. The
-                    // entry already carries its durable Mode (WalRecord wire
-                    // id 26), so this replaces the appended mode rather than
-                    // filling in a missing one.
-                    collected.Add(entry with { Mode = resolvedMode });
-                }
-
-                nextSequence = page.NextSequence;
-                if (pageEntries.Count < PageSize)
-                {
-                    break;
-                }
-            }
+        var tailTasks = new Task<long>[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            tailTasks[partition] = shards[partition].GetNextSequenceAsync(cancellationToken).AsTask();
+        }
+        var tails = await Task.WhenAll(tailTasks).ConfigureAwait(false);
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            await CatchUpPartitionAsync(
+                shards[partition], resume[partition], tails[partition],
+                includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
         }
 
         collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        terminals.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
+        collected.AddRange(terminals);
 
         for (var i = 0; i < collected.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return collected[i];
+        }
+    }
+
+    // Reads one partition up to the tail the call captured. The next
+    // sequence counts appends whose flush is still in flight, and a read
+    // stops below the oldest one, so a durable prepare can sit above a
+    // transient hole; stopping there would miss it while its terminal on
+    // another partition is emitted. The catch-up therefore waits the hole
+    // out, and fails the call rather than yield an incomplete prefix. A
+    // failed flush rewinds the next sequence below the captured tail; the
+    // offsets it rewound past never became durable, so the catch-up then
+    // stops at the rewound sequence.
+    private async Task CatchUpPartitionAsync(
+        IWalShardGrain grain,
+        long fromSequence,
+        long tail,
+        bool includeLocalOrigin,
+        string? localClusterId,
+        LatticeMergeMode resolvedMode,
+        List<WalRecord> collected,
+        List<WalRecord> terminals,
+        CancellationToken cancellationToken)
+    {
+        var reached = fromSequence;
+        var bound = tail;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (reached < bound)
+        {
+            reached = await DrainPartitionAsync(
+                grain, reached, bound,
+                includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
+            if (reached >= bound)
+            {
+                return;
+            }
+
+            bound = Math.Min(bound, await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false));
+            if (reached >= bound)
+            {
+                return;
+            }
+
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) >= TailCatchUpLimit)
+            {
+                throw new TimeoutException(
+                    $"The change feed could not read a WAL partition up to sequence {bound} (stopped at {reached}) within {TailCatchUpLimit}; "
+                    + "an append below it has not become durable. Re-subscribe from the same cursor.");
+            }
+
+            await Task.Delay(TailCatchUpPollInterval, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    // Reads one partition from `fromSequence`, stopping before `bound`, and
+    // returns the offset of the next entry to read. Records the feed emits
+    // go to `collected`, saga terminals to `terminals`.
+    private async Task<long> DrainPartitionAsync(
+        IWalShardGrain grain,
+        long fromSequence,
+        long bound,
+        bool includeLocalOrigin,
+        string? localClusterId,
+        LatticeMergeMode resolvedMode,
+        List<WalRecord> collected,
+        List<WalRecord> terminals,
+        CancellationToken cancellationToken)
+    {
+        var nextSequence = fromSequence;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var page = await grain.ReadAsync(nextSequence, PageSize, cancellationToken).ConfigureAwait(false);
+            var pageEntries = page.Entries;
+            if (pageEntries.Count == 0)
+            {
+                return nextSequence;
+            }
+
+            for (var i = 0; i < pageEntries.Count; i++)
+            {
+                var sequenced = pageEntries[i];
+                if (sequenced.Sequence >= bound)
+                {
+                    return sequenced.Sequence;
+                }
+
+                var entry = sequenced.Entry;
+
+                // Tombstone-reap envelopes are local structural
+                // cleanup records (see `ReplicationShipperGrain.ShouldShip`
+                // for the full rationale). They are produced by
+                // `BPlusLeafGrain.CompactTombstonesAsync`, carry
+                // `MutationKind.Tombstone`, and have no defined
+                // receiver-side apply rule because every peer
+                // cluster reaps independently against its own
+                // copy of the data. Skip them at the change-feed
+                // boundary so bootstrap consumers do not observe
+                // them either.
+                if (entry.Op == MutationKind.Tombstone)
+                {
+                    continue;
+                }
+
+                // Receiver-apply foreign-origin filter. Under the
+                // WAL-as-sole-durability-boundary contract, every
+                // leaf commit - including entries installed by
+                // `IReplicationApplier` on this cluster - is
+                // captured by the per-shard WAL. The change-feed
+                // contract documented on `IChangeFeed` is narrower:
+                // "locally-authored writes only". An apply-installed
+                // entry stamps `OriginClusterId` with the *source*
+                // cluster id (set by
+                // `LatticeOriginContext.With(originClusterId)`
+                // inside `LatticeGrain.ApplySetAsync` /
+                // `ApplyDeleteAsync` / `ApplyDeleteRangeAsync`), so
+                // an entry whose origin is set and does not match
+                // the local cluster id is by construction an
+                // apply-installed record - drop it before any
+                // downstream filter sees it. Empty-origin entries
+                // are durability-only authoring records produced
+                // by the local `ICommitLogWriter` path and remain
+                // eligible; local-origin entries are governed by
+                // the optional `includeLocalOrigin` filter below.
+                //
+                // This deliberately differs from
+                // `ReplicationShipperGrain.ShouldShip`, which drops an
+                // empty-origin entry because the receiver's per-origin
+                // high-water mark has nothing to key it on. A bootstrap
+                // consumer wants every locally-authored record; a peer
+                // can only dedup one with an origin. The divergence
+                // cannot strand a saga terminal (issue #2324): on a
+                // replicated tree `WalCommitLogWriter` fills an empty
+                // origin from the configured cluster id before the
+                // append, terminals included, so a terminal reaching
+                // either drain carries the local origin. That is pinned
+                // by WalCommitLogWriterTests' SagaTerminalOrigin cases.
+                if (entry.OriginClusterId is { Length: > 0 } applyOrigin
+                    && !string.Equals(applyOrigin, localClusterId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!includeLocalOrigin
+                    && entry.OriginClusterId is { } origin
+                    && string.Equals(origin, localClusterId, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+                {
+                    terminals.Add(entry with { Mode = resolvedMode });
+                    continue;
+                }
+
+                // Re-stamp Mode from the resolver the caller resolved. The
+                // entry already carries its durable Mode (WalRecord wire
+                // id 26), so this replaces the appended mode rather than
+                // filling in a missing one.
+                collected.Add(entry with { Mode = resolvedMode });
+            }
+
+            nextSequence = page.NextSequence;
+            if (pageEntries.Count < PageSize)
+            {
+                return nextSequence;
+            }
         }
     }
 }

@@ -521,6 +521,10 @@ internal sealed partial class AppInstallFlow
         Changed?.Invoke();
     }
 
-    [GeneratedRegex("^[0-9a-f]{64}$", RegexOptions.CultureInvariant)]
+    // The tail anchor is \z, not $: in .NET $ also matches immediately before a
+    // trailing line feed, so "^[0-9a-f]{64}$" accepted a 64-hex digest with a
+    // newline smuggled onto the end and the "pinned by valid digests" badge
+    // would have shown for an asset whose digest the cluster then rejects.
+    [GeneratedRegex("^[0-9a-f]{64}\\z", RegexOptions.CultureInvariant)]
     private static partial Regex DigestPattern();
 }

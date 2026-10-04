@@ -68,12 +68,13 @@ each module is perturbed by at least one mutation. Both run in CI through
 
 Writing the modules against production found defects that tests had not, each
 filed and kept as a standing mutation: a split in flight across a resize
-(#4452), an undo that let both copies serve (#4453, fixed), a mid-dispatch
+(#4452, fixed), an undo that let both copies serve (#4453, fixed), a mid-dispatch
 re-bind that ignores the bound copy's mirror (#4454), an online snapshot that
 drops prepared buckets (#4455), a split sweep that treats an undeterminable
 registry answer as in flight (#4473), terminals re-sent to the wrong copy after
-an undo (#4474), and a saga that never completes once its old copy is purged
-(#4475). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+an undo (#4474), a saga that never completes once its old copy is purged
+(#4475), and, found by the review of this coverage, a router that cached the
+old copy reading empty and losing writes once that copy is purged (#4503). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

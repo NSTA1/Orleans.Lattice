@@ -129,6 +129,19 @@ public sealed class AppPageTabsAndTextTests
         });
     }
 
+    [TestCase(59.5, "1 hour")]
+    [TestCase(119.1, "2 hours")]
+    [TestCase(1_439.2, "1 day")]
+    [TestCase(58.5, "59 minutes")]
+    [TestCase(90.0, "90 minutes")]
+    [TestCase(0.0, "0 minutes")]
+    public void A_retention_is_named_on_its_rounded_figure_so_it_never_reads_a_whole_larger_unit(double minutes, string expected)
+    {
+        // The minutes round up; deciding the unit before that rounding read 59.5
+        // minutes as "60 minutes" and 1,439.2 minutes as "1,440 minutes".
+        Assert.That(AppPageText.Retention(TimeSpan.FromMinutes(minutes)), Is.EqualTo(expected));
+    }
+
     [TestCase(AppLifecycleState.Installed, "Installed")]
     [TestCase(AppLifecycleState.Enabled, "Enabled")]
     [TestCase(AppLifecycleState.Disabled, "Disabled")]

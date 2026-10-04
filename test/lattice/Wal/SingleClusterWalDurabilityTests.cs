@@ -193,7 +193,7 @@ public sealed class SingleClusterWalDurabilityTests
         // run, and fail - not fall through - if it never does.
         var reportedTotal = 0L;
         var passes = 0;
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(15).TotalMilliseconds;
         LatticeWalGcReport report;
         do
         {
@@ -207,7 +207,7 @@ public sealed class SingleClusterWalDurabilityTests
 
             await Task.Delay(50);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         listener.RecordObservableInstruments();
 
@@ -352,8 +352,8 @@ public sealed class SingleClusterWalDurabilityTests
 
         var sp = RequireSiloServices();
         var registry = sp.GetRequiredService<IWalCursorRegistry>();
-        var cursorDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (DateTime.UtcNow < cursorDeadline)
+        var cursorDeadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(15).TotalMilliseconds;
+        while (Environment.TickCount64 < cursorDeadline)
         {
             var min = await registry.GetMinCursorAsync(treeId);
             if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)
@@ -425,8 +425,8 @@ public sealed class SingleClusterWalDurabilityTests
         await scheduler.StartAsync(CancellationToken.None);
         try
         {
-            var trimDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-            while (DateTime.UtcNow < trimDeadline && Interlocked.Read(ref trimmedForTree) <= 0)
+            var trimDeadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(15).TotalMilliseconds;
+            while (Environment.TickCount64 < trimDeadline && Interlocked.Read(ref trimmedForTree) <= 0)
             {
                 await Task.Delay(50);
             }
@@ -488,8 +488,8 @@ public sealed class SingleClusterWalDurabilityTests
 
         // Wait for at least one leaf materialiser to advance its checkpoint and
         // report a non-Zero durable floor (the drain making progress).
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(15);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(15).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var min = await registry.GetMinCursorAsync(treeId);
             if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)

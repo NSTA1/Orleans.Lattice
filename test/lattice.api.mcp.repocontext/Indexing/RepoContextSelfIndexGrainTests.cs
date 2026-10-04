@@ -60,7 +60,7 @@ public sealed class RepoContextSelfIndexGrainTests
     private async Task<RepoIndexProgress> WaitForTerminalAsync(RepoContextMcpHarness harness, string repoId)
     {
         var job = harness.GrainFactory.GetGrain<IRepoIndexJobGrain>(repoId);
-        var deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         while (true)
         {
             var progress = await job.GetProgressAsync();
@@ -69,7 +69,7 @@ public sealed class RepoContextSelfIndexGrainTests
                 return progress;
             }
 
-            if (DateTimeOffset.UtcNow >= deadline)
+            if (Environment.TickCount64 >= deadline)
             {
                 throw new TimeoutException($"The indexing job for '{repoId}' did not settle in time.");
             }

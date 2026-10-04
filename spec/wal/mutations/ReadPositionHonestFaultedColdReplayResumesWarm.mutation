@@ -1,0 +1,24 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4467 as production had it
+# until #4489 fixed it (the sibling of issue #4451 the
+# fix session found: a cold rebuild that faults part-way re-arms its replay
+# barrier within the same activation with the partly rebuilt projection still in
+# memory, sees a non-empty cache, and resumes WARM from the persisted checkpoint,
+# skipping the entries between its re-read frontier and that checkpoint.
+MODULE: ReadPositionHonestFaultedColdReplayResumesWarm
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a re-armed replay after a cold-rebuild fault resumes from the persisted checkpoint over a partial projection
+PERTURBS: ReplayFaultRearm
+
+--- FIND
+    /\ rp[l] < anchor[l]
+    /\ UNCHANGED vars
+--- REPLACE
+    /\ rp[l] < anchor[l]
+\* MUTATION: the re-armed replay resumes warm from the persisted checkpoint.
+    /\ rp' = [rp EXCEPT ![l] = stCp[l]]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+--- END

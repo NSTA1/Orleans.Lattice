@@ -15,8 +15,8 @@ public sealed class SagaCopyBindingCoyoteTests
     /// <summary>
     /// The shipping design, dispatching each batch in one routing-tier call: the
     /// saga decides with its whole batch on the bound copy and nothing off it,
-    /// across a resize flip and across an undo. The mid-dispatch partial failure is
-    /// pinned off here because it is the open defect #4454, characterised below.
+    /// across a resize flip and across an undo. A dispatch a transient failure
+    /// stops part way is covered below.
     /// </summary>
     [Test]
     public void The_batch_is_decided_whole_on_the_bound_copy_across_a_swap(
@@ -70,16 +70,39 @@ public sealed class SagaCopyBindingCoyoteTests
     }
 
     /// <summary>
-    /// Characterises the open defect #4454 against the shipping core: when a
-    /// transient shard failure stops a dispatch part way and the tree then moves,
-    /// the mid-dispatch re-bind (<c>SagaCopyBinding.RebindsAfterRefusal</c>) applies
-    /// no mirror check and leaves the prepares already taken on the old copy. When
-    /// #4454 is fixed this test must fail, and becomes the fixed-design assertion.
+    /// The shipping design, with a transient shard failure able to stop a dispatch
+    /// part way and the tree then flipping to the resized copy: the rest of the
+    /// batch still lands on the bound copy, which mirrors it, so nothing is left
+    /// behind on a copy a resize undo re-exposes (#4454).
     /// </summary>
     [Test]
-    public void Mid_dispatch_rebind_strands_partial_prepares_issue_4454()
+    public void A_dispatch_stopped_part_way_across_a_resize_flip_keeps_the_batch_on_the_bound_copy(
+        [Values(2, 3)] int keyCount,
+        [Values] SagaCopyBindingSwap swap)
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new SagaCopyBindingModel(keyCount, swap, SagaCopyBindingGuard.None, partialDispatch: true));
+    }
+
+    /// <summary>
+    /// #4454 before its fix: the routing tier refuses the rest of a partly
+    /// dispatched batch and the execute phase re-binds, both without asking where
+    /// the bound copy mirrors, so the prepares already taken stay on the old copy.
+    /// </summary>
+    [Test]
+    public void A_mid_dispatch_rebind_that_ignores_the_mirror_strands_partial_prepares()
     {
         CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new SagaCopyBindingModel(2, SagaCopyBindingSwap.ResizeFlip, SagaCopyBindingGuard.None, partialDispatch: true));
+            new SagaCopyBindingModel(2, SagaCopyBindingSwap.ResizeFlip, SagaCopyBindingGuard.RebindIgnoresMirror, partialDispatch: true));
+    }
+
+    /// <summary>Specificity: that guard is caught only by the no-bucket-off-the-bound-copy assertion.</summary>
+    [Test]
+    public void A_mid_dispatch_rebind_that_ignores_the_mirror_is_caught_only_by_the_off_copy_assertion()
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new SagaCopyBindingModel(
+                2, SagaCopyBindingSwap.ResizeFlip, SagaCopyBindingGuard.RebindIgnoresMirror, partialDispatch: true,
+                assertions: SagaCopyBindingAssertions.BatchOnBoundCopy));
     }
 }

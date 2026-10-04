@@ -33,24 +33,27 @@ public sealed class ClusterStatusPollerTests
         var reads = 0;
         poller.Follow(_ =>
         {
-            reads++;
+            // The poller reads on its own continuation, not on the test's thread,
+            // so a plain ++ here can lose an increment and strand every later
+            // barrier on a count the poller has already passed.
+            Interlocked.Increment(ref reads);
             return Task.FromResult(outcomes.Dequeue());
         });
 
         Advance(time, ClusterStatusPoller.Interval);
-        ReadsReach(() => reads, 1);
+        ReadsReach(() => Volatile.Read(ref reads), 1);
 
         Advance(time, ClusterStatusPoller.Interval);
-        Assert.That(reads, Is.EqualTo(1), "after a failed read the poller waits twice as long");
+        Assert.That(Volatile.Read(ref reads), Is.EqualTo(1), "after a failed read the poller waits twice as long");
         Advance(time, ClusterStatusPoller.Interval);
-        ReadsReach(() => reads, 2);
+        ReadsReach(() => Volatile.Read(ref reads), 2);
 
         Advance(time, ClusterStatusPoller.Interval);
-        ReadsReach(() => reads, 3);
+        ReadsReach(() => Volatile.Read(ref reads), 3);
 
         Assert.Multiple(() =>
         {
-            Assert.That(SpinWait.SpinUntil(() => !poller.IsFollowing, TimeSpan.FromSeconds(10)), Is.True);
+            FollowBarriers.Reaches(() => !poller.IsFollowing, "a settled operation stops the follow");
             Assert.That(time.ArmedTimers, Is.Zero, "a settled operation is no longer followed");
         });
     }
@@ -81,13 +84,10 @@ public sealed class ClusterStatusPollerTests
     }
 
     private static void ReadsReach(Func<int> reads, int expected) =>
-        Assert.That(SpinWait.SpinUntil(() => reads() == expected, TimeSpan.FromSeconds(10)), Is.True, $"the poller reads {expected} time(s)");
+        FollowBarriers.ReadsReach(reads, expected, "the poller");
 
-    private static void Advance(ManualTimeProvider time, TimeSpan delta)
-    {
-        // The next wait is armed on the follow's continuation once the read
-        // returns; wait for it before moving the clock again.
-        Assert.That(SpinWait.SpinUntil(() => time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True, "the poller re-arms");
-        time.Advance(delta);
-    }
+    // The next wait is armed on the follow's continuation once the read returns;
+    // FollowBarriers.Advance waits for it before moving the clock again.
+    private static void Advance(ManualTimeProvider time, TimeSpan delta) =>
+        FollowBarriers.Advance(time, delta, "the poller");
 }

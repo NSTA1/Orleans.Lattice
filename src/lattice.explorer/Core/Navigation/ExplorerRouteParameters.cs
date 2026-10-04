@@ -45,7 +45,7 @@ public sealed class ExplorerRouteParameters : IReadOnlyList<ExplorerRouteParamet
     /// and keeping the last value supplied for a repeated key.
     /// </summary>
     /// <param name="parameters">The parameters to carry. A <see langword="null"/> or empty sequence yields <see cref="Empty"/>.</param>
-    /// <exception cref="ArgumentException">A key is not canonical lower case.</exception>
+    /// <exception cref="ArgumentException">A key is not canonical lower case, or is one of the shell's tenant-scope keys.</exception>
     public static ExplorerRouteParameters Create(IEnumerable<ExplorerRouteParameter>? parameters)
     {
         if (parameters is null)
@@ -110,12 +110,16 @@ public sealed class ExplorerRouteParameters : IReadOnlyList<ExplorerRouteParamet
     /// <paramref name="value"/> removes the key instead, so a caller clearing a
     /// filter does not leave <c>?filter=</c> behind in the URL.
     /// </summary>
-    /// <param name="key">The canonical lower-case query key.</param>
+    /// <param name="key">The canonical lower-case query key. Not a tenant-scope key.</param>
     /// <param name="value">The value to carry, or empty to remove the key.</param>
-    /// <exception cref="ArgumentException"><paramref name="key"/> is not canonical lower case.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="key"/> is not canonical lower case, or is one of the shell's
+    /// tenant-scope keys (<see cref="ExplorerRouteSegments.TenantQueryKey"/>,
+    /// <see cref="ExplorerRouteSegments.AllTenantsQueryKey"/>).
+    /// </exception>
     public ExplorerRouteParameters With(string key, string? value)
     {
-        ExplorerRouteSlug.EnsureCanonical(key);
+        ExplorerRouteParameter.ValidateKey(key);
 
         if (string.IsNullOrEmpty(value))
         {

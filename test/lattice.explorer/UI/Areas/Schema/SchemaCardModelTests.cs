@@ -47,6 +47,7 @@ public sealed class SchemaCardModelTests
         yield return new TestCaseData("utf8", Card(SchemaCardKind.Encoding, string.Empty, card => card.Encoding = LatticeSchemaEncodingKind.Utf8), "The value must be well-formed UTF-8");
         yield return new TestCaseData("json", Card(SchemaCardKind.Encoding), "The value must be one JSON document");
         yield return new TestCaseData("size", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "1024"), "The value must be at most 1,024 bytes");
+        yield return new TestCaseData("one byte", Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "1"), "The value must be at most 1 byte");
         yield return new TestCaseData("optional", Card(SchemaCardKind.TextLength, "s", card => { card.Maximum = "3"; card.Optional = true; }), "s must be text of at most 3 characters, when present");
         yield return new TestCaseData("any of", Card(SchemaCardKind.AnyOf, string.Empty, card => card.Alternatives = [Card(SchemaCardKind.Type, "a"), Card(SchemaCardKind.Required, "b")]), "At least one of these must hold: a must be text or b must be present as text, a number or true or false");
     }
@@ -189,6 +190,26 @@ public sealed class SchemaCardModelTests
         Assert.That(SchemaCardDecompiler.Decompile(LatticeSchemaRule.Regex(SchemaFormatPatterns.PatternOf(SchemaTextFormat.Slug), "s")).Kind, Is.EqualTo(SchemaCardKind.Format));
         Assert.That(SchemaCardDecompiler.Decompile(LatticeSchemaRule.Regex("^s")).Kind, Is.EqualTo(SchemaCardKind.Pattern));
         Assert.That(SchemaCardDecompiler.Decompile([LatticeSchemaRule.Json(), LatticeSchemaRule.Utf8()]).Select(card => card.Encoding), Is.EqualTo(new[] { LatticeSchemaEncodingKind.Json, LatticeSchemaEncodingKind.Utf8 }));
+    }
+
+    [Test]
+    public void A_legacy_dollar_anchored_rule_is_kept_verbatim_as_a_pattern_card()
+    {
+        // The format patterns moved from "$" to "\z" because "$" also matches
+        // before a trailing line feed, so a stored "$" rule is a weaker rule
+        // than the card that wrote it. Reading it back as a format card would
+        // silently rewrite the operator's policy on the next save, so it reads
+        // back as a pattern card holding the stored pattern unchanged.
+        var legacy = LatticeSchemaRule.Regex("^[a-z0-9]+(-[a-z0-9]+)*$", "s");
+        var card = SchemaCardDecompiler.Decompile(legacy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(card.Kind, Is.EqualTo(SchemaCardKind.Pattern));
+            Assert.That(card.Pattern, Is.EqualTo("^[a-z0-9]+(-[a-z0-9]+)*$"));
+            Assert.That(SchemaCardCompiler.TryCompile(card, out var kept, out _), Is.True);
+            Assert.That(kept, Is.EqualTo(legacy), "opening a policy must never rewrite it");
+        });
     }
 
     [Test]

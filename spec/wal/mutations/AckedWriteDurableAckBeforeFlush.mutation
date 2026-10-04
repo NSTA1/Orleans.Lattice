@@ -1,0 +1,16 @@
+# Pairs with AckedWriteDurable. The write is acknowledged when its flush is
+# issued rather than when it lands, so an acknowledged write is not in the store.
+MODULE: AckedWriteDurableAckBeforeFlush
+TARGET: AckedWriteDurable
+CLASS: Invariant
+SUMMARY: the acknowledgement point precedes durability
+PERTURBS: FlushAck
+
+--- FIND
+    /\ durable' = durable \cup {o}
+    /\ acked' = acked \cup {o}
+--- REPLACE
+\* MUTATION: acknowledged without being stored.
+    /\ durable' = durable
+    /\ acked' = acked \cup {o}
+--- END

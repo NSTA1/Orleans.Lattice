@@ -70,6 +70,20 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task<PhysicalTreeRetention> GetPhysicalRetentionAsync();
 
     /// <summary>
+    /// Reports whether this physical copy was ever discarded by
+    /// <see cref="DiscardDerivedPhysicalTreeAsync"/> - the destination of an
+    /// undone resize. Unlike <see cref="GetPhysicalRetentionAsync"/> the answer
+    /// survives the copy's purge, because a discarded id is never reused. An
+    /// atomic-write saga bound to the copy reads it when the copy refuses a
+    /// terminal, to count that terminal as delivered - the copy's batch is
+    /// discarded with it - rather than re-send it to the copy the tree resolves
+    /// to now (issue #4474). A pure read of in-memory state, interleaved so a
+    /// probe never queues behind a purge.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> IsDiscardedAsync();
+
+    /// <summary>
     /// Discards this physical copy, as <see cref="DiscardDerivedPhysicalTreeAsync"/>
     /// does, when it is a resize's derived copy that was retired by a build
     /// predating the discard and that no resize can still recover - its logical

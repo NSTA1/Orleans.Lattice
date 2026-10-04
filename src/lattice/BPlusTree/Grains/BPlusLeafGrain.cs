@@ -1210,7 +1210,7 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
     {
-        if (IsLatePrepareForTerminalTransaction()) return null;
+        if (await IsLatePrepareForTerminalTransactionAsync()) return null;
 
         using var _commitScope = EnterCommitScope();
         // step 0 (build) - HLC tick (or override), build LwwValue. Version
@@ -1658,7 +1658,7 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
     {
-        if (IsLatePrepareForTerminalTransaction()) return null;
+        if (await IsLatePrepareForTerminalTransactionAsync()) return null;
 
         using var _commitScope = EnterCommitScope();
         var count = entries.Count;
@@ -2078,7 +2078,7 @@ internal sealed partial class BPlusLeafGrain(
             return new LeafDeleteResult { Split = recovered };
         }
 
-        if (IsLatePrepareForTerminalTransaction())
+        if (await IsLatePrepareForTerminalTransactionAsync())
         {
             return new LeafDeleteResult { Split = recovered };
         }

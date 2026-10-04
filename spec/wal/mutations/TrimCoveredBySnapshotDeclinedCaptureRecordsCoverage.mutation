@@ -1,0 +1,21 @@
+# Pairs with TrimCoveredBySnapshot, and reproduces issue #3421 (fixed by #3440):
+# the leaf recorded snapshot coverage from the capture it SENT rather than from
+# what the store KEPT, so a failed or declined capture still raised the in-memory
+# coverage, the pin resolved min(persisted, covered) over a prefix no blob holds,
+# and the GC trimmed it.
+MODULE: TrimCoveredBySnapshotDeclinedCaptureRecordsCoverage
+TARGET: TrimCoveredBySnapshot
+CLASS: Invariant
+SUMMARY: a failed capture still records coverage, so the pin authorises trimming an unsnapshotted prefix
+PERTURBS: CaptureFail
+
+--- FIND
+    /\ Cur(l) >= 0
+    /\ faults < MaxFaults
+    /\ cov' = cov
+--- REPLACE
+    /\ Cur(l) >= 0
+    /\ faults < MaxFaults
+\* MUTATION: coverage recorded from the request, not the store's answer.
+    /\ cov' = [cov EXCEPT ![l] = rp[l]]
+--- END

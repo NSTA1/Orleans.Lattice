@@ -716,7 +716,8 @@ registry shard of the tree:
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
    every `(transactionId, key)` pair in any leaf's per-tx pending
    bucket whose registry status in the captured snapshot is
-   `InFlight`, `Indeterminate`, or absent. The emitted row carries the
+   `InFlight`, `Indeterminate`, or absent (an `Indeterminate` saga whose
+   decision is still stored is first resolved to it; see below). The emitted row carries the
    source-stamped
    prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
    `ExpiresAtTicks`, and the typed CRDT `Delta` / `Mode` so the
@@ -780,9 +781,38 @@ because the terminal that would have flipped it was already behind the
 incremental stream the receiver drains after the snapshot. The source
 held "committed", the receiver held "preparing", permanently, with no
 repair path on either side. Carrying the row explicitly means absence
-in this payload once again means only what it says, and an
-`Indeterminate` saga's prepared rows ship (pass 1 above) so the
-receiver holds exactly what the source holds.
+in this payload once again means only what it says.
+
+**The verdict behind an aged-out row is exported, not the mask.** The
+prepared rows pass resolves an `Indeterminate` saga whose decision the
+registry still stores to that recorded verdict
+(`ITxRegistryGrain.GetRecordedStatusAsync`), once per saga, before it
+emits any of the saga's rows. Both passes then treat the saga as
+decided. A recorded commit ships as committed rows, and a recorded abort
+ships nothing. The prepared rows pass emits a recorded commit's committed
+rows itself, because the committed projection pass need not enumerate a
+key held only in a pending bucket. A delete the saga committed ships as a
+committed tombstone row, which the bootstrap drain applies as a delete,
+rather than as an absence: a bootstrap can land on a receiver copy that
+still holds the key (a peer that fell off the log re-bootstraps over its
+existing copy, which the drain does not clear), and an absence would leave
+that older value beside the saga's other keys. Shipping such a saga as prepared rows split it on the
+receiver (#4481): when its terminal had drained some keys before the
+decision aged out and left another bucket stranded, the drained keys
+arrived as committed rows and the stranded one as a prepared row. The
+receiver's registry has no row for the saga, so it reads that prepared
+row as still in flight and serves its pre-saga value beside the drained
+keys' post-saga values, and nothing on either side repairs it. The
+recorded verdict is what the source's own leaf sweep finishes the
+stranded prepare by, so the receiver now holds the state the source
+converges to. The source's read path keeps masking the row: the export
+transfers state the source owns rather than disclosing an outcome to a
+reader. Two cases still ship as prepared rows:
+
+- An `Indeterminate` saga with no stored verdict, such as a cross-tree
+  delegation whose coordinator could not be reached.
+- A saga whose row has already been purged reads as absent. Its export
+  carries the split the source itself serves (#2318).
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the

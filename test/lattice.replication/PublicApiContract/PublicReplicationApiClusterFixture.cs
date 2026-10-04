@@ -261,9 +261,9 @@ internal sealed class PublicReplicationApiClusterFixture
         ArgumentNullException.ThrowIfNull(probe);
         ArgumentNullException.ThrowIfNull(description);
 
-        var deadline = DateTime.UtcNow + (timeout ?? ConvergenceTimeout);
+        var deadline = Environment.TickCount64 + (long)(timeout ?? ConvergenceTimeout).TotalMilliseconds;
         Exception? lastException = null;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             try
             {

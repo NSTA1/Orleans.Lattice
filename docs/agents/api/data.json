@@ -84,6 +84,43 @@
       "source": "src/lattice.api.data.grpc/Security/LatticeDataApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeDataApi",
+        "package": "Orleans.Lattice.Api.Data",
+        "provides": [
+          "ILatticeDataApi"
+        ],
+        "source": "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#LatticeApiDataServiceCollectionExtensions.AddLatticeDataApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLattice",
+        "kind": "registration",
+        "reason": "The data facade dials the core tree registry and options system and fails fast when AddLattice has not registered them.",
+        "source": "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#LatticeApiDataServiceCollectionExtensions.AddLatticeDataApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeDataApiGrpc",
+        "package": "Orleans.Lattice.Api.Data.Grpc",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcServiceCollectionExtensions.cs#LatticeDataApiGrpcServiceCollectionExtensions.AddLatticeDataApiGrpc"
+      },
+      {
+        "registration": "MapLatticeDataApiGrpc",
+        "package": "Orleans.Lattice.Api.Data.Grpc",
+        "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcServiceCollectionExtensions.cs#LatticeDataApiGrpcServiceCollectionExtensions.MapLatticeDataApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": {
+      "source": "src/lattice.api.data/LatticeApiDataServiceCollectionExtensions.cs#LatticeApiDataServiceCollectionExtensions.AddLatticeDataApi",
+      "statement": "The data API is opt-in and absent by default: nothing is registered unless the host calls AddLatticeDataApi."
+    }
+  },
   "types": {
     "AllowAllDataApiAuthorizer": {
       "kind": "class",

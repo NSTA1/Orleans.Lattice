@@ -12,6 +12,9 @@ surfaces:
     api: "No app lifecycle MCP tool is documented; Orleans.Lattice.Api.Mcp.Apps exposes enabled app tools only."
     source: "docs/lattice.api.mcp.apps/README.md"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/apps.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/apps.json"
   - id: app-source-registered
     check: "The app is registered with an app source, such as AddLatticeApp for an embedded in-image manifest."
     source: "src/lattice.apps/LatticeAppsServiceCollectionExtensions.cs#AddLatticeApp"
@@ -120,6 +123,10 @@ failure_modes:
     signal: "Install is refused, or enable or reconcile fails with AppActivationFailure.TreeOwnershipConflict (OwnedByAnotherApp, PreExistingUnownedTree, DerivedTree, or AliasTarget)."
     effect: "Nothing is written at install; at activation the app's rules are withdrawn and the tree stays with its current owner."
     response: "Inspect DescribeAsync OwnershipConflict, release the tree from its owning install, or stop declaring it, then retry."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
   mechanism: "Disable withdraws access without deleting data; uninstall retires the install and soft-deletes structural app trees under retention. A consent or upgrade rollback is a new version-pinned InstallAsync or UpdateConsentAsync followed by reconciliation when the app is enabled."
