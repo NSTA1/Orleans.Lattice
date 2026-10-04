@@ -13,9 +13,9 @@ CLASS: Invariant
 SUMMARY: without the self-check, a leaf that lost its terminal memory takes a late marker that gates the key after the saga completed
 
 --- FIND
-    /\ lk /\ ~lt
+    /\ lk /\ ~term[c][s]
     /\ row[c][s][k] < SagaV
 --- REPLACE
 \* MUTATION: the gate does not check the row against the saga's prepare stamp.
-    /\ lk /\ ~lt
+    /\ lk /\ ~term[c][s]
 --- END

@@ -13,22 +13,22 @@ SUMMARY: a marker installed after its terminal is copied to a fresh sibling leaf
 PERTURBS: DeliverLate, LeafSplit
 
 --- FIND
-    /\ lk /\ ~lt
+    /\ lk /\ ~term[c][s]
     /\ row[c][s][k] < SagaV
 --- REPLACE
 \* MUTATION: the gate does not check the row against the saga's prepare stamp.
-    /\ lk /\ ~lt
+    /\ lk /\ ~term[c][s]
 --- END
 
 --- FIND
-    /\ lk' = IF ~Gone(spCopy) /\ ~lt THEN TRUE ELSE lk
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
 --- REPLACE
 \* MUTATION: the marker is installed even when the leaf applied the terminal.
     /\ lk' = IF ~Gone(spCopy) THEN TRUE ELSE lk
 --- END
 
 --- FIND
-    /\ lk' = (lk /\ ~lt)
+    /\ lk' = (lk /\ ~term[spCopy][s2])
 --- REPLACE
 \* MUTATION: the transfer copies a marker whose terminal the donor applied.
     /\ lk' = lk
