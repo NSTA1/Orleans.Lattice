@@ -425,6 +425,16 @@ internal sealed partial class BPlusLeafGrain
             bucket[key] = incoming;
         }
 
+        // The leaf clock dominates every prepared stamp it holds (issue #4530):
+        // a range delete stamps itself past the leaf clocks it covers, and must
+        // sort above every prepare of a saga decided before it was issued. Every
+        // installer already advances the clock past the stamp (a foreground or
+        // override prepare through AdvanceClockOrOverride, a replayed one through
+        // AdvanceProjectionClock); this keeps it true by construction for any
+        // future path that installs a bucket.
+        if (incoming.Timestamp > state.State.Clock)
+            state.State.Clock = incoming.Timestamp;
+
         // CRDT-delta carry. A prepared mutation authored under a CRDT merge
         // mode rides its typed delta alongside the merged-state value; record
         // it in the parallel side-map so the terminal drain folds the delta

@@ -396,6 +396,18 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// Work-bounded probe for a range delete's issue stamp (issue #4530): walks
+    /// the same leaves <see cref="DeleteRangeBoundedAsync"/> would for
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) and
+    /// returns the highest leaf clock among them, across at most
+    /// <see cref="LatticeOptions.MaxLeavesPerScanPage"/> leaves per call. The
+    /// caller drives it to completion with
+    /// <see cref="ShardRangeClockPage.ResumeFromInclusive"/>, as for the delete.
+    /// Writes nothing.
+    /// </summary>
+    Task<ShardRangeClockPage> GetRangeClockBoundedAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
     /// by walking the leaf chain and summing per-leaf counts.
     /// </summary>
