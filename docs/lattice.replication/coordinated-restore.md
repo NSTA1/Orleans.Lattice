@@ -85,7 +85,10 @@ phases:
    not write-starved while a large tree builds. The write fence also self-lifts
    on a bounded cutover deadline (five minutes after it engages), so a stalled
    cutover never fences local writes indefinitely; that release leaves shipping
-   and receiving paused until the saga completes globally.
+   and receiving paused until the saga completes globally. When shipping
+   resumes, each shipper re-resolves the tree's source identity before its first
+   send, so it ships from the restored copy even if the alias-change push to it
+   was lost; it never drains the retired log onto a peer's restored copy (#4490).
 3. **Abort** - reached if any participant voted to abort. Every participant that
    prepared is compensated: its shadow is reverted and garbage collected and the
    pre-restore tree is left untouched.
