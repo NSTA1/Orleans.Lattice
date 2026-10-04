@@ -764,7 +764,13 @@ internal sealed partial class LatticeGrain
             // Legacy single-tree path: the per-shard gate is the only
             // barrier, so mark the per-tree linearization point and fan
             // the terminal out as soon as the gate completes.
-            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
+            //
+            // Issue #4485: while a snapshot capture holds this tree's decision
+            // gate the mark is refused rather than waited out, and the refusal
+            // propagates so the replication applier defers the entry (the
+            // sender re-ships it). The tally above is idempotent per source
+            // shard, so the re-delivery reaches this point again.
+            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed, waitOutDecisionGate: false);
 
             await ApplyTerminalPostGateAsync(
                 transactionId, committed, tally.ObservedSourceShards,
@@ -874,7 +880,7 @@ internal sealed partial class LatticeGrain
     {
         var registry = TxRegistryRouting.GetRegistry(
             grainFactory, TreeId, transactionId);
-        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
+        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed, waitOutDecisionGate: false);
 
         await ApplyTerminalPostGateAsync(
             transactionId, committed, observedSourceShards,

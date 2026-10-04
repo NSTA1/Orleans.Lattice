@@ -181,4 +181,84 @@ public partial class BootstrapAtomicVisibilityTests
             Assert.That(receivedB, Is.Null, "keyB's delete must reach the receiver beside keyA's write");
         });
     }
+
+    [Test]
+    public async Task Re_bootstrap_over_a_populated_receiver_deletes_a_key_a_committed_saga_deleted_before_its_terminal_drained()
+    {
+        // The frozen registry view records the saga as Committed (its decision
+        // is still inside the retention window), but its terminal reached only
+        // keyA's shard, so keyB's prepared delete still sits in a pending bucket.
+        // The committed pass reads keyB as absent and emits nothing, so unless
+        // the prepared pass ships the delete as a committed tombstone the
+        // receiver keeps keyB's older value (#4504).
+        const string tree = "snap-committed-pending-delete";
+        const string receiverTree = "snap-committed-pending-delete-receiver";
+        const string sourceCluster = "snap-committed-pending-delete-origin";
+        var (keyA, keyB) = AgedKeysOnDistinctShards();
+        keyA += "-cpd";
+        keyB += "-cpd";
+        while (LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount)
+            == LatticeSharding.GetShardIndex(keyB, LatticeConstants.DefaultShardCount))
+        {
+            keyB += "x";
+        }
+
+        var txid = Guid.NewGuid();
+        var source = _cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        await source.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, Hlc(5_000), ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await source.ApplyPreparedDeleteAsync(
+            keyB, Hlc(5_000), ClusterId, sourceVectorClock: null, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        await source.ApplyTxTerminalAsync(txid, committed: true, shardIndex: shardA, Hlc(5_100), ClusterId);
+
+        var registrySnapshot = await _cluster.Client.GetGrain<ITxRegistryGrain>(tree).SnapshotAsync();
+        Assert.That(registrySnapshot.TryGetValue(txid, out var decided) ? decided : TxStatus.InFlight,
+            Is.EqualTo(TxStatus.Committed), "precondition: the frozen registry view records the saga as committed");
+
+        var applier = _cluster.Silos.OfType<Orleans.TestingHost.InProcessSiloHandle>().First()
+            .SiloHost.Services.GetRequiredService<IReplicationApplier>();
+        var receiver = _cluster.Client.GetGrain<ILattice>(receiverTree);
+        foreach (var (key, value) in new[] { (keyA, (byte)8), (keyB, (byte)9) })
+        {
+            await applier.ApplyAsync(new WalRecord
+            {
+                TreeId = receiverTree,
+                Op = MutationKind.Set,
+                Key = key,
+                Value = new[] { value },
+                Timestamp = Hlc(1_000),
+                OriginClusterId = sourceCluster,
+            });
+        }
+
+        Assert.That(await receiver.GetAsync(keyB), Is.EqualTo(new byte[] { 9 }), "precondition: the receiver holds keyB's older value");
+
+        var stream = await _provider.ExportAsync(tree, HybridLogicalClock.Zero);
+        var entries = (await DrainAsync(stream)).Where(e => e.Key == keyA || e.Key == keyB).ToList();
+
+        using (LatticeBootstrapApplyContext.BeginScope())
+        {
+            foreach (var entry in entries)
+            {
+                if (Orleans.Lattice.Replication.Grains.LatticeBootstrapCoordinatorGrain.ToSnapshotWalRecord(
+                        entry, receiverTree, sourceCluster, LatticeMergeMode.LwwRegister) is { } record)
+                {
+                    await applier.ApplyAsync(record);
+                }
+            }
+        }
+
+        var receivedA = await receiver.GetAsync(keyA);
+        var receivedB = await receiver.GetAsync(keyB);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
+            Assert.That(entries.Where(e => e.Key == keyB),
+                Has.Some.Matches<SnapshotEntry>(e => e.IsTombstone && !e.IsPrepared && e.Timestamp == Hlc(5_000)),
+                "keyB's committed delete must ship as a committed tombstone row at the saga's prepare HLC");
+            Assert.That(receivedB, Is.Null, "keyB's committed delete must reach the receiver beside keyA's write");
+        });
+    }
 }

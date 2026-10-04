@@ -52,12 +52,28 @@ before calling `AddLatticeReplication`.
   after every snapshot entry has been applied, so the causal
   dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
-- **Tombstoned and expired keys are not emitted.** Only live entries
-  reach the receiver through the committed projection; the tombstone
-  state is reconstructed from the incremental WAL after the snapshot
-  completes. The one exception is an in-flight saga's prepared delete,
-  which ships as a prepared row with `IsTombstone` set (see
+- **Deletes ship as committed tombstone rows.** The committed
+  projection carries live keys only, so the default provider ends the
+  export with a tombstone pass: every key a source leaf still holds as a
+  tombstone ships as a row with `IsTombstone` set and `IsPrepared`
+  clear, stamped with the tombstone's own HLC, and the bootstrap drain
+  applies it as a delete. Without it a receiver that bootstraps in place
+  over an existing copy - a peer that fell off the log and is
+  re-bootstrapped by the fall-off detector, or an operator re-seed over
+  existing data - kept the old value of every key the source deleted
+  while it was behind, permanently, because the delete's WAL record is
+  behind the source's trim point and the incremental stream never
+  delivers it (#4504). Last-writer-wins resolves a tombstone row against
+  a live row for the same key by HLC, so a delete older than a value the
+  receiver wrote later does not apply. A tombstone the source has already
+  reaped (tombstone compaction physically removes it after
+  `TombstoneGracePeriod`) cannot ship; that residual is tracked as #4537.
+  An in-flight saga's prepared delete ships as a prepared row with
+  `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **Expired keys are not emitted.** The committed projection reads an
+  expired key as absent; the receiver's copy carries the same absolute
+  expiry, so it expires there too.
 - **A live key's TTL is carried.** Every exported row - a
   committed-projection row as well as a prepared saga row - carries the
   source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so on
@@ -587,12 +603,13 @@ Any state -> Failed         (any thrown exception; restart is a fresh BootstrapA
   applier has no HLC floor gate; exact identity dedup and idempotent
   per-key merge make the snapshot/incremental boundary safe regardless of
   overlap.
-- **Tombstones in custom providers are skipped.** Committed
-  (non-prepared) snapshot entries whose `Value` is `null` (not emitted
-  by the default provider, but permissible from a host-supplied
-  `ISnapshotProvider`) are skipped rather than applied as deletes, as
-  are prepared rows with an empty `TransactionId`. A prepared row with
-  `IsTombstone` set is applied as a prepared delete.
+- **Committed tombstone rows apply as deletes.** A committed
+  (non-prepared) row with `IsTombstone` set is applied as a delete at
+  the row's HLC, and a prepared row with `IsTombstone` set as a prepared
+  delete. A committed row whose `Value` is `null` and which does not set
+  `IsTombstone` (not emitted by the default provider, but permissible
+  from a host-supplied `ISnapshotProvider`) is skipped, as is a prepared
+  row with an empty `TransactionId`.
 - **Per-tree merge mode is honoured on bootstrap.** Every
   `WalRecord` emitted by the bootstrap drain is stamped with the
   merge mode `ILatticeMergeModeResolver` resolves for the tree - the
@@ -710,7 +727,8 @@ subset.
 
 The export operates in two passes against a single frozen view of the
 producer's tree-wide transaction-registry decisions, unioned across every
-registry shard of the tree:
+registry shard of the tree, followed by the tombstone pass described under
+[Semantics](#semantics):
 
 1. **Prepared rows pass (runs first).** Walks every shard's leaf
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
@@ -824,7 +842,12 @@ emitted as a committed row by the prepared rows pass, because the scan
 need not enumerate a key held only in a pending bucket. The
 same applies in reverse for `Aborted`: the prepared mutation is
 correctly dropped from the committed pass and not shipped as a
-prepared row.
+prepared row. A `Committed` saga's pending **delete** is the exception
+to the fold: the committed pass reads the deleted key as absent and
+emits nothing, so the prepared rows pass ships it itself as a committed
+tombstone row (`IsTombstone` set, `IsPrepared` clear, at the prepare's
+HLC). Otherwise a receiver re-bootstrapping over a copy that still held
+the key would keep its older value beside the saga's other keys (#4504).
 
 **Decision rows: pre-cut saga records re-shipped after the bootstrap.**
 The source shipper resumes from its own per-partition cursors after a
