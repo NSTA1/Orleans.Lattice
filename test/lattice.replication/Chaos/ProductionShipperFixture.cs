@@ -254,7 +254,7 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             return;
         }
 
-        var deadline = DateTime.UtcNow + EdgeReadinessTimeout;
+        var deadline = Environment.TickCount64 + (long)EdgeReadinessTimeout.TotalMilliseconds;
         while (true)
         {
             var pending = FindEdgeWithStartupBackoff();
@@ -262,7 +262,7 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             {
                 return;
             }
-            if (DateTime.UtcNow >= deadline)
+            if (Environment.TickCount64 >= deadline)
             {
                 throw new TimeoutException(
                     $"ProductionShipperFixture readiness barrier: edge {pending} did not complete a clean " +

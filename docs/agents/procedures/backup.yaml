@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_tree_snapshot and lattice_backup_start"
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/backup.json, api/treeadmin.json and, for each MCP tool used (lattice_backup_start, lattice_backup_start_health_check, lattice_backup_start_incremental, lattice_backup_start_set, lattice_treeadmin_tree_snapshot), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/backup.json"
   - id: backup-engine
     check: "AddLatticeBackupApi is called after AddLatticeBackup."
     source: "docs/lattice.api.backup/README.md"
@@ -88,6 +91,10 @@ failure_modes:
     signal: "Tracked operation status becomes Failed after the accepting silo is lost or stops heartbeating."
     effect: "The background backup is not resumed."
     response: "Start a new tracked operation with a fresh id after confirming the previous status."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: false
   mechanism: "No snapshot abort verb is surfaced; unwanted backup artifacts are removed only through DeleteBackupAsync."

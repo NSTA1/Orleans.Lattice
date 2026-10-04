@@ -210,10 +210,10 @@ internal sealed class ChaosDeliveryPump : IAsyncDisposable
     /// </summary>
     public async Task DrainAsync(TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         var n = _fixture.SiteCount;
         var consecutiveStable = 0;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             var drained = true;
             for (var i = 0; i < n && drained; i++)

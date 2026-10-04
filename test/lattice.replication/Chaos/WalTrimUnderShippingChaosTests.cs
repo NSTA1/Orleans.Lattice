@@ -111,8 +111,8 @@ public class WalTrimUnderShippingChaosTests
     private static async Task WaitForConvergenceAsync(ILattice peer, IEnumerable<string> keys, TimeSpan timeout)
     {
         var keysArr = keys.ToArray();
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var allPresent = true;
             foreach (var k in keysArr)

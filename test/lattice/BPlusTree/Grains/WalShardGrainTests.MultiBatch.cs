@@ -274,10 +274,10 @@ public partial class WalShardGrainTests
 
         public async Task WaitForActiveAsync(int target, TimeSpan timeout)
         {
-            var deadline = DateTime.UtcNow + timeout;
+            var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
             while (Volatile.Read(ref _active) < target)
             {
-                if (DateTime.UtcNow > deadline)
+                if (Environment.TickCount64 > deadline)
                 {
                     Assert.Fail($"Timed out waiting for {target} concurrent provider calls; observed {Volatile.Read(ref _active)}.");
                 }
@@ -358,8 +358,8 @@ public partial class WalShardGrainTests
             {
                 // Wait until every offset strictly below failOnOffset
                 // is committed in the inner provider before throwing.
-                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-                while (DateTime.UtcNow < deadline)
+                var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+                while (Environment.TickCount64 < deadline)
                 {
                     var head = await inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
                     if (head >= failOnOffset - 1)

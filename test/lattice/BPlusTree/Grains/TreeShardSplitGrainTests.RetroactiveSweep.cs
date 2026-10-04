@@ -289,6 +289,38 @@ public partial class TreeShardSplitGrainTests
     }
 
     [Test]
+    public async Task RetroactiveSweep_replays_prepare_as_a_forwarded_prepare()
+    {
+        // Issue #4445. The replay can reach the destination after the saga's
+        // terminal, so it must carry the forwarded-prepare marker that makes
+        // the destination leaf check the saga's decision before bucketing it.
+        var txid = Guid.NewGuid();
+        var snap = BuildSetSnapshot(txid, out var key);
+        var (grain, _, _, target, _, _) = CreateGrainWithSweepWiring(
+            leafSnapshots: [snap],
+            preCheckStatus: TxStatus.InFlight);
+        string? forwardedTreeId = null;
+        bool? prepared = null;
+        target.SetAsync(key, Arg.Any<byte[]>()).Returns(_ =>
+        {
+            forwardedTreeId = LatticeForwardedPrepareContext.RegistryTreeId;
+            prepared = LatticePreparedContext.Current;
+            return Task.CompletedTask;
+        });
+
+        await grain.InitiateSplitStateAsync(0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(prepared, Is.True, "the replay is a prepared write");
+            Assert.That(forwardedTreeId, Is.EqualTo(TreeId),
+                "the replay must be marked as a forwarded prepare naming the tree the saga decides under");
+            Assert.That(LatticeForwardedPrepareContext.Current, Is.False,
+                "the marker must not outlive the replay");
+        });
+    }
+
+    [Test]
     public async Task RetroactiveSweep_replays_tombstone_via_DeleteAsync_when_saga_in_flight()
     {
         var txid = Guid.NewGuid();

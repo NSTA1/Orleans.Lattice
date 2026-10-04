@@ -261,9 +261,9 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
     {
         // The drain is driven off the residency snapshot's background rebuilds, so
         // poll the committed record against a generous deadline rather than a delay.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         var status = TenantRegionLifecycleStatus.None;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             var report = await Facade.GetTenantRegionStatusAsync(tenant.Value);
             status = report.Regions.Single(r => r.RegionId == regionId).Status;

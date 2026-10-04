@@ -59,10 +59,10 @@ public class ReshardAtomicWriteStructureTests
         });
 
         var reshard = _cluster.GrainFactory.GetGrain<ITreeReshardGrain>(treeId);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
         while (!await reshard.IsIdleAsync())
         {
-            Assert.That(DateTime.UtcNow, Is.LessThan(deadline), "Reshard did not complete.");
+            Assert.That(Environment.TickCount64, Is.LessThan(deadline), "Reshard did not complete.");
             await reshard.RunReshardPassAsync();
             for (var idx = 0; idx < Math.Max(target, FourShardClusterFixture.TestShardCount); idx++)
             {

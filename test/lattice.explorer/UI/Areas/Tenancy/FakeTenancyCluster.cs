@@ -23,6 +23,7 @@ internal sealed class FakeTenancyCluster :
 {
     private readonly Dictionary<string, Exception> _failures = new(StringComparer.Ordinal);
     private readonly Dictionary<string, TaskCompletionSource> _holds = new(StringComparer.Ordinal);
+    private readonly List<string> _calls = [];
     private int _grantIds;
 
     /// <summary>Creates the cluster with the reserved default tenant and the caller's tenant <c>acme</c>.</summary>
@@ -54,7 +55,22 @@ internal sealed class FakeTenancyCluster :
     public bool CreatesTenantsWithoutRegions { get; set; }
 
     /// <summary>Every call made, by method name.</summary>
-    public List<string> Calls { get; } = [];
+    /// <remarks>
+    /// A page's follower records its reads on its own continuation rather than on
+    /// the test's thread, so the log is guarded and handed out as a snapshot:
+    /// enumerating the live list while a follower appended to it would otherwise
+    /// throw "Collection was modified" part-way through an assertion.
+    /// </remarks>
+    public IReadOnlyList<string> Calls
+    {
+        get
+        {
+            lock (_calls)
+            {
+                return _calls.ToArray();
+            }
+        }
+    }
 
     /// <summary>Makes every later call to <paramref name="method"/> throw <paramref name="exception"/>.</summary>
     public void Fail(string method, Exception exception) => _failures[method] = exception;
@@ -488,7 +504,11 @@ internal sealed class FakeTenancyCluster :
 
     private async Task EnterAsync(string method)
     {
-        Calls.Add(method);
+        lock (_calls)
+        {
+            _calls.Add(method);
+        }
+
         if (_holds.TryGetValue(method, out var hold))
         {
             await hold.Task;

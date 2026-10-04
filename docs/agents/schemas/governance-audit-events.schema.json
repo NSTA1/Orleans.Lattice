@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nsta1.github.io/Orleans.Lattice/docs/agents/schemas/governance-audit-events.schema.json",
+  "schema": "lattice.agents/json-schema/v1",
+  "title": "Orleans.Lattice audit event schemas",
+  "description": "Audit records, security metrics and audit controls, with their emitting components, plus the audit records the code does not yet emit, as uncertainty markers.",
+  "type": "object",
+  "required": [
+    "schema",
+    "audit_records",
+    "metrics",
+    "audit_controls",
+    "uncertainties"
+  ],
+  "properties": {
+    "schema": {
+      "const": "lattice.agents/governance-audit-events/v1"
+    },
+    "audit_records": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "fields",
+          "emitting_component",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "emitting_component": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          },
+          "sinks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "instrument",
+          "tags",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "instrument": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "audit_controls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "field",
+          "default",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "default": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/uncertain"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "statement",
+            "source"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/uncertain"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "package": {
+      "type": "string",
+      "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+      }
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uncertain": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "properties": {
+        "status": {
+          "const": "uncertain"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

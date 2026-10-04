@@ -1,0 +1,98 @@
+schema: lattice.agents/procedure/v1
+id: replication-reseed
+name: "Re-seed a peer from a replication snapshot"
+surfaces:
+  in_process:
+    api: "ILatticeReplicationAdmin.RequestSnapshotAsync / ForceRequestSnapshotAsync and ILatticeBootstrapCoordinator.BootstrapAsync"
+    source: "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin.RequestSnapshotAsync"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/replication.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/replication.json"
+  - id: source-cluster-selected
+    check: "The operator names a non-empty source cluster id to produce the snapshot."
+    source: "src/lattice.replication/ILatticeReplicationAdmin.cs#RequestSnapshotAsync"
+  - id: source-tree-enrolled
+    check: "The sender-side snapshot service re-resolves the requested tree against local replication enrollment before any tree data is read."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - id: fall-off-detected-or-reseed-needed
+    check: "Fall-off exists when the receiver high-water mark is strictly less than the sender oldest retained WAL HLC, or an operator has chosen re-seed for a new peer or recovery."
+    source: "docs/lattice.replication/auto-bootstrap.md"
+  - id: transport-authenticated
+    check: "The remote snapshot gRPC calls carry an accepted shared secret and the origin header required by transport security."
+    source: "docs/lattice.replication/transport-security.md"
+steps:
+  - n: 1
+    action: "For a suspected retention gap, compare the receiver high-water mark with the sender oldest retained HLC."
+    api: "ILatticeFallOffLogDetector.CheckAndTriggerAsync"
+    expects: "FellOffLog is true only when incremental replication cannot bridge the gap."
+    source: "src/lattice.replication/LatticeFallOffLogDetector.cs#LatticeFallOffLogDetector.CheckAndTriggerAsync"
+  - n: 2
+    action: "Request a routine operator re-seed, or use the force bypass when disaster recovery or scheduling requires skipping the rate limit."
+    api: "ILatticeReplicationAdmin.RequestSnapshotAsync / ForceRequestSnapshotAsync"
+    expects: "Routine re-seed can return Triggered false with RetryAfter; force returns Triggered true when the coordinator call succeeds."
+    source: "src/lattice.replication/LatticeReplicationAdmin.cs#LatticeReplicationAdmin.RequestSnapshotAsync"
+  - n: 3
+    action: "Poll bootstrap status until LiveIncremental or Failed."
+    api: "ILatticeBootstrapCoordinator.GetStatusAsync / GetStateAsync"
+    expects: "LiveIncremental means the snapshot frontier is pinned and incremental replication is live."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+postconditions:
+  - check: "After the snapshot drain, the receiver pins the snapshot causal-stable frontier as both high-water-mark vector and pinned causal floor."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - check: "Incremental entries at or below the pinned frontier are no-ops, preserving an exactly-once snapshot-to-incremental handoff."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - check: "A fall-off probe for the same source while bootstrap is active is suppressed and counted separately."
+    source: "docs/lattice.replication/auto-bootstrap.md"
+failure_modes:
+  - id: fall-off-log-detected
+    signal: "peer.fell_off_log increments or FallOffLogDecision.FellOffLog is true."
+    effect: "Incremental replication cannot catch the peer up from retained WAL alone."
+    response: "Allow auto-bootstrap to run or invoke operator re-seed from a suitable source cluster."
+  - id: auto-bootstrap-disabled
+    signal: "FallOffLogDecision.FellOffLog is true and BootstrapTriggered is false."
+    effect: "The receiver remains unable to bridge the retained-WAL gap automatically."
+    response: "Run RequestSnapshotAsync or ForceRequestSnapshotAsync manually."
+  - id: rate-limited
+    signal: "RequestSnapshotAsync returns Triggered false with RetryAfter."
+    effect: "No bootstrap coordinator call was started by that request."
+    response: "Wait RetryAfter, or use ForceRequestSnapshotAsync when bypass is operationally justified."
+  - id: conflicting-bootstrap
+    signal: "BootstrapAsync or the admin seam throws InvalidOperationException for another in-flight source cluster."
+    effect: "Only the existing source owns the in-flight bootstrap for the tree."
+    response: "Wait for it to finish or fail before retrying from a different source."
+  - id: origin-binding-or-authorization-denied
+    signal: "Remote snapshot gRPC returns PermissionDenied for bad shared secret, missing or mismatched origin binding, or sender-side enrollment refusal."
+    effect: "No snapshot metadata or entries are exported."
+    response: "Fix transport secrets, origin binding, endpoint mapping, or source-tree enrollment before re-requesting the snapshot."
+  - id: unreachable-peer
+    signal: "Remote snapshot transport returns Unavailable, DeadlineExceeded, Aborted or an equivalent transient network fault."
+    effect: "The drain retries within the transient budget, then the bootstrap transitions to Failed if the budget is exhausted."
+    response: "Restore peer reachability and request or force the re-seed again."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "Snapshot re-seed applies data and pins a new frontier; there is no re-seed undo. Re-seed again from another source or restore from backup if the chosen source was wrong."
+  steps: []
+  source: "docs/lattice.replication/snapshot-bootstrap.md"
+concurrency:
+  - rule: "Only one bootstrap for a tree runs cluster-wide; a same-source concurrent kickoff is a no-op."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - rule: "A concurrent bootstrap for the same tree from a different source cluster is rejected."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - rule: "Concurrent bootstraps of different trees run on different coordinator activations and can proceed in parallel."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+  - rule: "Remote snapshot transports are safe to invoke concurrently across distinct tree and source-cluster pairs; receivers serialize a single pair through the bootstrap coordinator."
+    source: "docs/lattice.replication/snapshot-bootstrap.md"
+sources:
+  - "docs/lattice.replication/snapshot-bootstrap.md"
+  - "docs/lattice.replication/auto-bootstrap.md"
+  - "docs/lattice.replication/transport-security.md"
+  - "src/lattice.replication/ILatticeReplicationAdmin.cs"
+  - "src/lattice.replication/LatticeReplicationAdmin.cs"
+  - "src/lattice.replication/LatticeFallOffLogDetector.cs"
+  - "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcMethods.cs"
+  - "src/lattice.replication.grpc/LatticeRemoteSnapshotGrpcService.cs"

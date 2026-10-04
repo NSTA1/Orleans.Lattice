@@ -60,6 +60,13 @@ internal static class SchemaPatterns
     }
 
     /// <summary>The pattern equivalent to a text-match card, for showing and for taking over as a regex.</summary>
+    /// <remarks>
+    /// The tail anchor is <c>\z</c>, not <c>$</c>: in .NET <c>$</c> also matches
+    /// immediately before a trailing line feed, so an "ends with" rule taken
+    /// over as a regex and enforced by the cluster would have accepted the text
+    /// followed by a newline - which <see cref="string.EndsWith(string, StringComparison)"/>
+    /// does not. <c>\z</c> keeps the pattern agreeing with the card it replaces.
+    /// </remarks>
     /// <param name="match">Where the text must appear.</param>
     /// <param name="text">The text.</param>
     /// <returns>The regular expression.</returns>
@@ -70,7 +77,7 @@ internal static class SchemaPatterns
         return match switch
         {
             SchemaTextMatch.StartsWith => "^" + escaped,
-            SchemaTextMatch.EndsWith => escaped + "$",
+            SchemaTextMatch.EndsWith => escaped + "\\z",
             _ => escaped,
         };
     }

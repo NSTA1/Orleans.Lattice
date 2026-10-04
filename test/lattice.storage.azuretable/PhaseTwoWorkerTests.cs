@@ -54,8 +54,8 @@ public partial class PhaseTwoWorkerTests
 
     private static async Task WaitForCallsAsync(RecordingSubmitter submitter, int expected)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(2).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             if (submitter.Calls.Count >= expected)
             {

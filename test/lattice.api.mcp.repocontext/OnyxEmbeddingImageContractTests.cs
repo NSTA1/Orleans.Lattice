@@ -65,8 +65,8 @@ public sealed class OnyxEmbeddingImageContractTests
 
     private static async Task WaitForHealthAsync(HttpClient client)
     {
-        var deadline = DateTime.UtcNow.AddMinutes(3);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromMinutes(3).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             try
             {

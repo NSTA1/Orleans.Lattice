@@ -94,10 +94,10 @@ internal static class LatticeDigestSettleHelpers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tree);
-        var deadline = DateTime.UtcNow + (timeout ?? SettleTimeout);
+        var deadline = Environment.TickCount64 + (long)(timeout ?? SettleTimeout).TotalMilliseconds;
         LeafProjectionDigest latest = default;
 
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             latest = await tree.GetLeafProjectionDigestAsync(shardIndex);
@@ -129,10 +129,10 @@ internal static class LatticeDigestSettleHelpers
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(tree);
-        var deadline = DateTime.UtcNow + (timeout ?? SettleTimeout);
+        var deadline = Environment.TickCount64 + (long)(timeout ?? SettleTimeout).TotalMilliseconds;
         var latest = new LeafProjectionDigest[shardCount];
 
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var total = 0L;
@@ -177,10 +177,10 @@ internal static class LatticeDigestSettleHelpers
     {
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(expectedHash);
-        var deadline = DateTime.UtcNow + (timeout ?? SettleTimeout);
+        var deadline = Environment.TickCount64 + (long)(timeout ?? SettleTimeout).TotalMilliseconds;
         LeafProjectionDigest latest = default;
 
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
             latest = await tree.GetLeafProjectionDigestAsync(shardIndex);

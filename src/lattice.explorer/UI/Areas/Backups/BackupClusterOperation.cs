@@ -205,13 +205,18 @@ internal static class BackupClusterOperation
                     return scrub.OrphanCount == 0
                         ? "Every catalogue row has its backup in the store."
                         : scrub.Pruned
-                            ? "Removed " + BackupsFormat.Count(scrub.RemovedCount) + " orphan rows from the catalogue."
-                            : "Found " + BackupsFormat.Count(scrub.OrphanCount) + " orphan rows. They are never offered as restore points; remove them from the maintenance page.";
+                            ? "Removed " + OrphanRows(scrub.RemovedCount) + " from the catalogue."
+                            : "Found " + OrphanRows(scrub.OrphanCount) + (scrub.OrphanCount == 1
+                                ? ". It is never offered as a restore point; remove it from the maintenance page."
+                                : ". They are never offered as restore points; remove them from the maintenance page.");
             }
         }
 
         return OperationText.State(status);
     }
+
+    private static string OrphanRows(long count) =>
+        BackupsFormat.Count(count) + (count == 1 ? " orphan row" : " orphan rows");
 
     /// <summary>Whether a succeeded check of the catalogue found orphan rows it did not remove.</summary>
     /// <param name="status">The status.</param>
