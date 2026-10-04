@@ -69,25 +69,28 @@ internal sealed class LeafSnapshotProvider(
     /// <summary>
     /// Translates one exported row into the mutation the WAL feed would carry
     /// for it. A committed row is a live <see cref="MutationKind.Set"/> that
-    /// keeps its absolute expiry. A prepared row is an in-flight saga's
-    /// prepare-phase write, not committed state: it keeps
-    /// <see cref="LatticeMutation.IsPrepared"/> and its saga identity so the
-    /// apply loop routes it into the pending-tx map, and a prepared delete
-    /// stays a tombstone rather than surfacing its ignored value slot.
-    /// </summary>
-    private static LatticeMutation ToMutation(string treeId, SnapshotEntry entry)
-    {
-        var isPreparedDelete = entry.IsPrepared && entry.IsTombstone;
-        return new LatticeMutation
+        /// keeps its absolute expiry. A committed tombstone row is a committed
+        /// <see cref="MutationKind.Delete"/> (#4504): mapping it to a Set would
+        /// install an empty value where the source deleted the key. A prepared row
+        /// is an in-flight saga's
+        /// prepare-phase write, not committed state: it keeps
+        /// <see cref="LatticeMutation.IsPrepared"/> and its saga identity so the
+        /// apply loop routes it into the pending-tx map, and a prepared delete
+        /// stays a tombstone rather than surfacing its ignored value slot.
+        /// </summary>
+        private static LatticeMutation ToMutation(string treeId, SnapshotEntry entry)
         {
-            TreeId = treeId,
-            Kind = isPreparedDelete ? MutationKind.Delete : MutationKind.Set,
-            Key = entry.Key,
-            EndExclusiveKey = null,
-            Value = isPreparedDelete ? null : entry.Value,
-            Timestamp = entry.Timestamp,
-            IsTombstone = isPreparedDelete,
-            ExpiresAtTicks = isPreparedDelete ? 0 : entry.ExpiresAtTicks,
+            var isDelete = entry.IsTombstone;
+            return new LatticeMutation
+            {
+                TreeId = treeId,
+                Kind = isDelete ? MutationKind.Delete : MutationKind.Set,
+                Key = entry.Key,
+                EndExclusiveKey = null,
+                Value = isDelete ? null : entry.Value,
+                Timestamp = entry.Timestamp,
+                IsTombstone = isDelete,
+                ExpiresAtTicks = isDelete ? 0 : entry.ExpiresAtTicks,
             OriginClusterId = null,
             VectorClock = null,
             TransactionId = entry.IsPrepared ? entry.TransactionId : Guid.Empty,
