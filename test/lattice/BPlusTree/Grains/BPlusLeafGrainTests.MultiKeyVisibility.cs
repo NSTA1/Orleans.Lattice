@@ -37,8 +37,10 @@ public partial class BPlusLeafGrainTests
             expected["k"] = [2, 2];
             expected["fresh"] = [5];
         }
-        else if (status != TxStatus.Indeterminate)
+        else if (status != TxStatus.Indeterminate || alreadyTerminal)
         {
+            // An already-terminal orphan serves the row whatever the outcome,
+            // Indeterminate included (issue #4428).
             expected["k"] = [1];
             expected["deleted"] = [3];
         }
@@ -71,7 +73,7 @@ public partial class BPlusLeafGrainTests
                     _ => throw new ArgumentOutOfRangeException(nameof(reader)),
                 };
                 Assert.That(actual.Keys, Is.EquivalentTo(expected.Keys),
-                    $"Prepared k=[2,2] and pre-saga k=[1] must both be hidden for Indeterminate; actual k=[{string.Join(",", actual.GetValueOrDefault("k") ?? [])}]");
+                    $"Prepared k=[2,2] and pre-saga k=[1] must both be hidden for Indeterminate unless this leaf already applied the terminal; actual k=[{string.Join(",", actual.GetValueOrDefault("k") ?? [])}]");
                 foreach (var (key, value) in expected)
                     Assert.That(actual[key], Is.EqualTo(value), key);
                 break;

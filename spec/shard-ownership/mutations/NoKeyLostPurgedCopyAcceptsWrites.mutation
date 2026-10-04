@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. Reproduces current production (#4503): a routed write
+# through a router that cached the purged old copy is accepted
+# (PrepareForWriteAsync re-seeds a purged tree) and acknowledged, but lands on
+# a copy the tree no longer resolves to, so the resized copy never holds it.
+MODULE: NoKeyLostPurgedCopyAcceptsWrites
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a routed write on the purged old copy is accepted and acknowledged but lands where nothing reads it
+PERTURBS: LaterWrite
+
+--- FIND
+       IN /\ ~RoutedRefused(c, s, k2)
+--- REPLACE
+\* MUTATION: the purged copy accepts the write.
+       IN /\ ~RoutedRefused(c, s, k2) \/ Gone(c)
+--- END

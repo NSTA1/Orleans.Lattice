@@ -2187,7 +2187,9 @@ internal sealed class AtomicWriteGrain(
         List<WalRecord>? buffer = null;
         for (var i = 0; i < records.Length; i++)
         {
-            if (records[i] is { } r)
+            // A copy a resize undo discarded has had its log released; a terminal
+            // it took before the discard is discarded with it (issue #4474).
+            if (records[i] is { } r && _discardedTerminalCopies?.Contains(r.TreeId) != true)
             {
                 buffer ??= new List<WalRecord>(records.Length);
                 buffer.Add(r);
@@ -2195,6 +2197,36 @@ internal sealed class AtomicWriteGrain(
         }
         if (buffer is null) return;
         await writer.AppendManyAsync(buffer, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The physical copies this activation found discarded by a resize undo
+    /// while broadcasting terminals; see <see cref="TerminalCopyWasDiscardedAsync"/>.
+    /// </summary>
+    private HashSet<string>? _discardedTerminalCopies;
+
+    /// <summary>
+    /// Whether the physical copy that refused a saga terminal is the destination
+    /// of an undone resize, discarded by <see cref="ITreeDeletionGrain.DiscardDerivedPhysicalTreeAsync"/>.
+    /// The undo discards every write that copy took, so a terminal addressed to it
+    /// counts as delivered: the batch prepared on it is discarded with it, whole.
+    /// Following the refusal to the copy the tree resolves to now - the old copy
+    /// the undo restored, which lays keys out by the same map - would land the
+    /// terminal and its committed-values backstop on some of that copy's shards
+    /// only and tear the batch there, and refusing it outright would stall the
+    /// saga on every retry (issue #4474). A purge never marks a copy discarded,
+    /// so a resize's old copy is not answered here. Asked only on a refusal.
+    /// </summary>
+    private async Task<bool> TerminalCopyWasDiscardedAsync(string physicalTreeId)
+    {
+        if (_discardedTerminalCopies?.Contains(physicalTreeId) == true) return true;
+        if (!await grainFactory.GetGrain<ITreeDeletionGrain>(physicalTreeId).IsDiscardedAsync()) return false;
+        (_discardedTerminalCopies ??= new HashSet<string>(StringComparer.Ordinal)).Add(physicalTreeId);
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: terminal addressed to {PhysicalTreeId}, a copy a resize undo discarded, counts as delivered; its batch is discarded with the copy.",
+            OperationKey,
+            physicalTreeId);
+        return true;
     }
 
     /// <summary>
@@ -2224,6 +2256,13 @@ internal sealed class AtomicWriteGrain(
     /// returning. The returned record is null when no WAL adapter is
     /// registered (single-node / unit-test path) or when the shard
     /// rejected the call before constructing one.
+    /// </para>
+    /// <para>
+    /// A refusal by a copy a resize undo discarded counts the terminal as
+    /// delivered and returns null, before any routing refresh: that copy's
+    /// batch is discarded with it, so the terminal is never re-sent to the
+    /// copy the tree resolves to now (issue #4474). See
+    /// <see cref="TerminalCopyWasDiscardedAsync"/>.
     /// </para>
     /// </summary>
     private async Task<WalRecord?> MarkOneShardAsync(
@@ -2292,6 +2331,7 @@ internal sealed class AtomicWriteGrain(
                 // the new owner; AppendTxTerminalAsync is shard-keyed so
                 // the refreshed call may resolve to a different physical
                 // tree id under online resize.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
             }
             catch (StaleTreeRoutingException)
@@ -2299,7 +2339,15 @@ internal sealed class AtomicWriteGrain(
                 // Tree alias swapped mid-saga (online resize). Refresh
                 // routing under the same logical tree id and retry against
                 // the new physical tree.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                // A copy a resize undo discarded refuses as a deleted tree; any
+                // other refusal of this kind keeps surfacing as before.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
+                throw;
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
@@ -2797,10 +2845,15 @@ internal sealed class AtomicWriteGrain(
     /// <summary>
     /// Called when the routing tier refused the prepared batch because the
     /// logical tree no longer resolves to the bound copy (issue #4358). Resolves
-    /// the routing afresh and, when the tree has indeed moved, re-binds the saga
-    /// to the copy it resolves to now so the batch is re-dispatched there.
-    /// Returns <see langword="false"/> when the fresh routing still names the
-    /// bound copy, leaving the failure to the ordinary retry path.
+    /// the routing afresh and applies <see cref="SagaCopyBinding.AfterRefusal"/>:
+    /// when the tree has moved to a copy the bound copy mirrors into, the saga
+    /// stays bound and the dispatch is retried, which the routing tier then places
+    /// on the bound copy (issue #4454) - re-binding part way would leave the
+    /// prepares already taken on the bound copy for a resize undo to re-expose;
+    /// otherwise the saga re-binds to the copy the tree resolves to now so the
+    /// batch is re-dispatched there. Returns <see langword="false"/> when the
+    /// fresh routing still names the bound copy, leaving the failure to the
+    /// ordinary retry path.
     /// </summary>
     private async Task<bool> TryRebindToResolvedCopyAsync()
     {
@@ -2809,9 +2862,19 @@ internal sealed class AtomicWriteGrain(
         {
             routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
                 .GetRoutingAsync(forceRefresh: true);
-            if (string.Equals(routing.PhysicalTreeId, state.State.BoundPhysicalTreeId, StringComparison.Ordinal))
+            var bound = state.State.BoundPhysicalTreeId!;
+            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
             {
                 return false;
+            }
+
+            if (SagaCopyBinding.AfterRefusal(bound, routing.PhysicalTreeId, await BoundCopyMirrorDestinationAsync(bound))
+                == SagaCopyBindingVerdict.StayBound)
+            {
+                Logger.LogInformation(
+                    "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Bound} to {Current}, which the bound copy mirrors into, while its batch was being dispatched; staying bound and dispatching the rest onto the bound copy.",
+                    OperationKey, state.State.TreeId, bound, routing.PhysicalTreeId);
+                return true;
             }
 
             var prevBound = state.State.BoundPhysicalTreeId;
