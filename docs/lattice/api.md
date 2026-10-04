@@ -540,7 +540,7 @@ maintenance windows accordingly.
 |--------|-----------|-------------|
 | `IsMergeCompleteAsync` | `Task<bool> IsMergeCompleteAsync()` | `true` once no merge is in progress (vacuously `true` when none has ever been initiated). Monotonic: once `true` for a given operation, never returns `false` again. |
 | `IsSnapshotCompleteAsync` | `Task<bool> IsSnapshotCompleteAsync()` | Same semantics for `SnapshotAsync`. |
-| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Same semantics for `ResizeAsync`. Answers without waiting for an in-flight resize phase. |
+| `IsResizeCompleteAsync` | `Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default)` | Same semantics for `ResizeAsync`. Answers without waiting for an in-flight resize phase. A completed resize reports `true` only once it has released the tree's alias reservation, so a `DeleteTreeAsync` or alias change issued as soon as it reports `true` is never refused as an alias operation in progress ([#4527](https://github.com/NSTA1/Orleans.Lattice/issues/4527)). |
 | `IsResizeUndoPendingAsync` | `Task<bool> IsResizeUndoPendingAsync(CancellationToken cancellationToken = default)` | `true` while an undo accepted by `UndoResizeAsync` is still unwinding; `false` once it has finished or when none was requested. Takes precedence over `IsResizeCompleteAsync` when telling a running resize, an unwinding undo, and no resize apart (an undo of an already completed resize leaves `IsResizeCompleteAsync` `true`). Answers without waiting for an in-flight resize phase. |
 | `IsReshardCompleteAsync` | `Task<bool> IsReshardCompleteAsync(CancellationToken cancellationToken = default)` | Same semantics for `ReshardAsync`. |
 
