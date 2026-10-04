@@ -276,12 +276,14 @@ public partial class BootstrapAtomicVisibilityTests
     /// <para>
     /// The registry now reports such a row as
     /// <see cref="TxStatus.Indeterminate"/> rather than omitting it, and the
-    /// prepared pass skips only genuinely decided sagas, so the rows ship and the
-    /// receiver holds exactly what the source holds.
+    /// export resolves a row whose decision is still stored to that recorded
+    /// verdict (#4481), so an aged-out commit ships as committed rows: the
+    /// write is neither dropped nor left for the receiver to read as still
+    /// preparing.
     /// </para>
     /// </summary>
     [Test]
-    public async Task ExportAsync_still_emits_prepared_rows_when_the_decision_has_aged_out()
+    public async Task ExportAsync_ships_the_recorded_commit_when_the_decision_has_aged_out()
     {
         const string keyA = "aged-alpha";
         const string keyB = "aged-beta";
@@ -314,15 +316,17 @@ public partial class BootstrapAtomicVisibilityTests
         var stream = await _provider.ExportAsync(AgedTree, HybridLogicalClock.Zero);
         var entries = await DrainAsync(stream);
 
-        var preparedKeys = entries
-            .Where(e => e.IsPrepared && e.TransactionId == txid)
-            .Select(e => e.Key)
-            .OrderBy(k => k, StringComparer.Ordinal)
-            .ToList();
-
-        Assert.That(preparedKeys, Is.EqualTo(new[] { keyA, keyB }),
-            "An indeterminate saga's prepared rows must ship. Skipping them drops "
-            + "the write from the bootstrap payload with nothing left to repair it.");
+        var sagaRows = entries.Where(e => e.Key == keyA || e.Key == keyB).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(sagaRows.Any(e => e.IsPrepared), Is.False,
+                "The recorded commit behind the aged-out row resolves the saga; it must not ship as prepared rows.");
+            Assert.That(
+                sagaRows.Where(e => !e.IsPrepared).Select(e => (e.Key, e.Value[0])).Distinct().OrderBy(r => r.Key, StringComparer.Ordinal).Select(r => r.Item2).ToArray(),
+                Is.EqualTo(new byte[] { 1, 2 }),
+                "Both keys ship as committed rows carrying the saga's values. Dropping them loses the write "
+                + "from the bootstrap payload with nothing left to repair it.");
+        });
     }
 
     /// <summary>
