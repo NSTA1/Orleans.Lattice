@@ -182,7 +182,7 @@ follow:
   without limit (see
   [Tree Storage](tree-storage.md#sizing-surface-1---leaf-grain-state-row)).
 - **Replication consumers see exactly the foreground commit ordering.** A peer
-  replicating from this shard sees the same `LatticeMutation` envelopes in the
+  replicating from this WAL partition sees the same `LatticeMutation` envelopes in the
   same order that the local projection saw them. The WAL is the linearization
   point.
 
@@ -207,7 +207,7 @@ replication change feed.
 The grain also serves the replication shipper's bytes-shaped page read (the
 same durable gap-free window, each entry carried as the payload bytes the
 encoder wrote at append time, read through `IWalStorageProvider.ReadEncodedAsync`),
-reports the provider's retained-payload and physical byte sizes for the shard
+reports the provider's retained-payload and physical byte sizes for the WAL partition
 (`-1` when the provider does not support byte accounting), and fences itself
 against appends and retires its activation during a placement move (see
 [Moving a partition to another account](wal-storage-providers.md#moving-a-partition-to-another-account)).
@@ -400,7 +400,7 @@ on the grain instance; up to `WalMaxPendingBatches` flushes can be in
 motion against `IWalStorageProvider.AppendEncodedBatchAsync` simultaneously,
 each independently completing per-caller `TaskCompletionSource<long>`
 instances when the provider acknowledges durability. Offset assignment is
-serialised under the shard's internal state gate, so each in-flight flush
+serialised under the WAL partition's internal state gate, so each in-flight flush
 owns a strictly-increasing, non-overlapping offset window by construction
 even while batch appends interleave.
 
@@ -854,8 +854,8 @@ allowed to "fall off the log" so disk usage stays bounded; that consumer
 detects the gap on its next read and re-bootstraps via the fall-off-log
 path described in [`projection-rebuild.md`](projection-rebuild.md).
 
-The scan is conservative: the first non-eligible entry per shard stops the
-walk for that shard, as does the first entry above the partition's durable
+The scan is conservative: the first non-eligible entry per WAL partition stops the
+walk for that partition, as does the first entry above the partition's durable
 materialiser offset floor. WAL offsets are dense and append-only but HLC
 `WallClockTicks` is mostly-monotonic-with-skew, so a stop-at-first-miss walk
 preserves correctness while a more aggressive scan would risk trimming an
@@ -1126,8 +1126,8 @@ verdict, with `cause="not_driven"`.
 
 Two further GC signals separate a tree that is catching up from one that is
 stuck (issue #3149). `orleans.lattice.wal.gc.floor_head_distance` records,
-for each shard a pass scanned, how many offsets lie from the first entry the
-scan had to retain through the shard's newest entry - zero when the scan
+for each WAL partition a pass scanned, how many offsets lie from the first entry the
+scan had to retain through the partition's newest entry - zero when the scan
 released everything it was offered - and
 `orleans.lattice.wal.gc.terminal_breach` counts each pass of a tree that has
 been over its byte ceiling, with a usable cursor floor, reclaiming nothing,

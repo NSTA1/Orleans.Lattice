@@ -92,8 +92,8 @@ public interface ILatticeBootstrapCoordinator
     /// <param name="treeName">The logical tree id to bootstrap. Must be non-null and non-empty.</param>
     /// <param name="sourceClusterId">
     /// The id of the cluster the snapshot was produced on. Stamped
-    /// onto every applied entry as its origin id so the per-origin
-    /// HWM dedupe can recognise the snapshot/incremental boundary.
+    /// onto every applied entry as its origin id so the snapshot-pinned
+    /// floor can recognise the snapshot/incremental boundary.
     /// Must be non-null and non-empty.
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed at every state transition and on every yielded snapshot entry.</param>

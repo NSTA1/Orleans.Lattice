@@ -4,21 +4,21 @@ Adaptive shard splitting allows a hot physical shard to split into two **at
 runtime, fully online** - no shard is ever taken offline. Splits happen
 automatically when an autonomic monitor detects a hot shard, and an
 [online reshard](online-reshard.md) drives the same split to grow a tree's
-shard count. Shard splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
-and is not reachable from consumer assemblies.
+shard count. Shard splitting is internal-only: individual split coordinators are not
+reachable from consumer assemblies.
 
 ## Why
 
 Lattice trees are sharded by hashing keys into a virtual slot space and
-mapping virtual slots onto physical `ShardRootGrain` activations. With a
+mapping virtual slots onto physical shard-root activations. With a
 fixed shard count, a workload skewed toward a small set of keys will
 saturate one shard while others sit idle. Adaptive splitting redistributes
 hot virtual slots to a new physical shard so the load follows the data.
 
 ## How it works
 
-A split is driven by the internal `TreeShardSplitGrain` coordinator through
-five persisted phases, in this order. The source shard *S* keeps serving reads and
+A split is driven by an internal per-shard coordinator through
+persisted phases, in this order. The source shard *S* keeps serving reads and
 writes throughout; the target shard *T* receives mirrored data and eventually
 owns the moved slots.
 
@@ -328,20 +328,20 @@ sampling pass until it succeeds. On each tick (default every 30 s) it:
    (fold). If that count is already `MaxConcurrentAutoSplits` or more, the
    pass triggers nothing, so a fold in flight takes up one of the tree's
    autonomic split slots.
-   Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
+   Because the hot-shard monitor is keyed per-tree, the cap is enforced
    independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
 4. Selects the top-`(MaxConcurrentAutoSplits - inFlight)` hottest shards
    whose rate reaches `HotShardOpsPerSecondThreshold` (default 200 ops/s),
    skipping any shard already splitting, on cooldown, or owning a single
-   virtual slot. Three shape clauses can refuse a hot shard as well: no
+   virtual slot. Additional shape clauses can refuse a hot shard as well: no
    shard is admitted once the tree has `MaxPhysicalShardsPerTree`
    physical shards (default 256), or while its load is uniform - the
    hottest shard's rate below `HotShardMinSkewRatio` (default 1.5) times
    the median shard rate, the signature of a bulk ingest that a split
    cannot relieve - and a candidate holding fewer than
    `HotShardMinShardEntries` live entries (default 1024) is skipped.
-5. Triggers `ITreeShardSplitGrain.SplitAsync` on each selected shard in
+5. Triggers one split coordinator on each selected shard in
    parallel via `Task.WhenAll` and starts a per-shard cooldown.
 
 Each split runs in its own coordinator activation, keyed
@@ -362,7 +362,7 @@ individually** when:
 | `AutoSplitEnabled = false` | Whole pass | Returns early. |
 | Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Whole pass | Returns early. |
 | Resize / reshard / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Reshard/Merge/SnapshotCompleteAsync()` returns `false`. |
-| Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
+| Any shard has a pending bulk graft | Whole pass | A shard root reports a pending bulk operation. |
 | Shard migrations in flight (adaptive splits and fold donors) already at `MaxConcurrentAutoSplits` | Whole pass | Count of shards that report they are splitting. |
 | Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |
 | Tree already has `MaxPhysicalShardsPerTree` physical shards (default 256) | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=shard_ceiling`. |
@@ -406,7 +406,7 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 
 | Option | Default | Description |
 |---|---|---|
-| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
+| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, the hot-shard monitor will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
 | `HotShardOpsPerSecondThreshold` | `200` | Operations/second at or above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
@@ -432,11 +432,12 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   `BeginShadowWrite` re-stamps every in-flight prepared mutation from
   *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`
   saga whose Prepare landed on *S* before the split commits and
-  completes against *T* with no perceived interruption. Combined with
-  `LatticeOptions.TxDecisionRetention` (default 60 s), a sweep that
-  installs a pending bucket after the saga's terminal fan-out has
-  already broadcast can still resolve the verdict via the registry
-  tombstone window. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
+  completes against *T* with no perceived interruption. A swept or
+  shadow-forwarded prepare that reaches *T* after its saga has decided is
+  refused rather than bucketed: *T*'s leaf reads the decision from the
+  logical tree's registry, where `LatticeOptions.TxDecisionRetention`
+  (default 60 s) keeps it readable, and the sweep's post-sweep cleanup
+  applies a committed saga's terminal with the value as its backstop. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
 * **No mixed-round batch across the swap** - the coordinator's drain
   copies a shadowing saga's *pre-saga* value into *T* with a migration
   marker, so between the shard-map swap and the arrival of the saga's
@@ -468,8 +469,8 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
 ## Scope
 
-Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
-infrastructure: once `AddLatticeAuth` has installed its trust-boundary call
+Shard splitting is an autonomic concern. The individual split coordinator is
+internal infrastructure: once `AddLatticeAuth` has installed its trust-boundary call
 filter, starting a split asserts that the call originated inside the
 cluster, so an external client call to start one is rejected with
 `LatticeAuthorizationDeniedException` (a cluster without that filter does

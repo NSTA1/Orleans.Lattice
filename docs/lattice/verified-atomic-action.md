@@ -84,7 +84,7 @@ A model that asserts nothing an interleaving can break is worthless, so the fixt
 proves the model can fail. `AtomicActionExecutionModel` takes a
 `useBrokenReverseOrder` flag: when set, it compensates the **lowest**-indexed
 committed step first (forward order) instead of the highest.
-`AtomicActionCoyoteTests` has two tests:
+`AtomicActionCoyoteTests` has tests for both arms:
 
 - `Compensation_runs_in_reverse_order_exactly_once_on_any_order` runs the proven
   core and calls `CoyoteModelHarness.AssertNoViolationInAnyExploredRun(...)` - no

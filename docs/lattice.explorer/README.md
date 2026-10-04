@@ -10,7 +10,7 @@ backups, telemetry and the cluster itself, entirely over the cluster's gRPC APIs
 The console reaches a cluster only through the cluster's public facades, so it
 never joins Orleans membership. Out of the box it gives you:
 
-- **Nine native areas.** Data, Apps, Access, Schema, Tenancy, Replication,
+- **Native areas.** Data, Apps, Access, Schema, Tenancy, Replication,
   Backups, Telemetry and Cluster are compiled into the console. Each one probes
   the facade it needs and shows itself only to a caller who can use it.
 - **The address is the navigation.** Every page has one canonical, lower-case
@@ -79,7 +79,7 @@ transitively.
 |---|---|---|
 | Data | [State API](../lattice.api.state/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
 | Apps | [App control, catalogue, workspace and bridge](../lattice.api.apps/README.md) | Your apps, the source catalogue, consent review, lifecycle, each app's own pages, and its sandboxed UI. See [Lattice Apps in the Explorer](lattice-apps.md). |
-| Access | [Auth control API](../lattice.api.auth/README.md) | Rules, groups and decision explanation. See [Managing access](managing-access.md). |
+| Access | [Auth control API](../lattice.api.auth/README.md), [Tenant administration API](../lattice.api.tenantadmin/README.md) | Cluster rules and groups, delegated tenant groups and members, tenant-tier rules, and decision explanation. See [Managing access](managing-access.md). |
 | Schema | [Schema control API](../lattice.api.schema/README.md) | Policy, version configuration, compliance scans, remediation and schema dead letters. See [Managing schema](managing-schema.md). |
 | Tenancy | [Tenant administration API](../lattice.api.tenantadmin/README.md) | The operator's tenant directory and each tenant's members, quota, regions and sharing. See [Tenant scope](tenant-scope.md). |
 | Replication | [Replication API](../lattice.api.replication/README.md) | The estate map, peer link health, enrolled trees, and enabling or disabling replication for a tree. See [The Explorer areas](areas.md#replication). |

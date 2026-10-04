@@ -1,6 +1,6 @@
 # Efficiency
 
-The state API is an always-available read surface, so its **ambient cost must be near zero when no one is looking** and must scale sub-linearly when many observers watch the same thing. Two guarantees deliver that.
+The state API is an always-available read surface, so its **ambient cost must be near zero when no one is looking** and must scale sub-linearly when many observers watch the same thing. The guarantees below deliver that.
 
 ## Reader-less clusters sample nothing
 

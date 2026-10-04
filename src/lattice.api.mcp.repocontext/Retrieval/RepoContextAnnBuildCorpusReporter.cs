@@ -83,8 +83,8 @@ internal readonly record struct RepoContextAnnBuildCorpusSnapshot(
 /// authorization denial on the corpus can never again be mistaken for an empty
 /// repository.
 /// <para>
-/// <b>Why this exists.</b> A denied <b>point</b> read throws, but a denied
-/// <b>range</b> read resolves to a reject-all key filter and returns a clean,
+/// <b>Why this exists.</b> A denied <b>range</b> read resolves to a reject-all
+/// key filter and returns a clean,
 /// successful, empty result: no exception, no log, every instrument healthy. The
 /// build then counted zero vectors, ingested zero, declined to partition, reached
 /// <c>Ready</c>, recorded <c>Converged</c>, logged a <i>success</i> line and stood

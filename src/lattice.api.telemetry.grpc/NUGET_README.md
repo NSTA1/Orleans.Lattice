@@ -5,10 +5,10 @@ Optional, opt-in **gRPC transport binding** for
 transport-agnostic, read-only telemetry facade.
 
 It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
-a **client-safe** client. `LatticeTelemetryApiGrpcClient` binds the two facade
-operations - **get catalog** (the curated named-query catalogue the caller may
-select from) and **query** (evaluate one catalogue entry by id with bounded
-parameters) - alongside the unauthenticated auth-scheme discovery RPC. Every
+a **client-safe** client. `LatticeTelemetryApiGrpcClient` binds the facade operations - **get catalog** (the curated named-query catalogue
+the caller may select from) and **query** (evaluate one catalogue entry by id
+with bounded parameters) - alongside the unauthenticated auth-scheme discovery
+RPC. Every
 wire message rides the Orleans serializer, so the contract stays versioned and
 additive-only.
 

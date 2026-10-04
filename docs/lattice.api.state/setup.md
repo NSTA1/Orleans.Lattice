@@ -1,6 +1,6 @@
 # Setup
 
-`Orleans.Lattice.Api.State` layers on top of an existing `Orleans.Lattice` silo. There are three registration steps, two of which are optional depending on whether you expose the surface remotely.
+`Orleans.Lattice.Api.State` layers on top of an existing `Orleans.Lattice` silo. The registration steps below include optional remote-exposure pieces.
 
 ## 1. Register the facade on the silo
 
@@ -17,7 +17,7 @@ builder.Host.UseOrleans(silo =>
 });
 ```
 
-With only this step the facade runs **in-process**, with no transport hop. The facade interfaces (`ILatticeStateQuery` and friends) live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so a co-located consumer reuses them in one of two ways: either it references that contract package and resolves them from DI directly (the path the co-hosted `Orleans.Lattice.Api.Mcp` server takes), or it co-hosts the gRPC binding in the same process and dials it over a loopback channel, which still avoids a network hop. See [Client](client.md#in-process-reuse) for that path.
+With only this step the facade runs **in-process**, with no transport hop. The facade interfaces (`ILatticeStateQuery` and friends) live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so a co-located consumer reuses them either by referencing that contract package and resolving them from DI directly (the path the co-hosted `Orleans.Lattice.Api.Mcp` server takes), or by co-hosting the gRPC binding in the same process and dialing it over a loopback channel, which still avoids a network hop. See [Client](client.md#in-process-reuse) for that path.
 
 ## 2. Add the gRPC binding
 

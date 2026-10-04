@@ -409,7 +409,7 @@ internal sealed partial class ReplicationApplier(
             // saga-id-keyed and idempotent on the receiver
             // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
             // _recentlyTerminal HashSet dedup). They bypass the
-            // per-origin HWM check, the shadow-forward dedup cache, and
+            // snapshot-pinned floor check, the shadow-forward dedup cache, and
             // the causal-buffer parking path: those primitives are
             // per-key data-flow dedup primitives and have no defined
             // semantics on saga linearization records. The receiver-side
@@ -532,7 +532,7 @@ internal sealed partial class ReplicationApplier(
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass the
                 // causal-park gate for the same reason they bypass
-                // the HWM gate (see the HWM dedup comment above):
+                // the snapshot-pinned floor gate (see the floor comment above):
                 // parallel cross-leaf saga writes carry VectorClock
                 // frontiers whose entries point at sibling per-leaf
                 // clocks, and parking them would produce a
@@ -833,9 +833,9 @@ internal sealed partial class ReplicationApplier(
                     // (shadow-forward-dedup); the dead-letter
                     // decorator's "Applied=false clears the counter"
                     // contract would then silently drop the entry
-                    // until FIFO eviction. The HWM was never advanced
-                    // for this entry (apply threw before TryAdvance),
-                    // so HWM dedupe will not suppress the retry - the
+                    // until FIFO eviction. The incremental HWM was never
+                    // advanced for this entry (apply threw before TryAdvance),
+                    // and is not a retry drop threshold - the
                     // cache rollback is the only step required.
                     if (_dedupeCaches.TryGetValue(ent.TreeId, out var cache))
                     {

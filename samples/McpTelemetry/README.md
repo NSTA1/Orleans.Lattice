@@ -86,7 +86,7 @@ report the silo as up, confirm `docker compose up -d` is running and that port
 `5290` is reachable from the container.
 
 Authorization on the MCP endpoint is disabled purely to keep the sample
-one-command runnable with no identity provider: a demo credential bridge maps a
+free of an identity provider: a demo credential bridge maps a
 request carrying a marker header onto a fixed `agent` credential. A real
 deployment leaves `RequireAuthorization` at its secure default, registers an
 `ILatticeApiMcpAuthorizer`, and lifts an authenticated ASP.NET Core principal

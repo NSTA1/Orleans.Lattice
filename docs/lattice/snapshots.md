@@ -17,7 +17,7 @@ snapshot. Each shard is unlocked individually after its entries have been copied
 so earlier shards become readable again while later shards are still being
 processed.
 
-Each shard follows a three-phase pattern:
+Each shard follows this phased pattern:
 
 1. **Lock** (once) - mark every source shard in the copied range (see
    [Requirements](#requirements)) as deleted. The intent is persisted
@@ -109,7 +109,7 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 
 ## Crash Safety
 
-Snapshot progress is persisted in `TreeSnapshotState` after each phase
+Snapshot progress is persisted in the snapshot coordinator's state after each phase
 completion. For offline mode, the snapshot intent is persisted with a **Lock**
 phase *before* any source shards are marked as deleted. This ensures that a
 crash between intent and shard-marking can be recovered: on restart, the

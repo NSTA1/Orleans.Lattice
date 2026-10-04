@@ -54,7 +54,7 @@ aborted saga likewise surfaces to the caller as a
 
 ## The saga phases
 
-The coordinator drives every enlisted participant on every cluster through three
+The coordinator drives every enlisted participant on every cluster through its
 phases:
 
 1. **Prepare** - each participant builds the restored data into a shadow
@@ -90,7 +90,7 @@ phases:
    prepared is compensated: its shadow is reverted and garbage collected and the
    pre-restore tree is left untouched.
 
-Two guarantees make this safe under failure:
+These guarantees make this safe under failure:
 
 - **Single global decision.** The coordinator reaches exactly one
   commit-or-abort decision after collecting every vote, and delivers that one
@@ -193,7 +193,7 @@ single global decision.
 
 Implement the public `ISagaParticipant` interface (in `Orleans.Lattice.Replication`)
 and register it with `AddLatticeSagaParticipant<TParticipant>(name)` on the silo
-builder. The interface has four methods:
+builder. The interface methods are:
 
 - `PrepareAsync` - prepare the resource set this participant hosts for the saga
   and return a `SagaParticipantPrepareResult` carrying the vote. The work may be

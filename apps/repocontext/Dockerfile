@@ -15,6 +15,9 @@
 #
 #   docker build -f apps/repocontext/Dockerfile -t repocontext-mcp:local .
 #
+# Provenance-gated images also pass --build-arg GIT_COMMIT=$(git rev-parse HEAD);
+# omitting it leaves the revision label empty.
+#
 # Behind a private / corporate-proxy / offline NuGet feed, where public
 # nuget.org is unreachable, point the restore at your own NuGet.Config with the
 # optional BuildKit secret (the same 'nugetcfg' convention the local-dev
@@ -22,6 +25,9 @@
 #
 #   docker build -f apps/repocontext/Dockerfile -t repocontext-mcp:local \
 #     --secret id=nugetcfg,src=$env:APPDATA\NuGet\NuGet.Config .
+#
+# Add the same GIT_COMMIT build arg here when the image will be checked by the
+# provenance gate.
 #
 # The cold-start rig's `rig.ps1 build` passes it for you from
 # $env:NUGET_CONFIG_FILE.

@@ -15,16 +15,16 @@ After deletion, any attempt to read from or write to the tree throws `InvalidOpe
 
 ## How It Works
 
-Deletion uses a three-phase approach:
+Deletion uses a phased approach:
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant L as LatticeGrain
-    participant D as TreeDeletionGrain
-    participant S0 as ShardRootGrain (0)
-    participant S1 as ShardRootGrain (1)
-    participant SN as ShardRootGrain (N)
+    participant L as ILattice facade
+    participant D as Deletion coordinator
+    participant S0 as Shard root (0)
+    participant S1 as Shard root (1)
+    participant SN as Shard root (N)
     participant R as Reminder Service
 
     Client->>L: DeleteTreeAsync()
@@ -67,7 +67,7 @@ sequenceDiagram
 
 ### Phase 1: Mark shards as deleted
 
-`TreeDeletionGrain.DeleteTreeAsync()` calls `MarkDeletedAsync()` on every shard in parallel. Each shard persists an `IsDeleted = true` flag to its `ShardRootState`. Once set, every subsequent `GetAsync`, `SetAsync`, `DeleteAsync`, `ScanKeysAsync`, `BulkLoadAsync`, and `BulkAppendAsync` call on that shard throws `InvalidOperationException` immediately - before touching any leaf or internal node.
+The deletion coordinator marks every shard as deleted in parallel. Each shard persists an `IsDeleted = true` flag in its root state. Once set, every subsequent `GetAsync`, `SetAsync`, `DeleteAsync`, `ScanKeysAsync`, `BulkLoadAsync`, and `BulkAppendAsync` call on that shard throws `InvalidOperationException` immediately - before touching any leaf or internal node.
 
 "Every shard" means every physical shard index the registry records for the tree, not just the pinned `ShardCount`: an [adaptive shard split](shard-splitting.md) allocates its target shard above the pin and routes slots to it without changing the pin, and a shard consolidation retires a donor from the routing map, keeping its shard root as a routing tombstone after releasing its leaves. Deletion, recovery and purge therefore walk shards `0` through the highest index the registry has recorded for the tree (its pinned count, its shard map or its split allocation high-water mark, whichever is greatest), so a split-added shard and a retired donor are soft-deleted, recovered and purged with the rest of the tree. An [online reshard](online-reshard.md) that re-pins an observably empty tree to a smaller count rewrites the pin and the map, and raises the high-water mark to the highest index the tree had before, so the shards above the new count - and whatever their leaves still hold - stay inside every later delete, recovery and purge.
 
@@ -75,7 +75,7 @@ On an [aliased tree](#deleting-an-aliased-tree) the walk covers the pinned live 
 
 ### Phase 2: Persist and schedule
 
-After all shards are marked, the `TreeDeletionGrain` persists its own `IsDeleted` flag and `DeletedAtUtc` timestamp, unregisters the [tombstone compaction](tombstone-compaction.md) reminder (compaction is no longer needed for a deleted tree), then registers a grain reminder for deferred purge. The reminder fires at intervals equal to the configured `SoftDeleteDuration` (clamped to a minimum of 1 minute). A registration that races the Orleans reminder service's start-up is retried; if it still cannot be registered, the grain rolls its soft delete back (the shard marks stay in place) and the call fails, so a retried delete is a real retry rather than a no-op against a tree nothing would ever purge.
+After all shards are marked, the deletion coordinator persists its own `IsDeleted` flag and `DeletedAtUtc` timestamp, unregisters the [tombstone compaction](tombstone-compaction.md) reminder (compaction is no longer needed for a deleted tree), then registers a grain reminder for deferred purge. The reminder fires at intervals equal to the configured `SoftDeleteDuration` (clamped to a minimum of 1 minute). A registration that races the Orleans reminder service's start-up is retried; if it still cannot be registered, the grain rolls its soft delete back (the shard marks stay in place) and the call fails, so a retried delete is a real retry rather than a no-op against a tree nothing would ever purge.
 
 ### Phase 3: Purge
 
@@ -83,7 +83,7 @@ When the reminder fires and the soft-delete window has elapsed (`now - DeletedAt
 
 For each shard, `PurgeAsync()`:
 
-1. Clears every leaf the shard root still records as owed a state clear (`ShardRootState.PendingLeafClears`) - leaves an earlier [empty-leaf reclaim](tree-structure.md) or orphan repair took out of the tree but could not clear. They are on neither the chain nor any routing table, so no walk below reaches them, and the shard row cleared in the last step is the only thing that names them (issue [#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)).
+1. Clears every leaf the shard root still records as owed a state clear - leaves an earlier [empty-leaf reclaim](tree-structure.md) or orphan repair took out of the tree but could not clear. They are on neither the chain nor any routing table, so no walk below reaches them, and the shard row cleared in the last step is the only thing that names them (issue [#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)).
 2. Walks the doubly-linked leaf chain from the leftmost leaf, calling `ClearGrainStateAsync()` on each leaf (which clears persistent state and deactivates the grain).
 3. Collects all internal node grain IDs by walking the tree from the root level by level, and with them every leaf the bottom internal level routes to. Any routed leaf the chain walk did not reach is cleared too, then each internal node.
 4. Clears the shard root's own state via `ClearStateAsync()`.
@@ -114,7 +114,7 @@ After all shards are purged, the deletion grain records the purge as complete, r
 
 ## Read Cache Behaviour
 
-`LeafCacheGrain` is a `[StatelessWorker]` that holds an in-memory copy of leaf data. It is **not** notified when a tree is deleted - doing so would require traversing every leaf in the tree to set a flag, which is prohibitively expensive and defeats the purpose of the shard-root-level guard.
+The leaf cache is a `[StatelessWorker]` that holds an in-memory copy of leaf data. It is **not** notified when a tree is deleted - doing so would require traversing every leaf in the tree to set a flag, which is prohibitively expensive and defeats the purpose of the shard-root-level guard.
 
 This is safe because the cache is not publicly addressable. The only path to it is the shard root's read traversal, and every shard-root operation runs its deleted-tree check before it traverses at all, so a read of a deleted tree is refused before it reaches the cache layer. No external caller can obtain a reference to a leaf cache - its key is an internal `GrainId` string derived from the primary leaf's identity, not exposed through `ILattice`.
 
@@ -206,7 +206,7 @@ Before issue [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941) the w
 
 ## Resized, aliased, and re-created trees
 
-Deletion, recovery and purge keep one deletion record per tree ID. Three situations need care: the original copy a resize retires, a tree whose ID is aliased to another physical tree, and a tree created again under the ID of a purged one.
+Deletion, recovery and purge keep one deletion record per tree ID. These situations need care: the original copy a resize retires, a tree whose ID is aliased to another physical tree, and a tree created again under the ID of a purged one.
 
 ### Retiring a resized tree's original copy
 
@@ -231,7 +231,7 @@ The WAL GC also checks a tree's deletion state before it touches leaves to heal 
 
 ### Deleting an aliased tree
 
-A resize, a shadow-cutover restore and a schema remediation leave a tree [aliased](tree-registry.md#tree-aliasing) to a physical copy that holds its live data. `DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` always act on the **logical** tree, so on an aliased tree the logical tree's deletion grain resolves the alias and runs the three phases above against the live copy:
+A resize, a shadow-cutover restore and a schema remediation leave a tree [aliased](tree-registry.md#tree-aliasing) to a physical copy that holds its live data. `DeleteTreeAsync`, `RecoverTreeAsync` and `PurgeTreeAsync` always act on the **logical** tree, so on an aliased tree the logical tree's deletion grain resolves the alias and runs the phases above against the live copy:
 
 1. **Validate and pin.** A deletion fence is published first, so a concurrent alias change either finishes before the delete reads the registry or is refused. The copy the alias targets must be owned by this logical tree - its registry `DerivedFrom` must be the logical tree id, and no other logical tree may alias it - or the delete is refused with `InvalidOperationException` and nothing is marked. The resolved copy is then pinned in the logical tree's durable state, so every retry, recovery and purge acts on that same copy even if a later read of the alias would differ.
 2. **Delegate.** The live copy is marked deleted and the logical tree's single purge reminder is registered. The copy's own deletion bookkeeping publishes no lifecycle event; the logical tree publishes one `TreeDeleted` and counts one `kind=deleted` under its own id.

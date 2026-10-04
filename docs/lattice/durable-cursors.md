@@ -31,17 +31,17 @@ characteristics.
 
 ### Grain model
 
-Each cursor is a single `ILatticeCursorGrain` activation keyed
+Each cursor is backed by a single internal grain activation keyed
 `{treeId}/{cursorId}`, where `cursorId` is a server-assigned opaque GUID
 returned by the `Open*Async` call. The grain is an internal implementation
-detail - its interface is declared `internal`, so application code cannot
-reference it. Callers interact exclusively through the `ILattice` facade.
+detail, so application code cannot reference it. Callers interact
+exclusively through the `ILattice` facade.
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant L as ILattice
-    participant G as ILatticeCursorGrain
+    participant G as Cursor grain
     participant P as Persistent State
     participant S as Shards
 
@@ -81,7 +81,7 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     participant C as Client
-    participant G as ILatticeCursorGrain
+    participant G as Cursor grain
 
     Note over G: NotStarted
 
@@ -105,9 +105,9 @@ sequenceDiagram
 ```
 ### Persisted state
 
-`LatticeCursorState` is intentionally minimal - a silo restart only needs to
-replay one page of work, and the checkpoint must be cheap to write on every
-step.
+The persisted cursor state is intentionally minimal - a silo restart only
+needs to replay one page of work, and the checkpoint must be cheap to write
+on every step.
 
 | Field | Type | Purpose |
 |-------|------|---------|
@@ -129,7 +129,7 @@ Every `Next*Async` / `DeleteRangeStepAsync` call follows the same pattern:
 sequenceDiagram
     participant C as Client
     participant L as ILattice
-    participant G as ILatticeCursorGrain
+    participant G as Cursor grain
     participant S as Shards
 
     C->>L: NextKeysAsync(cursorId, pageSize)
@@ -246,7 +246,7 @@ finally
    `GetManyAsync` / `CountAsync` / `CountPerShardAsync`, just held
    across multiple pages. Note what carries the per-step guarantee
    here, because it is easy to credit to the wrong mechanism: inside
-   the scope `BPlusLeafGrain.ResolvePendingStatusAsync` answers from
+   the scoped leaf read path answers from
    the captured dictionary and **returns without contacting the
    registry**, so a step's per-key readings were fixed at open and no
    amount of registry-side pruning can move them. The pin in step 2 is
@@ -268,7 +268,7 @@ finally
 
 ### Caps and failure modes
 
-Three independent caps bound the registry footprint a forgotten or
+Independent caps bound the registry footprint a forgotten or
 stalled point-in-time cursor can occupy:
 
 | Cap | Default | Effect |
@@ -315,7 +315,7 @@ grain clears its persisted state and deactivates.
 ```mermaid
 sequenceDiagram
     participant R as Orleans Reminders
-    participant G as ILatticeCursorGrain
+    participant G as Cursor grain
 
     Note over G: After every Open / Next / Step
     G->>R: RegisterOrUpdateReminder("cursor-ttl", dueTime=CursorIdleTtl, period=CursorIdleTtl)
@@ -327,9 +327,9 @@ sequenceDiagram
     G->>G: DeactivateOnIdle()
 ```
 
-`LatticeCursorGrain` inherits this machinery from the internal `TtlGrain`
-abstract base class, which also backs `AtomicWriteGrain`. Each grain overrides
-`TtlReminderName`, `ResolveTtl`, and `OnTtlExpiredAsync` independently -
+The cursor implementation inherits this machinery from an internal TTL
+base that is also used by atomic-write coordinators. Each user of that
+base resolves its own reminder name, TTL value and expiry action -
 `CursorIdleTtl` and `AtomicWriteRetention` are separate options and do not
 share a value.
 
@@ -358,9 +358,9 @@ round-trips above a direct stateless scan call:
 
 | Cost component | Magnitude | Notes |
 |----------------|-----------|-------|
-| `WriteStateAsync` - checkpoint | 1 x storage write per step | Serialises `LatticeCursorState` (< 10 KB for a live-mode cursor; see [Grain state size](#grain-state-size)). On memory provider: negligible. On Azure Table / SQL: ~1-5 ms. |
+| `WriteStateAsync` - checkpoint | 1 x storage write per step | Serialises the cursor state (< 10 KB for a live-mode cursor; see [Grain state size](#grain-state-size)). On memory provider: negligible. On Azure Table / SQL: ~1-5 ms. |
 | `RegisterOrUpdateReminder` - TTL slide | 1 x reminder-table write per step | ~1-5 ms round-trip. See [debounce](#reducing-reminder-write-frequency) below. |
-| Extra grain round-trip | +1 Orleans call per step | `ILatticeCursorGrain` sits between `ILattice` and the shard fan-out. Typically < 1 ms on a local cluster. |
+| Extra grain round-trip | +1 Orleans call per step | The cursor grain sits between `ILattice` and the shard fan-out. Typically < 1 ms on a local cluster. |
 | Shard fan-out | Same as `ScanKeysAsync` / `ScanEntriesAsync` | Each step is a normal sharded scan - no additional shard calls. |
 
 **Total per-step overhead: ~2-10 ms**, dominated by the storage provider
@@ -383,20 +383,19 @@ This overhead is typically small relative to the actual I/O cost of streaming
 
 ### Reducing reminder write frequency
 
-The internal `TtlGrain` base exposes a virtual `SlideDebounce` property
-(default `TimeSpan.Zero`, meaning slide on every call). Overriding it in a
-subclass throttles `RegisterOrUpdateReminder` calls to at most one per
-interval, accepting a slightly stale TTL window in exchange for lower
-reminder-table pressure. This is an internal extension point; it is not
-surfaced on `LatticeOptions`.
+An internal TTL debounce hook defaults to `TimeSpan.Zero`, meaning the
+reminder slides on every call. Internal callers can throttle
+`RegisterOrUpdateReminder` calls to at most one per interval, accepting a
+slightly stale TTL window in exchange for lower reminder-table pressure.
+This is not surfaced on `LatticeOptions`.
 
 The simpler alternative is to **increase `pageSize`**: halving the step
 count halves the reminder and checkpoint write count proportionally.
 
 ### Grain state size
 
-`LatticeCursorState` is intentionally minimal. For a live-mode cursor, even
-with a 4 KB `LastYieldedKey` and a 1 KB spec, the checkpoint is < 10 KB. A
+The persisted cursor state is intentionally minimal. For a live-mode cursor,
+even with a 4 KB `LastYieldedKey` and a 1 KB spec, the checkpoint is < 10 KB. A
 point-in-time cursor adds its captured decision map (one entry per in-flight
 or recently completed saga at open), and a snapshot cursor adds its
 coordinate - including, on a multi-shard tree, the pinned routing map.

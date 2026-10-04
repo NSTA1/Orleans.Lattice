@@ -12,7 +12,7 @@ server-streaming), describing a restore chain, deleting a backup, accept-then-po
 backup and restore operations with progress and cancellation, reverting,
 streaming a backup's artifacts back chunk-wise, scheduling, scope status,
 capability probing, backup health, and tracked catalog rebuild / scrub. Inventory
-and the blocking catalog rebuild / scrub methods stay in-process only. The blocking create and restore client methods are deprecated and
+and the blocking catalog rebuild / scrub methods stay in-process only. The blocking create, restore, and health-check client methods are deprecated and
 will be removed in the next major version; migrate at
 https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs. Every wire message rides the Orleans
 serializer, so the contract stays versioned and additive-only.

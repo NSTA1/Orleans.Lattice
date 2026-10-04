@@ -4693,7 +4693,7 @@ internal sealed partial class LatticeGrain(
     /// activation before re-resolving. Clearing the alias too is
     /// essential for callers using this hook to escape a
     /// <see cref="StaleTreeRoutingException"/> retry loop after an
-    /// online resize / reshard swapped the alias - if only the shard
+    /// online resize or other alias cutover swapped the alias - if only the shard
     /// map were invalidated, the next resolve would still hand back
     /// the same stale physical tree id and the caller would spin
     /// against the same throw indefinitely. External saga coordinators

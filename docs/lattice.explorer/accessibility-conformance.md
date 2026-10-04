@@ -8,7 +8,7 @@ overclaims is worse than none, so the limitations section is not boilerplate.
 
 The Explorer targets **WCAG 2.2 Level AA**, which includes WCAG 2.1 Level AA.
 
-Ten criteria are the working definition of "accessible" for this console:
+These criteria are the working definition of "accessible" for this console:
 keyboard operability and focus order; visible focus; heading structure;
 landmarks and skip links; live-region announcements; name, role and value for
 custom widgets; text contrast; non-text contrast; reduced motion; and forced
@@ -69,9 +69,9 @@ the real web head against a live test cluster:
 
 - **The axe sweep** runs the `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa` and
   `wcag22aa` rule sets over every area's primary page, as the cluster's
-  administrator, in all eight appearances (Paper and Board, standard and more
-  contrast, comfortable and compact density), plus the signed-out Home and the
-  sign-in dialog.
+  administrator, in each configured appearance combination (Paper and Board,
+  standard and more contrast, comfortable and compact density), plus the
+  signed-out Home and the sign-in dialog.
 - **Named assertions** cover what axe cannot see. Keyboard tests walk the
   directory, open and restore the address line, drive the command palette, trap
   and return focus in the compact directory sheet, and move focus into and out of
@@ -90,7 +90,7 @@ the real web head against a live test cluster:
 
 The criterion each test enforces is listed in the [`ConformanceChecklist.md`](../../test/lattice.explorer.uitests/ConformanceChecklist.md) checklist.
 
-Three disciplines make those results mean something:
+These disciplines make those results mean something:
 
 - **No suppression mechanism exists.** There is no allow-list to add an
   exception to. A finding is fixed, or it is tracked as its own issue.
@@ -129,9 +129,9 @@ Three disciplines make those results mean something:
   administrator there. Their addresses render the not-found page, which is swept,
   reflowed and deep-linked like every other page. A second test cluster serves
   tenancy for the tenancy journeys: there an open tenant switcher, and the
-  Tenancy directory with its **New tenant** dialog open, are swept in all eight
-  appearances, but the rest of the Tenancy area's pages are not swept or
-  reflow-tested, and no Telemetry page is swept in the browser.
+  Tenancy directory with its **New tenant** dialog open, are swept in each
+  configured appearance combination, but the rest of the Tenancy area's pages are
+  not swept or reflow-tested, and no Telemetry page is swept in the browser.
 - **Most of the lane runs in one engine.** Only the app frame's isolation, AppKit
   boot and task-board pilot tests run in Firefox and WebKit as well as Chromium; the accessibility
   sweep, structure, keyboard and reflow tests run in Chromium.

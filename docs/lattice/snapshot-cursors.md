@@ -32,8 +32,8 @@ returning the cursor ID:
    coordinate - with the full map as well when the tree has more than one
    physical shard - so all paging fan-outs target the same shard layout.
 2. **Per-shard frozen-baseline capture.** Every shard root walks its
-   leaf chain through `IShardRootGrain.CaptureSnapshotBaselineAsync`,
-   freezing each `BPlusLeafGrain`'s committed projection and folding its
+   leaf chain through the shard-root baseline-capture path,
+   freezing each leaf's committed projection and folding its
    own `(leaf_frontier, capturedHead]` WAL tail exactly once (CRDT folds
    are not idempotent, so each record is applied to a single leaf a
    single time). The per-leaf results are unioned into one fully
@@ -74,7 +74,7 @@ returning the cursor ID:
 
 The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and
-persisted on `LatticeCursorState.SnapshotCoordinate`. The coordinate
+persisted on the cursor state's snapshot-coordinate slot. The coordinate
 carries a fresh per-open `SnapshotBaselineToken` that identifies the
 durable baseline rows. The coordinate is deterministic - replaying with
 the same coordinate yields the same page sequence, even after silo
@@ -123,7 +123,7 @@ the in-memory seed is sufficient.
 
 The frozen baseline is therefore seeded **in memory** at capture and
 persisted **lazily**: the cursor flushes every shard's baseline durably
-(`ISnapshotLeafGrain.EnsurePersistedAsync`) the first time a page reports
+(the snapshot leaf durable-baseline flush) the first time a page reports
 `HasMore == true`, *before* it returns that page or writes its
 continuation bookmark. The client only ever observes a continuation
 token after every shard baseline is durable, so any cursor that survives
@@ -176,7 +176,7 @@ A durable baseline is normally deleted at close, but an interrupted close
 token no other cursor reuses. To bound that leak, every persisted
 baseline carries a sliding time-to-live governed by
 `LatticeOptions.SnapshotBaselineTtl` (default 6 hours; set to
-`Timeout.InfiniteTimeSpan` to disable). `SnapshotBaselineStorageGrain`
+`Timeout.InfiniteTimeSpan` to disable). The snapshot-baseline storage row
 arms a self-clearing Orleans reminder when a baseline is written and
 slides it forward while the snapshot is actively served, so a long-running
 scan keeps its baseline alive while an abandoned one is reclaimed once the
@@ -304,7 +304,7 @@ while (true)
 // scope.DisposeAsync() runs here and closes the cursor.
 ```
 
-The `*Scope` family covers the five unfiltered cursor flavours - `OpenKeyCursorScopeAsync`,
+The `*Scope` family covers the unfiltered cursor flavours - `OpenKeyCursorScopeAsync`,
 `OpenEntryCursorScopeAsync`, `OpenSnapshotKeyCursorScopeAsync`,
 `OpenSnapshotEntryCursorScopeAsync`, and `OpenDeleteRangeCursorScopeAsync` -
 so the choice between scoped and manual is independent of the

@@ -303,7 +303,7 @@ Key invariants:
 
 ## 4. Lattice trees
 
-All five trees persist through the Lattice grain-storage provider
+The sample's application trees persist through the Lattice grain-storage provider
 (`lattice`, Azure Table grain storage) and their write-ahead log
 through `Orleans.Lattice.Storage.AzureTable` (table
 `OrleansLatticeWal`). The sample's own grain state (chaos toggles,

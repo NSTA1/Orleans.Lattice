@@ -12,7 +12,7 @@ orleans.lattice.membership
 
 Recording is guarded by each instrument's `Enabled` flag: when no listener is attached the resolution cache does no measurement work, so the meter is zero-cost on the resolution hot path when nobody is listening.
 
-Every instrument on this meter carries a single tag, `tenant` (`LatticeTenantLabel.TagTenant`), fixed to the platform sentinel `_platform_`: subject resolution and directory search belong to no tenant. All five instruments are charted by the bundled `Orleans.Lattice - Identity & Authorization` Grafana dashboard; see the [metrics-to-panel map](../lattice.dashboards/metrics-to-panel-map.md#orleanslatticemembership-meter).
+Every instrument on this meter carries a single tag, `tenant` (`LatticeTenantLabel.TagTenant`), fixed to the platform sentinel `_platform_`: subject resolution and directory search belong to no tenant. The instruments are charted by the bundled `Orleans.Lattice - Identity & Authorization` Grafana dashboard; see the [metrics-to-panel map](../lattice.dashboards/metrics-to-panel-map.md#orleanslatticemembership-meter).
 
 ## Instruments
 

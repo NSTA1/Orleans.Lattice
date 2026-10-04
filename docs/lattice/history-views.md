@@ -184,7 +184,7 @@ An ordinary materialised view is rebuilt from *current* source state when its
 projection version changes or when an unconstrained range delete is observed on a
 re-keyed projection (which the history projection is) - both of which would
 collapse a history timeline. A history view's registration
-carries an **accumulative** flag that changes exactly those two behaviours:
+carries an **accumulative** flag that changes these behaviours:
 
 - **Projection-version change:** the view adopts the new version forward and keeps
   its existing rows, resuming the drain from the durable checkpoint. The worst

@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Views;
 
 /// <summary>
 /// Validates <see cref="LatticeViewOptions"/> at first resolve: the per-pass
-/// batch size must be positive and the coalesce window must be greater than zero.
+/// batch size, timing, staging, fanout, replication, and throttling settings must be in range.
 /// Mirrors how the replication options are validated.
 /// </summary>
 internal sealed class LatticeViewOptionsValidator : IValidateOptions<LatticeViewOptions>

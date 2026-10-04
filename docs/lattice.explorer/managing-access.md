@@ -1,14 +1,14 @@
 # Managing access from the Explorer
 
-The **Access** area is the Explorer surface for the cluster's authorization rule store, local membership groups, and access explanations. It drives the auth administration facade; the Explorer presents and submits the data, but the cluster remains the enforcement point for every read and mutation.
+The **Access** area is the Explorer surface for the cluster's authorization rule store, local membership groups, delegated tenant groups and member sets, and access explanations. It drives the auth administration facade and, on delegated tenant pages, the tenant directory and tenant policy facades; the Explorer presents and submits the data, but the cluster remains the enforcement point for every read and mutation.
 
 `/access` is cluster-wide. Its tenant-rooted form, `/t/{tenant}/access`, keeps its tenant root and shows only that tenant's part of the policy: the rules whose governed tree is one of the tenant's own trees. App links from Access re-enter the current tenant where the Apps area is tenant-scoped.
 
 ## Availability
 
-Access is visible only after a fail-closed probe can read the first page of the group catalogue. A successful probe makes the area visible in the directory spine. The probe is remembered for the signed-in identity on the current circuit and is asked again when the identity changes.
+Access is visible after one of two fail-closed probes admits the caller. A cluster administrator is admitted when the cluster-wide probe can read the first page of the group catalogue. A tenant administrator who is not a cluster administrator is admitted when the tenant posture probe for the asserted tenant reports delegated tenant access administration enabled and the caller administers that tenant. The verdict is remembered for the signed-in identity, endpoint and asserted tenant on the current circuit, and is asked again when any of them changes.
 
-The area is hidden when the auth administration facade is absent, the cluster cannot be reached, the cluster does not serve access administration, or a signed-in identity is refused by the probe.
+The area is hidden when neither the cluster-wide access facade nor the delegated tenant access facades are served, the cluster cannot be reached, the cluster does not serve the relevant administration surface, or a signed-in identity is refused by both probes.
 
 The only unavailable state is an anonymous or unsigned circuit that is refused by the probe. The exact sentence shown is:
 
@@ -26,11 +26,12 @@ The plain addresses are cluster-wide. The tenant-rooted forms show only that ten
 
 | Page | Plain address | Tenant-rooted form | Notes |
 | --- | --- | --- | --- |
-| Rules | `/access`, `/access/rules` | `/t/{tenant}/access`, `/t/{tenant}/access/rules` | Lists authorization rules and opens the new-rule dialog with `?new=true`. Tenant-rooted, only the rules governing the tenant's own trees, with one quiet line counting the cluster-wide rules that also apply and linking to `/access/rules`. |
+| Rules | `/access`, `/access/rules` | `/t/{tenant}/access`, `/t/{tenant}/access/rules` | Lists authorization rules and opens the new-rule dialog with `?new=true`. Tenant-rooted, only the rules governing the tenant's own trees, with one quiet line counting the cluster-wide rules that also apply and linking to `/access/rules`; with delegated tenant access, separates read-only Platform rules from the tenant's own rules. |
 | Rule details | `/access/rules/{ruleId}` | `/t/{tenant}/access/rules/{ruleId}` | Shows one rule. Use `?tree={treeId}` when the rule id is reused under more than one governed tree. Tenant-rooted, another tenant's rule or a cluster-wide one is not found. |
-| Groups | `/access/groups` | `/t/{tenant}/access/groups` | Lists groups and opens the new-group dialog with `?new=true`. Groups belong to the whole cluster, so the tenant-rooted page lists none and links to the cluster's groups. |
-| Group details | `/access/groups/{groupId}` | `/t/{tenant}/access/groups/{groupId}` | Shows one group, its direct members, parent groups, and matching rules. Tenant-rooted, not found. |
-| Explain | `/access/explain` | `/t/{tenant}/access/explain` | Explains one operation or lists effective permissions. Tenant-rooted, effective permissions list the tenant's own rules and count the cluster-wide ones that also apply. |
+| Groups | `/access/groups` | `/t/{tenant}/access/groups` | Lists groups and opens the new-group dialog with `?new=true`. Without delegated tenant access, groups belong to the whole cluster, so the tenant-rooted page lists none and links to the cluster's groups. With delegated tenant access, it lists the tenant's own groups. |
+| Members | None | `/t/{tenant}/access/members` | Lists the tenant member set and lets a delegated tenant administrator add or remove members. There is no cluster-wide form. |
+| Group details | `/access/groups/{groupId}` | `/t/{tenant}/access/groups/{groupId}` | Shows one cluster group, or one tenant group when delegated tenant access is active for that tenant and caller. Without delegated tenant access, tenant-rooted group details are not found. |
+| Explain | `/access/explain` | `/t/{tenant}/access/explain` | Explains one operation or lists effective permissions. Tenant-rooted cluster Access counts the cluster-wide rules that also apply; delegated tenant Access draws the Platform and Tenant layers in decision order. |
 
 Access uses these query keys:
 
@@ -68,7 +69,7 @@ The Groups page lists groups 200 at a time and searches by group id or display n
 
 The group id is a plain text box for the new group's name, not a picker (see [Pickers](navigation-model.md#pickers)). As you type, it says "A group named {id} already exists." when the cluster already defines that group. When you leave the field, and again when you submit, an id the identity directory does not know as a group is refused with the directory named, for example "{id} is not a group in the identity directory (static roster)."; the hint states the directory's own explanation of a valid id. With no directory configured, the hint says the id is used as typed and must not name an existing group. A refused create keeps the dialog open with the id, and says why: "The group was not created: ...".
 
-A tenant-rooted groups page (`/t/{tenant}/access/groups`) lists no groups, because groups belong to the whole cluster, not to one tenant. It links to the cluster's Groups page, `/access/groups`, where groups are listed and created; asking for **New group** there with `?new=true` points you to it.
+A tenant-rooted groups page (`/t/{tenant}/access/groups`) lists tenant groups when delegated tenant access administration is on for that tenant and caller. Otherwise it lists no groups, because cluster groups belong to the whole cluster, not to one tenant. In that case it links to the cluster's Groups page, `/access/groups`, where cluster groups are listed and created; asking for **New group** there with `?new=true` points you to it.
 
 The Group details page shows the display name, direct members, parent groups, and rules that apply to the group. Operators can rename the group, add a user or nested group as a direct member, remove a direct member, explain access for the group, or delete the group.
 
@@ -127,7 +128,7 @@ The address line completes `group:{id}` and `rule:{id}` from the first page of t
 
 ## Server authority
 
-The access facade authorizes every administration call as access administration on the policy tree before reading or mutating membership or policy state. Policy explanations are computed through the same access gate used by the data plane. The Explorer is therefore an administrative client, not a second policy engine.
+The access facade authorizes every cluster-wide administration call as access administration on the policy tree before reading or mutating membership or policy state. Tenant Access pages call the tenant directory and tenant policy facades, which authorize the named tenant before reading or mutating tenant groups, members or rules. Policy explanations are computed through the same access gate used by the data plane. The Explorer is therefore an administrative client, not a second policy engine.
 
 ## See also
 

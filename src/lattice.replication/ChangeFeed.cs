@@ -197,7 +197,7 @@ internal sealed class ChangeFeed(
                     // WAL-as-sole-durability-boundary contract, every
                     // leaf commit - including entries installed by
                     // `IReplicationApplier` on this cluster - is
-                    // captured by the per-shard WAL. The change-feed
+                    // captured by the partitioned WAL. The change-feed
                     // contract documented on `IChangeFeed` is narrower:
                     // "locally-authored writes only". An apply-installed
                     // entry stamps `OriginClusterId` with the *source*

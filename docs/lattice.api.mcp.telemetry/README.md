@@ -8,7 +8,7 @@ The core [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md) server advert
 
 It is deliberately a thin, read-only proxy:
 
-- **Four read-only tools.** `lattice_telemetry_query`, `lattice_telemetry_query_range`, `lattice_telemetry_list_metrics`, and `lattice_telemetry_metric_metadata` cover instant queries, range queries, metric-name discovery, and metric metadata. There are no write, delete, or control verbs - the group is read-only by construction.
+- **Read-only tools.** `lattice_telemetry_query`, `lattice_telemetry_query_range`, `lattice_telemetry_list_metrics`, and `lattice_telemetry_metric_metadata` cover instant queries, range queries, metric-name discovery, and metric metadata. There are no write, delete, or control verbs - the group is read-only by construction.
 - **A dual-credential trust boundary.** The MCP-side authorization (a `LatticeOperation.Telemetry` grant) and the backend-side credential are two independent halves. The proxy stamps the configured *backend* credential on every backend call and **never** forwards the caller's Lattice credential to the backend.
 - **A metric-access allow-list.** A `ReadAll` default exposes every backend metric; a `DenyAllExceptAllowed` posture restricts the surface to an explicit set of exact names and `*` wildcards, enforced on every query, listing, and metadata call.
 - **Range guardrails.** A range query is bounded by a configured maximum window and step, so a single call cannot ask the backend for an unbounded scan.
@@ -44,7 +44,7 @@ services.AddTelemetryTools(o =>
 });
 ```
 
-Once the host has also registered a permissive or custom MCP authorizer (the default one denies every group tool - see [MCP security](../lattice.api.mcp/security.md#2-the-coarse-authorizer-seam)), a caller holding a cluster-wide `Telemetry` grant discovers the four `lattice_telemetry_*` tools and asks PromQL questions such as `rate(orleans_lattice_shard_writes_total[5m])` over MCP. Grant the capability with an ordinary Allow rule over the all-trees sentinel scope:
+Once the host has also registered a permissive or custom MCP authorizer (the default one denies every group tool - see [MCP security](../lattice.api.mcp/security.md#2-the-coarse-authorizer-seam)), a caller holding a cluster-wide `Telemetry` grant discovers the `lattice_telemetry_*` tools and asks PromQL questions such as `rate(orleans_lattice_shard_writes_total[5m])` over MCP. Grant the capability with an ordinary Allow rule over the all-trees sentinel scope:
 
 ```csharp verify
 using Orleans.Lattice.Auth;
@@ -64,7 +64,7 @@ For a complete host that proxies a real Prometheus instance running in Docker an
 ## Reference
 
 - [Setup](setup.md) - registering the tool module, the backend, the credential, and the guardrails.
-- [Tools](tools.md) - the four telemetry tools and their arguments and results.
+- [Tools](tools.md) - the telemetry tools and their arguments and results.
 - [Security](security.md) - the dual-credential trust boundary, the `Telemetry` capability, and the metric-access allow-list.
 
 ## See also
