@@ -40,9 +40,9 @@ reader is most likely to over-read are these.
   restore, an explicit alias change and schema remediation move the alias too;
   none is covered here.
 - **Shard consolidation is not modelled.** The reshard here only grows.
-- **Cross-cluster replication is not modelled.** As for the
-  [atomic-commit protocol](verified-atomic-commit.md#scope-one-cluster), the
-  replicated half has no formal artefact.
+- **Cross-cluster replication is not modelled.** Unlike the
+  [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
+  replicated half has its own module, shard ownership's has no formal artefact.
 - **Where production has an open defect, the modules model the intended
   design.** Each such place has an issue and a standing mutation that
   reproduces production. A clean model run is a statement about the design once

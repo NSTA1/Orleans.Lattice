@@ -21,6 +21,7 @@ be quiet about one.
 | Directory | Module | What it specifies |
 |-----------|--------|-------------------|
 | [`atomic-commit/`](atomic-commit/README.md) | `AtomicCommit` | The multi-leaf prepare / commit / abort saga, the per-tree transaction-registry decision, and reader visibility. |
+| [`atomic-commit/`](atomic-commit/README.md#the-cross-cluster-module) | `AtomicCommitCrossCluster` | The same saga replicated to a peer cluster: the receiver's terminal tally, cross-tree barrier, delegation dial-back and bootstrap, and the receiver's all-or-nothing visibility. |
 | [`replication/`](replication/README.md) | `Replication` | Plain (non-saga) cross-cluster replication: the shipper's cursor and cycle-break, the receiver's dedup, causal buffer and dead-lettering, and the bootstrap handoff, over a lossy, reordering transport. |
 | [`replication/`](replication/README.md) | `ReplicationCausalDelivery` | Causal-dependency delivery to a receiver whose shippers block at the head of the line, over shipping orders that differ from authoring order. |
 | [`replication/`](replication/README.md) | `ReplicationReBootstrap` | An in-place re-bootstrap after the source reaped a delete the receiver missed: the receiver-side reconcile and its gates. |

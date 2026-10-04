@@ -26,7 +26,8 @@ internal sealed class PreparedBucketSweepProgress
 /// by an online snapshot for every slot it copies (issue #4455).
 /// <para>
 /// For each prepared mutation the saga's decision is read under
-/// <c>decisionTreeId</c>, the logical tree the saga records it under: a decided
+/// <c>decisionTreeId</c>, the logical tree the saga records it under, and a
+/// decision the registry masks is read as recorded (issue #4473): a decided
 /// saga's terminal is applied to the target directly, with the prepared value as
 /// the committed backstop; an undecided one is replayed as a prepare, which
 /// registers the target as a participant, and the target is given a shadow
@@ -94,10 +95,9 @@ internal static class PreparedBucketSweep
                 // (issue #4368). The post-sweep cleanup reads the same way.
                 // Terminal-intent (issue #4485): this sweep APPLIES the
                 // answer, so it acts only on a decision durably recorded on
-                // the registry, never on an uncached coordinator verdict.
-                var preStatus = await TxRegistryRouting
-                    .GetRegistry(grainFactory, decisionTreeId, snapshot.TransactionId)
-                    .GetStatusForTerminalAsync(snapshot.TransactionId);
+                // the registry, never on an uncached coordinator verdict. A
+                // decision the registry masks is read as recorded (#4473).
+                var preStatus = await DecisionForSweepAsync(grainFactory, decisionTreeId, snapshot.TransactionId);
                 if (preStatus == TxStatus.Committed)
                 {
                     Dictionary<string, byte[]>? committedValues = null;
@@ -170,13 +170,14 @@ internal static class PreparedBucketSweep
         // Committed/Aborted while the decision is still reported -
         // including for TxDecisionRetention after ForgetAsync
         // tombstones it - then Indeterminate until the row is pruned,
-        // and InFlight (the default fallback) once it is gone. For
-        // Committed/Aborted we apply the terminal directly. For
-        // anything else we leave the entry pending - either the saga
-        // is genuinely still in flight (its eventual broadcast will
-        // reach destination, which is now registered as a
-        // participant) or its decision is no longer reported and the
-        // entry is a true orphan. The latter is shadowed by
+        // and InFlight (the default fallback) once it is gone. An
+        // Indeterminate answer is followed by the recorded decision,
+        // as in the pre-check (issue #4473). For Committed/Aborted we
+        // apply the terminal directly. For anything else we leave the
+        // entry pending - either the saga is genuinely still in flight
+        // (its eventual broadcast will reach destination, which is now
+        // registered as a participant) or its decision is no longer
+        // stored and the entry is a true orphan. The latter is shadowed by
         // any later prepare for the same key via the highest-HLC
         // tie-break in TryFindPendingForKey.
         if (perTxSnapshots is { Count: > 0 })
@@ -184,8 +185,11 @@ internal static class PreparedBucketSweep
             var txids = new List<Guid>(perTxSnapshots.Keys);
             var statuses = await TxRegistryFanOut.GetStatusManyForTerminalAsync(
                 grainFactory, decisionTreeId, txids);
-            foreach (var (txid, status) in statuses)
+            foreach (var (txid, reported) in statuses)
             {
+                var status = reported == TxStatus.Indeterminate
+                    ? await RecordedDecisionAsync(grainFactory, decisionTreeId, txid)
+                    : reported;
                 // Only a DECIDED status authorises acting. Anything else -
                 // genuinely in flight, or a decision the registry currently
                 // cannot determine - leaves the entry pending. Testing for
@@ -211,6 +215,28 @@ internal static class PreparedBucketSweep
             }
         }
     }
+
+    /// <summary>
+    /// The saga's decision as the sweep acts on it: the reported status, or,
+    /// when the registry masks a decision it still stores
+    /// (<see cref="TxStatus.Indeterminate"/>), the recorded one. Treating a masked
+    /// decision as in flight replayed the prepare, which the destination refuses
+    /// for a decided saga (#4445), leaving only an activation-scoped shadow
+    /// marker: a destination reactivation, or a terminal carrying no value for
+    /// the moved key, then served the migrated pre-saga value (issue #4473). The
+    /// sweep is finishing work its shard owns, the use
+    /// <see cref="ITxRegistryGrain.GetRecordedStatusAsync"/> exists for, and a
+    /// decided saga takes the terminal-with-backstop branch.
+    /// </summary>
+    private static async Task<TxStatus> DecisionForSweepAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid)
+    {
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid);
+        var status = await registry.GetStatusForTerminalAsync(txid);
+        return status == TxStatus.Indeterminate ? await registry.GetRecordedStatusAsync(txid) : status;
+    }
+
+    private static Task<TxStatus> RecordedDecisionAsync(IGrainFactory grainFactory, string decisionTreeId, Guid txid) =>
+        TxRegistryRouting.GetRegistry(grainFactory, decisionTreeId, txid).GetRecordedStatusAsync(txid);
 
     /// <summary>
     /// Replays a single <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> through
