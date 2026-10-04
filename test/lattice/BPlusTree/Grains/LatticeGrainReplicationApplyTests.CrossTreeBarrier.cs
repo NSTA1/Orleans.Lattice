@@ -72,12 +72,16 @@ public partial class LatticeGrainReplicationApplyTests
             originClusterId: BarrierOrigin, atomicShardCount: 1,
             crossTreeOperationId: operationId, crossTreeWaitSet: waitSet);
 
+        // The recorded decisions are read FIRST and without a dial: a status
+        // read or an in-flight observation resolves a surviving delegation
+        // against the barrier and caches the verdict itself, which would hide a
+        // finalise that never marked the registry.
+        var recordedA = await registryA.GetRecordedStatusAsync(txid);
+        var recordedB = await registryB.GetRecordedStatusAsync(txid);
         var finalA = await registryA.ObserveCrossTreeInFlightAsync();
         var finalB = await registryB.ObserveCrossTreeInFlightAsync();
         var valueA = await latticeA.GetAsync("k");
         var valueB = await latticeB.GetAsync("k");
-        var recordedA = await registryA.GetRecordedStatusAsync(txid);
-        var recordedB = await registryB.GetRecordedStatusAsync(txid);
         Assert.Multiple(() =>
         {
             Assert.That(valueA, Is.EqualTo(new byte[] { 1 }));
