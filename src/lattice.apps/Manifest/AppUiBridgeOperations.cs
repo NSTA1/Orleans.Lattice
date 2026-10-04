@@ -11,7 +11,7 @@ namespace Orleans.Lattice.Apps;
 /// </summary>
 public static class AppUiBridgeOperations
 {
-    /// <summary>Reads the frame's launch context: the app slug, installed version, locale and theme.</summary>
+    /// <summary>Reads the frame's launch context: the app slug, installed version, protocol, theme, contrast, density, reduced motion, tenant display name and roles.</summary>
     public const string ContextRead = "context.read";
 
     /// <summary>Reads the signed-in user's display name; consented separately because it is personal data.</summary>

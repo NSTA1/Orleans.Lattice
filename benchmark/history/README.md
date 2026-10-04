@@ -88,7 +88,7 @@ The `microbench` scenario uses none of these: its BenchmarkDotNet exporter write
 
 ## Dashboards
 
-The history Grafana hosts an **Overview dashboard** plus **seven generated persona
+The history Grafana hosts an **Overview dashboard** plus **generated persona
 dashboards**, and one hand-maintained atomic-writes dashboard. The Overview is a
 single-page roll-up showing every persona's
 headline KPIs in one view (one row per persona, scoped to that persona's
@@ -115,15 +115,15 @@ only at a fleet of about 400 vehicles; at the scenario files' 2,000 vehicles
 they are about 79:21 and 1:5 - see
 [`benchmark-scenarios.md`](../benchmark-scenarios.md).
 
-### Per-persona-dashboard layout (3 bands, top-to-bottom)
+### Per-persona-dashboard layout
 
-The seven persona dashboards share this 3-band layout. The Overview dashboard
+The persona dashboards share this layout. The Overview dashboard
 is single-band (one row of stat tiles per persona, KPIs scoped to the
 persona's scenarios).
 
 | Band | Purpose                              | Panel type                                    | Reads                                                                                  |
 |------|--------------------------------------|-----------------------------------------------|----------------------------------------------------------------------------------------|
-| 0    | Headline KPIs                        | `stat` × {3..4} with threshold-coloured bg    | Per-persona last-known KPI values (e.g. commit p99, ship p95, reads/sec).              |
+| 0    | Headline KPIs                        | `stat` panels with threshold-coloured bg       | Per-persona last-known KPI values (e.g. commit p99, ship p95, reads/sec).              |
 | 1    | Trends across runs                   | `timeseries` × {family count}, `points` mode  | One series per metric per run in the persona's metric families (every pushed sample carries `scenario`, `run_id` and `git_sha`; the legend shows the metric name, `scenario` and `git_sha`, so runs at one commit share a legend label).         |
 | 2    | Per-run history (commit comparator)  | `barchart` × {KPI count}, vertical            | One bar per run, hover shows `{{scenario}} {{run_id}} @ {{git_sha}}`.                  |
 

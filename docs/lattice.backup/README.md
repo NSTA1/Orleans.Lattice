@@ -123,4 +123,4 @@ The backup API facade now exposes accept-then-poll backup and restore operations
 - [`Orleans.Lattice.Backup.AzureBlob`](../lattice.backup.azureblob/README.md) - the durable Azure Blob Storage sink implementation.
 - [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) - the transport-agnostic backup / restore control facade.
 - [`Orleans.Lattice.Api.Backup.Grpc`](../lattice.api.backup.grpc/README.md) - the code-first gRPC binding and typed client for the control facade.
-- [Core chaos tests](../lattice/chaos-tests.md) - also describes this package's three restore and shadow-cutover chaos suites under `test/lattice.backup/Chaos/`.
+- [Core chaos tests](../lattice/chaos-tests.md) - also describes this package's restore and shadow-cutover chaos suites under `test/lattice.backup/Chaos/`.

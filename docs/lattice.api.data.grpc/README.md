@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/READM
 
 It provides:
 
-- **A code-first gRPC service.** Ten unary RPCs - point read, range read, set, delete, range delete, non-atomic bulk upsert, the two atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read - bound from C# definitions rather than a `.proto`. The service is exposed under the fully-qualified gRPC service name `orleans.lattice.api.data`, so each method's full path is `/orleans.lattice.api.data/<Rpc>`.
+- **A code-first gRPC service.** Unary RPCs cover point read, range read, set, delete, range delete, non-atomic bulk upsert, the atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read, all bound from C# definitions rather than a `.proto`. The service is exposed under the fully-qualified gRPC service name `orleans.lattice.api.data`, so each method's full path is `/orleans.lattice.api.data/<Rpc>`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer, so client and server stay in lock-step by construction. Most RPCs use this package's own request / response records, wrapping facade DTOs where needed; `Get` answers with the facade's `DataReadResult`, and `ReadRange` and `DeleteRange` carry the facade's `DataRangeRequest` / `DataRangePage` and `DataRangeDeleteRequest` / `DataRangeDeleteResult` unchanged.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
@@ -96,7 +96,7 @@ A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncr
 
 ## Options
 
-`LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, has four properties: `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).
+`LatticeDataApiGrpcOptions`, bound through `AddLatticeDataApiGrpc(configure)`, exposes `RequireAuthorization` (`bool`, default `true`), `CredentialHeaderName` (`string`, default `"authorization"`), `CredentialScheme` (`string`, default `"Bearer"`), and `ActiveTenantHeaderName` (`string`, default `"lattice-active-tenant"`). Their full semantics are in the [data API configuration reference](../lattice.api.data/configuration.md#latticedataapigrpcoptions).
 
 ## Public surface
 
@@ -111,7 +111,7 @@ A typed counter advance (`CounterIncrement`, `CounterDecrement` or `GCounterIncr
 | `LatticeDataApiOperation` | The operation behind each RPC: `SetPoint`, `DeletePoint`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `GetPoint`, `ReadRange`, `DeleteRange`, `SetMany`, `CrdtWrite`, `CrdtRead`, and `Unknown` for an unmapped method. |
 | `ILatticeDataApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context; the default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix. |
 | `ILatticeDataApiActiveTenantBridge` | Active-tenant seam (`TenantId? Resolve(ServerCallContext context)`) that lifts the caller's asserted tenant onto the ambient scope; the default reads `ActiveTenantHeaderName`. |
-| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the ten RPCs - including the `CrdtWriteOp` selector (the twenty typed-CRDT mutations) a `CrdtWriteRequest` carries, the `CrdtKind` selector (the thirteen CRDT types) a `CrdtReadRequest` carries, and the nested `CrdtMapField` / `CrdtVectorEntry` rows - with their stable aliases in `GrpcDataTypeAliases`; the facade DTOs that `Get`, `ReadRange`, and `DeleteRange` reuse keep their `DataApiTypeAliases` aliases from `Orleans.Lattice.Api.Abstractions`. |
+| `Data*` / `Crdt*` request and response records | Public Orleans-serialized wire messages for the RPCs - including the `CrdtWriteOp` selector a `CrdtWriteRequest` carries, the `CrdtKind` selector a `CrdtReadRequest` carries, and the nested `CrdtMapField` / `CrdtVectorEntry` rows - with their stable aliases in `GrpcDataTypeAliases`; the facade DTOs that `Get`, `ReadRange`, and `DeleteRange` reuse keep their `DataApiTypeAliases` aliases from `Orleans.Lattice.Api.Abstractions`. |
 | `AddLatticeDataApiGrpc` / `MapLatticeDataApiGrpc` | Registration and endpoint-routing extensions. |
 
 ## Reference

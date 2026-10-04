@@ -66,8 +66,8 @@ public interface ILatticeFallOffLogDetector
     /// <param name="sourceClusterId">
     /// Origin cluster id of the lagging sender. Must be non-null and
     /// non-empty. Stamped onto every snapshot entry the bootstrap
-    /// coordinator subsequently applies, so the per-origin
-    /// high-water-mark dedupe recognises the snapshot/incremental
+    /// coordinator subsequently applies, so the snapshot-pinned floor
+    /// recognises the snapshot/incremental
     /// boundary.
     /// </param>
     /// <param name="senderOldestAvailableHlc">

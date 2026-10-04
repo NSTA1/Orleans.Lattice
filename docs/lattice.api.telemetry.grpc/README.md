@@ -20,7 +20,7 @@ the cluster's internal grain contracts.
 
 ## Service
 
-Service name `orleans.lattice.api.telemetry`, three unary RPCs:
+Service name `orleans.lattice.api.telemetry`; the unary RPCs are:
 
 | RPC | Request -> Response | Notes |
 |---|---|---|
@@ -80,8 +80,8 @@ silently raising the bar for every host.
 `LatticeTelemetryApiGrpcClient.Create(CallInvoker, IServiceProvider)` builds the
 client over a caller-supplied `CallInvoker` and a service provider with Orleans
 serialization registered (`AddSerializer()`), so its marshallers match the
-server's. It exposes the three RPCs as `GetCatalogAsync`,
-`QueryAsync(TelemetryQueryRequest)`, and `GetAuthSchemeAsync`, and carries no
+server's. It exposes `GetCatalogAsync`, `QueryAsync(TelemetryQueryRequest)`, and
+`GetAuthSchemeAsync`, and carries no
 transport policy of its own: address, TLS, retries, deadlines, and call
 credentials live on the `CallInvoker` / `GrpcChannel`. It forwards the visibility
 the caller requests and returns the facade's pinned `Scope` unchanged - render
@@ -137,7 +137,7 @@ tenant.
 | `OperationCanceledException` | `Cancelled` | |
 | anything else | `Internal` | The original message is suppressed. |
 
-Two deliberate non-translations, both tested: an unconfigured backend arriving as
+Deliberate non-translations, both tested: an unconfigured backend arriving as
 `NotFound` stays `NotFound` and is **not** upgraded to `Unavailable`, and a
 capability denial never collapses into `NotFound`. A catalogue that offered
 nothing cannot then refuse a query for a different-looking reason.
@@ -152,9 +152,9 @@ query id it already supplied.
 
 Serializable types in this package use the reserved `oitlg.` alias prefix, which
 is disjoint from the contract's `oitl.` set; the constants live in the public
-`GrpcTelemetryTypeAliases` class. Four aliases only - `TelemetryCatalogRequest`,
+`GrpcTelemetryTypeAliases` class. The binding-owned aliases are `TelemetryCatalogRequest`,
 `AuthSchemeAdvertisementRequest`, `AuthSchemeDescriptor`, and
-`AuthSchemeAdvertisement` - so the binding adds nothing else to the wire. Aliases are
+`AuthSchemeAdvertisement`, so the binding adds nothing else to the wire. Aliases are
 wire format: never rename or remove one.
 
 ## See also

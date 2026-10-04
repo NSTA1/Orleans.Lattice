@@ -67,10 +67,14 @@ telemetry and app installation - are granted by a whole-tree rule on the
 cluster-wide `*` scope. An opt-in all-trees tier
 (`LatticeAuthOptions.AllTreesGrantsEnabled`, off by default) also lets such a
 cluster-wide rule govern ordinary trees: an all-trees deny then wins outright, and
-an all-trees allow applies only where the tree's own rules decide nothing. The
-recommended and default
-posture is **default-deny**. A small set of **bootstrap administrators** forms
-the root-of-trust that seeds the first rules and performs break-glass operations.
+an all-trees allow applies only where the tree's own rules decide nothing. When
+delegated tenant access is enabled by the tenancy package, tenant-tier rules live
+in a separate `tenant:{tenant}:...` rule namespace and are evaluated below
+operator-authored rules, so platform rules remain final while tenant
+administrators can manage tenant-local groups, member sets, and ordinary data
+rules for their own tenant. The recommended and default posture is
+**default-deny**. A small set of **bootstrap administrators** forms the
+root-of-trust that seeds the first rules and performs break-glass operations.
 
 ### Consistency: eventual by default, strict on request
 

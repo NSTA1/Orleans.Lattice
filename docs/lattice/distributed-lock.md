@@ -213,7 +213,7 @@ wait-timeout) and retry, rather than being granted a lease no live process holds
 
 ## Observability
 
-The lock publishes four instruments on the `orleans.lattice` meter, charted on
+The lock publishes instruments on the `orleans.lattice` meter, charted on
 the Overview dashboard's "Distributed lock" row:
 
 - `orleans.lattice.lock.acquired` (tagged `outcome=granted|timeout|unavailable`),

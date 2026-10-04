@@ -270,9 +270,9 @@ script.
 The same limit applies to this runbook's own guard test, which is discussed under
 [How this runbook is kept honest](#how-this-runbook-is-kept-honest).
 
-### Which of the seven checks answers "was this image built from that commit"
+### Which provenance check answers "was this image built from that commit"
 
-Exit `0` means all seven checks agreed. It does not mean all seven asked
+Exit `0` means all provenance checks agreed. It does not mean all checks asked
 independent questions, and on the ordinary passing path two of them do not.
 
 `-ExpectedCommit` defaults to the HEAD of `-ExpectedCheckout`, and
@@ -461,7 +461,7 @@ This is a **declared-versus-effective** case, the same class as `docker stop -t`
 overriding a configured `stop_grace_period`. Only a reading taken from the running
 container or the running store settles it, which is what the two commands above do.
 
-## The two compose files
+## Compose files
 
 | File | Tracked | Loaded | Carries |
 | --- | --- | --- | --- |
@@ -1083,7 +1083,7 @@ A persistent 503 has its own diagnosis section in the
 [sample README](../../samples/RepoContextContainer/README.md); do not skip it in
 favour of restarting again, because a restart discards the evidence.
 
-### The host answers four health endpoints, and the two above are not all of them
+### Host health endpoints beyond liveness and readiness
 
 `RepoContextHostBuilder` registers four (`LivenessPath`, `ReadinessPath`,
 `BackupPath`, `SiloPath`), and the verification list above deliberately uses only

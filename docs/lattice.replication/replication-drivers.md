@@ -149,7 +149,7 @@ reads it.
 
 ##### Membership-sensitive consumers
 
-These are the four drivers whose behaviour depends on which peers
+These are the drivers whose behaviour depends on which peers
 are currently reachable. Every one of them reads
 `IReplicationTopology` and nothing else (other membership-sensitive
 paths - the anti-entropy digest probe, the source-identity rebind, the
@@ -391,20 +391,20 @@ restore-to-drop-keys cutover meant to discard, which plain last-writer-wins
 cross-cluster shipping never retracts). Pushing the rebind synchronously with
 the swap shrinks that window to the notification latency.
 
-Two further per-tick metadata resolutions are memoised on the same principle -
+The other per-tick metadata resolutions are memoised on the same principle -
 recompute only when an input changed, not every tick. Peer wire-version
 negotiation and shared-dictionary negotiation both key off the receiver's
 advertised capability on `ReplicationAck`, so their results are cached and
 recomputed only when a new ack changes the peer's advertised capability (or
 the shipper's options instance or effective dictionary id changes), not on
-every pump tick. Together with the source-identity rebind this removes all
-three steady-state idle registry/metadata resolutions, so an idle shipper's
+every pump tick. Together with the source-identity rebind this removes
+steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
 
 ### Doorbell
 
 The shipper grain is the log-first replication producer: it tails the
-single per-shard leaf write-ahead log (the leaf commit-log writer is the
+partitioned per-tree write-ahead log (the leaf commit-log writer is the
 sole WAL appender) from a durable per-partition cursor and is the only
 ship driver. The commit-time doorbell sink does not append to the
 WAL and does not ship; it maintains no producer-side vector clock state

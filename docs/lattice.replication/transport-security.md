@@ -4,13 +4,13 @@
 
 ## Threat model and posture
 
-The authenticator addresses three concrete risks:
+The authenticator addresses these concrete risks:
 
 1. **Unauthenticated inbound replication.** A network attacker that can reach the receiver's gRPC endpoint can otherwise inject `WalRecord`s into the local cluster's apply pipeline.
 2. **Misconfigured plaintext shipping.** A host accidentally pointing a sender at an `http://` peer would leak both the wire payload and the shared-secret header in cleartext.
 3. **Secrets committed to source control.** Hosts that bind secrets from `appsettings.json` (or any file-backed configuration provider rooted under the application directory) routinely commit the file to source control or bake it into a container image.
 
-The package fails closed on all three by default. Custom secret sources, plaintext opt-out, and the hostile-config scan toggle are explicit, named opt-ins.
+The package fails closed on these risks by default. Custom secret sources, plaintext opt-out, and the hostile-config scan toggle are explicit, named opt-ins.
 
 ## Default surface: environment variables
 

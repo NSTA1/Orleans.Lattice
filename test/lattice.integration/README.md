@@ -8,7 +8,7 @@ high-water-mark paths.
 
 The suite, `DurableActiveActiveTests`, is categorized as `Integration` and
 `AzureStorageEmulator`. A single
-`DurableActiveActiveClusterFixture` is shared by all eight scenarios. Each
+`DurableActiveActiveClusterFixture` is shared by its scenarios. Each
 scenario uses its own pre-minted LWW-register tree, so durable state can remain
 in place for the whole fixture without tests depending on execution order.
 
@@ -18,7 +18,7 @@ The project also holds two materialised-view topology fixtures, described under
 two-site fixture, and `MaterialisedViewTopologyStartupIntegrationTests`, which
 needs no Azurite.
 
-It also carries four per-project hygiene fixtures - `DeletionMandateHygieneTests`,
+It also carries per-project hygiene fixtures - `DeletionMandateHygieneTests`,
 `EmDashHygieneTests`, `IntegrationCategoryHygieneTests` and
 `MojibakeHygieneTests` - which are uncategorized, need no Azurite, and are not
 selected by the emulator filter under [Running locally](#running-locally).
@@ -114,8 +114,8 @@ sequenceDiagram
 ## Fixture lifecycle
 
 - `OneTimeSetUp` probes Azurite and starts both sites once.
-- All eight scenario tree IDs, plus the replicated source and view trees of the
-  three materialised-view topologies, are placed in both sites' replicated-tree
+- The scenario tree IDs, plus the replicated source and view trees of the
+  materialised-view topologies, are placed in both sites' replicated-tree
   map before startup, allowing the production replication activation service
   to start every shipper.
 - A cold restart disposes and rebuilds a site's `TestCluster` with the same

@@ -1,5 +1,10 @@
 # Leaf-queue commit-turn dispatch profile
 
+> **Status note (2026-10-04).** This file records a measurement taken while the
+> leaf ran its write methods inside a non-reentrant grain turn. The leaf's write
+> methods are now interleaved, so read "today" below as the leaf at the time of
+> the measurement; the measurements themselves stand as recorded.
+
 ## Purpose
 
 Issue [#418](https://github.com/NSTA1/Orleans.Lattice/issues/418)

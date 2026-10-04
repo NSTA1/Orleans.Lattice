@@ -1,6 +1,6 @@
 # Anti-entropy bootstrap-snapshot fallback (GC'd divergence)
 
-[Targeted leaf re-replay](anti-entropy-leaf-rereplay.md) repairs a localised divergence by re-shipping the relevant write-ahead-log entries. But re-replay cannot always reach the divergence the Merkle walk localised, and two cases defeat it:
+[Targeted leaf re-replay](anti-entropy-leaf-rereplay.md) repairs a localised divergence by re-shipping the relevant write-ahead-log entries. But re-replay cannot always reach the divergence the Merkle walk localised; these cases defeat it:
 
 - **Trimmed WAL.** The local WAL has been garbage-collected past the divergence point, so those entries are gone from the log - re-replay emits `leaf_rereplay.skipped{reason=wal_trimmed}` and stops.
 - **Below-cursor blind spot.** A later write already advanced the peer's high-water-mark past an older gap of never-shipped entries, so re-replay's `Timestamp > peerCursor` selection filters them all out and selects nothing - re-replay emits `leaf_rereplay.skipped{reason=range_empty}` and stops.

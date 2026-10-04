@@ -4,7 +4,7 @@ Authorization and enforcement add-on for [Orleans.Lattice](../../README.md).
 
 ## What is it?
 
-`Orleans.Lattice.Auth` is the authorization layer of a lattice cluster. It builds on the subjects that [`Orleans.Lattice.Membership`](../lattice.membership/README.md) resolves and adds three things:
+`Orleans.Lattice.Auth` is the authorization layer of a lattice cluster. It builds on the subjects that [`Orleans.Lattice.Membership`](../lattice.membership/README.md) resolves and adds these pieces:
 
 - **A policy store** (`ILatticeAuthorizationPolicyStore`) that persists authorization rules durably in a dogfooded `ILattice` tree, so the policy is itself introspectable through the standard read / scan / change-feed surface.
 - **A decision engine** that compiles the rule set into an in-memory snapshot and evaluates a request (subject, operation, tree, key/range) into an allow or deny.

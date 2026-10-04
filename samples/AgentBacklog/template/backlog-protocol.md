@@ -61,7 +61,7 @@ place instead of creating a near-duplicate. The id is the mirrored issue number,
 which makes identity and mirroring the same act (see
 [Entry gating](#entry-gating---mirror-first-admit-by-label)).
 
-**A memory record has exactly four author-settable scalars** besides the
+**A memory record has a fixed set of author-settable scalars** besides the
 `kind` that `repocontext_remember` fixes at creation (`Decision`, `Note` or
 `Memory`), and this is the constraint the whole schema is built around. `repocontext_update` accepts
 `title`, `body`, `author` and `provenance` on a memory record and **rejects
@@ -97,7 +97,7 @@ attribute expressed this way is filterable without reading bodies. Arbitrary
 | `state:complete` \| `state:parked` | The item's **terminal** state, and the only execution state carried on the item. The vocabulary is **closed**: those two values are the whole of it, absent means the item is live, and any other `state:` value is a defect that quarantines the item out of the ready set rather than leaving it claimable. [The `state:` tag vocabulary](#the-state-tag-vocabulary) is the single definition of the enumerated set and of the verdict for an unrecognised value; [Recording completion](#recording-completion) says when the terminal tag may be written. |
 | `resource:<name>` | **Optional, repeatable-by-name but one tag per distinct resource.** Names a scarce **non-file** resource the item needs exclusively - a shared test box, a physical device, a deployment slot, a rate-limited external account. Two items naming the same resource may never be in flight together, however disjoint their code radii are. **The `resource:` prefix is what makes the constraint load-bearing**, because step 8 of the ready set matches on it. A bare descriptive tag asserting the same requirement - `needs-box-exclusive`, say - is read by no step and excludes nothing, however plainly it reads to a human. |
 
-**Five tags are mandatory on every item**: `backlog`, `priority:`, `phase:`,
+**The mandatory tags on every item are**: `backlog`, `priority:`, `phase:`,
 `homeRegion:` and `baseBranch:`. The rest are optional. `state:` is deliberately
 not among them, because its absence is exactly what "live" means.
 

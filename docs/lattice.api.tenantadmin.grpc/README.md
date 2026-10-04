@@ -124,14 +124,14 @@ tenant the call acts on.
 
 `ILatticeTenantRegionAdmin` is an **optional** dependency of the service, as are
 `ILatticeTenantAccessAdmin`, `ILatticeTenantGrantAdmin`, and
-`ILatticeTenantQuotaUsage`. `AddLatticeTenantAdminApi` registers all four, so an
+`ILatticeTenantQuotaUsage`. `AddLatticeTenantAdminApi` registers them, so an
 ordinary silo serves every group; a host that composes the binding without one of them
 still serves every lifecycle and self-service RPC and answers each RPC of the absent
 facade with `Unimplemented`, rather than failing container construction at startup.
 
 ### Delegated tenant access RPCs
 
-The eighteen delegated tenant access RPCs bind
+The delegated tenant access RPCs bind
 [`ILatticeTenantDirectoryAdmin` and `ILatticeTenantPolicyAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)
 without widening them. Every one is **interceptor-enforced**, `GetTenantAccessPosture`
 included: none is on the self-service exemption list, so `RequireAuthorization`
@@ -139,13 +139,12 @@ applies, and the facade then runs its own check - a platform operator, or an adm
 the named tenant directly or through a group - followed by the feature flag (which
 `GetTenantAccessPosture` skips, so it answers while the feature is off), the
 reserved-tenant refusal, confinement and caps. The interceptor reads the target tenant
-from each request, and `LatticeTenantAdminApiOperation` names each RPC (members 18 to
-35).
+from each request, and `LatticeTenantAdminApiOperation` names each RPC.
 
 Both facades are **optional** dependencies of the service. `AddLatticeTenantAdminApi`
 registers both, so an ordinary silo serves every RPC; a host without one answers that
 facade's RPCs with `Unimplemented`. Names, trees and rule ids travel tenant-local, as
-the facades take them. The quota-setting RPC needs no new members: the four delegated
+the facades take them. The quota-setting RPC needs no new members: the delegated
 access caps (`MaxGroups`, `MaxMembershipEdges`, `MaxMemberSubjects`,
 `MaxTenantRules`) are members of the `TenantQuotasDescriptor` that
 `TenantAdminSetQuotasRequest` already carries, and a request from a client that
@@ -234,7 +233,7 @@ records whose stable aliases carry the `oitng.` prefix (the constants live in th
 `GrpcTenantAdminTypeAliases` class). Responses are the facade result records from
 `Orleans.Lattice.Api.Abstractions`, whose aliases carry the `oitn.` prefix, except
 `ListAccessibleTenants`, which wraps its list in this package's `TenantSelfDescriptorList`,
-`GetAuthScheme`, which answers with this package's `AuthSchemeAdvertisement`, and the four
+`GetAuthScheme`, which answers with this package's `AuthSchemeAdvertisement`, and the
 delegated tenant access RPCs whose facade result is not a record: `GetTenantGroup`
 (`TenantAdminGroupLookup`), `ListTenantGroupMembers` (`TenantAdminGroupMemberList`),
 `GetTenantRule` (`TenantAdminRuleLookup`) and `RemoveTenantRule` (`TenantAdminRuleRemoval`).

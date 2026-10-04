@@ -4,7 +4,7 @@ using Orleans.Lattice.Primitives;
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Pure-pull, cursor-driven subscriber API over the per-shard
+/// Pure-pull, cursor-driven subscriber API over the partitioned
 /// write-ahead log. Lets in-process consumers (custom bridges, integration tests,
 /// in-process projections) read every
 /// captured <see cref="WalRecord"/> for a tree without touching the
@@ -12,10 +12,11 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The contract is deliberately neutral: there is no peer id, no
 /// per-call ack envelope, no notion of "live" vs. "snapshot" mode.
-/// The public cursor parameter is an HLC-shaped compatibility seam. The current
-/// implementation snapshots the locally authored feed without applying that cursor;
-/// consumers that need durable resume use the shipper's per-partition WAL cursors
-/// rather than this low-level API.
+/// The HLC-cursor overload is a source-compatibility seam. The current
+/// implementation snapshots the locally authored feed without applying that
+/// cursor; the <see cref="ChangeFeedCursor"/> overload and
+/// <see cref="GetCurrentCursorAsync(string, CancellationToken)"/> provide the
+/// per-partition offset cursor shape used for durable resume on this API.
 /// </para>
 /// <para>
 /// <b>Scope: locally-authored writes only.</b> Consumers see only
@@ -25,14 +26,14 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ILattice.DeleteAsync(string, CancellationToken)"/>, and
 /// <see cref="ILattice.DeleteRangeAsync(string, string, CancellationToken)"/>.
 /// Entries installed by the receiver-side apply pipeline
-/// (<see cref="IReplicationApplier"/> / <c>IReplicationApplyGrain</c>)
-/// are captured by the per-shard WAL on the destination cluster -
+/// (<see cref="IReplicationApplier"/> and the underlying apply seam)
+/// are captured by the partitioned WAL on the destination cluster -
 /// the WAL is the sole durability boundary - but they are filtered
 /// out at the feed boundary by the foreign-origin guard so consumers of this
 /// locally-authored feed never observe them.
 /// An apply-installed entry stamps <see cref="WalRecord.OriginClusterId"/>
-/// with the *source* cluster id (set by <c>LatticeOriginContext.With</c>
-/// inside the apply seam), so an entry whose origin is set and does
+/// with the *source* cluster id (set inside the apply seam), so an
+/// entry whose origin is set and does
 /// not match the local <see cref="LatticeReplicationOptions.ClusterId"/>
 /// is by construction apply-installed and is dropped before any
 /// downstream consumer sees it. A custom bridge that shipped this feed and
