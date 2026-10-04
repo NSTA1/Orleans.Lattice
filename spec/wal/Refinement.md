@@ -207,13 +207,23 @@ from this specification.**
   can be trimmed before it is snapshotted, and that is the documented contract of the
   setting rather than a defect.
 - **Replication, view maintainers, log subscribers and backup capture.** They are
-  WAL consumers the offset floor does not speak for; production bounds the trim by
-  their cursors (`WalGcOffsetAdmission.UncoveredCursor`). They are absent here,
-  which only over-approximates the trim, so nothing here speaks for them. That bound
-  is not sound for the replication shipper today (issue #4579): its cursor is an HLC,
-  and an entry stamped below the cursor at a higher offset is trimmed before it is
-  shipped. `WalMove.tla`'s consumer, which floors the trim in offset space, states
-  the intended bound; see `MoveRefinement.md`'s `GcTrim` row.
+  WAL consumers the offset floor does not speak for. They are absent here, which
+  only over-approximates the trim, so nothing here speaks for them. Production
+  bounds the trim for each retention reader in offset space, on every silo, as
+  `WalMove.tla`'s consumer states (`t - 1 <= cons`): the replication shipper and
+  every view maintainer register with the log's durable
+  `IWalOffsetConsumerRegistryGrain` before they read it, and each GC pass refuses
+  any entry at or above the lowest per-partition read position they publish
+  (`WalGcTrimCore.ClassifyEntry`, `consumerOffsetFloor`; issues #4579, #4584).
+  Their HLC cursors, which are not an offset bound and which only the silo they
+  run on can see, no longer carry that guarantee. An incremental backup capture is
+  deliberately not a retention reader: the GC may trim past it, and its fall-off
+  decision is exact by offset and made against what was actually read
+  (`WalLogSubscriber` probes the tail again when a read jumps an offset), so a
+  trim it misses makes the capture fall back to a full backup, whose cut is read
+  from leaf state the durable pins protect and is newer than the window it replaces
+  (`IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`).
+  A configured retention TTL may still trim past any consumer; see the TTL gap above.
 - **Two arms of `LeafDurablePinCore.Resolve`.** The `ReleaseEmpty` arm for a leaf
   whose clock is live but which holds no row and has applied nothing (the
   abstaining `(clock, -1)` release, #1490's narrowest arm) needs a projection that
