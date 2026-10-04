@@ -76,7 +76,7 @@ The WAL models live under `test/lattice/BPlusTree/Coyote/`:
 | `WalOffsetContiguityModel` | `WalOffsetAllocationCore` | Reading and advancing the offset counter is atomic, so two concurrent appends never receive the same offset and the assigned sequence stays dense and strictly ascending. |
 | `WalBlockedFloorLifecycleModel` | `WalBlockedFloorCore` | The GC's blocked floor is the minimum live buffer pin across consumers, so through every interleaving of pin-take, pin-raise, and pin-clear it never rises above a live pin and never trims an entry a buffering consumer still needs. |
 | `WalMoveRedriveModel` | `WalMoveResumeCore` | A placement move's tail copy resumes just past what the target already holds, so a coordinator that crashes and re-drives at any offset boundary copies every retained offset exactly once with no duplicate and no gap. |
-| `WalDurabilityLifecycleModel` | `WalOffsetAllocationCore`, `WalShippingWatermark`, `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | End to end, with a leaf stopping at any step: appends, out-of-order flushes, read-position replay, checkpoint persists and snapshot captures that can fail, pin publication and the GC trim. No acknowledged write is lost or skipped, no leaf falls off the log, a failed persist is rolled back, no pin exceeds the persisted checkpoint, and the lifecycle converges once faults are spent. |
+| `WalDurabilityLifecycleModel` | `WalOffsetAllocationCore`, `WalShippingWatermark`, `LeafDurablePinCore`, `WalGcTrimCore`, `WalFallOffCore` | End to end, with a leaf stopping at any step: appends, out-of-order flushes, read-position replay, checkpoint persists and snapshot captures that can fail, pin publication and the GC trim, with a variant in which one leaf owns nothing so the never-written release is exercised. No acknowledged write is lost or skipped, no leaf falls off the log, no trim entitlement exceeds snapshot coverage, a failed persist is rolled back, and no pin exceeds the persisted checkpoint. That no acknowledged write is lost, and that the lifecycle converges once faults are spent, are asserted but unguarded (below). |
 
 ### Every model ships a non-vacuous guard test
 
@@ -110,15 +110,25 @@ asserts Coyote *finds* the resulting violation
 - `WalMoveRedriveModel` - the guard resumes every re-drive from the source floor
   instead of past what the target already holds, and Coyote finds the crash point
   after which the copy re-appends an offset the target already has (a duplicate).
-- `WalDurabilityLifecycleModel` - four guards, each removing one fix and each
+- `WalDurabilityLifecycleModel` - five guards, each removing one fix and each
   required to be caught by the assertion that fix protects, not merely by some
   violation:
   - resolving the pin against the pending checkpoint (`[PublishedPinWithinPersistedBelief]`);
   - not rolling back a failed checkpoint persist (`[PersistedBeliefHonest]`);
   - reading past the watermark (`[ShippingNeverSkips]`);
   - flooring the trim at the highest pin (`[TrimCoveredBySnapshot]`).
+  - releasing a never-written leaf's pin regardless of its snapshot coverage
+    (`[ReleaseBackedBySnapshot]` at the publication; with that assertion off and
+    one leaf owning nothing, `[RecoveryNeverFallsOffLog]` after the trim and the
+    restart).
 
-A model with a green fix test and a green guard test is proven load-bearing.
+A model with a green fix test and a green guard test is proven load-bearing for the
+assertions its guards name, and only for those. `WalDurabilityLifecycleModel` also
+asserts four properties no guard reaches - `[AckedWriteDurable]`,
+`[ReadPositionHonest]` and the two bounded-progress checks - and the review of
+issue #4433 showed that disabling any of them leaves every lifecycle test green:
+none of them is ever the reporter. They are listed as gaps in the WAL catalogue in
+`.github/instructions/testing.instructions.md`, not counted as checked.
 
 ### Running the tier
 
@@ -151,7 +161,9 @@ action has a mutation that makes a property fire, and a refinement note maps eac
 construct to production and to tests proven to go red when production regresses.
 
 The specification found four durability defects, each filed with a reproduction and
-kept as a standing mutation until it is fixed:
+kept as a standing mutation until it is fixed. Three were reproduced against the real
+`BPlusLeafGrain` before they were filed; #4467 was reproduced by the model's trace
+only, and its fix's grain test came with the fix:
 
 | Issue | Defect |
 |-------|--------|

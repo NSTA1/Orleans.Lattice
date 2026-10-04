@@ -532,8 +532,10 @@ internal sealed partial class LatticeGrain(
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
-    /// Wall-clock budget for every stale-routing retry loop on the public
-    /// <see cref="ILattice"/> surface (reads, writes, and replication apply).
+    /// Wall-clock budget for the stale-routing retry loops on the public
+    /// <see cref="ILattice"/> write surface and replication apply, and the
+    /// ceiling on the read paths' shorter budget
+    /// (<see cref="StaleRoutingReadRetryBudget"/>).
     /// A single <see cref="StaleShardRoutingException"/> /
     /// <see cref="StaleTreeRoutingException"/> retry is insufficient because
     /// (a) under cascading mid-saga topology changes (e.g. a 4-to-8 reshard
@@ -552,6 +554,38 @@ internal sealed partial class LatticeGrain(
     /// topology never quiesces within the budget.
     /// </summary>
     private static readonly TimeSpan StaleRoutingWriteRetryBudget = TimeSpan.FromSeconds(60);
+
+    private TimeSpan? _staleRoutingReadRetryBudget;
+
+    /// <summary>
+    /// Wall-clock budget for the stale-routing retry loops on the point and
+    /// multi-key read paths (<see cref="GetAsync"/>, <c>GetWithVersionAsync</c>,
+    /// <see cref="ExistsAsync"/>, <see cref="GetManyAsync"/>): five sixths of
+    /// this silo's response timeout, capped at
+    /// <see cref="StaleRoutingWriteRetryBudget"/>, so a read that cannot make
+    /// progress surfaces the typed stale-routing fault before its caller's
+    /// request times out (issue #4545). See <see cref="StaleRoutingReadRetry"/>.
+    /// Resolved once per activation.
+    /// </summary>
+    private TimeSpan StaleRoutingReadRetryBudget =>
+        _staleRoutingReadRetryBudget ??= StaleRoutingReadRetry.Budget(
+            services.GetService<IOptions<SiloMessagingOptions>>()?.Value.ResponseTimeout
+                ?? new SiloMessagingOptions().ResponseTimeout,
+            StaleRoutingWriteRetryBudget);
+
+    /// <summary>
+    /// Paces stale-routing retry number <paramref name="retry"/> of one read
+    /// (issue #4545): no wait for the first few, then a doubling wait capped at
+    /// <see cref="StaleRoutingReadRetry.MaxBackoff"/>, so a signal that persists
+    /// is not retried in a tight loop of registry and shard calls.
+    /// </summary>
+    private static ValueTask PaceStaleRoutingReadRetryAsync(int retry, CancellationToken cancellationToken)
+    {
+        var delay = StaleRoutingReadRetry.Backoff(retry);
+        return delay == TimeSpan.Zero
+            ? ValueTask.CompletedTask
+            : new ValueTask(Task.Delay(delay, cancellationToken));
+    }
 
     /// <summary>
     /// Rejects any public <see cref="ILattice"/> call targeting a reserved
@@ -1029,7 +1063,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1080,11 +1115,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1169,7 +1206,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1193,11 +1231,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1285,7 +1325,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1299,11 +1340,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1415,7 +1458,8 @@ internal sealed partial class LatticeGrain(
             // handling preserves tree-deletion semantics (single retry
             // only, so a deleted tree surfaces in <2s rather than after
             // 60s).
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1441,11 +1485,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -4672,12 +4718,49 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    private string?[]? _preparedRouteKeys;
+    private string? _preparedRouteKeysTreeId;
+
+    /// <summary>
+    /// Names the shard a saga prepare-phase write is dispatched to (issue
+    /// #4522), so a leaf of that shard knows the stamp it mints is the
+    /// prepare's original stamp. A forward to another shard inherits this
+    /// route and so never matches there. Does nothing outside a prepare. The
+    /// <c>{physicalTreeId}/{shardIndex}</c> strings are cached per index, so a
+    /// steady-state prepare pays only the request-context write.
+    /// </summary>
+    private void StampPreparedRouteIfPrepared(string physicalTreeId, int shardIndex)
+    {
+        if (!LatticePreparedContext.Current)
+            return;
+
+        if (!string.Equals(_preparedRouteKeysTreeId, physicalTreeId, StringComparison.Ordinal))
+        {
+            _preparedRouteKeys = null;
+            _preparedRouteKeysTreeId = physicalTreeId;
+        }
+
+        var keys = _preparedRouteKeys;
+        if (keys is null || (uint)shardIndex >= (uint)keys.Length)
+        {
+            var grown = new string?[Math.Max(shardIndex + 1, keys?.Length ?? 0)];
+            if (keys is not null)
+                Array.Copy(keys, grown, keys.Length);
+            keys = grown;
+            _preparedRouteKeys = keys;
+        }
+
+        var routeKey = keys[shardIndex] ??= $"{physicalTreeId}/{shardIndex}";
+        LatticeOriginalPrepareStampContext.StampPreparedRoute(routeKey);
+    }
+
     private IShardRootGrain GetShardGrain(string key, RoutingInfo routing)
     {
         // Call synchronously AFTER the caller awaits routing: RequestContext
         // changes inside an async resolver would not flow back to its caller.
         StampRoutedIdentity(routing.PhysicalTreeId);
         var shardIndex = routing.Map.Resolve(key);
+        StampPreparedRouteIfPrepared(routing.PhysicalTreeId, shardIndex);
         var cache = _cachedShards;
         if (cache is not null
             && ReferenceEquals(_cachedShardsTreeId, routing.PhysicalTreeId)
@@ -4770,6 +4853,7 @@ internal sealed partial class LatticeGrain(
         // fan-out shard resolution too, so scans and multi-shard writes carry
         // the same self-heal signal to a retained shard.
         StampRoutedIdentity(physicalTreeId);
+        StampPreparedRouteIfPrepared(physicalTreeId, shardIndex);
 
         var cache = _cachedShards;
         if (cache is not null

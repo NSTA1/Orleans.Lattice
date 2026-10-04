@@ -143,13 +143,17 @@ SurfaceViaGate(t, k) == RegistryView(t) = "committed" /\ ~AlreadyTerminal(t, k)
 
 Projected(t, k) == IF ProjectedPrepared(t, k) THEN "post" ELSE "pre"
 
-\* The Indeterminate arm is tested FIRST, ahead of the orphan guard, because
-\* AtomicVisibilityGate.ResolveKey tests it first: under an outcome the
-\* registry declined to report there is no basis to prefer the projection
-\* over the prepared value, so neither is served.
+\* The orphan guard is tested FIRST, ahead of the Indeterminate arm, because
+\* AtomicVisibilityGate.ResolveKey tests it first (issue #4428). A leaf that
+\* has already applied the saga's terminal holds the outcome in its own
+\* projection, so a late orphan bucket there defers to that projection
+\* whatever the registry reports; only a leaf still waiting on its terminal
+\* has no basis to prefer the projection over the prepared value under an
+\* outcome the registry declines to report, and only that leaf hides the key.
 Observed(t, k) ==
     IF pend[t][k] = "pending"
-    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+    THEN IF AlreadyTerminal(t, k) THEN Projected(t, k)
+         ELSE IF RegistryView(t) = "indeterminate" THEN "hidden"
          ELSE IF SurfaceViaGate(t, k) THEN "post"
          ELSE Projected(t, k)
     ELSE Projected(t, k)
@@ -509,8 +513,9 @@ RevisionMonotonic == [][ revision' >= revision ]_vars
 Termination == \A t \in Txns : <>(phase[t] = "done")
 
 \* Every committed saga's keys are eventually all materialised at their
-\* post-saga value on their own leaf: the projection, not merely the gate,
-\* holds the committed write.
+\* post-saga value on their own leaf - the projection, not merely the gate,
+\* holds the committed write - and from then on every reader is served that
+\* value, whatever the registry reports and whatever late orphan bucket lands.
 \*
 \* An earlier statement asked for every key to be eventually observed
 \* post-saga or hidden. Observed has exactly three values and
@@ -535,17 +540,20 @@ Termination == \A t \in Txns : <>(phase[t] = "done")
 \* two come apart the moment materialisation stops being the terminal. Its
 \* paired mutation fires NoStrandedPrepare as well, by construction.
 \*
-\* What it does not promise is that the gate SERVES the materialised value.
-\* A late orphan bucket on a leaf that has already applied the commit is
-\* hidden for as long as the registry reports Indeterminate, because the
-\* gate tests that arm ahead of the orphan guard, and neither event that
-\* ends it (the registry answering again, or the orphan being discarded) is
-\* guaranteed to happen. "Every key is eventually observed post-saga" fails
-\* on exactly that behaviour, and it is a behaviour production has too.
+\* It also promises that the gate SERVES the materialised value, for ever
+\* once it does. That half depends on the gate testing the orphan guard
+\* ahead of its Indeterminate arm (issue #4428): with the arms the other way
+\* round a late orphan bucket on a leaf that has already applied the commit
+\* is hidden for as long as the registry reports Indeterminate, and neither
+\* event that ends it - the registry answering again, or the orphan being
+\* discarded - is guaranteed to happen
+\* (EveryCommittedKeyReadableIndeterminateFirst). The box is load-bearing:
+\* every such key is observed post-saga before its orphan arrives, so
+\* "eventually observed post-saga" alone holds on that defect.
 EveryCommittedKeyReadable ==
     \A t \in Txns :
         (decision[t] = "committed")
-            ~> (\A k \in Written(t) : ProjectedPrepared(t, k))
+            ~> [](\A k \in Written(t) : ProjectedPrepared(t, k) /\ ObservedPrepared(t, k))
 
 \* No stranded prepare: every participant of a decided saga eventually
 \* applies the saga's terminal, which is what consumes its prepared bucket.

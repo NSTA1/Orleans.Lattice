@@ -19,7 +19,8 @@ public partial class LatticeGrainTests
             string treeId,
             LatticeOptions? options = null,
             int shardCount = 4,
-            int virtualShardCount = 16)
+            int virtualShardCount = 16,
+            IServiceProvider? services = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -46,7 +47,7 @@ public partial class LatticeGrainTests
 
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, baseOptions);
 
-        var services = Substitute.For<IServiceProvider>();
+        services ??= Substitute.For<IServiceProvider>();
         var logger = NullLogger<LatticeGrain>.Instance;
         var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, logger);
         return (grain, grainFactory, registry);

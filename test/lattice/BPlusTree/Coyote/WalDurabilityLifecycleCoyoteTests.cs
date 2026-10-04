@@ -34,6 +34,82 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     }
 
     /// <summary>
+    /// The fixed design with one leaf that owns nothing, so the core's
+    /// never-written release (issues #3453, #4456 and #4523) is exercised: that
+    /// leaf scans, persists, captures and publishes over entries it never
+    /// applies, stops and reactivates, and is never latched stale.
+    /// </summary>
+    [Test]
+    public void A_never_written_leaf_is_never_latched_stale_under_crash_anywhere_recovery()
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new WalDurabilityLifecycleModel(WalDurabilityLifecycleGuard.None, faultBudget: 1, neverWrittenLeaf: true));
+    }
+
+    /// <summary>
+    /// The guard for the never-written arm, at its root cause: with the release
+    /// published at the persisted checkpoint whatever coverage the leaf holds
+    /// (before issue #4456; with no coverage, before issue #4523), the leaf's pin
+    /// rises above its snapshot at the publication itself, and
+    /// <c>[ReleaseBackedBySnapshot]</c> must be the assertion that reports it. It
+    /// needs no fault and is reached in the default ownership, where leaf 1 is
+    /// never-written until it applies its first entry.
+    /// </summary>
+    [Test]
+    public void Removing_the_never_written_release_bound_is_caught_by_the_release_backing_assertion()
+    {
+        var result = CoyoteModelHarness.Explore(new WalDurabilityLifecycleModel(
+            WalDurabilityLifecycleGuard.NeverWrittenReleaseIgnoresCoverage, faultBudget: 0));
+
+        Assert.That(
+            result.BugsFound,
+            Is.GreaterThan(0),
+            $"removing the never-written release's coverage bound must produce a violation in {result.Iterations} explored runs.");
+        Assert.That(
+            string.Join("\n", result.BugReports),
+            Does.Contain("[ReleaseBackedBySnapshot]"),
+            "the unbounded never-written release was caught, but not by [ReleaseBackedBySnapshot].");
+    }
+
+    /// <summary>
+    /// The guard for the never-written arm, at its outcome: with the root-cause
+    /// assertion off, the unbounded release lets the GC trim past the snapshot of
+    /// the leaf that owns nothing, and its restart must be reported by
+    /// <c>[RecoveryNeverFallsOffLog]</c>. This is the TLA+ module's trace (the
+    /// leaf reads, captures below its read position, persists, publishes and
+    /// stops) on production's cores.
+    /// </summary>
+    /// <remarks>
+    /// The latch needs a capture at exactly offset 1 and a persist at 2, with no
+    /// recapture or stop in between (<see cref="WalFallOffCore.IsPrefixLost"/>
+    /// exempts a checkpoint of 0). The measured per-run detection rate is
+    /// p ~ 2.0e-3 (40 Coyote explorations, 20409 paths, every one reported by
+    /// [RecoveryNeverFallsOffLog]; a uniform-random simulation of the variant
+    /// predicted 2.3e-3), so the default 1000 runs would miss it ~ 13% of the
+    /// time; 10000 runs miss it with probability ~ e^-20. Exploration stops at
+    /// the first violation, so the expected cost is ~ 1/p ~ 500 runs.
+    /// </remarks>
+    [Test]
+    public void Removing_the_never_written_release_bound_is_caught_by_the_fall_off_assertion()
+    {
+        var result = CoyoteModelHarness.Explore(
+            new WalDurabilityLifecycleModel(
+                WalDurabilityLifecycleGuard.NeverWrittenReleaseIgnoresCoverage,
+                faultBudget: 1,
+                neverWrittenLeaf: true,
+                checkReleaseBacking: false),
+            iterations: 10000);
+
+        Assert.That(
+            result.BugsFound,
+            Is.GreaterThan(0),
+            $"removing the never-written release's coverage bound must produce a violation in {result.Iterations} explored runs.");
+        Assert.That(
+            string.Join("\n", result.BugReports),
+            Does.Contain("[RecoveryNeverFallsOffLog]"),
+            "the unbounded never-written release was caught, but not by [RecoveryNeverFallsOffLog].");
+    }
+    /// <summary>
     /// The guards: each removed fix is caught by its own assertion.
     /// </summary>
     /// <remarks>

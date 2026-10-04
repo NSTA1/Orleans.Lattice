@@ -54,10 +54,13 @@ either the full effect of a saga or none of it, never a partial view.
 | `DeleteAsync` | **Linearizable** | The deletion is visible to subsequent reads under the same guarantee as any other write. |
 
 Single-key operations transparently retry on any topology-change
-exception, within a 60-second wall-clock budget per call. A caller sees a
-topology-change fault only when the topology keeps changing for that
-whole budget, in which case the library's internal stale-routing
-exception surfaces rather than a silently wrong result.
+exception, within a wall-clock budget per call: 60 seconds for a write,
+and for a read five sixths of the silo's response timeout (25 seconds at
+the default 30), so a read's fault arrives before the caller's request
+times out. A caller sees a topology-change fault only when the topology
+keeps changing for that whole budget, in which case the library's
+internal stale-routing exception surfaces rather than a silently wrong
+result.
 
 ---
 

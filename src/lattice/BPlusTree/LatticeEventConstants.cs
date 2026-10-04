@@ -274,6 +274,32 @@ public static class LatticeEventConstants
     internal const string ForwardedPrepareRequestContextKey = "ol.prep.fwd";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key naming the shard
+    /// (<c>{physicalTreeId}/{shardIndex}</c>) the routing tier dispatched a saga
+    /// prepare-phase write to (issue #4522). A leaf treats the prepare stamp it
+    /// mints as the prepare's original stamp only when this value equals its own
+    /// shard. A shard-to-shard forward inherits the value of the shard it left,
+    /// so it never matches its destination, and a caller that predates the key
+    /// sets nothing. Either way the prepare stays unmarked and keeps the
+    /// pre-#4522 terminal drain. Internal - set through
+    /// <see cref="LatticeOriginalPrepareStampContext"/>, and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string PreparedRouteRequestContextKey = "ol.prep.route";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key carrying each key's original saga
+    /// prepare stamp (a key to <see cref="HybridLogicalClock"/> map) to a leaf
+    /// that is about to bucket a forwarded prepare or apply a committed-values
+    /// backstop (issue #4522). The leaf buckets a forwarded prepare AT the
+    /// carried stamp, and installs a backstop value only over a row stamped
+    /// below it, at that stamp. Internal - set through
+    /// <see cref="LatticeOriginalPrepareStampContext"/>, and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string OriginalPrepareStampsRequestContextKey = "ol.prep.stamp";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to communicate the WAL
     /// offset of the mutation currently being driven through
     /// <c>ILeafProjection.Apply</c>. The replay coordinator stamps the

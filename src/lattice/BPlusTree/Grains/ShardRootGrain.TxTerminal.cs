@@ -383,7 +383,12 @@ internal sealed partial class ShardRootGrain
             var shadowForward = ForwardShadowAsync(
                 (transactionId, committed, committedValues, cancellationToken),
                 static (target, state) => (Task)target.AppendTxTerminalAsync(
-                    state.transactionId, state.committed, state.committedValues, state.cancellationToken));
+                    state.transactionId, state.committed, state.committedValues, state.cancellationToken),
+                // Once the resize has swapped, the terminal also reaches every
+                // shard of the resized copy a split of it has moved this shard's
+                // slots to, so a bucket mirrored there is resolved; those shards
+                // get no committed-values backstop (issue #4478).
+                closureState: static state => (state.transactionId, state.committed, null, state.cancellationToken));
 
             await Task.WhenAll(leafFanOut, shadowForward);
         }

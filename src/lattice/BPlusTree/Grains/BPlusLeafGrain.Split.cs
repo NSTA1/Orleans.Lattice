@@ -1070,6 +1070,9 @@ internal sealed partial class BPlusLeafGrain
                 : null,
             MovedAwayVirtualShardCount = state.State.MovedAwayVirtualShardCount,
 
+            // The donor's clock (issue #4522), so the sibling stamps every later
+            // write above every prepare the donor minted for its keys.
+            DonorClock = state.State.Clock,
             // The heads captured above ride this same round-trip so the
             // sibling's birth pin can publish a real offset rather than the
             // "-1" sentinel (issue #3094). They are the identical values
