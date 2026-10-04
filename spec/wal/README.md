@@ -24,7 +24,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 8 | 4 | 14 | 20 | 25 | 116,530 |
-| `WalMove` | 5 | 1 | 9 | 9 | 13 | 497 |
+| `WalMove` | 5 | 2 | 13 | 17 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
