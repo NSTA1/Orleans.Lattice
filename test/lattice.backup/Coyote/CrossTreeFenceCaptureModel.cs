@@ -46,9 +46,12 @@ internal enum CrossTreeFenceGuard
 /// <para>
 /// Each tree holds one key of the saga, so a member capture is one instant. A
 /// still-pending bucket is resolved against the tree's LOCAL decision record, as
-/// the #4485 fix specifies. Production today serves it pre-saga, which tears even
-/// a set this window accepts, so this model checks the window under the intended
-/// per-tree capture and leaves the per-tree defect to #4485.
+/// the #4485 fix does (<c>SnapshotProjectionFolder.ResolvePendingAgainst</c>), so
+/// this model checks the window over that per-tree capture. The per-tree capture
+/// itself is pinned by <c>SnapshotCaptureSagaAtomicityTests</c>, and the gated
+/// re-check (<see cref="CrossTreeFenceWindow.IsRecheckClean"/>) is not modelled
+/// here: <c>spec/backup/BackupCapture.tla</c> shows it redundant with the
+/// re-observation's epoch clause, so a guard removing it alone finds nothing.
 /// </para>
 /// <para>
 /// No gate input is pinned: the saga's decision, finalize order, broadcast order

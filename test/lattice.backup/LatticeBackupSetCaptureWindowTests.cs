@@ -5,15 +5,13 @@ using Orleans.Lattice.Operations;
 namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
-/// The cross-tree set capture's post-capture re-observation, end to end: a
-/// cross-tree atomic write that registers and completes entirely inside one
-/// capture window leaves the in-flight count at zero, and only the moved
-/// registration epoch shows the window was not quiet. The capture must discard
-/// that attempt and take a second one. Pins the call site
-/// <c>LatticeBackupCaptureService.CaptureFencedSetAsync</c> routes through
-/// <see cref="CrossTreeFenceWindow.IsStable"/> (the <c>Validate</c> row of
-/// <c>spec/backup/RefinementCapture.md</c>), which a test of the core alone
-/// cannot see.
+/// The cross-tree set capture's window, end to end: a cross-tree atomic write
+/// that tries to start while the members are being captured is refused by the
+/// set's decision gate, which refuses a new delegation as the fence does (issue
+/// #4485), so it is rolled back once the capture releases the gate, the window
+/// stays quiet, and the first attempt is accepted. What the fence alone refuses,
+/// and what the re-check and the re-observation catch when a fence is lost, is
+/// pinned by <see cref="LatticeBackupSetCaptureHoldLossTests"/>.
 /// </summary>
 [Category("Integration")]
 public sealed class LatticeBackupSetCaptureWindowTests
@@ -31,7 +29,7 @@ public sealed class LatticeBackupSetCaptureWindowTests
     public Task TearDown() => _fixture.DisposeAsync();
 
     [Test]
-    public async Task A_cross_tree_write_completing_inside_the_capture_window_forces_a_second_attempt()
+    public async Task A_cross_tree_write_starting_inside_the_capture_window_is_refused_and_rolled_back()
     {
         await _fixture.InitializeAsync();
         var suffix = Guid.NewGuid().ToString("N");
@@ -41,7 +39,9 @@ public sealed class LatticeBackupSetCaptureWindowTests
         await _fixture.GrainFactory.GetGrain<ILattice>(treeB).SetAsync("k", Bytes("old"));
 
         // After the first member is captured - once - a cross-tree atomic write
-        // registers on both trees and completes, all inside the window.
+        // tries to start on both trees, inside the window. It is not awaited
+        // there: a refused write's compensating abort is a decision, which the
+        // capture's gate holds back until the capture releases it.
         var hook = new AfterFirstMemberHook(() => _fixture.GrainFactory.SetManyAtomicAsync(
             new[]
             {
@@ -59,12 +59,31 @@ public sealed class LatticeBackupSetCaptureWindowTests
                 crossTreeConsistent: true));
         }
 
+        var refused = false;
+        try
+        {
+            await hook.Write!;
+        }
+        catch (InvalidOperationException)
+        {
+            refused = true;
+        }
+
         Assert.Multiple(() =>
         {
             Assert.That(hook.Fired, Is.True, "the write must have run inside the first attempt's window");
+            Assert.That(refused, Is.True, "the set's gate must refuse a cross-tree write starting inside the window");
             Assert.That(result.SetManifest.Fence, Is.Not.Null);
-            Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2),
-                "a registration inside the window must discard the attempt, though nothing is in flight when it closes");
+            Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(1),
+                "a refused write never registers, so the first attempt's window stays quiet");
+        });
+
+        var a = await _fixture.GrainFactory.GetGrain<ILattice>(treeA).GetAsync("k");
+        var b = await _fixture.GrainFactory.GetGrain<ILattice>(treeB).GetAsync("k");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Encoding.UTF8.GetString(a ?? []), Is.EqualTo("old"), "a refused batch must be rolled back on tree A");
+            Assert.That(Encoding.UTF8.GetString(b ?? []), Is.EqualTo("old"), "a refused batch must be rolled back on tree B");
         });
     }
 
@@ -74,12 +93,18 @@ public sealed class LatticeBackupSetCaptureWindowTests
     {
         public bool Fired { get; private set; }
 
+        public Task? Write { get; private set; }
+
         public async ValueTask ReportAsync(string phase, long completedUnits = 0, long? totalUnits = null, string? unitName = null)
         {
             if (!Fired && phase == BackupOperationPhases.CapturingMembers && completedUnits == 1)
             {
                 Fired = true;
-                await write();
+                Write = Task.Run(write);
+
+                // Long enough for the write to reach its registration, which the
+                // gate refuses at once.
+                await Task.WhenAny(Write, Task.Delay(TimeSpan.FromSeconds(2)));
             }
         }
     }

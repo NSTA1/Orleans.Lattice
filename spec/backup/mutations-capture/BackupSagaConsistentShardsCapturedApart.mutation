@@ -1,7 +1,9 @@
-# Pairs with BackupSagaConsistent. REPRODUCES CURRENT PRODUCTION (#4485):
-# nothing stops decisions while the shards are captured one after another, so
-# each shard is captured at its own moment. A shard captured before the saga
-# decided holds it pre-saga, one captured after its terminal post-saga.
+# Pairs with BackupSagaConsistent. REPRODUCES PRODUCTION BEFORE THE #4485 FIX:
+# nothing stopped decisions while the shards were captured one after another,
+# so each shard was captured at its own moment. A shard captured before the
+# saga decided holds it pre-saga, one captured after its terminal post-saga.
+# Its code analogue (a registry that records a decision under a held gate)
+# turns SnapshotCaptureSagaAtomicityTests red.
 MODULE: BackupSagaConsistentShardsCapturedApart
 TARGET: BackupSagaConsistent
 CLASS: Invariant

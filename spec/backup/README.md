@@ -54,17 +54,19 @@ Every module also checks `TypeOK`. Each liveness property fails on a protocol
 defect under the fairness its module asserts, demonstrated by a mutation that
 leaves that fairness intact; see each mutation directory.
 
-## Two modules model a fix, not today's production
+## Defects the modules found
 
-The models specify the INTENDED design. Where production differs, a mutation
-reproduces production and the refinement note's row cites the issue:
+The models specify the INTENDED design. Where production differed, a mutation
+reproduces production before the fix, and the issue stays cited in the
+refinement note's rows:
 
-- **#4485** (`BackupCapture`): a snapshot capture, and so every full backup and
-  a cross-tree set, can hold an atomic batch torn, because each shard is
-  captured at its own moment and a still-pending bucket is served pre-saga.
-  Confirmed by execution. The module checks the approved fix, a lease-fenced
-  decision gate; `BackupSagaConsistentPendingReadsPre` and
-  `BackupSagaConsistentShardsCapturedApart` reproduce production.
+- **#4485** (`BackupCapture`, fixed): a snapshot capture, and so every full
+  backup and a cross-tree set, could hold an atomic batch torn, because each
+  shard was captured at its own moment and a still-pending bucket was served
+  pre-saga. Confirmed by execution. The module checks the fix that shipped, a
+  lease-fenced decision gate; `BackupSagaConsistentPendingReadsPre` and
+  `BackupSagaConsistentShardsCapturedApart` reproduce production before it, and
+  their code analogues turn the fix's regression tests red.
 - **#4490** (`BackupRestore`, fixed by #4498): a shipper whose alias-change push
   was lost resumed from the retired copy's log and re-advanced the peer's
   restored cut. The shipper half was confirmed by execution. The module checks
@@ -72,8 +74,9 @@ reproduces production and the refinement note's row cites the issue:
   `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces production before
   it, and its code analogue turns the fix's regression test red.
 
-So a clean TLC run of these two modules is evidence about the design, not about
-the code running today, until those fixes land.
+Both fixes have landed, so the reproducing mutations now stand as regression
+checks: each must keep firing, and each has a code analogue that turns the
+fix's regression tests red.
 
 ## Saga abstraction
 

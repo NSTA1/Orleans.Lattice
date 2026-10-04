@@ -21,18 +21,19 @@ TLC report it, and every protocol step of each specification is perturbed by at
 least one, so a specification that could not notice a broken protocol fails the
 build. TLC runs these checks on every pull request.
 
-## Two guarantees above are not yet true of production
+## Defects the specifications found
 
 The specifications check the **intended** design. Two of the guarantees above
-were found not to hold in production, and are tracked as defects:
+were found not to hold in production:
 
-- **A backup can hold an atomic batch torn (#4485).** A capture reads each shard
-  at its own moment and serves a write still pending at that moment as if the
-  batch had not committed, so a backup taken while a multi-shard
-  `SetManyAtomicAsync` is being applied can hold one of its keys new and
-  another old. A cross-tree-consistent backup set is affected the same way.
-  The specification checks the approved fix, a short decision gate held for
-  the capture; until it ships, the capture guarantees above describe the fix.
+- **A backup could hold an atomic batch torn (#4485, fixed).** A capture read
+  each shard at its own moment and served a write still pending at that moment
+  as if the batch had not committed, so a backup taken while a multi-shard
+  `SetManyAtomicAsync` was being applied could hold one of its keys new and
+  another old. A cross-tree-consistent backup set was affected the same way.
+  The fix holds a short decision gate for the capture and resolves every
+  still-pending write against the decisions recorded when the gate was taken;
+  the specification checks that design.
 - **A restore's resumed replication could re-advance a peer (#4490, fixed).**
   If a shipper missed the notification that a restore moved the tree's alias,
   it could resume shipping from the retired copy for up to
@@ -46,14 +47,15 @@ were found not to hold in production, and are tracked as defects:
 The checks reach production through three extracted cores, each executed by the
 code that runs and by a test that drives it:
 
-- the cross-tree set's drain gate and post-capture re-observation
-  (`CrossTreeFenceWindow`), also driven by a Coyote model;
+- the cross-tree set's drain gate, re-check under the decision gate and
+  post-capture re-observation (`CrossTreeFenceWindow`), also driven by a Coyote
+  model;
 - the origin normalisation, per-origin high-water and consistency-cut frontier
   rules of every capture (`BackupChainFrontier`);
 - the coordinated restore's single commit-or-abort decision
   (`CrossClusterSagaDecisionCore`), also driven by a Coyote model.
 
-Everything else the specifications describe - registry leases, routing,
+Everything else the specifications describe - the decision gate's registry leases, routing,
 redirects, the alias reservation, the write and receive fences - is mapped to
 its production code and to the tests that pin it in each specification's
 refinement note, not executed by the model itself.

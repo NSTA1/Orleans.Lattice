@@ -1044,7 +1044,7 @@ restore decision).
 
 | Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
 |--------|---------------|-------------------------|-------------------------|
-| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix; production violates it today. | None of its own; #4485's repro becomes the regression test. |
+| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) are the detectors. |
 | `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
 | `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
 | `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
