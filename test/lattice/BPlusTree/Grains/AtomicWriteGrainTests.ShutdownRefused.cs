@@ -97,6 +97,7 @@ public partial class AtomicWriteGrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
         var state = existingState ?? new FakePersistentState<AtomicWriteState>();
+        PreparedKeysReadBack.Stub(shard, () => state.State.Entries.Select(e => e.Key));
 
         var grain = new AtomicWriteGrain(
             context,

@@ -380,4 +380,27 @@ internal sealed class AtomicWriteState
     /// </para>
     /// </summary>
     [Id(24)] public long DecideByUtcTicks { get; set; }
+
+    /// <summary>
+    /// The original prepare stamp of each entry key whose prepare a leaf marked
+    /// (issue #4522), read back from the buckets that hold them before the
+    /// execute phase ends and persisted with its checkpoint. The read accounts
+    /// for every entry or fails the batch, so a committed saga always has them.
+    /// The committed-values backstop carries each key's stamp, so a leaf that
+    /// holds no bucket for the key applies the saga's value under
+    /// last-writer-wins at that stamp rather than over a write acknowledged
+    /// after the prepare. A key whose prepare is unmarked (a CRDT delta, which
+    /// folds at the terminal stamp) has none. <see langword="null"/> when no
+    /// prepare is marked, or on state persisted before the read-back.
+    /// </summary>
+    [Id(25)] public Dictionary<string, Orleans.Lattice.HybridLogicalClock>? OriginalPrepareStamps { get; set; }
+
+    /// <summary>
+    /// The physical tree <see cref="OriginalPrepareStamps"/> were read back from,
+    /// set whenever the read-back completes (even with no marked prepare), so
+    /// <see langword="null"/> means it has not run. A stamp is carried only to a
+    /// shard of this tree: another copy's clocks do not order its writes
+    /// against it.
+    /// </summary>
+    [Id(26)] public string? OriginalPrepareStampsPhysicalTreeId { get; set; }
 }
