@@ -280,11 +280,14 @@ release the workflows pin (see [CI decision](../README.md#ci-decision)).
 ## The cross-cluster module
 
 `AtomicCommitCrossCluster` (issue #4436, epic #4430) instances `AtomicCommit`
-for the origin and drives its saga `t1`, over `k1` and `k2`, unchanged. What it
+for the origin and drives its saga `t1`, over `k1` and `k2`, through
+`AtomicCommit`'s prepare, decide, broadcast and forget steps; the orphan and
+registry-mask steps never run for it (an abstraction gap of the note). What it
 adds starts at the origin's WAL: every prepare and every per-source-shard
 terminal becomes a replication record, delivered to a receiver by a transport
 that may reorder, lose a delivery (the record is shipped again) and lose an ack
-(the record is delivered again). The receiver stages prepares, tallies terminals
+(the record is delivered again), but is assumed never to lose a record outright,
+which production violates (#4591, #4579, #4534). The receiver stages prepares, tallies terminals
 per source shard (including the legacy path for a terminal with no count),
 hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
@@ -310,8 +313,11 @@ fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
 #4510's settle), and a decision purged while its saga's prepare could still be
 re-shipped (#4508, fixed by #4553). The base models the fixed design. What
 remains outside it is a transport that loses a record, which production still
-does on a dead-lettered batch (#4494) and on a WAL trim past a peer that has not
-read the entry (#4534, #4579); the note records it as an abstraction gap.
+does where the receiver acknowledges a saga record it dead-lettered (#4591) and
+where the WAL trims an entry the shipper has not read (#4534, #4579);
+`RAllOrNothingPrepareAckedUnapplied` reproduces it and the note records it as an
+abstraction gap. A prepare the shipper dead-letters poisons its saga instead
+(#4494, fixed by #4570), which is safe but not live.
 
 The extracted cores it maps to are `TerminalArrivalTally` (now including the
 ungated test) and `CrossTreeReceiverBarrier`, both executed by the production
@@ -330,4 +336,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 22 | 20 | 14,843 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 23 | 20 | 14,843 |

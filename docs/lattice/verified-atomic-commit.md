@@ -34,13 +34,29 @@ Coyote models of the receiver, described under
 Do not read coverage of either half as coverage of the other. The single-cluster
 properties say nothing about a receiver, and the cross-cluster properties are all
 claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
-barrier, a transport that can reorder, lose and duplicate) and its failure modes
-are its own. The cross-cluster check is also narrower than its name: it assumes a
-source shard's terminal reaches the receiver after that shard's prepares, which
-the shipper's terminal hold provides (issue #4480), and that its transport
-never loses a record, which production still does on a dead-lettered batch
-(issue #4494) and on a WAL trim past a peer that has not read the entry (issues
-#4534 and #4579). Those departures are recorded as defects, not covered. The
+barrier, and a transport that may reorder, drop a delivery and duplicate, but is
+assumed never to lose a record) and its failure modes are its own. The
+cross-cluster check is also narrower than its name:
+
+- It assumes a source shard's terminal reaches the receiver after that shard's
+  prepares, which the built-in shipper's terminal hold provides (issue #4480); a
+  bridge built on `IChangeFeed` relies on the feed's own ordering instead (issue
+  #4511, fixed by #4519).
+- It assumes the transport never loses a record. Production violates that: the
+  receiver's dead-letter applier acknowledges a saga record it parked (issue
+  #4591), and the WAL can trim an entry the shipper has not read (issues #4579
+  and #4534). A prepare the shipper itself dead-letters poisons its saga
+  instead, which is safe but leaves the saga invisible on that peer (issue
+  #4494, fixed by #4570).
+- It imports a bootstrap atomically, while the receiver's drain installs the rows
+  one at a time and keeps serving reads, so a partial saga is observable
+  mid-drain (issue #4526). Its properties hold from live-incremental replication
+  onward.
+- It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
+  shipper drops the filtered prepares but ships every terminal, so all-or-nothing
+  holds only over the keys that peer replicates.
+
+Those departures are recorded as defects or scope limits, not covered. The
 bootstrap is modelled as production now ships it: the export carries the
 recorded verdict of every saga the origin stores (issue #4481, fixed by #4501),
 retained pre-cut records are shipped again and settled against it (issue #4482,
@@ -316,8 +332,9 @@ decision are in [`spec/README.md`](../../spec/README.md), which also describes t
 The same directory holds the cross-cluster module,
 [`AtomicCommitCrossCluster.tla`](../../spec/atomic-commit/AtomicCommitCrossCluster.tla),
 which instances `AtomicCommit` for the origin cluster and specifies the
-receiver: replication of each prepare and terminal over a transport that can
-reorder, lose and duplicate; the receiver's per-source-shard tally, including the
+receiver: replication of each prepare and terminal over a transport that may
+reorder, drop a delivery and duplicate, but is assumed never to lose a record
+(production violates that, issues #4591, #4579 and #4534); the receiver's per-source-shard tally, including the
 ungated legacy path; the cross-tree receiver barrier and the registry's
 delegation to it, with an undiallable barrier answering Indeterminate; the two
 delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its

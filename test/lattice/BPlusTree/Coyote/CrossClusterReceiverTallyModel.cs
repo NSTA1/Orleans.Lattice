@@ -100,6 +100,9 @@ internal sealed class CrossClusterReceiverTallyModel(
     public void Run(ICoyoteRuntime runtime)
     {
         var txid = Guid.NewGuid();
+        // Scope pin: every terminal carries the same stamped count, so the tally's
+        // upward merge of a raised count (TerminalArrivalTally.MergeExpected) is
+        // never exercised here; TerminalArrivalTallyTests pins that rule.
         var stampedCount = guard == CrossClusterTallyGuard.UnstampedTerminals ? 0 : _shards;
 
         // The origin has written every prepare and, once decided, every terminal.

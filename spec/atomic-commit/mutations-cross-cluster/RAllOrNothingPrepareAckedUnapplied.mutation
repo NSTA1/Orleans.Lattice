@@ -1,0 +1,32 @@
+# Pairs with RAllOrNothing. The base's transport may drop a delivery and
+# deliver a record again, but never loses one: a record leaves the outbox only
+# once it has been applied. This mutation lets a prepare be acknowledged
+# without being applied - what the receiver's dead-letter applier does today
+# after its retries run out (issue #4591), and what a trim of an unread entry
+# does at the sender (issues #4579, #4534). The shipper's terminal hold counts
+# the acknowledged prepare as delivered and releases the saga's terminals; the
+# tally completes, the other key's bucket drains post-saga, and the lost key has
+# no bucket and stays pre-saga. Once the decision is recorded a later copy of
+# the prepare would be settled, so the split shows when nothing re-ships it.
+MODULE: RAllOrNothingPrepareAckedUnapplied
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a prepare is acknowledged without being applied, so its saga's terminals are released over a key with no bucket
+PERTURBS: DeliverPrepare
+
+--- FIND
+    /\ \/ outbox' = outbox \ {m}
+       \/ outbox' = outbox
+    /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
+                THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+--- REPLACE
+\* MUTATION: a delivery may be acknowledged without being applied.
+    /\ \/ /\ \/ outbox' = outbox \ {m}
+             \/ outbox' = outbox
+          /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
+                      THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+          /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+       \/ /\ outbox' = outbox \ {m}
+          /\ UNCHANGED <<rpend, rproj>>
+--- END
