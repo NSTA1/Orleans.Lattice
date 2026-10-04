@@ -110,6 +110,11 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// binding naming its own copy (issue #4369); only the saga and the routing
     /// tier dispatching for it may assert one.
     /// </para>
+    /// <para>
+    /// The forwarded-prepare marker is included because it names the tree whose
+    /// registry a leaf consults before bucketing a prepare (issue #4445); only a
+    /// forwarding shard or the split sweep may assert it.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -124,6 +129,7 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey,
         LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
         LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
+        LatticeEventConstants.ForwardedPrepareRequestContextKey,
     ];
 
     /// <inheritdoc />

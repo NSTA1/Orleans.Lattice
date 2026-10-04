@@ -1,0 +1,16 @@
+# Pairs with OffsetContiguity. The append takes the next offset but does not
+# advance the allocator - the read-then-advance split that WalOffsetAllocationCore
+# makes one indivisible step under the shard's state gate - so the next append is
+# handed the same offset.
+MODULE: OffsetContiguityAppendDoesNotAdvance
+TARGET: OffsetContiguity
+CLASS: Invariant
+SUMMARY: an append reuses the allocator's offset without advancing it
+PERTURBS: Append
+
+--- FIND
+    /\ next' = next + 1
+--- REPLACE
+\* MUTATION: the allocator is read but not advanced.
+    /\ next' = next
+--- END

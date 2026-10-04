@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_view_rebuild and lattice_treeadmin_view_reconcile"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_view_rebuild, lattice_treeadmin_view_rebuild_start, lattice_treeadmin_view_reconcile, lattice_treeadmin_view_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
   - id: runtime-view
     check: "Target is a runtime-registered view for runtime control."
     source: "docs/lattice.api.treeadmin/README.md"
@@ -59,6 +62,10 @@ failure_modes:
     signal: "InvalidOperationException when no view subsystem is registered."
     effect: "No view verb is performed."
     response: "Register AddLatticeViews for runtime view support."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: false
   mechanism: "No revert for a completed view rebuild is surfaced; rebuild again from current source state if needed."

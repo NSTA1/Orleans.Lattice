@@ -1,0 +1,21 @@
+# Pairs with EveryAckedWriteMaterialised. A leaf stop costs nothing from the
+# fault budget, so a leaf may be torn down before it reads its own write on
+# every activation for ever. This perturbs the ENVIRONMENT assumption that
+# faults do not recur for ever, not the protocol: it shows the property needs
+# that assumption, and is not one of the protocol-defect liveness pairings
+# (those are ReadPositionTracksOwnEntries, ResidualAdvanceNeverPersisted and
+# SwitchKeepsFence).
+MODULE: EveryAckedWriteMaterialisedLeafStopsUnbounded
+TARGET: EveryAckedWriteMaterialised
+CLASS: Temporal
+SUMMARY: leaf stops are not bounded, so a leaf can be restarted before every read for ever
+PERTURBS: LeafStop
+
+--- FIND
+    /\ cov' = [cov EXCEPT ![l] = NoSnap]
+    /\ faults' = faults + 1
+--- REPLACE
+    /\ cov' = [cov EXCEPT ![l] = NoSnap]
+\* MUTATION: the stop does not spend the fault budget.
+    /\ faults' = faults
+--- END

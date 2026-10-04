@@ -336,10 +336,10 @@ public partial class PublicApiContractTests
         string treeId, int expectedMin, MutationKind? kind = null, TimeSpan? timeout = null)
     {
         var t = timeout ?? TimeSpan.FromSeconds(5);
-        var deadline = DateTime.UtcNow + t;
+        var deadline = Environment.TickCount64 + (long)t.TotalMilliseconds;
         var collected = new List<LatticeMutation>();
 
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             foreach (var m in PublicApiContractClusterFixture.DrainObserverEvents())
             {

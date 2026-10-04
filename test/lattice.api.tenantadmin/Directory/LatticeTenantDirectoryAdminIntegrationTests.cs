@@ -250,7 +250,7 @@ public sealed class LatticeTenantDirectoryAdminIntegrationTests
     /// </summary>
     private async Task<bool> WaitUntilActsAsTenantAsync(string subjectId, string tenantId)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         while (true)
         {
             if (await ActsAsTenantAsync(subjectId, tenantId))
@@ -258,7 +258,7 @@ public sealed class LatticeTenantDirectoryAdminIntegrationTests
                 return true;
             }
 
-            if (DateTime.UtcNow >= deadline)
+            if (Environment.TickCount64 >= deadline)
             {
                 return false;
             }

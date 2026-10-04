@@ -219,8 +219,8 @@ public class LatticeLockGrainIntegrationTests
     /// </summary>
     private static async Task WaitForQueueDepthAsync(ILatticeLockGrain theLock, int expected)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(10).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var status = await theLock.GetStatusAsync();
             if (status.QueueDepth == expected)

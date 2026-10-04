@@ -137,10 +137,10 @@ internal sealed partial class BPlusLeafGrain
     /// starts at a projection checkpoint past the mark, or at a WAL tail
     /// trimmed past it, leaves the transaction out, and the set is not carried
     /// in a leaf snapshot. It is also the orphan-guard input and the late-prepare
-    /// refusal's input (<see cref="IsLatePrepareForTerminalTransaction"/>), so
-    /// both are blind to a terminal the current activation does not know
-    /// (issue #4445). Lazily allocated for the same reason as
-    /// <see cref="_pendingTx"/>.
+    /// refusal's first check (<see cref="IsLatePrepareForTerminalTransactionAsync"/>),
+    /// which is why that refusal also asks the registry for a forwarded prepare
+    /// this set does not recognise (issue #4445). Lazily allocated for the same
+    /// reason as <see cref="_pendingTx"/>.
     /// </summary>
     private HashSet<Guid>? _recentlyTerminal;
 
@@ -182,7 +182,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Whether the write being committed is a saga prepare for a transaction
-    /// whose terminal this leaf has already applied, which makes it a
+    /// whose terminal has already been decided and settled, which makes it a
     /// late-arriving orphan: a source shard's shadow-forward of a prepare, or
     /// the retroactive pending-tx sweep, that trailed the saga's terminal to
     /// this leaf.
@@ -193,20 +193,101 @@ internal sealed partial class BPlusLeafGrain
     /// needs nothing), and each saga issues exactly one terminal, so nothing
     /// would ever drain the bucket. Reads hide an orphan only while
     /// <see cref="IsRecentlyTerminal"/> remembers the transaction, and that
-    /// memory is per-activation: a reactivation that replays the logged
-    /// prepare, or a later split that strands the key outside this leaf's
-    /// span, leaves the orphan surfacing as the committed value - a stale
-    /// round over newer rows, a duplicate key in a count or scan, and reads
-    /// that keep retrying a prepare they cannot settle.
+    /// memory is per-activation, so an orphan installed on an activation that
+    /// does not remember the terminal surfaces as the committed value - a
+    /// stale round over newer rows, a duplicate key in a count or scan, and
+    /// reads that keep retrying a prepare they cannot settle.
+    /// </para>
+    /// <para>
+    /// Two checks, in cost order. The first is the per-activation memory
+    /// (issue #4385), which answers synchronously. It misses a terminal this
+    /// leaf applied on an earlier activation - the replay window need not
+    /// cover the terminal mark, because the projection checkpoint can advance
+    /// past it and WAL GC can trim it - and it misses a saga that has decided
+    /// but whose terminal has not reached this leaf yet, which a delayed or
+    /// duplicated forward can outrun. A <b>forwarded</b> prepare
+    /// (<see cref="LatticeForwardedPrepareContext"/>) the memory does not
+    /// recognise is therefore checked against the saga's decision in the
+    /// registry (issue #4445), and refused once the saga has decided: bucketed,
+    /// it would be stamped on arrival, newer than any write acknowledged since,
+    /// and the read gate would surface it as committed over them. Only a
+    /// forwarded prepare can arrive after its saga decided: the saga
+    /// coordinator's own prepare is acknowledged before the saga decides, so it
+    /// pays no registry round trip.
+    /// </para>
+    /// <para>
+    /// Refusing on a decision this leaf has not yet applied is safe for the
+    /// same reason. A committed saga had every prepare acknowledged before it
+    /// decided, so a forwarded prepare arriving after the decision duplicates
+    /// one already delivered or is a sweep replay whose post-sweep cleanup
+    /// applies the terminal with the value as its backstop; an aborted saga
+    /// needs nothing. The txid is deliberately <b>not</b> recorded as terminal
+    /// here: that set also dedups terminals, and the terminal this leaf may
+    /// still receive must run its backstop.
     /// </para>
     /// </summary>
-    private bool IsLatePrepareForTerminalTransaction()
+    private ValueTask<bool> IsLatePrepareForTerminalTransactionAsync()
     {
         if (!LatticePreparedContext.Current)
-            return false;
+            return new ValueTask<bool>(false);
 
         var txid = LatticeTransactionContext.Current;
-        return txid != Guid.Empty && IsRecentlyTerminal(txid);
+        if (txid == Guid.Empty)
+            return new ValueTask<bool>(false);
+
+        if (IsRecentlyTerminal(txid))
+            return new ValueTask<bool>(true);
+
+        return LatticeForwardedPrepareContext.Current
+            ? IsForwardedPrepareForDecidedTransactionAsync(txid)
+            : new ValueTask<bool>(false);
+    }
+
+    /// <summary>
+    /// Asks the registry whether <paramref name="txid"/>'s saga has a terminal
+    /// decision, for a forwarded prepare this activation has no memory of (see
+    /// <see cref="IsLatePrepareForTerminalTransactionAsync"/>). The registry is
+    /// the one the forwarder named (<see cref="LatticeForwardedPrepareContext.RegistryTreeId"/>):
+    /// the logical tree, where the saga records its decision, which is not this
+    /// leaf's own physical tree id once the tree has been resized. An
+    /// <see cref="TxStatus.Indeterminate"/> answer is followed by the recorded
+    /// verdict, because a decision masked by the retention window is still a
+    /// decision. Fails open: a registry fault or any undecided answer buckets
+    /// the prepare as before, since refusing a prepare the saga may still need
+    /// would lose a write.
+    /// </summary>
+    private async ValueTask<bool> IsForwardedPrepareForDecidedTransactionAsync(Guid txid)
+    {
+        var treeId = LatticeForwardedPrepareContext.RegistryTreeId ?? state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId))
+            return false;
+
+        TxStatus status;
+        try
+        {
+            var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
+            status = await registry.GetStatusAsync(txid);
+            if (status == TxStatus.Indeterminate)
+                status = await registry.GetRecordedStatusAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Could not read the decision for saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
+                    + "prepare; bucketing it.",
+                    txid,
+                    treeId);
+            }
+
+            return false;
+        }
+
+        // The terminal may have landed while the registry call was in flight.
+        return status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid);
     }
 
     /// <summary>
@@ -1682,7 +1763,7 @@ internal sealed partial class BPlusLeafGrain
     /// Test hook: buckets a prepared write (a tombstone when
     /// <paramref name="value"/> is <see langword="null"/>) for
     /// <paramref name="transactionId"/> the way a prepared Set or Delete does,
-    /// but without <see cref="IsLatePrepareForTerminalTransaction"/>, so a test
+    /// but without <see cref="IsLatePrepareForTerminalTransactionAsync"/>, so a test
     /// can stand up an orphan bucket - a pending bucket for a transaction whose
     /// terminal this leaf has already applied. A live prepared write can no
     /// longer produce that state; activation replay still can, and the orphan

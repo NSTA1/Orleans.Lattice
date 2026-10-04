@@ -116,9 +116,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Core - Multi-key reads hide a cross-tree batch whose coordinator is unreachable.** `GetManyAsync`, key and entry scans and cursors served such a batch's keys at their old values, while point reads hid them. They now hide them too, so a reader never sees a cross-tree batch as not applied while other trees may show it applied. ([#4448](https://github.com/NSTA1/Orleans.Lattice/issues/4448)) (`Orleans.Lattice`)
+
 - **Core - Growing a resized tree no longer over-counts after atomic batches.** On a tree that had been resized, a split looked up each in-flight batch's outcome under the wrong tree id and took committed batches for unfinished. It then re-sent their writes to the new shard, where nothing settled them, so `CountAsync` counted those keys twice. The split now reads the outcome under the tree's own id. ([#4368](https://github.com/NSTA1/Orleans.Lattice/issues/4368)) (`Orleans.Lattice`)
 
-- **Core - A reshard no longer leaves stale prepared writes behind an atomic batch.** A split forwards each prepared key on its own, so one could reach the new shard after the batch had committed and sit there undrained. Once the shard forgot the commit, it counted that key twice, could serve a stale round, and reads could hang. The late write is now dropped. ([#4385](https://github.com/NSTA1/Orleans.Lattice/issues/4385)) (`Orleans.Lattice`)
+- **Core - A reshard no longer leaves stale prepared writes behind an atomic batch.** A split forwards each prepared key on its own, so one could reach the new shard after the batch had committed and sit there undrained: counted twice, served as a stale round, or hanging reads. The late write is now dropped, even by a shard restarted since the commit. ([#4385](https://github.com/NSTA1/Orleans.Lattice/issues/4385), [#4445](https://github.com/NSTA1/Orleans.Lattice/issues/4445)) (`Orleans.Lattice`)
 
 - **Schema - Remediation keeps the tree's shard topology and sizing.** A remediation or eager schema-version migration built its copy with library defaults, so a resharded or pinned tree came back at 64 shards with default leaf sizing, WAL partitions and virtual slot count, and without its runtime overrides. The copy now inherits the tree's shard map, split mark, structural pins and overrides, as a resize's does. ([#4379](https://github.com/NSTA1/Orleans.Lattice/issues/4379)) (`Orleans.Lattice`, `Orleans.Lattice.Schema`)
 
@@ -273,7 +275,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - Value previews say when the value goes on.** A text value whose preview ends part-way through a character shows as text rather than a hex dump, and a key's one-line preview ends in `...` whenever the value continues, including a binary value's hex. ([#4353](https://github.com/NSTA1/Orleans.Lattice/issues/4353), [#4354](https://github.com/NSTA1/Orleans.Lattice/issues/4354)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - Sizes never read 1024 of a unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry, Data and Tenancy areas. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355), [#4372](https://github.com/NSTA1/Orleans.Lattice/issues/4372)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Sizes and durations never read a whole larger unit.** A size just under a unit boundary, such as 1,048,575 bytes, now reads 1 MiB rather than 1024 KiB in the Cluster, Replication, Backups, Telemetry, Data and Tenancy areas, and 59.6 seconds reads 1 minute, not 60 seconds. ([#4355](https://github.com/NSTA1/Orleans.Lattice/issues/4355), [#4372](https://github.com/NSTA1/Orleans.Lattice/issues/4372), [#4459](https://github.com/NSTA1/Orleans.Lattice/issues/4459)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Explorer - A Data tab refresh no longer reports a failed read over loaded keys.** Switching tree, page size, prefix, tag or scan mode no longer shows a read error when the previous scan's cursor cannot be released; the new page stays in view and the server reaps the old cursor. ([#4371](https://github.com/NSTA1/Orleans.Lattice/issues/4371)) (`Orleans.Lattice.Explorer.Core`)
 
@@ -293,6 +295,16 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - An undecryptable preference document no longer wedges the store.** A UI preference document the host can no longer decrypt, after a key-ring change, is logged, deleted and read as empty, so preference reads and writes resume instead of failing for the rest of the circuit. ([#4401](https://github.com/NSTA1/Orleans.Lattice/issues/4401)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Explorer.Web`)
 
+- **Explorer - An extension route parameter cannot re-scope its route.** `ExplorerRoute.WithParameter` and `ExplorerRouteParameters` now refuse the shell's `tenant` and `all-tenants` keys, which re-pinned the tenant or turned on all-tenants visibility once the route round-tripped. ([#4458](https://github.com/NSTA1/Orleans.Lattice/issues/4458)) (`Orleans.Lattice.Explorer.Core`)
+
+- **Explorer - A count of one reads in the singular.** A catalogue check reports 1 orphan row rather than 1 orphan rows, and a schema size card reads at most 1 byte rather than 1 bytes. ([#4460](https://github.com/NSTA1/Orleans.Lattice/issues/4460)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - An app's page reports consent drift a narrower approval leaves.** An approved exception scope on another app's tree now covers a role scope only as far as the cluster would, so a key or prefix approval no longer reads as covering the whole tree or a different prefix. ([#4486](https://github.com/NSTA1/Orleans.Lattice/issues/4486)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A schema predicate's text constant reads unambiguously.** A rule shown as an expression now escapes backslashes and control characters as well as quotes, so `C:\new` no longer reads as a line break and a value holding a line break stays on one line. ([#4487](https://github.com/NSTA1/Orleans.Lattice/issues/4487)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - WAL reclamation shows only the current tree's verdict.** On the WAL page, a late answer or fault for the tree shown before no longer replaces the current tree's floor holder with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
 
 - **WAL - Purging a tree trims its write-ahead log.** An ordinary purge unregistered the tree without trimming its log, and WAL collection only visits registered trees, so the log leaked for good. Purge completion now trims the log first, as a resize discard already did. ([#3936](https://github.com/NSTA1/Orleans.Lattice/issues/3936)) (`Orleans.Lattice`)
@@ -307,6 +319,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 - **Gates - Two gates now see what they claim to.** The instrument priming enrolment gate compares each generator-owned row whole, so a stale row fails it, and the bucket closing-list guard counts soft references such as `Relates to #N` as claims. ([#4257](https://github.com/NSTA1/Orleans.Lattice/issues/4257), [#4121](https://github.com/NSTA1/Orleans.Lattice/issues/4121)) (`repository-wide`)
 
 ### Security
+
+- **Schema - A format rule admitted a smuggled trailing newline.** The built-in format patterns, the `EndsWith` text match and the app-install digest pin anchored with `$`, which in .NET also matches before a line feed ending the input. All now anchor at `\z`; a stored rule is kept verbatim. ([#4471](https://github.com/NSTA1/Orleans.Lattice/pull/4471)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Security - Three credential records printed their secret.** `StoredCredential`, `ExplorerAccessToken` and `MembershipCacheKey` are records, so the generated `ToString` disclosed a live password or bearer token to any log or fault that formatted one. Each now redacts it. ([#4471](https://github.com/NSTA1/Orleans.Lattice/pull/4471)) (`Orleans.Lattice.Explorer.Core`, `Orleans.Lattice.Membership`)
 
 - **Explorer - A web sign-in minted a token for whatever resource the endpoint asked for.** The advertised OAuth audience became the requested scope unchecked, so a hostile endpoint harvested a delegated Graph token. An audience must now be bound to the endpoint or listed in `AllowedAudiences`. ([#4394](https://github.com/NSTA1/Orleans.Lattice/issues/4394)) (`Orleans.Lattice.Explorer.Entra.Web`)
 

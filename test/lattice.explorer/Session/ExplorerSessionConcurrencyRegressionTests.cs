@@ -56,13 +56,20 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
         var failures = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
         using var start = new ManualResetEventSlim(false);
 
-        // Several readers against one switcher, run for a bounded wall-clock window
-        // rather than a fixed iteration count. The unsynchronised window is the few
-        // instructions between the cache miss and the insert, so a single reader can
-        // finish a fixed count without ever landing inside a Clear; contending readers
-        // across cores hit it reliably. Two seconds reproduced it every time before the
-        // fix and keeps the guard fast.
-        var deadline = DateTime.UtcNow.AddSeconds(2);
+        // Several readers against one switcher, run for a bounded window rather than
+        // a fixed iteration count. The unsynchronised window is the few instructions
+        // between the cache miss and the insert, so a single reader can finish a fixed
+        // count without ever landing inside a Clear; contending readers across cores hit
+        // it reliably. Two seconds reproduced it every time before the fix and keeps the
+        // guard fast.
+        //
+        // The window runs on a monotonic clock started when contention starts, not on a
+        // wall clock sampled before the threads exist: building and starting a thread per
+        // core would otherwise be charged against the budget, so on a loaded agent the
+        // guard could spend most of its two seconds before the first read and quietly
+        // stop guarding. A wall clock can also be stepped under it by the host.
+        var window = TimeSpan.FromSeconds(2);
+        var clock = new System.Diagnostics.Stopwatch();
         var threads = new List<Thread>();
 
         for (var r = 0; r < Math.Max(2, Environment.ProcessorCount / 2); r++)
@@ -72,7 +79,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
                 start.Wait();
                 try
                 {
-                    while (DateTime.UtcNow < deadline)
+                    while (clock.Elapsed < window)
                     {
                         // Any read composes or reads the cached scoped name.
                         preferences.GetOrDefault(ScopedKey, string.Empty);
@@ -91,7 +98,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
             try
             {
                 var i = 0;
-                while (DateTime.UtcNow < deadline)
+                while (clock.Elapsed < window)
                 {
                     // Each move clears the cache, so the readers keep missing and
                     // re-inserting - which is the collision.
@@ -109,6 +116,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
             thread.Start();
         }
 
+        clock.Start();
         start.Set();
 
         foreach (var thread in threads)
@@ -116,7 +124,7 @@ public sealed class ExplorerSessionConcurrencyRegressionTests
             thread.Join();
         }
 
-        Assert.That(failures, Is.Empty,
+        Assert.That(failures, Is.Empty, () =>
             "Reading a preference concurrently with a scope change threw. On a Blazor circuit "
             + "this exception surfaces on the render path, which terminates the circuit and "
             + "leaves the page rendered but inert."

@@ -23,7 +23,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, and #4453, are reproduced as standing checks.
+  torn-batch family, #4453 and #4452, are reproduced as standing checks.
 - **Pairings.** Every other mutation pairs an action with a property, so that
   every action in each module's `Next` is perturbed by at least one mutation
   and every checked property fires under at least one.
@@ -37,7 +37,12 @@ production's `AbandonRetargetedSplitAsync`, which neither module has because
 its interlock makes it unreachable; and the purged-copy stall lets the stalled
 saga count as quiescent. Those edits only keep the mutant free of deadlock, so
 that the named property is the only thing TLC can report, and each header says
-so. Every mutant in both catalogues was checked free of deadlock with only
+so.
+
+The #4503 reproductions that serve a read from the purged copy edit
+`RoutedRefused`, the operator every routed read and write shares, rather than an
+action, and so declare no `PERTURBS`; the write half is reproduced separately,
+inside `LaterWrite`. Every mutant in both catalogues was checked free of deadlock with only
 `TypeOK` checked, apart from the two whose target is `TypeOK` itself.
 
 ## Inventory: ShardOwnership
@@ -51,11 +56,13 @@ so. Every mutant in both catalogues was checked free of deadlock with only
 | [`NoKeyLostCommitSkipsFinalDrain`](NoKeyLostCommitSkipsFinalDrain.mutation) | `NoKeyLost` | Invariant | `SplitCommit` | the split moves the map without the final drain, so the new owner does not hold the key |
 | [`NoKeyLostLaterWriteNotMirrored`](NoKeyLostLaterWriteNotMirrored.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a write during a resize is not mirrored, so the flip loses it |
 | [`NoKeyLostPurgeClearsLiveCopy`](NoKeyLostPurgeClearsLiveCopy.mutation) | `NoKeyLost` | Invariant | `ResizePurge` | the purge clears the live copy's rows instead of the retired copy's |
+| [`NoKeyLostPurgedCopyAcceptsWrites`](NoKeyLostPurgedCopyAcceptsWrites.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a routed write on the purged old copy is accepted and acknowledged but lands where nothing reads it |
 | [`NoKeyLostResizeDuringSplit`](NoKeyLostResizeDuringSplit.mutation) | `NoKeyLost` | Invariant | `ResizeBegin` | a resize starts with a split in flight, so writes on the split target are lost at the flip |
 | [`NoKeyLostSnapshotSkipsRows`](NoKeyLostSnapshotSkipsRows.mutation) | `NoKeyLost` | Invariant | `SnapCopy` | the snapshot copies no committed rows, so the resized copy loses every pre-resize key at the flip |
 | [`NoKeyLostTerminalDropsBucket`](NoKeyLostTerminalDropsBucket.mutation) | `NoKeyLost` | Invariant | `SagaTerminal` | the terminal discards the bucket instead of draining it |
 | [`NoKeyLostUndoRestoresWrongMap`](NoKeyLostUndoRestoresWrongMap.mutation) | `NoKeyLost` | Invariant | `UndoSwap` | the undo pairs the old copy with a map that does not describe it |
 | [`NoResurrectionFlipBeforeFence`](NoResurrectionFlipBeforeFence.mutation) | `NoResurrection` | Invariant | `ResizeFlip` | the alias flips before the old copy is fenced, so a stale router reads an older value from it |
+| [`NoResurrectionPurgedCopyServesEmpty`](NoResurrectionPurgedCopyServesEmpty.mutation) | `NoResurrection` | Invariant | none (edits `RoutedRefused`) | a routed read on the purged old copy answers empty, below an acknowledged value |
 | [`OwnerMonotonicAbortOverturnsCommit`](OwnerMonotonicAbortOverturnsCommit.mutation) | `OwnerMonotonic` | Invariant | `SagaAbort` | an abort overwrites a recorded commit, so a key already read committed reverts |
 | [`OwnerMonotonicFreezeBeforeSweep`](OwnerMonotonicFreezeBeforeSweep.mutation) | `OwnerMonotonic` | Invariant | `SplitFreeze` | the split freezes before its retroactive sweep, so a visible commit reverts when the map moves |
 | [`OwnerMonotonicSnapshotSkipsBuckets`](OwnerMonotonicSnapshotSkipsBuckets.mutation) | `OwnerMonotonic` | Invariant | `SnapCopy` | the snapshot does not carry prepared buckets, so a commit decided before the flip reverts on the resized copy |
@@ -82,31 +89,32 @@ so. Every mutant in both catalogues was checked free of deadlock with only
 
 | Mutation | Target | Class | Perturbs | What it breaks |
 |----------|--------|-------|----------|----------------|
-| [`AtomicOnOwnerPrepareNotMirrored`](AtomicOnOwnerPrepareNotMirrored.mutation) | `AtomicOnOwner` | Invariant | `SagaPrepare` | a prepare during a resize is not mirrored, so the resized copy reads the batch torn |
-| [`AtomicOnOwnerRetainedDecidesEarly`](AtomicOnOwnerRetainedDecidesEarly.mutation) | `AtomicOnOwner` | Invariant | `SagaDecide` | the decision is recorded once any entry is dispatched, so readers see the batch torn |
-| [`AtomicOnOwnerRetainedStartCheckpointsEntry`](AtomicOnOwnerRetainedStartCheckpointsEntry.mutation) | `AtomicOnOwner` | Invariant | `SagaStart` | the saga records an entry as dispatched before dispatching it, so the batch commits torn |
-| [`NoKeyLostPurgeWipesResizedCopy`](NoKeyLostPurgeWipesResizedCopy.mutation) | `NoKeyLost` | Invariant | `ResizePurge` | the purge clears the resized copy instead of the old one |
-| [`NoKeyLostResizeCapturesPinnedShardsOnly`](NoKeyLostResizeCapturesPinnedShardsOnly.mutation) | `NoKeyLost` | Invariant | `ResizeBegin` | the resize captures only the pinned shard, so a split-allocated shard is neither copied nor forwarded |
-| [`NoKeyLostRetainedCommitSkipsDrain`](NoKeyLostRetainedCommitSkipsDrain.mutation) | `NoKeyLost` | Invariant | `SplitCommit` | the split moves the map without its final drain, so the destination misses an acknowledged write |
-| [`NoKeyLostRetainedLaterWriteNotMirrored`](NoKeyLostRetainedLaterWriteNotMirrored.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a write during a resize is not mirrored, so the flip loses it |
-| [`NoKeyLostSplitInSoftDeleteWindow`](NoKeyLostSplitInSoftDeleteWindow.mutation) | `NoKeyLost` | Invariant | `SplitBegin` | a split on the resized copy during the soft-delete window strands the bound saga's bucket on the split target |
-| [`NoKeyLostUndoRestoresForeignMap`](NoKeyLostUndoRestoresForeignMap.mutation) | `NoKeyLost` | Invariant | `UndoSwap` | the undo moves the alias back with a map that routes a key to a shard the old copy never held it on |
-| [`NoResurrectionLatePrepareActivationMemory`](NoResurrectionLatePrepareActivationMemory.mutation) | `NoResurrection` | Invariant | `DeliverLate` | the late-prepare refusal reads per-activation memory, so a late orphan serves a stale value |
-| [`NoResurrectionRetainedFlipUnfenced`](NoResurrectionRetainedFlipUnfenced.mutation) | `NoResurrection` | Invariant | `ResizeFlip` | the alias flips before the old copy is fenced, so a reader still on it is served a value the new copy has superseded |
-| [`NoResurrectionRetireDropsFence`](NoResurrectionRetireDropsFence.mutation) | `NoResurrection` | Invariant | `ResizeRetire` | retiring the old copy lifts its fence, so a stale reader is served the old copy again |
-| [`NoResurrectionUndoLeavesResizedCopyServing`](NoResurrectionUndoLeavesResizedCopyServing.mutation) | `NoResurrection` | Invariant | `UndoArm` | the undo arms nothing on the resized copy, so a reader still on it is served a value the old copy has superseded |
-| [`NoStrandedBucketTerminalNotMirrored`](NoStrandedBucketTerminalNotMirrored.mutation) | `NoStrandedBucket` | Temporal | `SagaTerminal` | a terminal to the old copy is not mirrored, so the resized copy keeps the batch's buckets forever |
-| [`OwnerMonotonicForgetBeforeFanOut`](OwnerMonotonicForgetBeforeFanOut.mutation) | `OwnerMonotonic` | Invariant | `RegistryForget` | the registry forgets a decided saga before its terminals land, so a committed key reverts |
-| [`OwnerMonotonicMaskReportsAbsent`](OwnerMonotonicMaskReportsAbsent.mutation) | `OwnerMonotonic` | Invariant | `RegistryMask` | a masked registry row reads as absent, so an undrained committed key reverts |
-| [`OwnerMonotonicReactivationDropsBuckets`](OwnerMonotonicReactivationDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `Reactivate` | a reactivation loses the leaf's prepared buckets, so a visible commit reverts |
-| [`OwnerMonotonicRetainedAbortOverturns`](OwnerMonotonicRetainedAbortOverturns.mutation) | `OwnerMonotonic` | Invariant | `SagaAbort` | an abort overwrites a recorded commit, so a key already read committed reverts |
-| [`OwnerMonotonicRetainedSnapshotDropsBuckets`](OwnerMonotonicRetainedSnapshotDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `SnapCopy` | the snapshot copies committed entries only, so a commit decided before the flip reverts on the resized copy |
-| [`OwnerMonotonicSweepIndeterminateLeavesMarker`](OwnerMonotonicSweepIndeterminateLeavesMarker.mutation) | `OwnerMonotonic` | Invariant | `SplitSweep` | the sweep replays an Indeterminate prepare that the destination refuses, leaving only an activation-scoped marker |
-| [`ResizeCompletesFenceNeverLands`](ResizeCompletesFenceNeverLands.mutation) | `ResizeCompletes` | Temporal | `ResizeFence` | the fence step records nothing, so the flip never becomes enabled |
-| [`ResizeCompletesUndoNeverClears`](ResizeCompletesUndoNeverClears.mutation) | `ResizeCompletes` | Temporal | `UndoClear` | the undo's last step never records that the undo finished |
-| [`SagaCompletesCompletionNeverRecorded`](SagaCompletesCompletionNeverRecorded.mutation) | `SagaCompletes` | Temporal | `SagaComplete` | the saga never records its completion once the broadcast has visited every target |
-| [`SplitCompletesFreezeNeverLands`](SplitCompletesFreezeNeverLands.mutation) | `SplitCompletes` | Temporal | `SplitFreeze` | the freeze step leaves the source accepting, so the split never reaches its commit |
-| [`TypeOkLateForwardOutsideDomain`](TypeOkLateForwardOutsideDomain.mutation) | `TypeOK` | Invariant | `DeliverLate` | a delivered late forward records a state outside its domain |
+| [`AtomicOnOwnerPrepareNotMirrored`](../mutations-retention/AtomicOnOwnerPrepareNotMirrored.mutation) | `AtomicOnOwner` | Invariant | `SagaPrepare` | a prepare during a resize is not mirrored, so the resized copy reads the batch torn |
+| [`AtomicOnOwnerRetainedDecidesEarly`](../mutations-retention/AtomicOnOwnerRetainedDecidesEarly.mutation) | `AtomicOnOwner` | Invariant | `SagaDecide` | the decision is recorded once any entry is dispatched, so readers see the batch torn |
+| [`AtomicOnOwnerRetainedStartCheckpointsEntry`](../mutations-retention/AtomicOnOwnerRetainedStartCheckpointsEntry.mutation) | `AtomicOnOwner` | Invariant | `SagaStart` | the saga records an entry as dispatched before dispatching it, so the batch commits torn |
+| [`NoKeyLostPurgeWipesResizedCopy`](../mutations-retention/NoKeyLostPurgeWipesResizedCopy.mutation) | `NoKeyLost` | Invariant | `ResizePurge` | the purge clears the resized copy instead of the old one |
+| [`NoKeyLostResizeCapturesPinnedShardsOnly`](../mutations-retention/NoKeyLostResizeCapturesPinnedShardsOnly.mutation) | `NoKeyLost` | Invariant | `ResizeBegin` | the resize captures only the pinned shard, so a split-allocated shard is neither copied nor forwarded |
+| [`NoKeyLostRetainedCommitSkipsDrain`](../mutations-retention/NoKeyLostRetainedCommitSkipsDrain.mutation) | `NoKeyLost` | Invariant | `SplitCommit` | the split moves the map without its final drain, so the destination misses an acknowledged write |
+| [`NoKeyLostRetainedLaterWriteNotMirrored`](../mutations-retention/NoKeyLostRetainedLaterWriteNotMirrored.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a write during a resize is not mirrored, so the flip loses it |
+| [`NoKeyLostSplitInSoftDeleteWindow`](../mutations-retention/NoKeyLostSplitInSoftDeleteWindow.mutation) | `NoKeyLost` | Invariant | `SplitBegin` | a split on the resized copy during the soft-delete window strands the bound saga's bucket on the split target |
+| [`NoKeyLostUndoRestoresForeignMap`](../mutations-retention/NoKeyLostUndoRestoresForeignMap.mutation) | `NoKeyLost` | Invariant | `UndoSwap` | the undo moves the alias back with a map that routes a key to a shard the old copy never held it on |
+| [`NoResurrectionLatePrepareActivationMemory`](../mutations-retention/NoResurrectionLatePrepareActivationMemory.mutation) | `NoResurrection` | Invariant | `DeliverLate` | the late-prepare refusal reads per-activation memory, so a late orphan serves a stale value |
+| [`NoResurrectionRetainedFlipUnfenced`](../mutations-retention/NoResurrectionRetainedFlipUnfenced.mutation) | `NoResurrection` | Invariant | `ResizeFlip` | the alias flips before the old copy is fenced, so a reader still on it is served a value the new copy has superseded |
+| [`NoResurrectionRetainedPurgedCopyServesEmpty`](../mutations-retention/NoResurrectionRetainedPurgedCopyServesEmpty.mutation) | `NoResurrection` | Invariant | none (edits `RoutedRefused`) | a routed read on the purged old copy answers empty, below an acknowledged value |
+| [`NoResurrectionRetireDropsFence`](../mutations-retention/NoResurrectionRetireDropsFence.mutation) | `NoResurrection` | Invariant | `ResizeRetire` | retiring the old copy lifts its fence, so a stale reader is served the old copy again |
+| [`NoResurrectionUndoLeavesResizedCopyServing`](../mutations-retention/NoResurrectionUndoLeavesResizedCopyServing.mutation) | `NoResurrection` | Invariant | `UndoArm` | the undo arms nothing on the resized copy, so a reader still on it is served a value the old copy has superseded |
+| [`NoStrandedBucketTerminalNotMirrored`](../mutations-retention/NoStrandedBucketTerminalNotMirrored.mutation) | `NoStrandedBucket` | Temporal | `SagaTerminal` | a terminal to the old copy is not mirrored, so the resized copy keeps the batch's buckets forever |
+| [`OwnerMonotonicForgetBeforeFanOut`](../mutations-retention/OwnerMonotonicForgetBeforeFanOut.mutation) | `OwnerMonotonic` | Invariant | `RegistryForget` | the registry forgets a decided saga before its terminals land, so a committed key reverts |
+| [`OwnerMonotonicMaskReportsAbsent`](../mutations-retention/OwnerMonotonicMaskReportsAbsent.mutation) | `OwnerMonotonic` | Invariant | `RegistryMask` | a masked registry row reads as absent, so an undrained committed key reverts |
+| [`OwnerMonotonicReactivationDropsBuckets`](../mutations-retention/OwnerMonotonicReactivationDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `Reactivate` | a reactivation loses the leaf's prepared buckets, so a visible commit reverts |
+| [`OwnerMonotonicRetainedAbortOverturns`](../mutations-retention/OwnerMonotonicRetainedAbortOverturns.mutation) | `OwnerMonotonic` | Invariant | `SagaAbort` | an abort overwrites a recorded commit, so a key already read committed reverts |
+| [`OwnerMonotonicRetainedSnapshotDropsBuckets`](../mutations-retention/OwnerMonotonicRetainedSnapshotDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `SnapCopy` | the snapshot copies committed entries only, so a commit decided before the flip reverts on the resized copy |
+| [`OwnerMonotonicSweepIndeterminateLeavesMarker`](../mutations-retention/OwnerMonotonicSweepIndeterminateLeavesMarker.mutation) | `OwnerMonotonic` | Invariant | `SplitSweep` | the sweep replays an Indeterminate prepare that the destination refuses, leaving only an activation-scoped marker |
+| [`ResizeCompletesFenceNeverLands`](../mutations-retention/ResizeCompletesFenceNeverLands.mutation) | `ResizeCompletes` | Temporal | `ResizeFence` | the fence step records nothing, so the flip never becomes enabled |
+| [`ResizeCompletesUndoNeverClears`](../mutations-retention/ResizeCompletesUndoNeverClears.mutation) | `ResizeCompletes` | Temporal | `UndoClear` | the undo's last step never records that the undo finished |
+| [`SagaCompletesCompletionNeverRecorded`](../mutations-retention/SagaCompletesCompletionNeverRecorded.mutation) | `SagaCompletes` | Temporal | `SagaComplete` | the saga never records its completion once the broadcast has visited every target |
+| [`SplitCompletesFreezeNeverLands`](../mutations-retention/SplitCompletesFreezeNeverLands.mutation) | `SplitCompletes` | Temporal | `SplitFreeze` | the freeze step leaves the source accepting, so the split never reaches its commit |
+| [`TypeOkLateForwardOutsideDomain`](../mutations-retention/TypeOkLateForwardOutsideDomain.mutation) | `TypeOK` | Invariant | `DeliverLate` | a delivered late forward records a state outside its domain |
 
 ## Running one by hand
 

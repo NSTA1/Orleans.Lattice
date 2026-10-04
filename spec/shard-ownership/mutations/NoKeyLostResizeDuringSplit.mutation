@@ -1,5 +1,5 @@
-# Pairs with NoKeyLost. Reproduces current production (#4452) from the resize
-# side: the resize starts while a split is in flight. Writes acknowledged on
+# Pairs with NoKeyLost. Reproduces production before #4452 was fixed (#4466),
+# from the resize side: the resize starts while a split is in flight. Writes acknowledged on
 # the split target T/s2 after the split commits are never mirrored to R, and
 # the flip routes k2 to R/s1, which does not hold them.
 #

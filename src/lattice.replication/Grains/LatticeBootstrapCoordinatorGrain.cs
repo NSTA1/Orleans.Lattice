@@ -573,81 +573,11 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
-            // Discriminate prepared-saga rows from committed-projection
-            // rows. A prepared row routes through the per-tx pending
-            // bucket on the receiver via the IsPrepared/TransactionId
-            // slots on WalRecord; the matching terminal record arrives
-            // through the post-snapshot incremental WAL stream and
-            // flips visibility atomically per saga. A committed
-            // projection row routes through the canonical Set/Delete
-            // apply path. The single WalRecord shape covers both
-            // because the steady-state replication path uses the
-            // identical discriminators.
-            var isPrepared = entry.IsPrepared;
-            var isTombstone = entry.IsTombstone;
-
-            if (!isPrepared && entry.Value is null)
+            if (ToSnapshotWalRecord(entry, treeName, sourceClusterId, mergeMode) is not { } record)
             {
-                // Tombstones are not emitted by the default provider
-                // on the committed-projection path (it skips dead
-                // keys), but defend against custom providers that
-                // might surface them.
                 continue;
             }
 
-            if (isPrepared && entry.TransactionId == Guid.Empty)
-            {
-                // A prepared row without a transaction id has no
-                // routing key for the receiver-side per-tx pending
-                // bucket. The default provider never emits one; treat
-                // a custom provider's malformed entry as a no-op
-                // rather than throwing - a throw here would loop the
-                // entire drain on the same bad entry every retry.
-                continue;
-            }
-
-            // Route the snapshot entry through the canonical replication
-            // applier seam so every decorator stacked on
-            // <see cref="IReplicationApplier"/> (dead-letter tracking,
-            // causal-apply buffer, host-supplied observers) sees
-            // bootstrap-arrived entries identically to live-incremental
-            // entries. The legacy drain bypassed the applier and wrote
-            // straight to <see cref="IReplicationApplyGrain"/>,
-            // so any decorator that fired only on the applier path
-            // missed every bootstrap entry; the applier itself preserves
-            // the source HLC and origin id verbatim, so re-routing
-            // through it is correctness-preserving for the underlying
-            // tree.
-            var op = (isPrepared, isTombstone) switch
-            {
-                (true, true) => MutationKind.Delete,
-                _ => MutationKind.Set,
-            };
-            var record = new WalRecord
-            {
-                TreeId = treeName,
-                Op = op,
-                Key = entry.Key,
-                Value = isTombstone ? null : entry.Value,
-                Timestamp = entry.Timestamp,
-                IsTombstone = isTombstone,
-                ExpiresAtTicks = entry.ExpiresAtTicks,
-                OriginClusterId = sourceClusterId,
-                Mode = mergeMode,
-                VectorClock = null,
-                IsPrepared = isPrepared,
-                TransactionId = entry.TransactionId,
-                AtomicBatchSize = entry.AtomicBatchSize,
-                AtomicBatchIndex = entry.AtomicBatchIndex,
-                // Carry the typed CRDT delta so a bootstrap-restored prepared
-                // CRDT entry folds its per-replica delta into the receiver's
-                // current visible state on the saga's terminal commit (the
-                // union) instead of installing the prepared LWW value. The
-                // tree's resolved mergeMode already routes the prepared apply
-                // through the fold; a plain LWW prepare carries Delta=null and
-                // stays on the unchanged path.
-                Delta = entry.Delta,
-            };
             await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
 
             // Bootstrap progress instruments: increment once per
@@ -855,5 +785,99 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 LatticeTenantLabel.ForTree(treeName),
             });
         _drainStartTimestamp = null;
+    }
+
+    /// <summary>
+    /// Converts one exported <see cref="SnapshotEntry"/> into the
+    /// <see cref="WalRecord"/> the drain applies through the replication
+    /// applier, or <see langword="null"/> for an entry the drain skips. A
+    /// prepared row routes into the receiver's per-tx pending bucket; a
+    /// committed row applies as a plain Set, or as a Delete when it carries
+    /// <see cref="SnapshotEntry.IsTombstone"/>: a bootstrap can land on a
+    /// receiver copy that already holds the key (a peer that fell off the log
+    /// re-bootstraps in place), so a delete the source committed must travel
+    /// as a tombstone rather than as an absence (#4481).
+    /// </summary>
+    internal static WalRecord? ToSnapshotWalRecord(
+        SnapshotEntry entry,
+        string treeName,
+        string sourceClusterId,
+        LatticeMergeMode mergeMode)
+    {
+        // Discriminate prepared-saga rows from committed-projection
+        // rows. A prepared row routes through the per-tx pending
+        // bucket on the receiver via the IsPrepared/TransactionId
+        // slots on WalRecord; the matching terminal record arrives
+        // through the post-snapshot incremental WAL stream and
+        // flips visibility atomically per saga. A committed
+        // projection row routes through the canonical Set/Delete
+        // apply path. The single WalRecord shape covers both
+        // because the steady-state replication path uses the
+        // identical discriminators.
+        var isPrepared = entry.IsPrepared;
+        var isTombstone = entry.IsTombstone;
+
+        if (!isPrepared && !isTombstone && entry.Value is null)
+        {
+            // A committed row with no value and no tombstone flag carries
+            // nothing to apply; defend against custom providers that
+            // might surface one. A committed tombstone is applied as a
+            // Delete below.
+            return null;
+        }
+
+        if (isPrepared && entry.TransactionId == Guid.Empty)
+        {
+            // A prepared row without a transaction id has no
+            // routing key for the receiver-side per-tx pending
+            // bucket. The default provider never emits one; treat
+            // a custom provider's malformed entry as a no-op
+            // rather than throwing - a throw here would loop the
+            // entire drain on the same bad entry every retry.
+            return null;
+        }
+
+        // Route the snapshot entry through the canonical replication
+        // applier seam so every decorator stacked on
+        // <see cref="IReplicationApplier"/> (dead-letter tracking,
+        // causal-apply buffer, host-supplied observers) sees
+        // bootstrap-arrived entries identically to live-incremental
+        // entries. The legacy drain bypassed the applier and wrote
+        // straight to <see cref="IReplicationApplyGrain"/>,
+        // so any decorator that fired only on the applier path
+        // missed every bootstrap entry; the applier itself preserves
+        // the source HLC and origin id verbatim, so re-routing
+        // through it is correctness-preserving for the underlying
+        // tree.
+        var op = (isPrepared, isTombstone) switch
+        {
+            (_, true) => MutationKind.Delete,
+            _ => MutationKind.Set,
+        };
+        return new WalRecord
+        {
+            TreeId = treeName,
+            Op = op,
+            Key = entry.Key,
+            Value = isTombstone ? null : entry.Value,
+            Timestamp = entry.Timestamp,
+            IsTombstone = isTombstone,
+            ExpiresAtTicks = entry.ExpiresAtTicks,
+            OriginClusterId = sourceClusterId,
+            Mode = mergeMode,
+            VectorClock = null,
+            IsPrepared = isPrepared,
+            TransactionId = entry.TransactionId,
+            AtomicBatchSize = entry.AtomicBatchSize,
+            AtomicBatchIndex = entry.AtomicBatchIndex,
+            // Carry the typed CRDT delta so a bootstrap-restored prepared
+            // CRDT entry folds its per-replica delta into the receiver's
+            // current visible state on the saga's terminal commit (the
+            // union) instead of installing the prepared LWW value. The
+            // tree's resolved mergeMode already routes the prepared apply
+            // through the fold; a plain LWW prepare carries Delta=null and
+            // stays on the unchanged path.
+            Delta = entry.Delta,
+        };
     }
 }
