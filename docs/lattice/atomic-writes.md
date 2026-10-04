@@ -1464,9 +1464,12 @@ batch that is.
   cross-tree-consistent backup set fences the saga decision registry of
   every member tree while it captures (see
   [Backup architecture](../lattice.backup/architecture.md#backup-set-and-the-cross-tree-fence)).
-  A cross-tree write that tries to start on a fenced tree is compensated
-  on every tree and throws `InvalidOperationException`; retry it once the
-  capture completes. Single-tree writes and atomic batches are never
+  A cross-tree write that tries to start on a fenced tree is refused, not
+  retried or queued: it is compensated on every tree and throws
+  `InvalidOperationException`, and the caller retries it once the capture
+  completes. This applies to every tree of the write that had not yet
+  registered when the fence went up; a write that had already registered on
+  every tree finishes normally, and the capture waits for it. Single-tree writes and atomic batches are never
   refused by a capture: a batch whose commit or abort decision falls
   inside any snapshot capture of its tree waits for the capture to
   release the tree's saga decision gate (issue #4485).

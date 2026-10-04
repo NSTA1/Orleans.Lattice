@@ -31,7 +31,7 @@ The manifest that results records the consistency cut (WAL sequence, HLC timesta
 
 When the flag is set over more than one tree, the set is captured inside a single shared cross-tree causal fence. Each attempt runs in this order:
 
-1. **Fence.** Every member tree's saga decision registry is fenced: a new cross-tree atomic write cannot register on the set (its sub-saga is rolled back and the write fails, so it can be retried once the capture completes). Decisions are still recorded, which is what lets the next step finish.
+1. **Fence.** Every member tree's saga decision registry is fenced: a new cross-tree atomic write cannot register on the set. It is refused, not retried or queued - its sub-sagas are rolled back and the write throws `InvalidOperationException` - so the caller retries it once the capture completes. Decisions are still recorded, which is what lets the next step finish.
 2. **Drain.** The capture waits for every in-flight cross-tree atomic saga touching the set to reach a terminal decision on every member. Under the fence nothing new can start, so the drain terminates.
 3. **Gate.** One saga decision gate is acquired across every member: from here no saga decision is recorded on any member, and each member's registry snapshots its decisions.
 4. **Re-check.** Under the gate, no cross-tree saga may still be awaiting its decision on any member. One that is - finalized on one member before the gate but not on another - would be captured on one side on the first member and the other side on the second, so the attempt is discarded.
