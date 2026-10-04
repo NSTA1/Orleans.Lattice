@@ -1,0 +1,34 @@
+# Pairs with SplitCompletes. Reproduces production before #4452 was fixed
+# (#4466) as a liveness defect, with every fairness condition of the base left
+# intact: an adaptive split may open its window while a resize is in flight,
+# and once the flip moves the alias off the copy it is splitting, the split's
+# coordinator steps are never enabled again (each requires the tree to still
+# resolve to the split's copy), so a split that started never finishes.
+# Production abandons such a split (AbandonRetargetedSplitAsync, #4264), which
+# this module has no action for. A second edit lets the stranded split count
+# as quiescent, so the mutant cannot deadlock and stutters forever with the
+# split unfinished: the liveness property is the only thing TLC can report.
+MODULE: SplitCompletesSplitDuringResize
+TARGET: SplitCompletes
+CLASS: Temporal
+SUMMARY: an adaptive split opens during a resize and is stranded by the flip, so it never completes
+PERTURBS: SplitBegin
+
+--- FIND
+SplitBegin ==
+    /\ sp = "idle"
+    /\ rs = "migrating" \/ rz \in {"idle", "purged", "undone"}
+--- REPLACE
+SplitBegin ==
+    /\ sp = "idle"
+\* MUTATION: no interlock with an in-flight resize.
+--- END
+
+--- FIND
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+--- REPLACE
+    /\ sg \in {"idle", "done"}
+\* MUTATION: a split the flip stranded counts as quiescent.
+    /\ sp \in {"idle", "done"} \/ alias # spCopy
+--- END

@@ -1,0 +1,28 @@
+# Pairs with AtomicOnOwner. Reproduces #4358 on its own: the routing tier
+# places a saga's prepares on whichever copy its cached pair names, ignoring the
+# binding, while the flip still waits for the fence. A saga bound to the old
+# copy T dispatches k1 through a pair that still names T (mirrored into R) and
+# k2 through the resolved copy R only; an undo then swaps back to T and the saga
+# decides on T, which holds k1's bucket but not k2's, so a fresh reader sees the
+# committed batch torn. SagaBatchOnOneCopy cannot see this: every bucket is on
+# the bound copy or the copy it mirrors into. This is the single-defect
+# standing check for the router.
+MODULE: AtomicOnOwnerRouterIgnoresBinding
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the routing tier ignores the binding, so part of a bound batch lands only on a copy an undo discards
+PERTURBS: SagaPrepare
+
+--- FIND
+    /\ LET c == IF p[1] = bound \/ alias = bound \/ BoundMirrors THEN bound ELSE alias
+           m == IF p[1] = bound THEN p[2] ELSE CopyMap(bound)
+           s == MapOf(m, k)
+       IN /\ c = bound
+--- REPLACE
+\* MUTATION: the routing tier ignores the binding.
+    /\ LET c == p[1]
+           m == p[2]
+           s == MapOf(m, k)
+       IN /\ TRUE
+--- END
+

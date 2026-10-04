@@ -1,0 +1,15 @@
+# Pairs with TypeOK in ReplicationCausalDelivery. A leaf clock that jumps by
+# the shipping-log length instead of taking an unused HLC stamps a write
+# outside the declared Hlcs domain, which is what TypeOK is there to notice.
+MODULE: TypeOkCausalHlcRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: stamps a write with an HLC beyond the declared domain, so TypeOK fires
+PERTURBS: Author
+
+--- FIND
+    /\ LET w == [o |-> o, h |-> h, d |-> d]
+--- REPLACE
+\* MUTATION: the stamped HLC runs ahead of the chosen one.
+    /\ LET w == [o |-> o, h |-> h + Len(log[o]), d |-> d]
+--- END

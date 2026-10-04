@@ -84,7 +84,7 @@ internal sealed class CausalApplyBufferGrain(
         // caller's dependency check and this park would otherwise leave the
         // entry parked with its dependencies already met (the lost wakeup).
         await DrainCoreAsync(buffer).ConfigureAwait(true);
-        return buffer.Count;
+        return EnsureLoaded().Count;
     }
 
     /// <inheritdoc />
@@ -97,7 +97,7 @@ internal sealed class CausalApplyBufferGrain(
         }
 
         await DrainCoreAsync(buffer).ConfigureAwait(true);
-        return buffer.Count;
+        return EnsureLoaded().Count;
     }
 
     /// <inheritdoc />
@@ -135,11 +135,25 @@ internal sealed class CausalApplyBufferGrain(
                     return;
                 }
 
+                var deferred = false;
                 foreach (var ent in ready)
                 {
                     try
                     {
                         await applier.ApplyDrainedEntryAsync(ent, CancellationToken.None).ConfigureAwait(true);
+                    }
+                    catch (TxDecisionGateRefusedException gated)
+                        when (gated.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
+                    {
+                        // Issue #4485: a snapshot capture holds the tree's saga
+                        // decision gate (or a backup set its fence). That is not a
+                        // fault and must never dead-letter a saga terminal: stop
+                        // the drain and leave every entry not yet durably removed
+                        // parked, so the next drain (or maintenance tick) re-applies
+                        // it once the capture releases the registry. Re-applying an
+                        // entry this pass already applied is idempotent at the leaf.
+                        deferred = true;
+                        break;
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException)
                     {
@@ -158,6 +172,12 @@ internal sealed class CausalApplyBufferGrain(
                             reasonTag: reasonTag,
                             CancellationToken.None).ConfigureAwait(true);
                     }
+                }
+
+                if (deferred)
+                {
+                    Rebuild();
+                    return;
                 }
 
                 // Durable removal strictly after each entry's apply (or

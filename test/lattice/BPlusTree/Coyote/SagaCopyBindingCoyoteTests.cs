@@ -70,6 +70,50 @@ public sealed class SagaCopyBindingCoyoteTests
     }
 
     /// <summary>
+    /// A pre-decision check that stays bound whenever the tree moved lets a saga
+    /// bound to the resized copy decide there after an undo swapped back, so its
+    /// acknowledged commit is discarded with that copy (shard-ownership review
+    /// #4435, finding F6).
+    /// </summary>
+    [Test]
+    public void A_pre_decision_check_that_always_stays_bound_decides_on_a_copy_the_undo_discards()
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new SagaCopyBindingModel(2, SagaCopyBindingSwap.UndoSwap, SagaCopyBindingGuard.PreDecisionAlwaysStaysBound));
+    }
+
+    /// <summary>Specificity: that guard is caught only by the bound-copy-live assertion.</summary>
+    [Test]
+    public void A_pre_decision_check_that_always_stays_bound_is_caught_only_by_the_live_copy_assertion()
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new SagaCopyBindingModel(
+                2, SagaCopyBindingSwap.UndoSwap, SagaCopyBindingGuard.PreDecisionAlwaysStaysBound,
+                assertions: SagaCopyBindingAssertions.All & ~SagaCopyBindingAssertions.BoundCopyLive));
+    }
+
+    /// <summary>
+    /// A refused dispatch that never re-binds the saga leaves it retrying the same
+    /// refused copy for ever (shard-ownership review #4435, nit N4).
+    /// </summary>
+    [Test]
+    public void A_refusal_that_never_rebinds_stops_the_saga_making_progress()
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new SagaCopyBindingModel(2, SagaCopyBindingSwap.UndoSwap, SagaCopyBindingGuard.RefusalNeverRebinds));
+    }
+
+    /// <summary>Specificity: that guard is caught only by the progress assertion.</summary>
+    [Test]
+    public void A_refusal_that_never_rebinds_is_caught_only_by_the_progress_assertion()
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new SagaCopyBindingModel(
+                2, SagaCopyBindingSwap.UndoSwap, SagaCopyBindingGuard.RefusalNeverRebinds,
+                assertions: SagaCopyBindingAssertions.All & ~SagaCopyBindingAssertions.RefusalMakesProgress));
+    }
+
+    /// <summary>
     /// The shipping design, with a transient shard failure able to stop a dispatch
     /// part way and the tree then flipping to the resized copy: the rest of the
     /// batch still lands on the bound copy, which mirrors it, so nothing is left

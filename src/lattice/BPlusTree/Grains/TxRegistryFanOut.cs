@@ -248,6 +248,179 @@ internal static class TxRegistryFanOut
     }
 
     /// <summary>
+    /// <see cref="GetStatusManyAsync"/> for a caller that APPLIES the answer
+    /// (issue #4485): each owning key answers through
+    /// <see cref="ITxRegistryGrain.GetStatusManyForTerminalAsync"/>, which
+    /// reports a terminal verdict only once it is durably recorded there.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="txids">The transaction ids to resolve.</param>
+    /// <returns>The merged per-txid status map.</returns>
+    public static async Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(
+        IGrainFactory grainFactory, string treeId, IReadOnlyList<Guid> txids)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(txids);
+
+        var groups = GroupByKey(treeId, txids);
+        var tasks = new List<Task<Dictionary<Guid, TxStatus>>>(groups.Count);
+        foreach (var (key, group) in groups)
+        {
+            tasks.Add(grainFactory.GetGrain<ITxRegistryGrain>(key).GetStatusManyForTerminalAsync(group));
+        }
+
+        var parts = await Task.WhenAll(tasks);
+        var merged = new Dictionary<Guid, TxStatus>(txids.Count);
+        foreach (var part in parts)
+        {
+            if (part is null) continue;
+            foreach (var (txid, status) in part)
+            {
+                merged[txid] = status;
+            }
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Resolves <paramref name="txids"/> against the decision snapshot (D0) the
+    /// snapshot capture gate under <paramref name="token"/> captured on each
+    /// owning registry key (issue #4485). Throws
+    /// <see cref="TxDecisionGateRefusedException"/> when any owning key no
+    /// longer holds the gate, so a capture never resolves against a lapsed one.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="txids">The transaction ids to resolve.</param>
+    /// <returns>The merged per-txid status as of D0.</returns>
+    public static async Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(
+        IGrainFactory grainFactory, string treeId, Guid token, IReadOnlyList<Guid> txids)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(txids);
+
+        var groups = GroupByKey(treeId, txids);
+        var tasks = new List<Task<Dictionary<Guid, TxStatus>>>(groups.Count);
+        foreach (var (key, group) in groups)
+        {
+            tasks.Add(grainFactory.GetGrain<ITxRegistryGrain>(key).GetCaptureGateStatusManyAsync(token, group));
+        }
+
+        var parts = await Task.WhenAll(tasks);
+        var merged = new Dictionary<Guid, TxStatus>(txids.Count);
+        foreach (var part in parts)
+        {
+            foreach (var (txid, status) in part)
+            {
+                merged[txid] = status;
+            }
+        }
+
+        return merged;
+    }
+
+    /// <summary>
+    /// Acquires (or upgrades) a snapshot capture's hold under
+    /// <paramref name="token"/> on every registry key of
+    /// <paramref name="treeId"/> (issue #4485), widening to the durable shard
+    /// high-water exactly as the tree-wide reads do. Returns the high-water the
+    /// hold covers; <see cref="ReleaseCaptureGateAsync"/> fails closed if the
+    /// mark has since moved past it.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="mode">The strength of the hold.</param>
+    /// <param name="lease">The hold's lease.</param>
+    /// <returns>The shard high-water the hold covers.</returns>
+    public static async Task<int> AcquireCaptureGateAsync(
+        IGrainFactory grainFactory, string treeId, Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var (_, covered) = await FanOutAsync(
+            grainFactory,
+            treeId,
+            TxRegistryHighWaterCache.Get(grainFactory, treeId),
+            async registry =>
+            {
+                await registry.AcquireCaptureGateAsync(token, mode, lease);
+                return true;
+            });
+        return covered;
+    }
+
+    /// <summary>
+    /// Renews the hold under <paramref name="token"/> on every registry key
+    /// below <paramref name="highWater"/>. Returns <see langword="false"/> when
+    /// any key no longer holds it.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="highWater">The high-water the hold was acquired over.</param>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="lease">The new lease, measured from now.</param>
+    /// <returns>Whether every key still held the hold.</returns>
+    public static async Task<bool> RenewCaptureGateAsync(
+        IGrainFactory grainFactory, string treeId, int highWater, Guid token, TimeSpan lease)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var keys = TxRegistryRouting.EnumerateKeys(treeId, highWater);
+        var tasks = new Task<bool>[keys.Length];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            tasks[i] = grainFactory.GetGrain<ITxRegistryGrain>(keys[i]).RenewCaptureGateAsync(token, lease);
+        }
+
+        foreach (var renewed in await Task.WhenAll(tasks))
+        {
+            if (!renewed) return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Releases the hold under <paramref name="token"/> on every registry key
+    /// below <paramref name="highWater"/>, then re-reads the durable shard
+    /// high-water. Returns <see langword="true"/> only when every key reports
+    /// the hold continuously live and the mark has not moved past
+    /// <paramref name="highWater"/> (a shard created during the hold could have
+    /// recorded an ungated decision). Every key is released whatever the
+    /// outcome.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="highWater">The high-water the hold was acquired over.</param>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>Whether the hold was valid for its whole life on every key.</returns>
+    public static async Task<bool> ReleaseCaptureGateAsync(
+        IGrainFactory grainFactory, string treeId, int highWater, Guid token)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var keys = TxRegistryRouting.EnumerateKeys(treeId, highWater);
+        var tasks = new Task<bool>[keys.Length];
+        for (var i = 0; i < keys.Length; i++)
+        {
+            tasks[i] = grainFactory.GetGrain<ITxRegistryGrain>(keys[i]).ReleaseCaptureGateAsync(token);
+        }
+
+        var valid = true;
+        foreach (var released in await Task.WhenAll(tasks))
+        {
+            if (!released) valid = false;
+        }
+
+        var mark = TxRegistryHighWaterCache.Observe(
+            grainFactory,
+            treeId,
+            await grainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).GetShardHighWaterAsync());
+        return valid && mark <= highWater;
+    }
+
+    /// <summary>
     /// Pins <paramref name="txids"/> under <paramref name="pinId"/> on each
     /// registry key that owns at least one of them. The
     /// <see cref="LatticeOptions.MaxPinnedSagaDecisions"/> cap is therefore

@@ -58,6 +58,11 @@ public partial class TreeSnapshotGrainTests
         registry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
         registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => status)));
+        // The sweep applies the answer, so it reads with terminal intent
+        // (issue #4485); answer that seam the same way.
+        registry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
+        registry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
+            .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => status)));
         grainFactory.GetGrain<ITxRegistryGrain>(
                 Arg.Is<string>(k => TxRegistryRouting.TreeIdFromKey(k) == treeId), Arg.Any<string?>())
             .Returns(registry);

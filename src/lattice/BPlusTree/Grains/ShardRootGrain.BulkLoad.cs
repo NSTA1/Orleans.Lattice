@@ -13,6 +13,7 @@ internal sealed partial class ShardRootGrain
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         ThrowIfRetired();
+        await AdmitPurgedCopyForBulkWriteAsync();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
         var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadAsync));
@@ -65,6 +66,7 @@ internal sealed partial class ShardRootGrain
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         ThrowIfRetired();
+        await AdmitPurgedCopyForBulkWriteAsync();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
 
         var seededRoot = await EnsureEmptyForBulkLoadAsync(nameof(BulkLoadRawAsync));
@@ -100,6 +102,19 @@ internal sealed partial class ShardRootGrain
 
         await FinalizeBulkLoadTreeAsync(operationId, leafIds, separators, maxChildren);
         await RetireSeededRootLeafAsync(seededRoot);
+    }
+
+    /// <summary>
+    /// The purge tombstone's gate for the bulk entry points, which seed their own
+    /// root rather than going through <see cref="PrepareForWriteAsync"/>: a bulk
+    /// write to a purged copy proceeds only when the registry names the copy live
+    /// again, seeding (and lifting the tombstone) as any write does
+    /// (issue #4503). A no-op on a shard that was never purged.
+    /// </summary>
+    private async Task AdmitPurgedCopyForBulkWriteAsync()
+    {
+        if (!state.State.IsPurged) return;
+        await PrepareForPurgedCopyAsync(forWrite: true, purgedAnswersEmpty: false);
     }
 
     /// <summary>
@@ -377,6 +392,7 @@ internal sealed partial class ShardRootGrain
         EnsureInternalOrigin(LatticeOperation.BulkLoad);
         ThrowIfDeleted();
         ThrowIfRetired();
+        await AdmitPurgedCopyForBulkWriteAsync();
         if (state.State.LastCompletedBulkOperationId == operationId) return;
         RecordWrite(sortedEntries.Count);
 

@@ -1,19 +1,19 @@
 # TLA+ specification of the WAL durability lifecycle
 
 This directory holds the formal specification of the Orleans.Lattice
-write-ahead log (WAL) under crash-anywhere recovery. It is part of epic #4430 and
-the deliverable of issue #4432. It follows the pattern the atomic-commit module
-set: a TLA+ design checked by TLC in CI, every property and every action paired
-with a mutation that makes a property fire, a refinement note mapping each
-construct to production and to detector tests, pure cores in the product
-assembly, and a Coyote model that executes those cores.
+write-ahead log (WAL) under crash-anywhere recovery. It is part of epic #4430, the
+deliverable of issue #4432 and its review remediation, issue #4433. It follows the
+pattern the atomic-commit module set: a TLA+ design checked by TLC in CI, every
+property and every action paired with a mutation that makes a property fire, a
+refinement note mapping each construct to production and to detector tests, pure
+cores in the product assembly, and a Coyote model that executes those cores.
 
 ## Modules
 
 | Module | What it specifies |
 |--------|-------------------|
 | [`WalDurability.tla`](WalDurability.tla) | The leaf side, end to end: append, out-of-order flush and acknowledgement, a shared stream read through per-leaf READ positions, checkpoint persists that can fail, snapshot captures that can fail, durable materialiser pins, the GC trim floor and its block pins, and leaf and shard crashes at any step with recovery from a snapshot or cold. |
-| [`WalMove.tla`](WalMove.tla) | A shard move: fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC and a shard crash. |
+| [`WalMove.tla`](WalMove.tla) | A shard move: a durable fence under a lease and the source activation's fence, quiesce, copy and switch, concurrent with appends, out-of-order flushes, a consumer, the GC, a shard crash and the loss of the move's coordinator. |
 
 They are two modules because a move touches none of the leaf state. Keeping the
 move out of `WalDurability` keeps that module small enough to check its liveness
@@ -23,20 +23,27 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 8 | 4 | 14 | 20 | 25 | 116,530 |
-| `WalMove` | 5 | 1 | 9 | 9 | 13 | 497 |
+| `WalDurability` | 9 | 4 | 14 | 22 | 26 | 91,389 |
+| `WalMove` | 5 | 2 | 13 | 17 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
 excluding non-behavioural actions, plus its property rows. `Distinct states` is
 TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
-`WalMove` to depth 15, with tla2tools v1.7.4.
+`WalMove` to depth 16, with tla2tools v1.7.4.
+
+`WalDurability` also has one variant configuration, `WalDurability.TwoFaults.cfg`
+(see "Variant configurations" in [`../README.md`](../README.md)). It checks every
+invariant and both action properties with a budget of two faults instead of one:
+445,516 distinct states to depth 32. The liveness properties stay at one fault,
+because at two the full configuration takes about ten minutes, past the TLC budget.
 
 ## Files
 
 | File | What it is |
 |------|-----------|
 | `WalDurability.tla` / `.cfg` / `.manifest.json` | The leaf-lifecycle module, its TLC model and its manifest. |
+| `WalDurability.TwoFaults.cfg` | The same module checked against its safety properties at two faults. |
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
 | `WalMove.tla` / `.cfg` / `.manifest.json` | The move module, its TLC model and its manifest. |
@@ -57,6 +64,7 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
 | `OffsetContiguity` | Invariant | No acknowledged offset is reissued. |
 | `RecoveryNeverFallsOffLog` | Invariant | No leaf ever latches `LeafProjectionStaleException`. |
 | `PersistedBeliefHonest` | Invariant | A leaf's belief about its persisted checkpoint is what storage holds, or the anchor it started from. |
+| `ReleaseBackedBySnapshot` | Invariant | Every trim entitlement the pin store has published is backed by the leaf's durable snapshot coverage. |
 | `SnapshotCoverageMonotonic` | Action | Durable snapshot coverage never regresses. |
 | `PublishedPinWithinPersistedBelief` | Action | A newly published pin never exceeds the persisted checkpoint. |
 | `EveryAckedWriteMaterialised` | Liveness | Every acknowledged write is eventually held by its owner's projection. |
@@ -68,26 +76,37 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
 |----------|------|---------|
 | `TypeOK` | Invariant | State stays well-typed. |
 | `MovedStreamKeepsAckedWrites` | Invariant | A move never loses an acknowledged write. |
-| `CopyTakenQuiesced` | Invariant | The copy is taken only from a quiesced stream. |
+| `CopyTakenQuiesced` | Invariant | While the move holds its fence, a copied stream has nothing in flight. |
 | `ReaderNeverPassesHole` | Invariant | The consumer never passes an append still in flight. |
 | `AllocatorNeverReissues` | Invariant | A recovered allocator never reissues an acknowledged offset. |
 | `StreamEventuallyComplete` | Liveness | A move's fence is always eventually lowered. |
+| `FenceEventuallyReleased` | Liveness | A durable fence is never held for ever, even once its coordinator is lost. |
 
 ## Defects this specification found
 
 Building the model against production surfaced four durability defects. Each was
 reproduced against the real `BPlusLeafGrain` before it was filed (except #4467,
-found in source by the fix session and reproduced only by the model so far). The
-model specifies the INTENDED design for each, and a mutation reproduced production's
-behaviour so the property kept firing on it until the fix landed. All four are now
+found in source by the fix session and reproduced only by the model). The model
+specifies the INTENDED design for each, and a mutation reproduced production's
+behaviour so the property kept firing on it until the fix landed. All four are
 fixed, and those mutations are ordinary regression checks:
+
+| Issue | Defect | Mutation |
+|-------|--------|----------|
+| #4450 | A snapshot that fails to load falls through to a cold replay of a WAL trimmed under its coverage; the leaf comes up silently missing acknowledged writes. **Fixed by #4470**: the replay now fails closed. | `ReadPositionHonestLoadFailureColdReplays` |
+| #4451 | A capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection, licensing the GC to trim rows that exist nowhere else. **Fixed by #4489**: an unanchored capture claims only what has been re-read. | `TrimCoveredBySnapshotColdCaptureOverclaims` |
+| #4456 | A never-written leaf releases its block pin at its persisted checkpoint above its snapshot's coverage, and its next activation latches stale. **Fixed by #4497**: the release is bounded by coverage. | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded` |
+| #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm` |
+
+The independent review (#4433) found two more, both hidden by a bound or an
+abstraction the first version had. #4523 is fixed and its mutations are ordinary
+regression checks; #4525 is open, with a standing mutation that reproduces
+production's behaviour and gap rows in its refinement note:
 
 | Issue | Defect | Standing mutation |
 |-------|--------|-------------------|
-| #4450 | A snapshot that fails to load falls through to a cold replay of a WAL trimmed under its coverage; the leaf comes up silently missing acknowledged writes. **Fixed by #4470**: the replay now fails closed. | `ReadPositionHonestLoadFailureColdReplays`, now an ordinary regression mutation |
-| #4451 | A capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection, licensing the GC to trim rows that exist nowhere else. **Fixed by #4489**: an unanchored capture claims only what has been re-read. | `TrimCoveredBySnapshotColdCaptureOverclaims`, now an ordinary regression mutation |
-| #4456 | A never-written leaf releases its block pin at its persisted checkpoint above its snapshot's coverage, and its next activation latches stale. **Fixed by #4497**: the release is bounded by coverage. | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded`, now an ordinary regression mutation |
-| #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm`, now an ordinary regression mutation |
+| #4523 | A never-written leaf that holds no snapshot released at its persisted checkpoint; a later cold rebuild captures below that release, the GC trims past it, and the next activation latches stale. Needs two faults, which the one-fault configuration hid. **Fixed by #4535**: the release fires only under durable coverage. | `ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint` (no fault needed) and `RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults` (the two-fault composition) |
+| #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing about the source, so a source re-activated after the copy acknowledges writes the flip discards. The first model reset the move on a shard crash and could not see it. | `MovedStreamKeepsAckedWritesFenceInMemoryOnly` |
 
 The model also showed that one proposed fix for #4450 - cold-starting whenever the
 WAL prefix probes intact - is unsafe. The leaf's pin was resolved against the
@@ -95,21 +114,22 @@ snapshot that failed to load and cannot be lowered, so the GC may trim under it
 while the cold rebuild runs. `ReadPositionHonestLoadFailureColdStartsOverIntactWal`
 keeps that standing.
 
-When a fix lands, its gap row in `Refinement.md` is removed and its detector is
-re-proven red against the reproducing mutation.
+When a fix lands, its gap row is removed and its detectors are re-proven red against
+the reproducing mutation.
 
 ## What the assurance covers, and what it does not
 
 It covers the leaf lifecycle's durability logic on one partition shared by two
-leaves, with one fault per behaviour, and the move protocol with one move and one
-crash. It does NOT cover:
+leaves - with two faults per behaviour for safety and one for liveness - and the
+move protocol with one move, one shard crash and one coordinator crash. It does NOT
+cover:
 
 - multi-partition checkpoint arrays;
 - splits, resharding and saga state;
 - retention TTLs, which trim past the floor by design;
 - interleavings inside a grain turn's awaits;
 - replication consumers, beyond their effect on the trim floor;
-- any composition of two faults.
+- liveness under two faults, or any property under three.
 
 The full list is under the abstraction gaps of each refinement note. A property that
 holds here is evidence about the modelled design, not about the gaps.
@@ -118,13 +138,14 @@ holds here is evidence about the modelled design, not about the gaps.
 
 ```powershell
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalDurability.cfg WalDurability.tla
+java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalDurability.TwoFaults.cfg WalDurability.tla
 java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalMove.cfg WalMove.tla
 ```
 
 Pass `-metadir` with a directory outside the repository, or delete the `states/`
-directory TLC leaves beside the module. `WalDurability` takes about a minute and a
-half on four workers, because it checks two liveness properties over the full
-state graph; `WalMove` takes seconds.
+directory TLC leaves beside the module. On two workers `WalDurability` takes about
+two minutes, because it checks two liveness properties over the full state graph;
+its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds.
 
 ## The Coyote companion
 

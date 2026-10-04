@@ -9,12 +9,18 @@ PERTURBS: MoveFence
 
 --- FIND
     /\ move' = "fenced"
+    /\ dfence' = TRUE
+    /\ lapsed' = FALSE
+    /\ afence' = TRUE
     /\ moves' = moves + 1
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moveCopy, crashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moveCopy, crashes, coordCrashes>>
 --- REPLACE
 \* MUTATION: fence and copy in one step.
     /\ move' = "copied"
     /\ moveCopy' = durable
+    /\ dfence' = TRUE
+    /\ lapsed' = FALSE
+    /\ afence' = TRUE
     /\ moves' = moves + 1
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, crashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, crashes, coordCrashes>>
 --- END

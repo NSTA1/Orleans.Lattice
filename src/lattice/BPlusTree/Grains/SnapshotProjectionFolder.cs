@@ -50,6 +50,11 @@ internal sealed class SnapshotProjectionFolder(
     private readonly Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>> _pendingTx = new();
     private readonly Dictionary<Guid, Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>> _pendingTxDeltas = new();
 
+    // Sagas whose terminal this fold applied (issue #4485): the orphan-guard
+    // input when the still-pending buckets are resolved against a capture's
+    // decision snapshot.
+    private readonly HashSet<Guid> _terminalApplied = [];
+
     // Per-key durable merge-mode discriminator, mirroring the live leaf cache's
     // _mergeModes map: only CRDT keys are present (a plain last-writer-wins
     // fold removes the key), so an absent key materialises a null discriminator
@@ -313,6 +318,7 @@ internal sealed class SnapshotProjectionFolder(
 
     private void ApplyTxCommit(Guid txId)
     {
+        _terminalApplied.Add(txId);
         _pendingTxDeltas.Remove(txId, out var deltaBucket);
         if (!_pendingTx.Remove(txId, out var bucket))
             return;
@@ -375,8 +381,145 @@ internal sealed class SnapshotProjectionFolder(
 
     private void ApplyTxAbort(Guid txId)
     {
+        _terminalApplied.Add(txId);
         _pendingTxDeltas.Remove(txId);
         _pendingTx.Remove(txId);
+    }
+
+    /// <summary>
+    /// The transaction ids of the sagas still pending (prepared, terminal not
+    /// yet folded), for resolving them against a capture's decision snapshot.
+    /// </summary>
+    public IReadOnlyCollection<Guid> PendingTransactionIds => _pendingTx.Keys;
+
+    /// <summary>
+    /// Resolves every still-pending prepared bucket against a snapshot capture's
+    /// decision snapshot (D0) exactly as a live multi-key read resolves it
+    /// (issue #4485), then drops the buckets. Per key, the deciding bucket is
+    /// chosen with <see cref="AtomicVisibilityGate.SelectDecidingPrepare"/> and
+    /// resolved with <see cref="AtomicVisibilityGate.ResolveKey"/>:
+    /// <list type="bullet">
+    /// <item><description>
+    /// a saga Committed in D0 whose terminal has not landed here installs its
+    /// prepared value (a CRDT delta is folded into the row), stamped to
+    /// dominate the pre-saga row, so the key reads post-saga;
+    /// </description></item>
+    /// <item><description>
+    /// a saga Indeterminate in D0 removes the key, which reads as absent (the
+    /// #2328 export vocabulary: neither candidate value is asserted);
+    /// </description></item>
+    /// <item><description>
+    /// anything else (InFlight, Aborted, an already-terminal orphan, or a
+    /// prepare the row supersedes) leaves the pre-saga row.
+    /// </description></item>
+    /// </list>
+    /// </summary>
+    /// <param name="decisions">The per-txid status as of D0, for every pending txid.</param>
+    /// <param name="alreadyTerminal">
+    /// The sagas whose terminal the source leaf had already applied when it was
+    /// frozen; together with the terminals folded from the tail they feed the
+    /// orphan guard.
+    /// </param>
+    public void ResolvePendingAgainst(IReadOnlyDictionary<Guid, TxStatus> decisions, IReadOnlyCollection<Guid>? alreadyTerminal)
+    {
+        ArgumentNullException.ThrowIfNull(decisions);
+        if (_pendingTx.Count == 0)
+            return;
+
+        var view = new TxDecisionView(decisions);
+        var byKey = new Dictionary<string, List<(Guid TxId, LwwValue<byte[]> Value)>>(StringComparer.Ordinal);
+        foreach (var (txId, bucket) in _pendingTx)
+        {
+            foreach (var (key, value) in bucket)
+            {
+                if (!byKey.TryGetValue(key, out var list))
+                {
+                    list = [];
+                    byKey[key] = list;
+                }
+
+                list.Add((txId, value));
+            }
+        }
+
+        foreach (var (key, list) in byKey)
+        {
+            var candidates = new PreparedCandidate[list.Count];
+            for (var i = 0; i < list.Count; i++)
+            {
+                var (txId, value) = list[i];
+                var terminal = _terminalApplied.Contains(txId)
+                    || (alreadyTerminal is not null && alreadyTerminal.Contains(txId));
+                candidates[i] = new PreparedCandidate(
+                    view.Resolve(txId),
+                    terminal,
+                    IsSupersededByRow(key, txId, value),
+                    value.Timestamp);
+            }
+
+            var chosen = AtomicVisibilityGate.SelectDecidingPrepare(candidates);
+            if (chosen < 0)
+                continue;
+
+            var candidate = candidates[chosen];
+            switch (AtomicVisibilityGate.ResolveKey(candidate.Status, candidate.AlreadyTerminal, preparedHiddenByTombstoneOrExpiry: false))
+            {
+                case PendingReadOutcome.SurfacePrepared:
+                    InstallPrepared(list[chosen].TxId, key, list[chosen].Value);
+                    break;
+                case PendingReadOutcome.Hidden:
+                    _entries.Remove(key);
+                    _modes.Remove(key);
+                    break;
+            }
+        }
+
+        _pendingTx.Clear();
+        _pendingTxDeltas.Clear();
+    }
+
+    /// <summary>
+    /// Whether the folded row for <paramref name="key"/> already supersedes the
+    /// saga's prepared value, by the same comparison the live leaf's commit drain
+    /// makes: a newer, non-migrated row wins, and a CRDT-delta prepare is folded
+    /// rather than merged so no row supersedes it.
+    /// </summary>
+    private bool IsSupersededByRow(string key, Guid txId, LwwValue<byte[]> value)
+    {
+        if (!_entries.TryGetValue(key, out var row) || row.IsMigrated)
+            return false;
+        if (_pendingTxDeltas.TryGetValue(txId, out var deltas) && deltas.ContainsKey(key))
+            return false;
+        return row.Timestamp.CompareTo(value.Timestamp) > 0;
+    }
+
+    /// <summary>
+    /// Installs a committed saga's prepared value for <paramref name="key"/> as
+    /// the folded row, stamped strictly above any existing row so it wins the
+    /// row-level merge exactly as the live commit drain's re-stamp does.
+    /// </summary>
+    private void InstallPrepared(Guid txId, string key, LwwValue<byte[]> value)
+    {
+        var stamp = value.Timestamp;
+        if (_entries.TryGetValue(key, out var row) && row.Timestamp.CompareTo(stamp) >= 0)
+        {
+            stamp = new HybridLogicalClock
+            {
+                WallClockTicks = row.Timestamp.WallClockTicks,
+                Counter = row.Timestamp.Counter + 1,
+            };
+        }
+
+        if (_pendingTxDeltas.TryGetValue(txId, out var deltas) && deltas.TryGetValue(key, out var dm))
+        {
+            var folded = FoldPreparedCrdtDelta(key, dm.Delta, dm.Mode);
+            _entries[key] = value with { Value = folded, Timestamp = stamp, IsTombstone = false };
+            RecordMode(key, dm.Mode);
+            return;
+        }
+
+        _entries[key] = value with { Timestamp = stamp };
+        _modes.Remove(key);
     }
 
     private void ApplyTombstoneReap(in LatticeMutation mutation)
