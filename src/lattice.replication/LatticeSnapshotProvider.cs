@@ -59,6 +59,18 @@ namespace Orleans.Lattice.Replication;
 /// key or at none, never at a strict subset.
 /// </para>
 /// <para>
+/// <b>Aged-out decisions over a resident prepare.</b> A saga snap0 reports as
+/// <see cref="TxStatus.Indeterminate"/> because its decision tombstone outlived
+/// the retention window is resolved to the verdict the registry still stores
+/// (<see cref="ITxRegistryGrain.GetRecordedStatusAsync"/>, the read the source
+/// leaf's self-terminalise sweep finishes such a prepare by) before either pass
+/// runs over it, so a saga whose terminal drained some keys and stranded others
+/// ships whole rather than split (#4481). An Indeterminate saga with no stored
+/// verdict (an unreachable cross-tree delegation) still ships as prepared rows,
+/// and a row already purged reads as absent and exports the split the source
+/// itself serves (#2318).
+/// </para>
+/// <para>
 /// <b>Performance note.</b> The default implementation pays one
 /// per-key <see cref="ILattice.GetWithVersionAsync"/> round-trip on
 /// top of the leaf-chain enumeration. This is correct but not
@@ -296,6 +308,8 @@ internal sealed class LatticeSnapshotProvider(
 
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
         var physicalShardIndices = shardMap.GetPhysicalShardIndices();
+        var recordedResolved = new HashSet<Guid>();
+        var recordedCommitted = new HashSet<Guid>();
 
         foreach (var shardIndex in physicalShardIndices)
         {
@@ -330,18 +344,45 @@ internal sealed class LatticeSnapshotProvider(
                     // not the skipping side. The committed pass runs under the
                     // same snap0 and does not surface an indeterminate saga's
                     // keys, so skipping here too would drop the prepared rows
-                    // from the export entirely and lose the write. Shipping
-                    // them leaves the receiver holding exactly what the source
-                    // holds - a resident prepare whose outcome is not currently
-                    // determinable - which is honest, is repaired by the same
-                    // mechanisms that repair the source, and is strictly better
-                    // than the receiver silently concluding the saga never
-                    // committed.
+                    // from the export entirely and lose the write.
+                    //
+                    // An Indeterminate row whose decision is still STORED
+                    // (its tombstone aged out of the readable window) is
+                    // resolved to that recorded verdict first (#4481). The
+                    // receiver's registry has no row for the saga, so a key
+                    // shipped as a prepared row there reads as in flight and
+                    // serves its pre-saga value beside the keys the saga's
+                    // terminal already drained - a split no mechanism on
+                    // either side repairs. The recorded verdict is what the
+                    // source's own leaf sweep finishes the stranded prepare
+                    // by, so overriding snap0 with it for both passes ships
+                    // the saga whole, as committed rows (or not at all on an
+                    // abort), exactly as a saga snap0 had as decided. This is
+                    // a transfer of state the source owns, not a disclosure
+                    // to a reader, so the read path's retention mask does not
+                    // apply. An Indeterminate with no stored verdict (an
+                    // unreachable cross-tree delegation) still ships as
+                    // prepared rows, and a row already purged reads as absent
+                    // and exports the split the source itself serves (#2318).
                     if (snap0.TryGetValue(m.TransactionId, out var status)
-                        && status is TxStatus.Committed or TxStatus.Aborted)
+                        && status == TxStatus.Indeterminate
+                        && recordedResolved.Add(m.TransactionId))
                     {
-                        continue;
+                        var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                            .GetRegistry(_grainFactory, treeName, m.TransactionId)
+                            .GetRecordedStatusAsync(m.TransactionId)
+                            .ConfigureAwait(false);
+                        if (recorded is TxStatus.Committed or TxStatus.Aborted)
+                        {
+                            snap0[m.TransactionId] = recorded;
+                            if (recorded == TxStatus.Committed)
+                            {
+                                recordedCommitted.Add(m.TransactionId);
+                            }
+                        }
                     }
+
+                    var resolvedFromRecord = recordedCommitted.Contains(m.TransactionId);
 
                     if (hasUpperBound && m.Timestamp > asOfHlc)
                     {
@@ -349,6 +390,38 @@ internal sealed class LatticeSnapshotProvider(
                         // snapshot's as-of cut; defer it to the
                         // post-snapshot incremental WAL stream rather
                         // than leaking it across the cut.
+                        continue;
+                    }
+
+                    if (resolvedFromRecord)
+                    {
+                        // A recorded commit behind an aged-out row ships as
+                        // the committed value the source's leaf sweep will
+                        // install. The committed-projection pass need not
+                        // enumerate a key held only in a pending bucket, so
+                        // this pass emits it. A committed delete ships
+                        // nothing: on a bootstrapping receiver an absent key
+                        // is the deleted state, and the committed pass hides
+                        // any pre-saga row under the overridden snapshot.
+                        if (!m.IsTombstone)
+                        {
+                            yield return new SnapshotEntry
+                            {
+                                Key = m.Key,
+                                Value = m.Value ?? Array.Empty<byte>(),
+                                Timestamp = m.Timestamp,
+                                ExpiresAtTicks = m.ExpiresAtTicks,
+                                Delta = m.Delta,
+                                Mode = m.Mode,
+                            };
+                        }
+
+                        continue;
+                    }
+
+                    if (snap0.TryGetValue(m.TransactionId, out status)
+                        && status is TxStatus.Committed or TxStatus.Aborted)
+                    {
                         continue;
                     }
 
