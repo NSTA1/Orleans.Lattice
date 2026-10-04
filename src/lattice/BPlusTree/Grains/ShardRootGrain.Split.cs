@@ -71,6 +71,20 @@ internal sealed partial class ShardRootGrain
             throw new InvalidOperationException(
                 $"Shard {MyShardIndex} has been retired by an online consolidation and cannot be a migration source.");
 
+        // A receiver snapshot bootstrap is draining into the tree (issue #4526).
+        // Its read fence covers exactly the shards that existed when it was armed,
+        // so a migration opened now would move keys onto a shard the fence never
+        // reached. The bootstrap reads every shard's migration record only after
+        // arming, and this check runs on the same activation as the fence write,
+        // so whichever of the two comes second sees the other. A coordinator
+        // re-asserting a window it already opened is let through: that window
+        // predates the fence, and the bootstrap waits for it to finish.
+        if (state.State.BootstrapReadFenced
+            && !(state.State.SplitInProgress is { } opened
+                && HasSameAim(opened, targetShardIndex, movedSlots, virtualShardCount)))
+            throw new InvalidOperationException(
+                $"Shard {MyShardIndex} cannot be a migration source while a snapshot bootstrap is draining into the tree.");
+
         await PrepareForOperationAsync();
 
         var existing = state.State.SplitInProgress;
@@ -460,10 +474,17 @@ internal sealed partial class ShardRootGrain
         if (LatticePreparedContext.Current && LatticeTransactionContext.Current != Guid.Empty)
         {
             var shadowTxId = LatticeTransactionContext.Current;
-            if (expiresAtTicks > 0L)
-                await ForwardWithDeadlineAsync(() => target.SetAsync(key, value, expiresAtTicks));
-            else
-                await ForwardWithDeadlineAsync(() => target.SetAsync(key, value));
+            // Issue #4522: carry the local prepare's original stamp, so the
+            // destination buckets it AT that stamp and marks it.
+            var originalStamps = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
+            using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+            using (LatticeOriginalPrepareStampContext.With(originalStamps))
+            {
+                if (expiresAtTicks > 0L)
+                    await ForwardWithDeadlineAsync(() => target.SetAsync(key, value, expiresAtTicks));
+                else
+                    await ForwardWithDeadlineAsync(() => target.SetAsync(key, value));
+            }
 
             // Install the destination-side shadow marker for this in-flight
             // saga, mirroring TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync.
@@ -578,15 +599,62 @@ internal sealed partial class ShardRootGrain
         if (target is null) return;
 
         var shadowTxId = LatticeTransactionContext.Current;
+        var originalStamps = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
 
         // Forward the prepared tombstone (registers the destination as a
         // participant and buckets the tombstone into _pendingTx[txid][key]),
         // then install the destination-side shadow marker. Each hop is
         // ForwardWithDeadlineAsync-bounded so a forward parked against a
         // shard whose ownership is changing during the swap cannot pin the
-        // foreground turn.
-        await ForwardWithDeadlineAsync(() => target.DeleteAsync(key));
+        // foreground turn. The tombstone carries the local prepare's original
+        // stamp (issue #4522), as the write path does.
+        using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+        using (LatticeOriginalPrepareStampContext.With(originalStamps))
+        {
+            await ForwardWithDeadlineAsync(() => target.DeleteAsync(key));
+        }
         await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
+    }
+
+    /// <summary>
+    /// The original prepare stamp of this shard's local prepare of
+    /// <paramref name="key"/> under <paramref name="transactionId"/>, as a
+    /// one-entry map for <see cref="LatticeOriginalPrepareStampContext.With"/>,
+    /// or <see langword="null"/> when the prepare is not marked or is no longer
+    /// pending (issue #4522). Read back from the leaf after the local write, so
+    /// the shadow-forward carries exactly the stamp the local leaf minted. A
+    /// <see langword="null"/> result forwards the prepare unmarked, which keeps
+    /// the destination on the pre-#4522 drain - never a wrong stamp.
+    /// </summary>
+    private async Task<Dictionary<string, HybridLogicalClock>?> ResolveOriginalPrepareStampAsync(string key, Guid transactionId)
+    {
+        var vsc = state.State.SplitInProgress?.VirtualShardCount ?? state.State.MovedAwayVirtualShardCount;
+        if (vsc is not > 0)
+            return null;
+
+        var leafId = RootIsLeafTyped
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(key);
+        var slot = ShardMap.GetVirtualSlot(key, vsc.Value);
+        var pending = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
+            .GetPendingMutationsForSlotsAsync(new[] { slot }, vsc.Value);
+        if (pending is not { Count: > 0 })
+            return null;
+
+        foreach (var snapshot in pending)
+        {
+            if (snapshot.TransactionId == transactionId
+                && snapshot.StampIsOriginal
+                && string.Equals(snapshot.Key, key, StringComparison.Ordinal))
+            {
+                return new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal)
+                {
+                    [key] = snapshot.Timestamp,
+                };
+            }
+        }
+
+        return null;
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

@@ -441,6 +441,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.bootstrap.bytes_received` | counter (`By`) | `tree`, `origin`, `tenant` | Bootstrap throughput (rate) |
 | `orleans.lattice.replication.bootstrap.duration` | histogram (ms) | `tree`, `origin`, `outcome`, `tenant` | Bootstrap duration p50/p95/p99 |
 | `orleans.lattice.replication.bootstrap.transient_retries` | counter (`{retry}`) | `tree`, `origin`, `tenant` | Bootstrap transient retries (rate) |
+| `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | counter (`{lift}`) | `tree`, `tenant` | Bootstrap read fence force-lifted - issue #4526 |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | counter (`{event}`) | `tree`, `origin`, `tenant` | Fall-off-log suppressed events (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.triggered` | counter (`{fallback}`) | `tree`, `peer`, `tenant` | Bootstrap fallback triggered (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.entries` | counter (`{entry}`) | `tree`, `peer`, `tenant` | Bootstrap fallback entries re-shipped (rate) |

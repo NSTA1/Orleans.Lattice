@@ -58,6 +58,10 @@ the tree at another physical copy, the probe therefore reads the retired copy's
 log - or nothing, once that copy is purged - rather than the log the tree's new
 writes land in.
 
+## Sender-requested re-seed
+
+The fall-off detector compares the receiver's high-water mark against its own local log, so it cannot see records the sender's `WalRetention` ceiling trimmed before shipping them. The sender detects that case itself (a forced gap, see [Replication drivers](replication-drivers.md#forced-gap-a-peer-taken-off-the-log)) and asks the receiver to re-seed on each push. The receiver starts the same `BootstrapAsync` the detector would, under the same `AutoBootstrapOnFallOffLog` switch, and only when no bootstrap is running and none from an export after the sender's request has completed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)).
+
 ## Configuration
 
 `LatticeReplicationOptions.AutoBootstrapOnFallOffLog` (default `true`) gates
