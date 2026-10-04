@@ -115,13 +115,26 @@ internal sealed partial class ReplicationShipperGrain : IWalOffsetConsumer
 
     /// <summary>
     /// Raises the published positions to the durable cursors just written. Called
-    /// only after a successful <c>WriteStateAsync</c>.
+    /// only after a successful <c>WriteStateAsync</c>, or where every position
+    /// being published is at or below what the log still retains.
     /// </summary>
     private void PublishDurableReadPositions()
     {
         if (_registeredReadLog is { } log)
         {
             _readPositions = new ReadPositions(log, CurrentPartitionPositions());
+        }
+    }
+
+    /// <summary>
+    /// Publishes position 0 for every partition of the registered log, holding
+    /// the whole log until the next publication.
+    /// </summary>
+    private void HoldPublishedReadPositionsAtZero()
+    {
+        if (_registeredReadLog is { } log)
+        {
+            _readPositions = new ReadPositions(log, new long[CurrentPartitionPositions().Length]);
         }
     }
 
