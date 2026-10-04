@@ -65,7 +65,9 @@ Pure-pull means there are no callbacks, no events, and no live-streaming guarant
 
 ## Ordering
 
-Entries are yielded in `HybridLogicalClock` ascending order, merged across every WAL partition for the requested tree. Ties under equal HLCs are broken by the order in which the merge consumes them, which is unspecified - consumers must treat the feed as a multiset under equal HLCs.
+Entries other than saga terminals are yielded in `HybridLogicalClock` ascending order, merged across every WAL partition for the requested tree. Ties under equal HLCs are broken by the order in which the merge consumes them, which is unspecified - consumers must treat the feed as a multiset under equal HLCs.
+
+Saga terminals (`TxCommit` / `TxAbort`) are yielded after every other entry of the call, in HLC order among themselves, and never ahead of a prepare they resolve ([#4511](https://github.com/NSTA1/Orleans.Lattice/issues/4511)). WAL partitions are not HLC-ordered in append order and the call reads them one after another, so HLC order alone could place a terminal ahead of its prepare, and a bridge applying the feed to a peer would commit the saga split. Each call therefore yields a consistent prefix of the WAL: after reading every partition once it captures every partition's next append position and reads each partition up to that tail, yielding exactly the entries below it. A next append position can count an append whose flush is still in flight, and a read stops below it, so the call waits for such an append to become durable before it moves on; if a partition cannot be read up to its tail within 30 seconds the call throws `TimeoutException` rather than yield an incomplete prefix, and the consumer re-subscribes from the same cursor. A saga's prepares are appended before it decides, and the decision precedes every terminal append, so a terminal inside the prefix has every prepare it resolves inside it too. A prepare yielded in one call can still have its terminal yielded in a later call; the receiver stages the prepare until the terminal arrives.
 
 ## Caveats
 

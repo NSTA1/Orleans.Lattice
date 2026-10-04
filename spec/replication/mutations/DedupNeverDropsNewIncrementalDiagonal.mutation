@@ -1,0 +1,19 @@
+# Pairs with DedupNeverDropsNew. Reproduces the receiver half of #1060 as a
+# standing check: the drop threshold is the incrementally advanced per-origin
+# HWM (the diagonal) instead of the snapshot-pinned floor. Per-leaf clocks are
+# unordered, so an origin's HLCs are non-monotonic in delivery order: a writes
+# k1 at HLC 2 and then k2 at HLC 1, the receiver applies the first, its HWM
+# for a reaches 2, and the second - a genuinely new write to another key - is
+# dropped as a duplicate.
+MODULE: DedupNeverDropsNewIncrementalDiagonal
+TARGET: DedupNeverDropsNew
+CLASS: Action
+SUMMARY: deduplicates on the incremental per-origin HWM, so a new write with a lower HLC to another key is dropped (#1060)
+PERTURBS: Deliver
+
+--- FIND
+             /\ w.h <= pinned[x][w.o]
+--- REPLACE
+\* MUTATION: the per-origin diagonal is used as a drop threshold.
+             /\ w.h <= Max({pinned[x][w.o], hwm[x][w.o]})
+--- END

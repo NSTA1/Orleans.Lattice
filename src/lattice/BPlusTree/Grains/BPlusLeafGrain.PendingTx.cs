@@ -425,6 +425,16 @@ internal sealed partial class BPlusLeafGrain
             bucket[key] = incoming;
         }
 
+        // The leaf clock dominates every prepared stamp it holds (issue #4530):
+        // a range delete stamps itself past the leaf clocks it covers, and must
+        // sort above every prepare of a saga decided before it was issued. Every
+        // installer already advances the clock past the stamp (a foreground or
+        // override prepare through AdvanceClockOrOverride, a replayed one through
+        // AdvanceProjectionClock); this keeps it true by construction for any
+        // future path that installs a bucket.
+        if (incoming.Timestamp > state.State.Clock)
+            state.State.Clock = incoming.Timestamp;
+
         // CRDT-delta carry. A prepared mutation authored under a CRDT merge
         // mode rides its typed delta alongside the merged-state value; record
         // it in the parallel side-map so the terminal drain folds the delta
@@ -1178,6 +1188,26 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The terminal-intent twin of <see cref="ResolvePendingStatusAsync"/> for
+    /// the activation self-terminalise sweep, which APPLIES the answer (issue
+    /// #4485). It asks <see cref="ITxRegistryGrain.GetStatusForTerminalAsync"/>,
+    /// which returns a terminal verdict only once it is durably recorded on the
+    /// registry, and never under a snapshot capture's decision gate for a saga
+    /// not decided before it - so this sweep cannot land a terminal a capture's
+    /// decision snapshot does not account for. Ignores the read-path ambient
+    /// snapshot contexts: the sweep is not a read.
+    /// </summary>
+    private async ValueTask<TxStatus> ResolvePendingStatusForTerminalAsync(Guid txid)
+    {
+        if (txid == Guid.Empty) return TxStatus.InFlight;
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
+        return await TxRegistryRouting
+            .GetRegistry(grainFactory, treeId, txid)
+            .GetStatusForTerminalAsync(txid);
+    }
+
+    /// <summary>
     /// Issue #2190. Self-terminalises every saga prepare still resident in
     /// <c>_pendingTx</c> after activation-time replay whose saga the per-tree
     /// <see cref="ITxRegistryGrain"/> reports as terminally decided, by applying
@@ -1301,7 +1331,7 @@ internal sealed partial class BPlusLeafGrain
             TxStatus decision;
             try
             {
-                decision = await ResolvePendingStatusAsync(txid);
+                decision = await ResolvePendingStatusForTerminalAsync(txid);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

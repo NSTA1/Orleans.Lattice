@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence. Reproduces #2891 as a standing check: the
+# last-writer-wins merge breaks an HLC tie on an observer-relative field, so
+# every site ranks its own write lowest. a and b each write k1 at the same HLC
+# and the two sites settle on different values for ever. It perturbs the merge
+# definition, not an action.
+MODULE: EventualConvergenceObserverRelativeTieBreak
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the LWW tie-break ranks the observer's own write lowest, so tied writes resolve differently per site (#2891)
+
+--- FIND
+LwwRank(x, w) == Rank(w.o)
+--- REPLACE
+\* MUTATION: an observer-relative tie-break.
+LwwRank(x, w) == IF w.o = x THEN 0 ELSE Rank(w.o)
+--- END

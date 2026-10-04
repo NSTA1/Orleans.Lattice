@@ -1,17 +1,21 @@
-# Pairs with StreamEventuallyComplete. The move switches to its copy but never
-# lowers the fence, so every later append is refused and the stream never
-# completes; the spec's fairness is intact.
+# Pairs with StreamEventuallyComplete. The move switches to its copy but leaves
+# the source activation fenced, so every later append is refused and the stream
+# never completes; the spec's fairness is intact.
+# DEADLOCK: off is required: once appends are refused for ever the stream reaches
+# a state with no successor, which TLC reports as a deadlock before it checks the
+# liveness property this mutation targets.
 MODULE: StreamEventuallyCompleteSwitchKeepsFence
 TARGET: StreamEventuallyComplete
 CLASS: Temporal
-SUMMARY: a completed move leaves the fence raised, so appends stall for ever
+SUMMARY: a completed move leaves the activation fenced, so appends stall for ever
 PERTURBS: MoveSwitch
+DEADLOCK: off
 
 --- FIND
-    /\ durable' = {o \in moveCopy : o >= tail}
-    /\ move' = "idle"
+    /\ afence' = FALSE
+    /\ UNCHANGED <<next, inflight, tail, acked, cons, moves, crashes, coordCrashes>>
 --- REPLACE
-\* MUTATION: the fence is never lowered.
-    /\ durable' = {o \in moveCopy : o >= tail}
-    /\ move' = "fenced"
+\* MUTATION: the flip leaves the source activation fenced.
+    /\ afence' = TRUE
+    /\ UNCHANGED <<next, inflight, tail, acked, cons, moves, crashes, coordCrashes>>
 --- END

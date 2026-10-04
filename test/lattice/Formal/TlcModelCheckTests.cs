@@ -197,6 +197,54 @@ public sealed class TlcModelCheckTests
     }
 
     /// <summary>
+    /// The base specification holds under each of the module's variant
+    /// configurations - the same specification checked under a different bound
+    /// (see "Variant configurations" in <c>spec/README.md</c>) - over exactly
+    /// the number of distinct states the manifest records for that variant.
+    /// <para>
+    /// The count must also DIFFER from the base configuration's. That is the
+    /// assertion that the variant's override took effect: TLC accepts a value
+    /// assignment to a name the specification does not have and checks the
+    /// unchanged model, so a variant whose bound is misspelt would otherwise
+    /// pass as a second, larger check while re-checking the base. A variant
+    /// that genuinely reaches the base's state count changes nothing and has no
+    /// reason to exist.
+    /// </para>
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Each_variant_configuration_holds(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        var where = module.Describe(module.VariantConfigPath(variant));
+        var result = RunTlc(module, module.ReadSpecification(), module.ReadVariantConfig(variant), module.Name, []);
+
+        Assert.That(
+            result.Output,
+            Does.Contain(CleanBanner),
+            $"{where} must hold against {module.Describe(module.SpecificationPath)}." + Environment.NewLine + result.Output);
+        Assert.That(result.ExitCode, Is.Zero, $"TLC reported a failure exit code for {where}.");
+
+        var distinct = DistinctStates.Match(result.Output);
+        Assert.That(distinct.Success, Is.True, "TLC's output carried no final state-count line." + Environment.NewLine + result.Output);
+        var states = long.Parse(distinct.Groups[2].Value, CultureInfo.InvariantCulture);
+
+        Assert.That(
+            states,
+            Is.Not.EqualTo(module.Manifest.Counts.DistinctStates),
+            $"{where} reached exactly the base configuration's {module.Manifest.Counts.DistinctStates} distinct "
+            + "states, so its override did not take effect: it re-checked the base model under the base's bound. "
+            + "Check that every name it assigns is spelt as the specification declares or defines it.");
+        Assert.That(
+            states,
+            Is.EqualTo(module.Manifest.Variants[variant]),
+            $"TLC found a different number of distinct states for {where} than {module.Describe(module.ManifestPath)} "
+            + $"records under 'variants.{variant}'. If the specification or the variant changed on purpose, restate "
+            + "it there; if not, the reachable behaviour under the variant's bound has changed.");
+    }
+
+    /// <summary>
     /// The paired mutation for one property, run as a two-arm experiment.
     /// <para>
     /// Arm 1 (control) runs the generated single-property cfg against the
@@ -289,7 +337,7 @@ public sealed class TlcModelCheckTests
     /// <summary>
     /// The discovery control for the TLC gates: every TLC gate, found by
     /// signature rather than listed, is run over a module built in a temp
-    /// directory and must pass; then two broken copies must each fail the gate
+    /// directory and must pass; then each broken copy - a silent mutation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate
     /// that owns the fault. The toolchain-free gates have the same control in
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
@@ -299,7 +347,7 @@ public sealed class TlcModelCheckTests
         var gates = SpecModuleGates.All().Where(g => g.RunsTlc).ToArray();
         Assert.That(
             gates.Select(g => g.Method.Name),
-            Is.SupersetOf(new[] { nameof(The_base_specification_holds), nameof(Each_property_fires_under_its_mutation_and_not_on_the_base) }),
+            Is.SupersetOf(new[] { nameof(The_base_specification_holds), nameof(Each_variant_configuration_holds), nameof(Each_property_fires_under_its_mutation_and_not_on_the_base) }),
             "the reflection that finds TLC gates missed one this fixture declares, so the control below would "
             + "run over fewer gates than exist.");
 
@@ -316,8 +364,8 @@ public sealed class TlcModelCheckTests
         {
             silent.Replace(
                 $"mutations/{SyntheticSpecModule.MutationName}.mutation",
-                "    /\\ x' = (x + 1) % 4",
-                "    /\\ x' = (1 + x) % 3");
+                "    /\\ x' = (x + 1) % (Wrap + 1)",
+                "    /\\ x' = (1 + x) % Wrap");
             var module = silent.Discover();
             var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
             Assert.That(
@@ -335,6 +383,43 @@ public sealed class TlcModelCheckTests
                 Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
                 Does.Contain("different number of distinct states"),
                 "a manifest recording the wrong state count passed the base-model gate.");
+        }
+
+        var variantGate = gates.Single(g => g.Method.Name == nameof(Each_variant_configuration_holds));
+        var variantFile = $"{SyntheticSpecModule.ModuleName}.{SyntheticSpecModule.VariantName}.cfg";
+
+        using (var drifted = SyntheticSpecModule.Create())
+        {
+            drifted.Replace($"{SyntheticSpecModule.ModuleName}{SpecModuleManifest.FileSuffix}", "\"Narrow\": { \"distinctStates\": 2 }", "\"Narrow\": { \"distinctStates\": 5 }");
+            var module = drifted.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("records under 'variants.Narrow'"),
+                "a manifest recording the wrong variant state count passed the variant gate.");
+        }
+
+        using (var misspelt = SyntheticSpecModule.Create())
+        {
+            // TLC accepts a value assignment to a name the specification does
+            // not have and checks the unchanged model, so this run is clean at
+            // the base's own state count. Only the count assertion stands
+            // between it and a pass.
+            misspelt.Replace(variantFile, "    Wrap = 2", "    Wrpa = 2");
+            var module = misspelt.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("override did not take effect"),
+                "a variant whose bound is misspelt re-checked the base and passed the variant gate.");
+        }
+
+        using (var unresolved = SyntheticSpecModule.Create())
+        {
+            unresolved.Replace(variantFile, "    Wrap = 2", "    Wrap <- Narrower");
+            var module = unresolved.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("must hold against"),
+                "a variant overriding with an undefined name passed the variant gate.");
         }
     }
 

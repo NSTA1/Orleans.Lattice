@@ -101,14 +101,14 @@ public partial class TreeShardSplitGrainTests
         leaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
-        // Per-tree TxRegistry stub: pre-check returns
+        // Per-tree TxRegistry stub (the sweep's terminal-intent reads, issue #4485): pre-check returns
         // preCheckStatus for every txid the sweep asks about;
         // post-sweep batch returns postSweepStatus (or preCheckStatus
         // when null).
         var effectivePost = postSweepStatus ?? preCheckStatus;
         var txRegistry = Substitute.For<ITxRegistryGrain>();
-        txRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(preCheckStatus));
-        txRegistry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+        txRegistry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(preCheckStatus));
+        txRegistry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
             .Returns(ci =>
             {
                 var ids = (IReadOnlyList<Guid>)ci[0];
@@ -124,8 +124,8 @@ public partial class TreeShardSplitGrainTests
         if (physicalTreeId is not null)
         {
             var physicalRegistry = Substitute.For<ITxRegistryGrain>();
-            physicalRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
-            physicalRegistry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+            physicalRegistry.GetStatusForTerminalAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+            physicalRegistry.GetStatusManyForTerminalAsync(Arg.Any<IReadOnlyList<Guid>>())
                 .Returns(ci => Task.FromResult(((IReadOnlyList<Guid>)ci[0]).ToDictionary(id => id, _ => TxStatus.InFlight)));
             grainFactory.GetGrain<ITxRegistryGrain>(physicalTreeId).Returns(physicalRegistry);
         }

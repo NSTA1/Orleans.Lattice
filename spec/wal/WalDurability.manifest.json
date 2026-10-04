@@ -3,11 +3,14 @@
   "refinement": "Refinement.md",
   "nonBehaviouralActions": [],
   "counts": {
-    "invariants": 8,
+    "invariants": 9,
     "properties": 4,
     "actions": 14,
-    "mutations": 20,
-    "behaviourRows": 25,
-    "distinctStates": 116530
+    "mutations": 22,
+    "behaviourRows": 26,
+    "distinctStates": 91389
+  },
+  "variants": {
+    "TwoFaults": { "distinctStates": 445516 }
   }
 }

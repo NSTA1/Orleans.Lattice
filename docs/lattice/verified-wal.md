@@ -140,8 +140,11 @@ The cores above are each model-checked in isolation, and
 `WalDurabilityLifecycleModel` composes five of them. Above both sits a design-level
 TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
 
-- `WalDurability.tla`, the leaf lifecycle under crash-anywhere recovery;
-- `WalMove.tla`, a shard move.
+- `WalDurability.tla`, the leaf lifecycle under crash-anywhere recovery, checked
+  with every property at one fault and, through a second configuration, with every
+  safety property at two;
+- `WalMove.tla`, a shard move with a durable fence, a shard crash and the loss of
+  its coordinator.
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each
@@ -159,8 +162,18 @@ kept as a standing mutation until it is fixed:
 
 All four are fixed, and each one's mutation is now an ordinary regression check.
 
-**What is covered:** one WAL partition shared by two leaves, one fault per
-behaviour, and one move with one crash.
+The independent review of the specification found two more, each hidden by a bound
+or an abstraction of the first version. #4523 is fixed; #4525 is open, and is a
+standing mutation until its fix lands:
+
+| Issue | Defect |
+|-------|--------|
+| #4523 | A never-written leaf with no snapshot releases its block at its persisted checkpoint; after a cold-rebuild capture below that release and a trim, its next activation latches stale. It needs two faults. Fixed: the release fires only under durable coverage. |
+| #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing, so a source re-activated after the copy acknowledges writes the flip discards. |
+
+**What is covered:** one WAL partition shared by two leaves, with two faults per
+behaviour for safety and one for liveness; and one move with one shard crash and
+one coordinator crash.
 
 **What is not covered:**
 
@@ -169,7 +182,7 @@ behaviour, and one move with one crash.
 - retention TTLs, which trim past the floor by design;
 - interleavings inside a grain turn's awaits;
 - replication consumers, beyond their effect on the trim floor;
-- any composition of two faults.
+- liveness under two faults, or any property under three.
 
 Coverage of the leaf lifecycle does not imply coverage of any of those. Each module's
 refinement note lists its gaps in full.

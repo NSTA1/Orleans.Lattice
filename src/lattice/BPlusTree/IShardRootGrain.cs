@@ -396,6 +396,18 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// Work-bounded probe for a range delete's issue stamp (issue #4530): walks
+    /// the same leaves <see cref="DeleteRangeBoundedAsync"/> would for
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) and
+    /// returns the highest leaf clock among them, across at most
+    /// <see cref="LatticeOptions.MaxLeavesPerScanPage"/> leaves per call. The
+    /// caller drives it to completion with
+    /// <see cref="ShardRangeClockPage.ResumeFromInclusive"/>, as for the delete.
+    /// Writes nothing.
+    /// </summary>
+    Task<ShardRangeClockPage> GetRangeClockBoundedAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
     /// by walking the leaf chain and summing per-leaf counts.
     /// </summary>
@@ -1298,6 +1310,23 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// and the materialised row count used by the snapshot-open budget gate.
     /// </returns>
     Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/> for a
+    /// snapshot capture that holds a saga decision gate (issue #4485): every
+    /// leaf's fold resolves its still-pending prepared buckets against the
+    /// gate's decision snapshot (see
+    /// <see cref="IBPlusLeafGrain.FoldTailOntoFrozenGatedAsync"/>), so every
+    /// shard of the capture puts each saga on the same side.
+    /// </summary>
+    /// <param name="token">The cursor's per-open baseline token. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="decisionGate">The capture's decision gate.</param>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk and the per-leaf folds.</param>
+    /// <returns>As <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/>.</returns>
+    Task<SnapshotBaselineCaptureResult> CaptureGatedSnapshotBaselineAsync(
+        Guid token,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
