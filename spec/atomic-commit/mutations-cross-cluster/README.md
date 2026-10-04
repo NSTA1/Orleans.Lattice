@@ -41,10 +41,21 @@ transport assumption or its read view already does.
 | `RNoStrandedPrepareShipperDropsTerminal` | `RNoStrandedPrepare` | Temporal | `OriginBroadcast` | one source shard's terminal is never replicated (the #2324 class) |
 | `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged |
 | `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | retained pre-cut saga records are shipped again after a bootstrap (#4482) |
+| `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` | `RNoStrandedPrepare` | Temporal (`DEADLOCK: off`) | `OriginPrepare`, `DeliverTerminal` | a terminal waits on every prepare the saga wrote, one of which is never shipped, so it is never released |
 
-Every mutant is deadlock-free: run with a cfg naming only `TypeOK` and deadlock
-checking on, each reports no error (`TypeOkTallyExpectedRunaway` reports its own
-target first). None therefore needs `DEADLOCK: off`.
+Every mutant but one is deadlock-free: run with a cfg naming only `TypeOK` and
+deadlock checking on, each reports no error (`TypeOkTallyExpectedRunaway`
+reports its own target first), so none races its target against a deadlock
+under TLC's parallel search. `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` is
+the exception by construction - its defect is a terminal that can never be
+delivered, which leaves no enabled action - so it declares `DEADLOCK: off`, and
+the harness's third arm confirms the deadlock is real.
+
+The ordering a terminal waits for in the base is stated over the prepares still
+**outstanding**, never over every prepare the saga wrote. That is what lets a
+prepare that was never shipped - trimmed before it was read, or filtered out -
+leave its terminal deliverable, and it is the contract a shipper-side hold on
+terminals has to keep; the mutation above is what breaks it.
 
 ## Liveness fails on protocol defects, under the module's own fairness
 

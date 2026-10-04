@@ -323,4 +323,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 19 | 20 | 8,727 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 20 | 20 | 8,727 |
