@@ -115,7 +115,7 @@ internal sealed class LatticeFallOffLogDetector(IServiceProvider services) : ILa
         // tail == checkpoint + 1 and must cold-restart via a clean tail replay,
         // not throw LeafProjectionStaleException. Genuine loss (the first
         // needed offset itself fell off) is still tail > checkpoint + 1.
-        var walTrimmedPastCheckpoint = checkpointOffset > 0 && tail > checkpointOffset + 1;
+        var walTrimmedPastCheckpoint = WalFallOffCore.IsPrefixLost(checkpointOffset, tail);
 
         // Trigger 2: replay budget COST SIGNAL.
         //

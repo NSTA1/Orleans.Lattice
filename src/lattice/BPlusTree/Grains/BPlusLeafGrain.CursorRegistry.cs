@@ -1212,148 +1212,20 @@ internal sealed partial class BPlusLeafGrain
         bool[]? partitionsWithEmptyWal = null,
         bool releaseNeverWrittenScannedThrough = false)
     {
-        var checkpoint = GetCurrentCheckpointForPartition(partition);
+        // The decision is LeafDurablePinCore's, where the reasoning behind every
+        // arm now lives; this method gathers its inputs and maps the verdict onto
+        // the published frontier. The Zero frontier is reserved for the block pin
+        // and the never-written release, exactly as before the extraction.
+        var decision = LeafDurablePinCore.Resolve(
+            GetCurrentCheckpointForPartition(partition),
+            GetPersistedCheckpointForPartition(partition),
+            DurableSnapshotCoverageForPartition(partition),
+            partitionsWithLiveData[partition],
+            partitionsWithEmptyWal is not null
+                && partition < partitionsWithEmptyWal.Length
+                && partitionsWithEmptyWal[partition],
+            releaseNeverWrittenScannedThrough && clock <= HybridLogicalClock.Zero);
 
-        // Genuinely empty partition: it has applied NOTHING durably
-        // (checkpoint < 0) AND holds no live cache row, so there is no
-        // committed prefix to lose. Release any block and report the real
-        // frontier so the ubiquitous empty-partition pins keep WAL trim live
-        // (preserves #1490's empty-partition narrowness).
-        //
-        // The `checkpoint < 0` clause is load-bearing. Emptiness is decided
-        // from the transient per-activation in-memory cache
-        // (ComputePartitionsWithLiveData -> Cache.EnumerateRows), which does
-        // NOT reflect this leaf's durable data in the window between activation
-        // and cache hydration: a leaf can reactivate cold, find no snapshot to
-        // rehydrate from, and report/flush its durable pin while its cache is
-        // still empty even though the persisted projection checkpoint says the
-        // prefix [0, checkpoint] was durably applied (tombstone reaping and
-        // compaction can also empty the cache for a checkpointed partition
-        // while the WAL prefix still has to replay). Trusting that empty cache
-        // to RELEASE the block for a partition whose checkpoint is >= 0 is the
-        // "fall off the log" hole: it authorises the shared-shard WAL GC to
-        // trim a checkpointed, un-snapshotted prefix, after which the next cold
-        // rebuild replays from offset 0 over a WAL whose prefix is gone and the
-        // leaf comes up with its checkpoint below the WAL trim floor
-        // (LeafProjectionStaleException). A partition with a durable checkpoint
-        // must therefore be coverage-gated exactly like a cache-populated one,
-        // regardless of whether the cache momentarily shows it empty.
-        if (!partitionsWithLiveData[partition] && checkpoint < 0)
-        {
-            return (clock, checkpoint);
-        }
-
-        // Issue #3103: data-bearing, never checkpointed, and its WAL is EMPTY
-        // (head offset 0 - no entry was ever appended). This is the same
-        // "nothing to lose" case as the branch above, reached the other way
-        // round: the rows are real but the WAL behind them is not, because a
-        // WAL reset preserved the snapshot the leaf rehydrated them from.
-        // Blocking here is not conservative, it is terminal - an empty WAL has
-        // nothing to replay, so the starved-checkpoint drive returns NoAdvance
-        // for ever, the checkpoint never leaves -1, and the coverage repair's
-        // "checkpointed WITHOUT coverage" predicate stays permanently
-        // unreachable. Since a block pin is tree-wide, one such partition
-        // strands every leaf in the tree. Release it: an empty WAL holds no
-        // committed prefix, so the block protects nothing at all.
-        //
-        // Narrow by construction. This releases ONLY on a proven-empty WAL; a
-        // partition whose WAL holds unapplied entries keeps its block exactly
-        // as before, so neither the #1535 no-loss invariant nor the #945
-        // fall-off guard is weakened. The probe fails closed (see
-        // ComputeEmptyWalPartitionsAsync), so an unreadable head keeps the
-        // block too.
-        if (checkpoint < 0
-            && partitionsWithEmptyWal is not null
-            && partition < partitionsWithEmptyWal.Length
-            && partitionsWithEmptyWal[partition])
-        {
-            return (clock, checkpoint);
-        }
-
-        // Issue #3453: a never-written leaf (Clock == Zero) that has scanned
-        // this partition through a PERSISTED checkpoint X >= 0 over entries it
-        // skipped as another leaf's work, and holds no live row here. For such
-        // a leaf the release branches above resolve to (Zero, -1), which is
-        // byte-identical to the block pin, so no drive could ever lift it and
-        // the WAL GC scheduler looped on NoAdvance. (Zero, X) is the only
-        // release its encoding can express: an offset >= 0 puts the consumer in
-        // the GC's offset coverage set, which already exempts a Zero frontier
-        // from blocking (#3094), and the offset floor then retains everything
-        // above X - including any later write that routes to this leaf.
-        //
-        // X is the PERSISTED checkpoint, never `checkpoint` above (which is
-        // max(persisted, pending)). The pin store merges offsets by monotonic
-        // max, so an over-report can never be withdrawn, and every replay -
-        // including a cold rebuild - starts from the persisted offset (#3476).
-        //
-        // Opt-in, and only FlushDurableMaterialiserFrontierAsync opts in.
-        // SeedDurableMaterialiserFrontierAsync deliberately does not: its
-        // issue-2150 hazard is a Zero-clock leaf publishing a RAW checkpoint
-        // beyond durable coverage from the activation seed. This arm publishes
-        // the persisted checkpoint only, and only from the flush paths (the
-        // starvation drive, which persists before it publishes, and the
-        // deactivation barrier). A persisted scanned-through checkpoint is safe
-        // for a never-written leaf because it owns no row whose only durable
-        // copy is the WAL prefix at or below X: a cold activation with no
-        // snapshot and an empty cache replays under the -1 sentinel, which the
-        // fall-off detector exempts, and the #945 guard compares the WAL tail
-        // against this same persisted checkpoint.
-        if (releaseNeverWrittenScannedThrough
-            && clock <= HybridLogicalClock.Zero
-            && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
-        {
-            // Issue #4456: bounded by the leaf's own snapshot coverage when it
-            // holds one. The argument above covers only a leaf with NO snapshot.
-            // A leaf that holds one takes the warm path on its next activation:
-            // the rehydrate lowers this partition's checkpoint to the snapshot's
-            // coverage, and the fall-off detector, which does not exempt that
-            // path, latches LeafProjectionStaleException once the WAL tail has
-            // passed coverage + 1. Releasing at the persisted checkpoint above
-            // that coverage licenses exactly that trim, bricking a leaf that owns
-            // nothing in the trimmed prefix. Coverage below 0 - no snapshot, or one
-            // whose slot for this partition is empty - keeps the release at the
-            // persisted checkpoint: the rehydrate then resets the partition to
-            // the -1 sentinel, which the detector exempts.
-            var persistedScan = GetPersistedCheckpointForPartition(partition);
-            var snapshotCovered = DurableSnapshotCoverageForPartition(partition);
-            return (HybridLogicalClock.Zero,
-                snapshotCovered >= 0 ? Math.Min(persistedScan, snapshotCovered) : persistedScan);
-        }
-
-        // Data-bearing partition (live cache rows) OR a durably-checkpointed
-        // partition whose in-memory cache is momentarily empty. Either way the
-        // checkpointed prefix's only durable copy - absent a snapshot - is the
-        // WAL, so authorise trimming only as far as a durable snapshot covers.
-        //
-        // Issue #3476: and never past the PERSISTED checkpoint. `checkpoint`
-        // above is max(persisted, pending), and the pending half is an advance
-        // held only in this activation's memory. Every replay this activation
-        // (or a crash-recovered successor that does not rehydrate a snapshot)
-        // runs starts from the persisted offset, and the #945 guard and the
-        // fall-off-log detector fault it when the WAL tail has passed
-        // persisted + 1. A pin above the persisted checkpoint licenses exactly
-        // that trim: the #3224 drive recheck restamps coverage up to the
-        // pending checkpoint, so both arms of min(checkpoint, covered) could
-        // sit above it, the GC trimmed to the pin, and the next replay latched
-        // the leaf. Because the pin store merges by monotonic max, an
-        // over-reported offset can never be taken back, so the clamp has to
-        // hold at publication. The pending advance reaches the pin as soon as
-        // it persists: FlushPendingCheckpointAsync republishes through
-        // ReportCursorIfActiveAsync, and the starvation drive persists before
-        // it republishes.
-        var covered = DurableSnapshotCoverageForPartition(partition);
-        var safeOffset = Math.Min(GetPersistedCheckpointForPartition(partition), covered);
-        if (safeOffset < 0)
-        {
-            // Never checkpointed (checkpoint < 0, #1490), checkpointed only in
-            // memory so far (a pending first checkpoint over a persisted -1,
-            // #3476), OR checkpointed but uncovered (covered < 0, the residual
-            // cold-restart prefix loss and the empty-cache misclassification):
-            // the whole WAL from offset 0 is the only durable copy - retain the
-            // Zero block pin.
-            return (HybridLogicalClock.Zero, -1L);
-        }
-
-        return (clock, safeOffset);
+        return (decision.HasZeroFrontier ? HybridLogicalClock.Zero : clock, decision.Offset);
     }
 }
