@@ -9,9 +9,8 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <para>
 /// The GC needs this because the HLC cursor a consumer reports cannot protect
 /// it. A WAL partition is not HLC-ordered in offset (a skewed silo clock, a
-/// range delete's start stamp, a merge that keeps its source stamp), so an
-/// entry the consumer has not read can carry an HLC at or below a cursor it has
-/// already reported.
+/// merge that keeps its source stamp), so an entry the consumer has not read
+/// can carry an HLC at or below a cursor it has already reported.
 /// </para>
 /// <para>
 /// A consumer registers itself with the tree's

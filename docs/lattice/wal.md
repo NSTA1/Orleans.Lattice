@@ -840,7 +840,7 @@ A fourth clause bounds the trim by the **read position of every
 offset-reading consumer** (issue #4579). The replication shipper reads each
 partition by offset, so the HLC cursor it reports cannot hold the entries it
 has not read: a WAL partition is not HLC-ordered in offset (a silo whose clock
-trails, a range delete's start stamp, a merge that keeps its source stamp), so
+trails, a merge that keeps its source stamp), so
 an unread entry can carry an HLC at or below a cursor already reported. Each
 offset-reading consumer registers with the tree's durable consumer set before
 it reads the log. On every pass the GC asks each registered consumer for the

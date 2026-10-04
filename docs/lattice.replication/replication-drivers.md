@@ -738,8 +738,8 @@ than immediately when the registry recovers.
 
 The HLC cursor alone does not protect what the shipper has not read. It is
 the HLC of the last entry shipped in merge order, and a WAL partition is not
-HLC-ordered in offset: a silo whose clock trails, a range delete's start
-stamp, or a merge that keeps its source stamp can put an entry the shipper
+HLC-ordered in offset: a silo whose clock trails, or a merge that keeps its
+source stamp, can put an entry the shipper
 has not read at an HLC at or below the cursor it has already reported. Once
 the owning leaf checkpoints past such an entry, nothing else holds it, so a
 GC pass could trim it unshipped.

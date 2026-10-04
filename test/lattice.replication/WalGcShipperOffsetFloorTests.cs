@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// Issue #4579: the WAL GC must not trim an entry the replication shipper has
 /// not read, however that entry's HLC compares with the shipper's reported HLC
 /// cursor. A WAL partition is not HLC-ordered in offset (a skewed silo clock, a
-/// range delete's start stamp, a merge that preserves its source stamp), so an
+/// merge that preserves its source stamp), so an
 /// unshipped entry can sit above the shipper's read position with a stamp below
 /// the cursor it has already reported. Runs the real shipper, the real WAL shard
 /// grains, the real leaf and the silo's own WAL GC.
