@@ -1202,6 +1202,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         MergeIntoProjection(mutation.Key, incoming);
         AdvanceProjectionClock(mutation.Timestamp);
@@ -1223,6 +1224,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         // Carry the WAL-stamped typed CRDT delta and merge mode into the
         // pending-tx delta side-map so the activation-time replay
@@ -1253,6 +1255,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = 0,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         MergeIntoProjection(mutation.Key, tombstone);
         AdvanceProjectionClock(mutation.Timestamp);
@@ -1273,6 +1276,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = 0,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone, batch: (mutation.AtomicBatchSize, mutation.AtomicBatchIndex), stampOriginal: mutation.PrepareStampOriginal);
         AdvanceProjectionClock(mutation.Timestamp);

@@ -912,6 +912,7 @@ defaults.
 | `CrossTreeOperationId` | `string?` | On a cross-tree atomic write's sub-saga terminal, the caller's `operationId`. |
 | `CrossTreeParticipants` | `IReadOnlyList<string>?` | On the same terminals, the ordinal-sorted participant tree-id set. |
 | `Mode` | `LatticeMergeMode` | The declared convergence rule, carried so WAL replay can re-fold a prepared CRDT mutation's typed delta. The observer publish does not populate it, so a local observer sees the `LwwRegister` default; a consumer that needs the mode reads the WAL record's `Mode`. |
+| `IsMigrated` | `bool` | The migration provenance of the value the record stores: `true` for a cross-shard migration import or split hand-off, and for a saga value stored at a prepare stamp carried from the split source, so WAL replay restores the flag that decides whether a later migration import is admitted (issue #4564). The observer publish does not populate it. |
 
 ## Tree alias observers
 
