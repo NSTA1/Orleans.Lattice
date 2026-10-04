@@ -297,6 +297,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - A count of one reads in the singular.** A catalogue check reports 1 orphan row rather than 1 orphan rows, and a schema size card reads at most 1 byte rather than 1 bytes. ([#4460](https://github.com/NSTA1/Orleans.Lattice/issues/4460)) (`Orleans.Lattice.Explorer.UI`)
 
+- **Explorer - An app's page reports consent drift a narrower approval leaves.** An approved exception scope on another app's tree now covers a role scope only as far as the cluster would, so a key or prefix approval no longer reads as covering the whole tree or a different prefix. ([#4486](https://github.com/NSTA1/Orleans.Lattice/issues/4486)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - A schema predicate's text constant reads unambiguously.** A rule shown as an expression now escapes backslashes and control characters as well as quotes, so `C:\new` no longer reads as a line break and a value holding a line break stays on one line. ([#4487](https://github.com/NSTA1/Orleans.Lattice/issues/4487)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - WAL reclamation shows only the current tree's verdict.** On the WAL page, a late answer or fault for the tree shown before no longer replaces the current tree's floor holder with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488)) (`Orleans.Lattice.Explorer.UI`)
+
 - **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
 
 - **WAL - Purging a tree trims its write-ahead log.** An ordinary purge unregistered the tree without trimming its log, and WAL collection only visits registered trees, so the log leaked for good. Purge completion now trims the log first, as a resize discard already did. ([#3936](https://github.com/NSTA1/Orleans.Lattice/issues/3936)) (`Orleans.Lattice`)

@@ -25,6 +25,7 @@ public sealed class ClusterWalReclamationTests : ClusterTestContext
     private const string TreeId = "orders";
     private const string Leaf = "bplusleaf/7b16d935";
     private const string Consumer = "_lattice_materialiser_t/acme/orders-physical_bplusleaf/7b16d935";
+    private const string PreviousTree = "ledger";
 
     private readonly ILatticeWalReclamation _reclamation = Substitute.For<ILatticeWalReclamation>();
 
@@ -155,6 +156,80 @@ public sealed class ClusterWalReclamationTests : ClusterTestContext
             Does.Contain("does not report which pin holds the WAL floor")));
         Assert.That(cut.FindAll("[data-lt-cluster='wal-reclamation'] [role='alert']"), Is.Empty);
     }
+
+    // The section stays mounted while the WAL page's tree changes, so a read of the
+    // previous tree can answer after the current tree's. Neither its report nor its
+    // fault may then stand in for the current tree's verdict.
+    [Test]
+    public void A_late_answer_for_the_previous_tree_does_not_replace_the_current_trees_verdict()
+    {
+        var previous = new TaskCompletionSource<TreeWalReclamationReport>();
+        _reclamation.GetWalReclamationAsync(PreviousTree, Arg.Any<CancellationToken>()).Returns(previous.Task);
+        Answer(42, TreeWalFloorHolderState.NeverCheckpointed, -1);
+
+        var cut = RenderSupersededBy(TreeId);
+        var renders = cut.RenderCount;
+
+        previous.SetResult(new TreeWalReclamationReport { TreeId = PreviousTree, PinStoreReadable = true });
+
+        cut.WaitForState(() => cut.RenderCount > renders);
+        Assert.That(Verdict(cut), Does.Contain("Blocked").And.Contain($"leaf {Leaf} holds the floor").And.Not.Contain("No leaf holds a WAL pin"));
+    }
+
+    [Test]
+    public void A_late_fault_for_the_previous_tree_does_not_replace_the_current_trees_verdict()
+    {
+        var previous = new TaskCompletionSource<TreeWalReclamationReport>();
+        _reclamation.GetWalReclamationAsync(PreviousTree, Arg.Any<CancellationToken>()).Returns(previous.Task);
+        Answer(42, TreeWalFloorHolderState.NeverCheckpointed, -1);
+
+        var cut = RenderSupersededBy(TreeId);
+        var renders = cut.RenderCount;
+
+        previous.SetException(new ShellTransportException("The cluster could not be reached.", isTransient: true, new InvalidOperationException("unavailable")));
+
+        cut.WaitForState(() => cut.RenderCount > renders);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Verdict(cut), Does.Contain("Blocked"));
+            Assert.That(cut.Markup, Does.Not.Contain("could not be reached"));
+        });
+    }
+
+    [Test]
+    public void A_previous_tree_that_does_not_serve_the_read_does_not_hide_the_current_trees_verdict()
+    {
+        var previous = new TaskCompletionSource<TreeWalReclamationReport>();
+        _reclamation.GetWalReclamationAsync(PreviousTree, Arg.Any<CancellationToken>()).Returns(previous.Task);
+        Answer(42, TreeWalFloorHolderState.NeverCheckpointed, -1);
+
+        var cut = RenderSupersededBy(TreeId);
+        var renders = cut.RenderCount;
+
+        previous.SetException(new NotSupportedException("unimplemented"));
+
+        cut.WaitForState(() => cut.RenderCount > renders);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Verdict(cut), Does.Contain("Blocked"));
+            Assert.That(cut.Markup, Does.Not.Contain("does not report which pin holds the WAL floor"));
+        });
+    }
+
+    /// <summary>
+    /// Renders the section for <see cref="PreviousTree"/>, whose read is left pending, then
+    /// moves it to <paramref name="current"/> and waits for that tree's verdict.
+    /// </summary>
+    private IRenderedComponent<ClusterWalReclamation> RenderSupersededBy(string current)
+    {
+        var cut = Render<ClusterWalReclamation>(parameters => parameters.Add(section => section.TreeId, PreviousTree));
+        cut.Render(parameters => parameters.Add(section => section.TreeId, current));
+        cut.WaitUntil(() => Assert.That(Verdict(cut), Does.Contain("Blocked")));
+        return cut;
+    }
+
+    private static string Verdict(IRenderedComponent<ClusterWalReclamation> cut) =>
+        cut.Find("[data-lt-cluster='wal-reclamation-verdict']").TextContent;
 
     [Test]
     public void The_storage_tab_flags_a_wedged_tree_beside_its_retained_wal()

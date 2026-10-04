@@ -144,7 +144,51 @@ internal static class SchemaPredicateText
         LatticeConstantKind.Boolean => constant.BooleanValue ? "true" : "false",
         LatticeConstantKind.Int64 => constant.Int64Value.ToString(CultureInfo.InvariantCulture),
         LatticeConstantKind.Double => constant.DoubleValue.ToString("R", CultureInfo.InvariantCulture),
-        LatticeConstantKind.String => "\"" + (constant.StringValue ?? string.Empty).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"",
+        LatticeConstantKind.String => Quote(constant.StringValue ?? string.Empty),
         _ => "?",
     };
+
+    /// <summary>
+    /// A text constant in quotes, with every character that would change how it reads
+    /// escaped: the quote and the backslash itself, so an escape is never ambiguous, and
+    /// control and line-separator characters, so the expression stays on one line.
+    /// </summary>
+    private static string Quote(string text)
+    {
+        var builder = new StringBuilder(text.Length + 2).Append('"');
+        foreach (var ch in text)
+        {
+            switch (ch)
+            {
+                case '"':
+                    builder.Append("\\\"");
+                    break;
+                case '\\':
+                    builder.Append("\\\\");
+                    break;
+                case '\n':
+                    builder.Append("\\n");
+                    break;
+                case '\r':
+                    builder.Append("\\r");
+                    break;
+                case '\t':
+                    builder.Append("\\t");
+                    break;
+                default:
+                    if (char.IsControl(ch) || ch is '\u2028' or '\u2029')
+                    {
+                        builder.Append("\\u").Append(((int)ch).ToString("x4", CultureInfo.InvariantCulture));
+                    }
+                    else
+                    {
+                        builder.Append(ch);
+                    }
+
+                    break;
+            }
+        }
+
+        return builder.Append('"').ToString();
+    }
 }
