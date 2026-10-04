@@ -263,11 +263,9 @@ SplitBegin ==
 \* Retroactive sweep of prepares that predate the window: a bucket whose saga
 \* the registry reports decided is resolved at the destination (with the
 \* committed-values backstop for a commit) instead of being replayed; one the
-\* registry reports InFlight is replayed. The intended design resolves an
-\* Indeterminate answer to the recorded decision behind it, as the #4445 leaf
-\* refusal does; production replays it as a forwarded prepare the destination
-\* refuses, leaving only an activation-scoped shadow marker there
-\* (#4473).
+\* registry reports InFlight is replayed. An Indeterminate answer is resolved to
+\* the recorded decision behind it, as the #4445 leaf refusal does (#4473, fixed
+\* by #4561).
 SplitSweep ==
     /\ sp = "shadow"
     /\ alias = spCopy

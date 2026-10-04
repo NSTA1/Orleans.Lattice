@@ -216,7 +216,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4453 | The undo cleared the old copy's fence before the swap and armed the resized copy after it (fixed, #4457) | `UniqueOwnerUndoClearsBeforeSwap` |
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror (fixed, #4521) | `SagaBatchOnOneCopyRebindIgnoresMirror` |
 | #4455 | The online snapshot does not copy prepared buckets (fixed, #4506) | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
-| #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
+| #4473 | The split's sweep treats Indeterminate as InFlight (fixed, #4561) | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
 | #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |

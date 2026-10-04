@@ -1,4 +1,4 @@
-# Pairs with OwnerMonotonic. Reproduces current production (the split's
+# Pairs with OwnerMonotonic. Reproduces production before #4473 was fixed (#4561) (the split's
 # retroactive sweep after #4445): the pre-check reads the registry with
 # GetStatusAsync, and an Indeterminate answer is treated like InFlight, so the
 # prepare is replayed as a forwarded prepare. The destination resolves the

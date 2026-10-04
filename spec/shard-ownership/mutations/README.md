@@ -23,7 +23,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455 and #4503, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473 and #4503, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
