@@ -55,6 +55,15 @@ internal enum WalGcTrimEligibility
     /// that one a leaf that has not made its applied state durable - and because
     /// only this one clears itself when a reader advances.
     /// </para>
+    /// <para>
+    /// Also reported when an offset-reading consumer (the replication shipper)
+    /// has not durably consumed the entry's offset, whatever the HLC cursor
+    /// reads (issue #4579). That is still a reader that has not acknowledged
+    /// this far, and it clears the same way; like
+    /// <see cref="DurableOffsetRefusal"/> it is a verdict the predicate reaches
+    /// because it narrows, so on that path this member is not purely
+    /// diagnostic.
+    /// </para>
     /// </summary>
     CursorFloor = 1,
 

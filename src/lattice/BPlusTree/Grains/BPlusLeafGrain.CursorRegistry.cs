@@ -685,18 +685,15 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether <paramref name="partition"/> of a never-written leaf
     /// (<c>Clock == Zero</c>) has a durable scanned-through checkpoint it may
-    /// publish as a <c>(Zero, X)</c> release (issue #3453): the partition holds
-    /// no live cache row and its <b>persisted</b> checkpoint is <c>&gt;= 0</c>.
+    /// publish as a <c>(Zero, X)</c> release (issue #3453), decided by
+    /// <see cref="LeafDurablePinCore.IsNeverWrittenScannedThrough"/> on the
+    /// <b>persisted</b> checkpoint, never the pending one
+    /// (<see cref="GetCurrentCheckpointForPartition"/>).
     /// </summary>
-    /// <remarks>
-    /// The persisted checkpoint, never the pending one
-    /// (<see cref="GetCurrentCheckpointForPartition"/>): published offsets merge
-    /// by monotonic maximum, so an over-report can never be lowered, and every
-    /// replay starts from the persisted offset (issue #3476).
-    /// </remarks>
     private bool IsNeverWrittenScannedThroughPartition(int partition, bool[] partitionsWithLiveData)
-        => !partitionsWithLiveData[partition]
-            && GetPersistedCheckpointForPartition(partition) >= 0;
+        => LeafDurablePinCore.IsNeverWrittenScannedThrough(
+            partitionsWithLiveData[partition],
+            GetPersistedCheckpointForPartition(partition));
 
     private bool HasNeverWrittenScannedThroughPartition(int partitionCount, bool[] partitionsWithLiveData)
     {

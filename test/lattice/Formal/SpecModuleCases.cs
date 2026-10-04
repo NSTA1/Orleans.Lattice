@@ -27,8 +27,12 @@ public static class SpecModuleCases
         yield return [module];
     }
 
-    /// <summary>One case per mutation of every discovered module.</summary>
-    public static IEnumerable<TestCaseData> Mutations() => Expand(MutationsFor);
+    /// <summary>
+    /// One case per mutation of every discovered module, each tagged with the
+    /// CI shard category <see cref="TlcCiShard.Of"/> assigns it.
+    /// </summary>
+    public static IEnumerable<TestCaseData> Mutations() =>
+        Expand(MutationsFor).Select(TlcCiShard.Tag);
 
     /// <summary>One case per mutation of <paramref name="module"/>.</summary>
     public static IEnumerable<object[]> MutationsFor(SpecModule module)

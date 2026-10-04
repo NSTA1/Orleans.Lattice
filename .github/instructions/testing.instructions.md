@@ -933,7 +933,7 @@ sibling models did not yet encode. Each of its assertions has a companion guard
 | `MonotonicVisibility` | Once a committed value is observed visible it stays visible (no regression except by a later committed write/tombstone, none of which this model injects). The TLA+ form is stated over the whole behaviour - once observed post-saga, never observed pre-saga at any later state, even with a hidden observation in between - so TLC checks it as a temporal formula, not an action property. | `AtomicVisibilityGate` + `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` records `EverVisible[k]` and asserts a once-visible key never reverts; the cross-round/reshard form is covered by `ReshardMigrationModel`. | `Flipping_a_recorded_decision_violates_decision_durability` (a flip to abort re-hides a committed key). | Net-new (single-saga temporal) + cited (reshard). |
 | `RevisionMonotonic` | The registry revision counter never decreases; a stale-revision snapshot is exactly what the reader-side probe rejects. | `TxRegistryDecisionCore` (Phase 1) | `AtomicCommitInvariantModel` asserts `core.Revision >= previousRevision` after every mutation. | `Lowering_the_revision_counter_violates_revision_monotonicity`. | Net-new (explicit assertion; `AtomicCommitVisibilityModel` relies on it via the probe but does not assert it directly). |
 | `Termination` | Every saga reaches a terminal decision under a bounded fault budget (no permanent stall). | `SagaCoordinatorCore` + registry (Phase 4) | `AtomicCommitLivenessModel` drives to the budget-exhausted point and asserts the good terminal state. | `AtomicCommitLivenessModel` guard test (backstop removed) in `AtomicCommitLivenessCoyoteTests`. | Cited (already covered). |
-| `EveryCommittedKeyReadable` | Every committed key is eventually materialised at its post-saga value, so it stays readable once the registry forgets the decision (bounded-progress liveness). The TLA+ form is stated over materialisation; the model resolves each leaf through the production gate after the decision is garbage-collected, which reads post-saga exactly when the leaf drained, so the two agree. | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal (its "progress property 3"). | None of its own. The backstop-removed guards in `AtomicCommitLivenessCoyoteTests` report the stall through progress property 1, which is checked first, and weakening property 3's assertion to `true` leaves all of that fixture green (measured). In this model a committed leaf that applied its terminal has drained, so property 3 is implied by property 1 - the same coincidence the TLA+ spec states between this property and `NoStrandedPrepare`. | Cited (already covered). |
+| `EveryCommittedKeyReadable` | Every committed key is eventually materialised at its post-saga value, so it stays readable once the registry forgets the decision (bounded-progress liveness). The TLA+ form is stated over materialisation and, since issue #4428, over what the gate serves once a leaf has materialised; the model resolves each leaf through the production gate after the decision is garbage-collected, which reads post-saga exactly when the leaf drained, so the two agree. | `AtomicVisibilityGate` + drain (Phase 4) | `AtomicCommitLivenessModel` asserts eventual readability at the bounded terminal (its "progress property 3"). | None of its own. The backstop-removed guards in `AtomicCommitLivenessCoyoteTests` report the stall through progress property 1, which is checked first, and weakening property 3's assertion to `true` leaves all of that fixture green (measured). In this model a committed leaf that applied its terminal has drained, so property 3 is implied by property 1 - the same coincidence the TLA+ spec states between this property and `NoStrandedPrepare`. | Cited (already covered). |
 | `NoStrandedPrepare` | Every participant of a decided saga eventually applies the saga's terminal, so no prepared bucket is stranded. | Broadcast + drain (Phase 4) | `AtomicCommitLivenessModel` asserts every leaf reached the saga terminal at the bounded terminal (its "progress property 1"). | `Without_backstop_the_stranded_participant_is_reported_by_progress_property_1` in `AtomicCommitLivenessCoyoteTests`, which requires the reported violation to be property 1's. The other two backstop-removed guards accept any violation and stay green with property 1 disabled (measured), because properties 2 and 3 catch the same stall. | Cited (already covered). |
 
 **Net-new assertions this phase** (properties not previously asserted by any
@@ -1028,13 +1028,13 @@ reported under that fix's own assertion tag, not merely some violation.
 | TLA+ property | Plain-language property | Core(s) | Encoding (model + assertion) | Guard test | Net-new vs cited |
 |----------------|-------------------------|---------|------------------------------|------------|------------------|
 | `AckedWriteDurable` | An acknowledged write is recoverable by its owner from its durable snapshot and the readable WAL. | All five | `WalDurabilityLifecycleModel` `[AckedWriteDurable]` after every step. | None of its own: every guard arm that loses a write is caught earlier by a more specific tag. | Net-new. |
-| `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
+| `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. The guard perturbs model glue: the min-over-pins floor and the block-pin stop are computed in the model, while production makes them inline in `LatticeWalGc`, where the `LatticeWalGc` unit tests named in `spec/wal/Refinement.md`'s `GcTrim` row detect them. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
 | `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
-| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. Its two-fault sibling #4523 (fixed) is reached only by the TLA+ `TwoFaults` variant configuration. | Net-new. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore`, `LeafDurablePinCore`, `WalGcTrimCore` | `[RecoveryNeverFallsOffLog]` after every step. The never-written arm is reached by the model's `neverWrittenLeaf` ownership variant, in which leaf 1 owns no entry. | `Removing_the_never_written_release_bound_is_caught_by_the_fall_off_assertion` (the #4456 shape; run with `[ReleaseBackedBySnapshot]` off, which would report it first). The two-fault #4523 shape (a cold-rebuild capture below a release) is reached by the TLA+ `TwoFaults` variant configuration; in Coyote it is caught at its root cause by `[ReleaseBackedBySnapshot]`. | Net-new. |
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
-| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | Not encoded in Coyote. | `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
+| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | `[ReleaseBackedBySnapshot]` after every step, in both ownerships. | `Removing_the_never_written_release_bound_is_caught_by_the_release_backing_assertion`; also `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
@@ -1044,16 +1044,15 @@ reported under that fix's own assertion tag, not merely some violation.
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
 | `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
 
-**Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
+**Gap analysis.** Four WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
 
 - `AckedWriteDurable`;
 - `ReadPositionHonest`;
-- `RecoveryNeverFallsOffLog`;
 - `EveryAckedWriteMaterialised`;
 - `ReclamationEventuallyAdvances`.
 
-`SnapshotCoverageMonotonic`, `ReleaseBackedBySnapshot`, `StreamEventuallyComplete` and
+`SnapshotCoverageMonotonic`, `StreamEventuallyComplete` and
 `FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
 every one of them with a firing mutation. The four defects the model found (#4450,
 #4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
@@ -1095,14 +1094,16 @@ targets and requires a clean run. The assurance document is
 
 ### Backup and restore property catalogue (epic #4430, issue #4440)
 
-The backup area's properties are checked by four TLA+ modules under
+The backup area's properties are checked by five TLA+ modules under
 [`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
 naming the production symbols and detector tests per row. Its Coyote models
 live in the backup and replication test projects, not in `test/lattice/`, and
-drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
-`BackupChainFrontier` (origin normalisation and chain frontier, core unit suite
-only, not schedule-sensitive) and `CrossClusterSagaDecisionCore` (coordinated
-restore decision).
+drive two extracted cores: `CrossTreeFenceWindow` (backup set capture window)
+and `CrossClusterSagaDecisionCore` (coordinated restore decision). Two more
+cores have unit suites only, because they are folds that are not
+schedule-sensitive: `BackupChainFrontier` (origin normalisation and chain
+frontier) and `IncrementalSagaStaging` (how an increment resolves the sagas in
+its window, #4589).
 
 | Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
 |--------|---------------|-------------------------|-------------------------|
@@ -1110,6 +1111,8 @@ restore decision).
 | `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
 | `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
 | `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
+| `BackupIncremental` | `BackupSagaConsistent`, `CaptureStrictIsolation` | No restore of a backup chain holds part of a saga, or a write of a saga that did not commit. Models the #4589 fix. | None of its own; `LatticeBackupIncrementalSagaConsistencyTests` (red against the pre-fix collector) and `IncrementalSagaStagingTests`. |
+| `BackupIncremental` | `ChainCoversCommitted`, `SagaFallbackOnlyAcrossFull` | A link whose decision snapshot holds a saga committed restores it whole; an increment falls back to a full backup only for a saga straddling the full capture's frontier. | None; detectors in the note. |
 | `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |

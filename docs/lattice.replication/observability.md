@@ -108,7 +108,10 @@ Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL
 | `hlc_skew` | A blocked entry evicted from a full causal-apply buffer (`CausalBufferMaxEntries` / `CausalBufferMaxBytes`) to make room for a newer park. |
 | `mode_mismatch` | The receiver-side merge-mode gate rejected an entry whose wire `Mode` disagrees with the merge mode the receiver resolves locally for the tree. |
 | `foreign_tenant` / `tenant_offline` / `tenant_suspended` | The tenant-isolation gate refused the write: unknown tenant / tenant not resident in this region / tenant suspended or disabled (the matching `apply.duration` outcomes are `rejected-foreign-tenant`, `rejected-tenant-offline`, and `rejected-tenant-suspended` above). |
+| `poisoned_saga` | The sender withheld a later prepare or a terminal of a saga one of whose prepares it parked as `schema`, so the peer never commits the saga without that write (see [Poisoned sagas](replication-drivers.md#poisoned-sagas)). Each such saga also counts once on `shipper.saga_poisoned`. |
 | `oversized` | Reserved. Nothing emits it today; it is published for host decorators that wrap the canonical applier with a per-entry size check. |
+
+`orleans.lattice.replication.shipper.saga_poisoned` counts the sagas a shipper withholds from a peer, tagged `tree`, `peer` and `outcome`: `poisoned` when a saga is withheld (the peer serves it as never written while this cluster has it decided, until the peer is re-bootstrapped), `refused` when the shipper's bounded poison list is full and it stops advancing past the failing batch instead of letting a saga through torn. Alert on any increment; the matching warning or error log names the transaction id.
 
 `orleans.lattice.replication.dead_letter.removed` is tagged `discarded` (explicit operator discard), `replayed` (removed after a replay that returned without throwing, whatever its `Applied` result - except a replay deferred by a restore saga's receive fence, which leaves the entry parked for a later replay), or `evicted` (FIFO capacity eviction during a later enqueue).
 
@@ -301,6 +304,7 @@ The receiver-side bootstrap coordinator emits the following instruments tracking
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` (`By`) | `tree`, `origin` | Incremented by `entry.Value.Length` per applied entry. Mirrors the lifecycle of `entries_received`. |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is `live` or `failed`; `timed_out` is published as a constant but not emitted today (see below). |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `tree`, `origin` | Incremented by 1 each time the bootstrap drain catches a classified-transient transport fault and consumes one slot of the configured `LatticeReplicationOptions.BootstrapTransientRetry` budget. A bootstrap that completes on its first drain attempt records zero on this counter; a bootstrap that exhausts the budget and pivots to `Failed` records `MaxAttempts - 1` (one per consumed retry slot). |
+| `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `tree` | Incremented by 1 each time an operator force-lifts the read fence a failed bootstrap left over a partial import, through `ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync` (see [Read fence during the drain](snapshot-bootstrap.md#read-fence-during-the-drain)). Each increment opens a window in which reads may observe a partial import, so any non-zero value is an alert. Recorded only when a lift happens. |
 
 The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(treeName, sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
 
@@ -408,12 +412,14 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `{entry}` | `tree` | [Causal+ instruments](#causal-instruments) |
 | `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
 | `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
+| `orleans.lattice.replication.shipper.saga_poisoned` | `Counter<long>` | `{saga}` | `tree`, `peer`, `outcome` | [DLQ reasons](#dlq-enqueue-reason-classification) |
 | `orleans.lattice.replication.peer.fell_off_log` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
 | `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `{entry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` | `By` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | `tree`, `origin`, `outcome` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `{lift}` | `tree` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.digest_probe.compared` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer`, `outcome` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.digest_probe.mismatch` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.merkle_walk.localised` | `Counter<long>` | `{leaf}` | `tree`, `depth` | [Merkle walk](anti-entropy-merkle-walk.md#observability) |

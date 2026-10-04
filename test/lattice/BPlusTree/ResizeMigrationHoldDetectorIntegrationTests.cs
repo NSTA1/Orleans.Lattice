@@ -11,7 +11,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// callers; these run the resize coordinator's own decision, so removing the
 /// hold, or its soft-delete-window arm, or the reshard's read of it, makes a
 /// split, a consolidation or a reshard start where it must be refused
-/// (shard-ownership review #4435, finding F3).
+/// (shard-ownership review #4435, finding F3). A split is held only while the
+/// resize is in flight (<see cref="ITreeResizeGrain.HoldsShardSplitsAsync"/>):
+/// once it has completed the split runs in the soft-delete window, because the
+/// replaced copy's mirror follows it (issue #4478), and keeping it held until
+/// the purge makes that detector red.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -89,12 +93,25 @@ public class ResizeMigrationHoldDetectorIntegrationTests
     }
 
     [Test]
-    public async Task A_split_is_refused_by_the_resize_hold_while_the_replaced_copy_still_mirrors()
+    public async Task A_split_proceeds_while_the_replaced_copy_still_mirrors_because_the_mirror_follows_it()
     {
+        // Issue #4478: the replaced copy's mirror follows a split's refusal to
+        // the shard that owns the slot now, so the resize no longer holds a split
+        // once it has completed; red if the split hold is kept until the purge.
         var treeId = await CreatePopulatedTreeAsync("hold-split-window");
         await CompleteResizeAsync(treeId);
+        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
 
-        await AssertSplitRefusedAsync(treeId);
+        await split.SplitAsync(sourceShardIndex: 0);
+        await split.RunSplitPassAsync();
+
+        Assert.That(await split.IsIdleAsync(), Is.True, "the split must run to completion in the soft-delete window");
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeId);
+        for (var i = 0; i < 200; i++)
+        {
+            var actual = await tree.GetAsync($"key-{i:D4}");
+            Assert.That(actual is null ? null : Encoding.UTF8.GetString(actual), Is.EqualTo($"value-{i}"), $"key-{i:D4}");
+        }
     }
 
     [Test]

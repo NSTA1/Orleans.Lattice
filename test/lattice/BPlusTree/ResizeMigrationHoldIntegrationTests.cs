@@ -6,8 +6,9 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 
 /// <summary>
 /// End-to-end liveness of the resize's hold on shard migrations (issue #4452).
-/// A completed resize holds splits, folds and reshards while the copy it
-/// replaced still mirrors into the resized copy; the hold must end when the real
+/// A completed resize holds folds and reshards - but not splits, which the
+/// mirror follows (issue #4478) - while the copy it replaced still mirrors into
+/// the resized copy; the hold must end when the real
 /// purge of that copy clears its shadow-forward state - driven here through the
 /// deletion grain's own purge, never through the test-only seam - and must never
 /// begin for a resize that copied nothing. A hold that never released would
@@ -90,10 +91,9 @@ public class ResizeMigrationHoldIntegrationTests
         var (tree, expected) = await CreatePopulatedTreeAsync(treeId);
         await ResizeToCompletionAsync(treeId, 64);
         var resize = _cluster.GrainFactory.GetGrain<ITreeResizeGrain>(treeId);
-        var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
 
         Assert.That(await resize.HoldsShardMigrationsAsync(), Is.True, "the retired copy still mirrors into the resized one");
-        Assert.ThrowsAsync<InvalidOperationException>(() => split.SplitAsync(sourceShardIndex: 0));
+        Assert.That(await resize.HoldsShardSplitsAsync(), Is.False, "a completed resize does not hold a split");
 
         // The retirement purge the soft-delete reminder would run once the window
         // expires: a first resize retires the shards under the logical id itself.

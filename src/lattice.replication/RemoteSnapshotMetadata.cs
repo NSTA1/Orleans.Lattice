@@ -75,4 +75,14 @@ public readonly record struct RemoteSnapshotMetadata
     /// the empty <see cref="Orleans.Lattice.VersionVector"/>.
     /// </summary>
     [Id(3)] public VersionVector CausalStableFrontier { get; init; }
+
+    /// <summary>
+    /// The source's snapshot export epoch for this export (issue #4534), or
+    /// <c>0</c> from a source that does not number its exports. The
+    /// receiver's bootstrap coordinator records it once the bootstrap
+    /// completes and echoes it on its replication acknowledgements
+    /// (<see cref="ReplicationAck.BootstrapEpoch"/>). Strictly additive on
+    /// the wire: an older source omits it and it decodes to <c>0</c>.
+    /// </summary>
+    [Id(4)] public long ExportEpoch { get; init; }
 }

@@ -458,5 +458,25 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(25)] public IReadOnlyList<string>? CrossTreeParticipants { get; init; }
+
+    /// <summary>
+    /// Whether this saga prepare-phase record is stamped with its prepare's
+    /// <i>original</i> stamp (issue #4522): minted by the leaf the routing tier
+    /// dispatched the prepare to, or carried verbatim from that leaf by a split's
+    /// shadow-forward or retroactive sweep. Mirrors
+    /// <see cref="LatticeMutation.PrepareStampOriginal"/>, so the activation-time
+    /// replay classifies the rebuilt pending bucket exactly as the foreground
+    /// write did. Meaningful only when <see cref="IsPrepared"/> is set.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store: each
+    /// encoder and storage provider persists the record through the canonical
+    /// Orleans serializer, so a record authored before the slot existed decodes
+    /// as <see langword="false"/> (unmarked, keeping the pre-#4522 drain), and an
+    /// older decoder skips the unknown id. Ignored by a replication receiver,
+    /// which re-authors its own prepare record; a replicated prepare's bucket
+    /// carries its origin cluster id and drains at the source stamp regardless.
+    /// </para>
+    /// </summary>
+    [Id(27)] public bool PrepareStampOriginal { get; init; }
 }
 

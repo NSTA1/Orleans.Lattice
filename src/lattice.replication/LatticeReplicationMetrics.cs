@@ -804,6 +804,43 @@ public static class LatticeReplicationMetrics
         Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
             description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
 
+    /// <summary>
+    /// Counter of sagas the outbound shipper poisoned for a peer because a
+    /// prepare of the saga was parked on the dead-letter queue instead of
+    /// shipped (#4494). Tagged by <see cref="TagTree"/>, <see cref="TagPeer"/>
+    /// and <see cref="TagOutcome"/>: <see cref="OutcomeSagaPoisoned"/> when the
+    /// saga is withheld from the peer (its other records are parked with
+    /// <see cref="ReasonPoisonedSaga"/>, and the peer serves the saga as never
+    /// written until it is re-bootstrapped), <see cref="OutcomeSagaPoisonRefused"/>
+    /// when the shipper's poison list is full and it stops advancing past the
+    /// failing batch instead (fail closed: the stream to that peer stalls until
+    /// an operator intervenes). Any increment needs operator attention; the
+    /// warning log names the transaction id.
+    /// </summary>
+    public static readonly Counter<long> ShipperSagaPoisoned =
+        Meter.CreateCounter<long>("orleans.lattice.replication.shipper.saga_poisoned", unit: "{saga}",
+            description: "Sagas withheld from a peer because a prepare was dead-lettered, tagged by tree, peer and outcome.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the saga
+    /// is withheld from the peer.
+    /// </summary>
+    public const string OutcomeSagaPoisoned = "poisoned";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the
+    /// poison list was full, so the shipper refused to advance past the batch.
+    /// </summary>
+    public const string OutcomeSagaPoisonRefused = "refused";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for a
+    /// later prepare or a terminal of a saga the shipper poisoned after one of
+    /// its prepares was dead-lettered (#4494). The record is parked rather than
+    /// shipped so the peer never commits the saga without the lost write.
+    /// </summary>
+    public const string ReasonPoisonedSaga = "poisoned_saga";
+
     // --- Per-peer observable gauges ----------------------------------------------
     //
     // The gauges below are registered lazily by ReplicationPeerStats so the
@@ -1245,6 +1282,24 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="BootstrapTransientRetries"/> counter.
     /// </summary>
     public const string BootstrapTransientRetriesName = "orleans.lattice.replication.bootstrap.transient_retries";
+
+    /// <summary>
+    /// Counter incremented each time an operator force-lifts the read fence a
+    /// failed snapshot bootstrap left up over a partial import (issue #4526),
+    /// through <see cref="ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync"/>.
+    /// Tagged by <see cref="TagTree"/>. Every increment marks a window in which
+    /// reads of the tree may observe a partial import - a committed atomic batch
+    /// with some keys present and others not - until a later bootstrap
+    /// completes, so any non-zero value is an alert, not a trend.
+    /// </summary>
+    public static readonly Counter<long> BootstrapReadFenceForceLifted =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.read_fence_force_lifted", unit: "{lift}",
+            description: "Operator force-lifts of the read fence a failed snapshot bootstrap left over a partial import, tagged by tree. Each one exposes the partial import to readers.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapReadFenceForceLifted"/> counter.
+    /// </summary>
+    public const string BootstrapReadFenceForceLiftedName = "orleans.lattice.replication.bootstrap.read_fence_force_lifted";
 
     // --- Anti-entropy peer digest probe (detect stage) --------------------------
 

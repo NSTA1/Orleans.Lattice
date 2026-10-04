@@ -1,0 +1,17 @@
+# Pairs with SagaFallbackOnlyAcrossFull. The gate does not refuse a decision,
+# so a saga decided after d0 broadcasts commit terminals into the window that
+# d0 does not explain, and the increment falls back to fail safe.
+MODULE: SagaFallbackOnlyAcrossFullDecideUnderGate
+TARGET: SagaFallbackOnlyAcrossFull
+CLASS: Invariant
+SUMMARY: a decision is recorded while the gate is held
+PERTURBS: Decide
+
+--- FIND
+    /\ dec = "none"
+    /\ ~gated
+--- REPLACE
+    /\ dec = "none"
+    \* MUTATION: the gate does not refuse the decision.
+    /\ TRUE
+--- END

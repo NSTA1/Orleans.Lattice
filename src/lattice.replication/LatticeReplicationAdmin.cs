@@ -21,7 +21,8 @@ internal sealed class LatticeReplicationAdmin(
     ILatticeBootstrapCoordinator bootstrapCoordinator,
     IOptionsMonitor<LatticeReplicationOptions> optionsMonitor,
     ILogger<LatticeReplicationAdmin> logger,
-    TimeProvider? timeProvider = null) : ILatticeReplicationAdmin
+    TimeProvider? timeProvider = null,
+    IGrainFactory? grainFactory = null) : ILatticeReplicationAdmin
 {
     private readonly ILatticeBootstrapCoordinator _bootstrapCoordinator =
         bootstrapCoordinator ?? throw new ArgumentNullException(nameof(bootstrapCoordinator));
@@ -30,6 +31,7 @@ internal sealed class LatticeReplicationAdmin(
     private readonly ILogger<LatticeReplicationAdmin> _logger =
         logger ?? throw new ArgumentNullException(nameof(logger));
     private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly IGrainFactory? _grainFactory = grainFactory;
 
     /// <summary>
     /// Honoured-request timestamps keyed by <c>(treeName, sourceClusterId)</c>.
@@ -127,5 +129,51 @@ internal sealed class LatticeReplicationAdmin(
             Triggered: true,
             LastRequestedAt: now,
             RetryAfter: null);
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ForceLiftBootstrapReadFenceAsync(
+        string treeName,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        ArgumentException.ThrowIfNullOrEmpty(reason);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Fail closed: without a grain factory there is no fence to reach, and
+        // reporting "nothing armed" would be a lie about a tree that may be
+        // fenced.
+        var grainFactory = _grainFactory
+            ?? throw new InvalidOperationException(
+                $"{nameof(LatticeReplicationAdmin)} was constructed without an {nameof(IGrainFactory)}; it cannot force-lift a bootstrap read fence.");
+
+        // Audit before dispatch, so an attempt is on record even when it fails.
+        _logger.LogWarning(
+            "Operator FORCE-LIFT of the snapshot bootstrap read fence requested for tree {Tree}: {Reason}. Reads may observe a partial snapshot import until the next successful bootstrap.",
+            treeName, reason);
+
+        var lifted = await grainFactory
+            .GetGrain<Grains.ILatticeBootstrapCoordinatorGrain>(treeName)
+            .ForceLiftReadFenceAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        if (lifted)
+        {
+            LatticeReplicationMetrics.BootstrapReadFenceForceLifted.Add(1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                LatticeTenantLabel.ForTree(treeName));
+            _logger.LogWarning(
+                "Snapshot bootstrap read fence FORCE-LIFTED for tree {Tree}; its automatic re-drive is stopped. Reads may observe a partial snapshot import until a bootstrap completes.",
+                treeName);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Operator force-lift of the snapshot bootstrap read fence for tree {Tree} found no fence armed; nothing changed.",
+                treeName);
+        }
+
+        return lifted;
     }
 }

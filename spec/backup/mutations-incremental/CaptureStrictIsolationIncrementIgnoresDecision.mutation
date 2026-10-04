@@ -1,0 +1,16 @@
+# Pairs with CaptureStrictIsolation. The staging emits a batch as soon as its
+# prepares are complete, without asking the decision snapshot: a batch fully
+# prepared but undecided at the increment, and aborted later, is restored.
+MODULE: CaptureStrictIsolationIncrementIgnoresDecision
+TARGET: CaptureStrictIsolation
+CLASS: Invariant
+SUMMARY: a complete batch is emitted without consulting d0
+PERTURBS: Drain
+
+--- FIND
+         ELSE [kind |-> "incr", heads |-> NewHeads, emit |-> Emit,
+--- REPLACE
+         \* MUTATION: completeness alone decides.
+         ELSE [kind |-> "incr", heads |-> NewHeads,
+               emit |-> IF ~AbortSeen /\ Complete THEN Keys ELSE {},
+--- END

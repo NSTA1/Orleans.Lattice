@@ -29,6 +29,16 @@ namespace Orleans.Lattice.BPlusTree;
 /// <see cref="ITreeResizeGrain.HoldsShardMigrationsAsync"/> reports.
 /// </para>
 /// <para>
+/// An adaptive split is the exception (issue #4478). The mirror follows a
+/// refusal by a split of the resized copy to the shard that owns the slot now,
+/// and a terminal of a saga bound to the replaced copy reaches every shard of
+/// the resized copy that copy's split records lead to, so a split may run once
+/// the resize has completed, as <see cref="ITreeResizeGrain.HoldsShardSplitsAsync"/>
+/// reports and <see cref="ResizeHoldsShardSplitsAsync"/> reads. An online
+/// consolidation and a reshard keep the longer hold: a shard a consolidation
+/// retired refuses a forward without naming the shard that absorbed its slots.
+/// </para>
+/// <para>
 /// Each side publishes its own intent durably and only then reads the other's,
 /// so whichever of two racing starts reads second sees the first and backs out:
 /// the resize persists its intent and then reads every routed shard's migration
@@ -80,12 +90,38 @@ internal static class ShardMigrationResizeInterlock
     /// coordinator, whose faulted tick runs its own recovery (abandonment on a
     /// purged tree) - and which must not mistake a fault for a hold.
     /// </summary>
-    internal static async Task<bool> ReadResizeHoldAsync(IGrainFactory grainFactory, string treeId)
+    internal static Task<bool> ReadResizeHoldAsync(IGrainFactory grainFactory, string treeId) =>
+        ReadHoldAsync(grainFactory, treeId, static resize => resize.HoldsShardMigrationsAsync());
+
+    /// <summary>
+    /// Whether a resize of <paramref name="treeId"/>, or of the tree it was
+    /// derived from, holds an adaptive split (see
+    /// <see cref="ITreeResizeGrain.HoldsShardSplitsAsync"/>; issue #4478). Fails
+    /// closed: a coordinator or registry call that throws - including on a silo
+    /// too old to implement the method during a rolling upgrade - reads as a hold.
+    /// </summary>
+    internal static async Task<bool> ResizeHoldsShardSplitsAsync(IGrainFactory grainFactory, string treeId)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(treeId);
 
-        if (await grainFactory.GetGrain<ITreeResizeGrain>(treeId).HoldsShardMigrationsAsync())
+        try
+        {
+            return await ReadHoldAsync(grainFactory, treeId, static resize => resize.HoldsShardSplitsAsync());
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private static async Task<bool> ReadHoldAsync(
+        IGrainFactory grainFactory, string treeId, Func<ITreeResizeGrain, Task<bool>> holds)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        ArgumentNullException.ThrowIfNull(treeId);
+
+        if (await holds(grainFactory.GetGrain<ITreeResizeGrain>(treeId)))
         {
             return true;
         }
@@ -93,7 +129,7 @@ internal static class ShardMigrationResizeInterlock
         var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(treeId);
         return entry?.DerivedFrom is { } owner
             && !string.Equals(owner, treeId, StringComparison.Ordinal)
-            && await grainFactory.GetGrain<ITreeResizeGrain>(owner).HoldsShardMigrationsAsync();
+            && await holds(grainFactory.GetGrain<ITreeResizeGrain>(owner));
     }
 
     /// <summary>

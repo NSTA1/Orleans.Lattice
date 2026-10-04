@@ -210,6 +210,15 @@ public sealed partial class LatticeAdminGrainWalMoveTests
                 TreeId, Arg.Any<long>(), Arg.Any<IReadOnlyCollection<(int Partition, string ProviderKey)>>())
             .Returns(ci => Task.FromResult(pin.WithPartitions(
                 (IReadOnlyCollection<(int, string)>)ci[2]!, pin.Version + 1)));
+        registry.FlipFencedWalPlacementAsync(
+                TreeId, Arg.Any<long>(), Arg.Any<IReadOnlyCollection<(int Partition, string ProviderKey)>>(), Arg.Any<string>())
+            .Returns(ci => Task.FromResult(pin.WithPartitions(
+                (IReadOnlyCollection<(int, string)>)ci[2]!, pin.Version + 1)));
+        registry.RaiseWalMoveFencesAsync(
+                TreeId, Arg.Any<long>(), Arg.Any<IReadOnlyCollection<int>>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<bool>())
+            .Returns(_ => Task.FromResult(pin));
+        registry.ReleaseWalMoveFenceAsync(TreeId, Arg.Any<int>(), Arg.Any<string>(), Arg.Any<bool>())
+            .Returns(_ => Task.FromResult(pin));
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
 
         var wal = Substitute.For<IWalShardGrain>();
@@ -362,7 +371,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
                 .With.Message.Contains("42"));
 
         Assert.That(harness.Registry.ReceivedCalls().Any(c =>
-                c.GetMethodInfo().Name == nameof(ILatticeRegistry.UpdateWalPlacementAsync)),
+                c.GetMethodInfo().Name == nameof(ILatticeRegistry.FlipFencedWalPlacementAsync)),
             Is.False, "an aborted move must never flip the durable pin");
     }
 
@@ -438,11 +447,36 @@ public sealed partial class LatticeAdminGrainWalMoveTests
 
         await Admin(harness).ExecuteWalMoveAsync(TreeId, Move(0, SecondaryKey));
 
-        await harness.Registry.Received(1).UpdateWalPlacementAsync(
+        await harness.Registry.Received(1).FlipFencedWalPlacementAsync(
             TreeId,
             Arg.Any<long>(),
             Arg.Is<IReadOnlyCollection<(int Partition, string ProviderKey)>>(
-                moves => moves.Count == 1 && moves.First().Partition == 0 && moves.First().ProviderKey == SecondaryKey));
+                moves => moves.Count == 1 && moves.First().Partition == 0 && moves.First().ProviderKey == SecondaryKey),
+            Arg.Any<string>());
+    }
+
+    /// <summary>
+    /// The single-partition overload - the one <c>LatticeTreeAdmin</c>, gRPC, MCP
+    /// and the tracked move call - flips through its own registry call, so the
+    /// batch test above does not detect a flip there that names the wrong provider
+    /// (issue #4433).
+    /// </summary>
+    [Test]
+    public async Task A_single_partition_move_flips_the_placement_of_its_partition_to_the_target()
+    {
+        var harness = CreateHarness();
+        harness.Source.Seed(0, 1, 2);
+        harness.QuiesceScript.Add(() => Quiesced(highest: 2));
+
+        var receipt = await Admin(harness).ExecuteWalMoveAsync(TreeId, 0, SecondaryKey);
+
+        Assert.That(receipt.Outcome, Is.EqualTo(WalMoveOutcome.Moved));
+        await harness.Registry.Received(1).FlipFencedWalPlacementAsync(
+            TreeId,
+            Arg.Any<long>(),
+            Arg.Is<IReadOnlyCollection<(int Partition, string ProviderKey)>>(
+                moves => moves.Count == 1 && moves.First().Partition == 0 && moves.First().ProviderKey == SecondaryKey),
+            Arg.Any<string>());
     }
 
     [Test]

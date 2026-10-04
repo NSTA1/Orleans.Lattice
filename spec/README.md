@@ -28,6 +28,7 @@ be quiet about one.
 | [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnership` | Who serves a key across an adaptive split, an online reshard and an online resize with its fence, flip, undo and purge, with stale routers and an atomic-write saga bound to one physical copy. |
 | [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipRetention` | What the registry's mask and retirement, a late forwarded prepare and a leaf reactivation do to a saga bound across a split and a resize. The companion of `ShardOwnership`; the seam between the two is described in that directory's README. |
 | [`backup/`](backup/README.md) | `BackupCapture` | A backup capture racing in-flight sagas: the per-tree decision gate (#4485) and a cross-tree set's fence, drain gate, re-check and validation. |
+| [`backup/`](backup/README.md) | `BackupIncremental` | An incremental backup racing a saga: its prepares and terminals in the delta window resolved against the decision gate, the frontier held back for an unsettled saga, the undecided sagas a link hands on, and the fall back to a full backup (#4589). |
 | [`backup/`](backup/README.md) | `BackupProvenance` | What a backup chain records: per-origin provenance, the empty-origin rule and the chain's HLC frontier. |
 | [`backup/`](backup/README.md) | `BackupRestore` | A coordinated restore across regions, its per-record admission, and the replication that resumes after it. |
 | [`backup/`](backup/README.md) | `BackupCutover` | A local shadow-cutover restore and its revert: alias and map moved together, stale-routing redirects, the alias reservation. |
@@ -127,7 +128,7 @@ these columns, one row per module in the directory:
 ```markdown
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |
+| `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
 ```
 
 `SpecModuleDiscoveryTests` checks it against the manifest. It is the one place a

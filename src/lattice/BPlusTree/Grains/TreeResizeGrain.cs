@@ -422,9 +422,30 @@ internal sealed class TreeResizeGrain(
         // so a migration in flight now would commit a map the resize never
         // carries. The intent is persisted first, so a migration that opens its
         // record after this read sees the resize and backs out itself (see
-        // ShardMigrationResizeInterlock).
-        if (await ShardMigrationResizeInterlock.FindMigratingShardAsync(grainFactory, currentPhysical, shardIndices)
-            is { } migrating)
+        // ShardMigrationResizeInterlock). A receiver snapshot bootstrap's read
+        // fence is read the same way, after the intent is durable (issue #4526):
+        // the copy this resize builds would serve the bootstrap's partial import
+        // unfenced, and a bootstrap that arms its fence after this read sees the
+        // resize in flight and waits.
+        string? refusal;
+        try
+        {
+            refusal = await ShardMigrationResizeInterlock.FindMigratingShardAsync(grainFactory, currentPhysical, shardIndices)
+                is { } migrating
+                ? $"A shard split or consolidation is in progress on shard {migrating} of tree '{TreeId}'; resize refused until it completes."
+                : await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, currentPhysical, shardIndices) is { } fenced
+                    ? $"A snapshot bootstrap is draining into tree '{TreeId}' (shard {fenced} is read-fenced); resize refused until the bootstrap completes."
+                    : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fail closed, restoring the state this call replaced: a resize that
+            // cannot establish the shards are free of migrations and bootstrap
+            // fences must not start.
+            refusal = $"Could not establish that no shard migration or snapshot bootstrap is in progress on tree '{TreeId}' ({ex.GetType().Name}); resize refused.";
+        }
+
+        if (refusal is not null)
         {
             state.State.InProgress = prevInProgress;
             state.State.Phase = prevPhase;
@@ -441,8 +462,7 @@ internal sealed class TreeResizeGrain(
             // Restoring a completed predecessor keeps it undoable for the rest of
             // its soft-delete window.
             await WriteResizeStateAsync();
-            throw new InvalidOperationException(
-                $"A shard split or consolidation is in progress on shard {migrating} of tree '{TreeId}'; resize refused until it completes.");
+            throw new InvalidOperationException(refusal);
         }
 
         // Initiate the online snapshot from current physical tree to new tree.
@@ -584,6 +604,21 @@ internal sealed class TreeResizeGrain(
         return operationId;
     }
 
+    /// <summary>
+    /// The first shard of the copy the tree currently routes to whose receiver
+    /// snapshot bootstrap read fence is armed (issue #4526), or
+    /// <see langword="null"/> when none is.
+    /// </summary>
+    private async Task<int?> FindBootstrapFencedShardAsync()
+    {
+        var registry = grainFactory.GetLatticeRegistry();
+        var physical = await registry.ResolveAsync(TreeId);
+        var entry = await registry.GetEntryAsync(TreeId);
+        var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
+        var shardIndices = RoutedShardIndices.Resolve(shardCount, entry?.ShardMap);
+        return await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, physical, shardIndices);
+    }
+
     /// <inheritdoc />
     public Task<ResizeUndoProgress> GetUndoProgressAsync()
     {
@@ -686,6 +721,30 @@ internal sealed class TreeResizeGrain(
         _undoRunning++;
         try
         {
+            // A receiver snapshot bootstrap draining into the copy the tree routes
+            // to has fenced its reads (issue #4526). An undo would route readers
+            // back to the previous copy, which the fence does not cover, while the
+            // drain's remaining entries land there too. The running-undo marker is
+            // published above before the fence is read, so a bootstrap that arms
+            // after this read sees the undo and waits; one that armed before it is
+            // seen here. Fails closed: a fence that cannot be read refuses the undo.
+            // Raised as InvalidOperationException, which a requested undo's phase
+            // loop treats as unrecoverable and withdraws with this reason.
+            int? fenced;
+            try
+            {
+                fenced = await FindBootstrapFencedShardAsync();
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Could not establish whether a snapshot bootstrap is draining into tree '{TreeId}'; the resize cannot be undone until it can.", ex);
+            }
+
+            if (fenced is { } shard)
+                throw new InvalidOperationException(
+                    $"A snapshot bootstrap is draining into tree '{TreeId}' (shard {shard} is read-fenced); the resize cannot be undone until the bootstrap completes.");
+
             await ReserveAliasAsync();
             try
             {
@@ -1551,6 +1610,39 @@ internal sealed class TreeResizeGrain(
     // resize state, so the persisted state alone cannot show it is under way.
     private int _undoRunning;
 
+    /// <summary>
+    /// Whether a resize is in flight, an undo is pending or running, or the
+    /// running turn holds resize state it has not yet persisted - every state in
+    /// which <see cref="HoldsShardMigrationsAsync"/> and
+    /// <see cref="HoldsShardSplitsAsync"/> hold without probing anything. A
+    /// resize turn sets the in-memory state before it persists it, so a turn
+    /// that has started, completed or begun to unwind a resize shows as a
+    /// difference between the two until it has settled.
+    /// </summary>
+    private bool ResizeUnsettled()
+    {
+        var durable = DurableResizeState;
+        var live = state.State;
+        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
+        {
+            return true;
+        }
+
+        return durable.Complete != live.Complete
+            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
+            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
+            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Interleaving is safe for the reason given on
+    /// <see cref="HoldsShardMigrationsAsync"/>: only a resize whose persisted and
+    /// in-memory state agree, with no undo pending or running, is answered
+    /// <see langword="false"/>.
+    /// </remarks>
+    public Task<bool> HoldsShardSplitsAsync() => Task.FromResult(ResizeUnsettled());
+
     /// <inheritdoc />
     /// <remarks>
     /// Interleaving is safe because every answer that is not established from
@@ -1566,21 +1658,9 @@ internal sealed class TreeResizeGrain(
     /// </remarks>
     public async Task<bool> HoldsShardMigrationsAsync()
     {
+        if (ResizeUnsettled()) return true;
+
         var durable = DurableResizeState;
-        var live = state.State;
-        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
-        {
-            return true;
-        }
-
-        if (durable.Complete != live.Complete
-            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
-            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
-            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         if (!durable.Complete) return false;
 
         // A completed resize that names no copies never mirrored. Shadow-
