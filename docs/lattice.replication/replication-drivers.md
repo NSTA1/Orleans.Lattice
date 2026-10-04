@@ -356,6 +356,14 @@ operator alias change - the shipper must reset those cursors and re-ship from
 the new physical log start, or it would keep tailing the retired identity's
 WAL. An online reshard changes the tree's shard map, not its alias, so it
 does not trigger a rebind.
+A resize of a replicated tree cannot be undone after its alias swap
+([#4518](https://github.com/NSTA1/Orleans.Lattice/issues/4518)): writes the
+resized copy took may already have shipped, and last-writer-wins shipping
+never retracts them, so the rebind back to the old copy would leave them on
+the peer while this cluster discards them. An undo before the swap rebinds
+nothing, because the shipper never left the old copy. To return a replicated tree to its old
+shape, resize it again, back to its previous sizing: unlike an undo, a
+resize discards no write, so the clusters stay in agreement.
 
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the

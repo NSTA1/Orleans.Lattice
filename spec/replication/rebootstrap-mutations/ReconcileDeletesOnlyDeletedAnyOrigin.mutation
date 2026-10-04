@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted. Only origin = source proves s held the
+# value. A receiver-local write still on its way to s is absent from the export
+# because s has not received it, and reconciling it fabricates a delete.
+MODULE: ReconcileDeletesOnlyDeletedAnyOrigin
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the receiver pre-captures entries of any origin, so a write the source never held is reconciled as deleted
+PERTURBS: BeginExport
+
+--- FIND
+              precap |-> IF Eligible(reg[r]) THEN reg[r] ELSE Absent,
+--- REPLACE
+\* MUTATION: any live entry is pre-captured.
+              precap |-> IF reg[r].present /\ ~reg[r].del THEN reg[r] ELSE Absent,
+--- END

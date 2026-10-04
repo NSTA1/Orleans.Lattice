@@ -99,12 +99,13 @@ public readonly record struct SnapshotEntry
     [Id(3)] public bool IsPrepared { get; init; }
 
     /// <summary>
-    /// <see langword="true"/> when the prepared mutation is a delete
-    /// rather than a set; only meaningful when
-    /// <see cref="IsPrepared"/> is <see langword="true"/>. Committed
-    /// projection rows always carry the live value and never the
-    /// tombstone slot; the snapshot enumerator skips tombstoned keys
-    /// on the committed-projection path.
+    /// <see langword="true"/> when the entry is a delete rather than a set.
+    /// On a prepared row it marks a prepared delete. On a committed row it
+    /// marks a delete the source committed: the default exporter emits one
+    /// only for a saga it resolves from the recorded verdict behind an
+    /// aged-out decision (#4481), and the bootstrap drain applies it as a
+    /// delete so a re-bootstrap over an existing receiver copy removes the
+    /// key.
     /// </summary>
     [Id(4)] public bool IsTombstone { get; init; }
 
@@ -184,6 +185,24 @@ public readonly record struct SnapshotEntry
     [Id(11)] public Orleans.Lattice.LatticeMergeMode Mode { get; init; }
 
     /// <summary>
+    /// Set on a <b>decision row</b>: a row that carries no key or value and
+    /// records that the snapshot settled the saga <see cref="TransactionId"/>:
+    /// <see langword="true"/> for a commit, <see langword="false"/> for an
+    /// abort. The
+    /// bootstrap drain records the outcome in the receiver's transaction
+    /// registry, so a saga record the source's write-ahead log still retains
+    /// from before the cut, re-shipped by the incremental stream after the
+    /// bootstrap, is settled against it instead of being staged in a pending
+    /// bucket no terminal will ever drain (#4482). <see langword="null"/> on
+    /// every other row. A receiver that predates this slot sees a row with no
+    /// value that is neither prepared nor a tombstone, which its drain skips.
+    /// </summary>
+    [Id(12)] public bool? SettledDecision { get; init; }
+
+    /// <summary>Whether this entry is a decision row (see <see cref="SettledDecision"/>).</summary>
+    public bool IsDecision => SettledDecision is not null;
+
+    /// <summary>
     /// Compares two entries by value, with <see cref="Value"/> and
     /// <see cref="Delta"/> compared by content. The compiler-generated
     /// record-struct equality compares each <see cref="byte"/> array with
@@ -205,7 +224,8 @@ public readonly record struct SnapshotEntry
         && AtomicBatchIndex == other.AtomicBatchIndex
         && ExpiresAtTicks == other.ExpiresAtTicks
         && ByteArrayEquality.ContentEquals(Delta, other.Delta)
-        && Mode == other.Mode;
+        && Mode == other.Mode
+        && SettledDecision == other.SettledDecision;
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -231,6 +251,7 @@ public readonly record struct SnapshotEntry
         }
 
         hash.Add(Mode);
+        hash.Add(SettledDecision);
         return hash.ToHashCode();
     }
 }

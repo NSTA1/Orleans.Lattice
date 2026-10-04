@@ -312,15 +312,16 @@ the reshard chaos suite cover them at the implementation level:
   the snapshot carries it as `Indeterminate` rather than omitting it, so a
   reader resolving through a snapshot hides the saga's keys instead of being
   told the saga has not decided.
-  **Cross-cluster atomic visibility has no formal artefact at either layer.**
-  Neither this specification nor any Coyote model covers a saga replicated to a
-  peer: the receiver's per-source-shard terminal tally
+  **Cross-cluster atomic visibility is specified by a separate module,**
+  [`AtomicCommitCrossCluster.tla`](AtomicCommitCrossCluster.tla), mapped in
+  [`RefinementCrossCluster.md`](RefinementCrossCluster.md): the receiver's
+  per-source-shard terminal tally
   (`ITxRegistryGrain.RecordTerminalArrivalAsync`, driven from
-  `IReplicationApplyGrain.ApplyTxTerminalAsync`), its dial-back to the origin's
-  decision, or the cross-tree receiver barrier. Every property row above is a
-  claim about one cluster, and none of them should be read as covering the
-  replicated half (issue #2324). That half is covered by integration and chaos
-  tests in `test/lattice.replication/`, not by an exhaustive check.
+  `IReplicationApplyGrain.ApplyTxTerminalAsync`), its dial-back to the cross-tree
+  receiver barrier, and the barrier itself. It instances this module for the
+  origin. Every property row above is still a claim about one cluster, and none
+  of them should be read as covering the replicated half (issue #2324); the
+  cross-cluster module's properties are the claims about it.
 - **Crash / recovery.** Not modelled. `DecideTx` fires at most once per saga
   and `BroadcastStep` at most once per written key, because each leaves the
   phase or terminal its own guard requires, so the model has no re-entry at

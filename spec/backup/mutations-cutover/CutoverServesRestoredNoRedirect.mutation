@@ -1,0 +1,15 @@
+# Pairs with CutoverServesRestored. The restore returns without arming the
+# previous copy's redirect, so a routing activation that cached the pre-cutover
+# alias serves pre-restore data for as long as it never refreshes.
+MODULE: CutoverServesRestoredNoRedirect
+TARGET: CutoverServesRestored
+CLASS: Invariant
+SUMMARY: the cutover arms no redirect on the previous copy
+PERTURBS: ArmRedirect
+
+--- FIND
+    /\ redir' = [redir EXCEPT !["prev"] = "shadow"]
+--- REPLACE
+    \* MUTATION: no redirect.
+    /\ UNCHANGED redir
+--- END

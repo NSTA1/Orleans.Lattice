@@ -93,6 +93,29 @@ public sealed class ShadowCutoverShardMapIntegrationTests
             "the reshard of an aliased tree routes its physical tree by the logical map, so every shard of that map must be armed");
     }
 
+    [Test]
+    public async Task RevertRestoreAsync_arms_every_shard_of_the_restored_copy_to_redirect_back()
+    {
+        var target = await RegisterAndGrowAsync($"revert-arm-{Guid.NewGuid():N}");
+        var backupId = await WriteAndCaptureAsync(target, keyCount: 4);
+
+        var restore = await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(
+            backupId, target, scope: null, mode: LatticeRestoreMode.ShadowCutover));
+        await _fixture.Restore.RevertRestoreAsync(restore);
+
+        RoutingInfo shadowRouting;
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            shadowRouting = await _fixture.GrainFactory.GetGrain<ILattice>(restore.ShadowPhysicalTreeId!)
+                .GetRoutingAsync(forceRefresh: true);
+        }
+
+        Assert.That(
+            await UnarmedShardsAsync(restore.ShadowPhysicalTreeId!, shadowRouting.Map.GetPhysicalShardIndices(), logicalTreeId: target),
+            Is.Empty,
+            "after a revert, a routing activation still holding the restored copy must be redirected back, not served the restored snapshot");
+    }
+
     private async Task<string> RegisterAndGrowAsync(string treeId)
     {
         await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = InitialShards });

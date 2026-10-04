@@ -63,7 +63,8 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown if no resize exists to undo, if the persisted resize state is
-    /// incomplete, or if the old tree has already been purged.
+    /// incomplete, if the old tree has already been purged, or if the tree is
+    /// replicated and its alias has already swapped onto the resized copy.
     /// </exception>
     Task UndoResizeAsync();
 

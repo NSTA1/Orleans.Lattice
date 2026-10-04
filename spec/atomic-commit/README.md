@@ -15,6 +15,13 @@ It is one of the modules indexed in [`spec/README.md`](../README.md). The layout
 module follows, how to run TLC, and why TLC runs in CI are described there;
 this README covers only what is particular to the atomic-commit module.
 
+The directory holds a second module, `AtomicCommitCrossCluster`, which instances
+this one for the origin cluster and specifies the replicated half: what a peer
+cluster receiving the saga does to keep it all-or-nothing visible. It is
+described under [The cross-cluster module](#the-cross-cluster-module). Every
+property `AtomicCommit` checks is a claim about one cluster; none of them covers
+the receiver, and the cross-cluster module's properties cover nothing else.
+
 ## Files
 
 | File | What it is |
@@ -24,6 +31,11 @@ this README covers only what is particular to the atomic-commit module.
 | [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
 | [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json) | The module manifest: where the mutations and refinement note live, which actions are non-behavioural, and the counts the gates assert (see [Counts](#counts)). |
+| [`AtomicCommitCrossCluster.tla`](AtomicCommitCrossCluster.tla) | The cross-cluster module: the origin saga (this module, instanced) replicated to a receiver. |
+| [`AtomicCommitCrossCluster.cfg`](AtomicCommitCrossCluster.cfg) | Its TLC model. |
+| [`mutations-cross-cluster/`](mutations-cross-cluster/) | Its mutation catalogue. See [`mutations-cross-cluster/README.md`](mutations-cross-cluster/README.md). |
+| [`RefinementCrossCluster.md`](RefinementCrossCluster.md) | Its refinement note, mapping it to the replication apply seam, the receiver registry and the cross-tree receiver barrier. |
+| [`AtomicCommitCrossCluster.manifest.json`](AtomicCommitCrossCluster.manifest.json) | Its manifest. |
 | `README.md` | This file. |
 
 ## What is modelled
@@ -265,6 +277,44 @@ states at depth 21 (134,633 generated), clean, with deadlock checking on. The cu
 `TlcModelCheckTests.The_base_specification_holds`, against the tla2tools v1.7.4
 release the workflows pin (see [CI decision](../README.md#ci-decision)).
 
+## The cross-cluster module
+
+`AtomicCommitCrossCluster` (issue #4436, epic #4430) instances `AtomicCommit`
+for the origin and drives its saga `t1`, over `k1` and `k2`, unchanged. What it
+adds starts at the origin's WAL: every prepare and every per-source-shard
+terminal becomes a replication record, delivered to a receiver by a transport
+that may reorder, lose a delivery (the record is shipped again) and lose an ack
+(the record is delivered again). The receiver stages prepares, tallies terminals
+per source shard (including the legacy path for a terminal with no count),
+hands a cross-tree saga to the receiver barrier through a delegation its
+registry can fail to dial, fans terminals out to its leaves, and may instead join
+through a snapshot bootstrap. Each behaviour fixes one shape: a single-tree saga
+over two source shards, or a cross-tree saga over two trees.
+
+Its properties are all claims about the receiver: `RAllOrNothing`,
+`RStrictIsolation`, `RLinearizedTerminals` and `DelegationsDisjoint` as
+invariants, and `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
+`RNoStrandedPrepare` as temporal properties under a fair transport. The base
+holds with deadlock checking on; the state graph's depth is 18.
+
+The module models the protocol's intended design, and three places where
+production departs from it were filed as defects when the module was written,
+each kept as a standing mutation in
+[`RefinementCrossCluster.md`](RefinementCrossCluster.md): a terminal that
+overtakes its shard's prepare (#4480, now fixed by the shipper's terminal hold,
+whose detectors the note cites), a bootstrap over a stranded origin prepare
+(#4481), and pre-cut saga records re-shipped after a bootstrap (#4482); the
+last two remain gap rows. A fourth, filed later, is the residual of #4482's
+intended txid dedupe: a re-shipped prepare whose saga's decision the origin
+has already purged (#4508).
+The snapshot read paths' handling of an undiallable delegation (#4448) is
+reproduced on the receiver the same way.
+
+The extracted cores it maps to are `TerminalArrivalTally` (now including the
+ungated test) and `CrossTreeReceiverBarrier`, both executed by the production
+grains and by the Coyote models `CrossClusterReceiverTallyModel` and
+`CrossTreeReceiverBarrierModel`.
+
 ## Counts
 
 The module's current totals. `SpecModuleDiscoveryTests` checks this table
@@ -277,3 +327,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 22 | 20 | 8,727 |
