@@ -969,7 +969,7 @@ reported under that fix's own assertion tag, not merely some violation.
 |----------------|-------------------------|---------|------------------------------|------------|------------------|
 | `AckedWriteDurable` | An acknowledged write is recoverable by its owner from its durable snapshot and the readable WAL. | All five | `WalDurabilityLifecycleModel` `[AckedWriteDurable]` after every step. | None of its own: every guard arm that loses a write is caught earlier by a more specific tag. | Net-new. |
 | `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
-| `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violate it (#4450, #4467) live in grain glue the model replaces with the intended design. | Net-new. |
+| `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the open defect that violates it (#4467) lives in grain glue the model replaces with the intended design; #4450 was fixed by #4470. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
 | `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its known defect (#4456) needs a shard crash, which the lifecycle model leaves out until #4456 is fixed. | Net-new. |
@@ -993,9 +993,10 @@ table says so rather than borrowing one:
 
 `SnapshotCoverageMonotonic` and `StreamEventuallyComplete` are not encoded in
 Coyote at all. The TLA+ catalogue pairs every one of them with a firing mutation.
-Four open defects (#4450, #4451, #4456, #4467) are standing mutations in
-`spec/wal/` and gap rows in `spec/wal/Refinement.md`. Until each fix lands, the
-property it violates holds of the intended design, not of production.
+Open defects (#4451, #4456, #4467) are standing mutations in `spec/wal/` and gap
+rows in `spec/wal/Refinement.md`; until each fix lands, the property it violates
+holds of the intended design, not of production. #4450 was fixed by #4470, and its
+mutation is now an ordinary regression check.
 
 ## Browser UI tier
 

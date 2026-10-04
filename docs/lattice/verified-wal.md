@@ -43,6 +43,7 @@ directly is the public `InMemoryWalCursorRegistry`.
 | `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. |
 | `WalAdmissionGateCore.IsDispatchRefused` | Whether the commit-log writer refuses a new dispatch because it is draining for shutdown - the pre-admission gate paired with a drain that must release every parked caller. |
 | `WalOffsetAllocationCore.Assign` | The per-shard log-offset handed to an append and the single-step advance of the offset counter - the read-and-advance that must be atomic so two concurrent appends never share an offset and the sequence stays dense. |
+| `WalOffsetAllocationCore.RecoveredNextOffset` | The offset a recovering shard activation resumes from: one past the highest stored offset, so a recovered allocator never reissues an acknowledged offset. Activation, the post-failure resync and the test seam all recover through it. |
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
 | `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
@@ -151,12 +152,12 @@ kept as a standing mutation until it is fixed:
 
 | Issue | Defect |
 |-------|--------|
-| #4450 | A snapshot that fails to load falls through to a cold replay of a trimmed WAL. |
+| #4450 | A snapshot that fails to load falls through to a cold replay of a trimmed WAL. Fixed: the replay now fails closed. |
 | #4451 | A capture during a cold rebuild claims more coverage than its rows hold. |
 | #4456 | A never-written leaf releases its block pin above its snapshot's coverage. |
 | #4467 | A faulted cold rebuild re-arms warm over a partial projection. |
 
-Until those fixes land, the properties they violate hold of the intended design the
+Until each open fix lands, the property it violates holds of the intended design the
 specification describes, not of the code that runs.
 
 **What is covered:** one WAL partition shared by two leaves, one fault per

@@ -1,8 +1,9 @@
-# Pairs with ReadPositionHonest, and reproduces production's snapshot-load
-# failure path (issue #4450). TryRehydrateFromSnapshotAsync answers an ordinary
+# Pairs with ReadPositionHonest, and reproduces the snapshot-load failure path
+# production had until issue #4450 was fixed (#4470, LeafReplayStartPolicy now
+# fails closed). TryRehydrateFromSnapshotAsync answered an ordinary
 # storage fault, a missing segment or an unreadable frame by returning false,
-# which the activation cannot tell from "no snapshot": it takes the -1 cold
-# override and replays the whole READABLE WAL, guarded only by the cold-replay
+# which the activation could not tell from "no snapshot": it took the -1 cold
+# override and replayed the whole READABLE WAL, guarded only by the cold-replay
 # trim test against the persisted checkpoint. Under coverage-gated trim the
 # readable WAL no longer holds the prefix the snapshot covered, and a tail at
 # exactly persisted + 1 passes that test, so the leaf comes up having read past

@@ -467,7 +467,7 @@ Activate(l) ==
 (* the WAL's tail reads at the moment of the failure: nothing changes, and *)
 (* the step is a stutter. It costs no fault budget because it changes no   *)
 (* state; Activate's weak fairness still forces the retry to succeed.      *)
-(* THIS IS THE INTENDED DESIGN (#4450); production cold-replays instead.   *)
+(* Production matches it since #4450 was fixed (LeafReplayStartPolicy).    *)
 (***************************************************************************)
 ActivateLoadFail(l) ==
     /\ ~up[l]
