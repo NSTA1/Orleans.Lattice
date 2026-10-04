@@ -788,5 +788,16 @@ internal static class TypeAliases
 
     // Grain-storage fencing probe
     internal const string GrainStorageFencingProbeState = "ol.gfp";
+
+    // Offset-reading WAL consumers (issue #4579)
+
+    /// <summary>Alias for the offset-reading WAL consumer grain interface.</summary>
+    internal const string IWalOffsetConsumer = "ol.wci";
+
+    /// <summary>Alias for the per-tree offset-reading WAL consumer registry grain interface.</summary>
+    internal const string IWalOffsetConsumerRegistryGrain = "ol.wcg";
+
+    /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
+    internal const string WalOffsetConsumerRegistryState = "ol.wcs";
 }
 

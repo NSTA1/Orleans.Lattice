@@ -734,6 +734,39 @@ recovered registry. Operators monitoring the WAL GC trim frontier
 should expect this lag to clear on the next post-outage ack rather
 than immediately when the registry recovers.
 
+### Per-partition read positions hold the WAL (issue #4579)
+
+The HLC cursor alone does not protect what the shipper has not read. It is
+the HLC of the last entry shipped in merge order, and a WAL partition is not
+HLC-ordered in offset: a silo whose clock trails, a range delete's start
+stamp, or a merge that keeps its source stamp can put an entry the shipper
+has not read at an HLC at or below the cursor it has already reported. Once
+the owning leaf checkpoints past such an entry, nothing else holds it, so a
+GC pass could trim it unshipped.
+
+The shipper is therefore also an offset-reading WAL consumer:
+
+- Before its first read of a physical log it registers with that log's
+  durable consumer set, so a GC pass on any silo, and after a restart, asks
+  it where it is.
+- It answers with its durable `PartitionCursors`, which a held saga terminal
+  already caps. A position is raised only after the write that made it
+  durable. It is lowered before the next read when the in-memory cursors drop
+  (an alias rebind, a rewind).
+- A registered shipper that has acknowledged nothing answers 0 for every
+  partition, so it holds the whole log instead of racing the GC.
+- On an alias rebind it registers with the new physical log first and only
+  then withdraws from the old one. It answers nothing for a log it no longer
+  reads.
+
+The GC refuses every entry at or above the lowest position any registered
+consumer reports for that partition, however the HLC clauses read. Only the
+`WalRetention` TTL ceiling trims past it, and the shipper then sees the gap
+on its next read. A stalled or removed peer's shipper therefore holds the WAL
+at its last durable position until the TTL ceiling applies. A peer whose
+shipper has never activated is not yet a consumer; it starts from a snapshot
+bootstrap.
+
 ### Graceful deactivation
 
 `OnDeactivateCoreAsync` flushes any pending cursor advance before the
