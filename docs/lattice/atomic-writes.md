@@ -592,6 +592,16 @@ on a multi-key read, when a leaf has no tree id bound yet and so has no
 registry to consult; a single-key read on such a leaf instead resolves
 the saga as in flight and serves the pre-saga value.
 
+The one exception is a leaf that has already applied the saga's
+terminal. Its row already holds what the saga left there, so a
+prepared bucket that survives beside it - an orphan a replayed
+shadow-forward re-installed - can never change the key, and every read
+path serves the row whatever the registry reports, `Indeterminate`
+included. Hiding the key there would keep a committed, materialised
+value unreadable for as long as the row stays masked, and nothing
+guarantees the lazy purge that ends the mask ever runs on an idle
+registry shard (issue #4428).
+
 Snapshots carry the masked row explicitly rather than dropping it, so
 absence from a snapshot means only "no decision recorded". That
 matters most for the cross-cluster bootstrap export built from that
