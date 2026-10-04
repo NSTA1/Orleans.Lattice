@@ -9,6 +9,7 @@
     "Orleans.Lattice.Replication.Grpc"
   ],
   "sources": [
+    "docs/lattice.replication/dead-letter-queue.md",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus",
     "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApiGrpc",
@@ -37,11 +38,13 @@
     "src/lattice.replication/DefaultShardCountProvider.cs#GetShardRootKeysAsync",
     "src/lattice.replication/ILatticeReplicationAdmin.cs#ILatticeReplicationAdmin",
     "src/lattice.replication/ILatticeReplicationConfigAuthority.cs#ILatticeReplicationConfigAuthority",
+    "src/lattice.replication/ILatticeReplicationDeadLetters.cs",
     "src/lattice.replication/ILatticeSagaControlHandler.cs#ILatticeSagaControlHandler",
     "src/lattice.replication/IRemoteSnapshotTransport.cs#IRemoteSnapshotTransport",
     "src/lattice.replication/ISagaControlChannel.cs#ISagaControlChannel",
     "src/lattice.replication/IShardCountProvider.cs#GetShardRootKeysAsync",
     "src/lattice.replication/LatticeRemoteSnapshotService.cs#LatticeRemoteSnapshotService",
+    "src/lattice.replication/LatticeReplicationDeadLetters.cs",
     "src/lattice.replication/LatticeReplicationLocalVcSeeder.cs#LatticeReplicationLocalVcSeeder",
     "src/lattice.replication/PeerStatus/IReplicationPeerStatusReader.cs#IReplicationPeerStatusReader",
     "src/lattice.replication/PeerStatus/ReplicationPeerStatusReadPath.cs#AddReplicationPeerStatusReadPath"
@@ -84,6 +87,84 @@
       "source": "src/lattice.api.replication.grpc/Security/LatticeReplicationApiGrpcAuthInterceptor.cs#LatticeReplicationApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeReplicationApi",
+        "package": "Orleans.Lattice.Api.Replication",
+        "provides": [
+          "ILatticeReplicationControl"
+        ],
+        "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationApi"
+      },
+      {
+        "registration": "AddLatticeReplicationStatusApi",
+        "package": "Orleans.Lattice.Api.Replication",
+        "provides": [
+          "ILatticeReplicationStatus"
+        ],
+        "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationStatusApi"
+      },
+      {
+        "registration": "AddLatticeReplication",
+        "package": "Orleans.Lattice.Replication",
+        "provides": [
+          "ILatticeReplicationAdmin",
+          "ILatticeReplicationDeadLetters"
+        ],
+        "source": "src/lattice.replication/LatticeReplicationServiceCollectionExtensions.cs#LatticeReplicationServiceCollectionExtensions.AddLatticeReplication"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeReplication",
+        "kind": "registration",
+        "arguments": "enableRuntimeConfig: true",
+        "reason": "The replication control facade needs the runtime config authority registered by AddLatticeReplication with enableRuntimeConfig true.",
+        "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationApi"
+      },
+      {
+        "name": "AddLatticeReplication",
+        "kind": "registration",
+        "reason": "The replication status facade reads replication status from the replication package and fails fast when AddLatticeReplication has not registered it.",
+        "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationStatusApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeReplicationApiGrpc",
+        "package": "Orleans.Lattice.Api.Replication.Grpc",
+        "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.cs#LatticeReplicationApiGrpcServiceCollectionExtensions.AddLatticeReplicationApiGrpc"
+      },
+      {
+        "registration": "MapLatticeReplicationApiGrpc",
+        "package": "Orleans.Lattice.Api.Replication.Grpc",
+        "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.cs#LatticeReplicationApiGrpcServiceCollectionExtensions.MapLatticeReplicationApiGrpc"
+      },
+      {
+        "registration": "AddLatticeReplicationStatusApiGrpc",
+        "package": "Orleans.Lattice.Api.Replication.Grpc",
+        "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#LatticeReplicationApiGrpcServiceCollectionExtensions.AddLatticeReplicationStatusApiGrpc"
+      },
+      {
+        "registration": "MapLatticeReplicationStatusApiGrpc",
+        "package": "Orleans.Lattice.Api.Replication.Grpc",
+        "source": "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#LatticeReplicationApiGrpcServiceCollectionExtensions.MapLatticeReplicationStatusApiGrpc"
+      },
+      {
+        "registration": "AddLatticeReplicationGrpc",
+        "package": "Orleans.Lattice.Replication.Grpc",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcServiceCollectionExtensions.cs#LatticeReplicationGrpcServiceCollectionExtensions.AddLatticeReplicationGrpc"
+      },
+      {
+        "registration": "MapLatticeReplicationGrpc",
+        "package": "Orleans.Lattice.Replication.Grpc",
+        "source": "src/lattice.replication.grpc/LatticeReplicationGrpcServiceCollectionExtensions.cs#LatticeReplicationGrpcServiceCollectionExtensions.MapLatticeReplicationGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AdvertisedCompressionDictionary": {
       "kind": "record struct",
@@ -100,6 +181,27 @@
         }
       ],
       "source": "src/lattice.replication/SharedDictionaryNegotiation.cs#AdvertisedCompressionDictionary"
+    },
+    "ApplyResult": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "Applied",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "HighWaterMark",
+          "type": "HybridLogicalClock",
+          "required": true
+        },
+        {
+          "name": "Deferred",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/ApplyResult.cs#ApplyResult"
     },
     "AuthSchemeAdvertisement": {
       "kind": "record",
@@ -247,6 +349,37 @@
         }
       ],
       "source": "src/lattice.replication/ContentManifestResponse.cs#ContentManifestResponse"
+    },
+    "DeadLetterEntry": {
+      "kind": "record struct",
+      "fields": [
+        {
+          "name": "EntryId",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Entry",
+          "type": "WalRecord",
+          "required": true
+        },
+        {
+          "name": "FailureReason",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "RetryCount",
+          "type": "int",
+          "required": true
+        },
+        {
+          "name": "EnqueuedAtTicks",
+          "type": "long",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.replication/DeadLetterEntry.cs#DeadLetterEntry"
     },
     "DigestProbeRequest": {
       "kind": "struct",
@@ -920,6 +1053,173 @@
     }
   },
   "operations": [
+    {
+      "id": "dead-letter-count",
+      "in_process": "ILatticeReplicationDeadLetters.CountAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, CancellationToken cancellationToken",
+      "response": {
+        "type": "int",
+        "meaning": "The number of entries currently parked for the tree."
+      },
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Pure read with no facade retry policy; retry on the caller.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#CountAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read; it changes no state.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#CountAsync"
+      },
+      "concurrency": {
+        "rule": "Calls for one tree are routed to that tree's single dead-letter grain activation, which processes them one at a time.",
+        "source": "src/lattice.replication/LatticeReplicationDeadLetters.cs#LatticeReplicationDeadLetters.Grain"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationDeadLetters.cs#CountAsync",
+        "src/lattice.replication/LatticeReplicationDeadLetters.cs#CountAsync",
+        "src/lattice.replication/Grains/ReplicationDeadLetterGrain.cs#CountAsync"
+      ]
+    },
+    {
+      "id": "dead-letter-discard",
+      "in_process": "ILatticeReplicationDeadLetters.DiscardAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, long entryId, CancellationToken cancellationToken",
+      "response": {
+        "type": "bool",
+        "meaning": "true when an entry was removed without being applied; false when no entry with that id existed."
+      },
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "A repeat discard of the same entry id returns false and changes nothing.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "The queue state converges on repeat, but only the first call returns true.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
+      },
+      "concurrency": {
+        "rule": "Calls for one tree are routed to that tree's single dead-letter grain activation, which processes them one at a time.",
+        "source": "src/lattice.replication/LatticeReplicationDeadLetters.cs#LatticeReplicationDeadLetters.Grain"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync",
+        "src/lattice.replication/LatticeReplicationDeadLetters.cs#DiscardAsync",
+        "src/lattice.replication/Grains/ReplicationDeadLetterGrain.cs#DiscardAsync",
+        "docs/lattice.replication/dead-letter-queue.md"
+      ]
+    },
+    {
+      "id": "dead-letter-list",
+      "in_process": "ILatticeReplicationDeadLetters.ListAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, CancellationToken cancellationToken",
+      "response": {
+        "type": "IReadOnlyList<DeadLetterEntry>",
+        "meaning": "Every parked entry for the tree in ascending EntryId order; empty when nothing is parked."
+      },
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Pure read with no facade retry policy; retry on the caller.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ListAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pure read; it changes no state.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ListAsync"
+      },
+      "concurrency": {
+        "rule": "Calls for one tree are routed to that tree's single dead-letter grain activation, which processes them one at a time.",
+        "source": "src/lattice.replication/LatticeReplicationDeadLetters.cs#LatticeReplicationDeadLetters.Grain"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ListAsync",
+        "src/lattice.replication/LatticeReplicationDeadLetters.cs#ListAsync",
+        "src/lattice.replication/Grains/ReplicationDeadLetterGrain.cs#ListAsync",
+        "docs/lattice.replication/dead-letter-queue.md"
+      ]
+    },
+    {
+      "id": "dead-letter-replay",
+      "in_process": "ILatticeReplicationDeadLetters.ReplayAsync",
+      "grpc_method": null,
+      "transport_scope": "in_process_only",
+      "request": "string treeId, long entryId, CancellationToken cancellationToken",
+      "response": {
+        "type": "ApplyResult?",
+        "meaning": "null when no entry with that id exists. Otherwise the applier's result: the entry is removed unless Deferred is true, in which case a restore saga's receive fence held it back and it stays parked."
+      },
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "treeId is null or empty."
+        },
+        {
+          "error_id": "internal",
+          "condition": "The applier throws; the entry stays parked."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "The cancellation token is canceled."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "A replay that throws or is deferred leaves the entry parked and can be replayed again; after a successful replay a repeat returns null.",
+        "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
+      },
+      "idempotency": {
+        "idempotent": "conditional",
+        "basis": "A successful replay removes the entry, so a repeat returns null instead of applying it again.",
+        "source": "src/lattice.replication/LatticeReplicationDeadLetters.cs#ReplayAsync"
+      },
+      "concurrency": {
+        "rule": "ReplayAsync reads the entry, applies it and then removes it in separate grain calls, so a concurrent DiscardAsync of the same entry can remove it after it was read while the replay still applies it.",
+        "source": "src/lattice.replication/LatticeReplicationDeadLetters.cs#ReplayAsync"
+      },
+      "sources": [
+        "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync",
+        "src/lattice.replication/LatticeReplicationDeadLetters.cs#ReplayAsync",
+        "src/lattice.replication/Grains/ReplicationDeadLetterGrain.cs#RemoveReplayedAsync",
+        "docs/lattice.replication/dead-letter-queue.md"
+      ]
+    },
     {
       "id": "disable-replication",
       "in_process": "ILatticeReplicationControl.DisableReplicationAsync",

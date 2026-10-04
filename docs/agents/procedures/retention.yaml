@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_retention_get and lattice_treeadmin_retention_set"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_retention_get, lattice_treeadmin_retention_set), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
   - id: not-system-data-tree
     check: "First-party sys data trees are not targeted for set."
     source: "docs/lattice.api.treeadmin/README.md"
@@ -55,6 +58,10 @@ failure_modes:
     signal: "A non-null mode outside TreeHistoryRetentionMode is rejected before tree resolution or authorization."
     effect: "No policy change is applied."
     response: "Pass null to clear the override, or pass a defined retention mode."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
   mechanism: "Set the previous mode and window captured before the change; already-written rows keep their stamped shape."
