@@ -48,6 +48,7 @@ in kebab-case. A module directory holds:
 |------|-----------|
 | `<Module>.tla` | The specification. Its header must read `---- MODULE <Module> ----`. |
 | `<Module>.cfg` | The TLC model: the bounded instance and the invariant / property list. It must check `TypeOK`, which every generated mutation cfg carries alongside its target. |
+| `<Module>.<Variant>.cfg` | Optional: a variant configuration, the same specification checked under a different bound (see "Variant configurations" below). |
 | `<Module>.manifest.json` | The manifest (below). |
 | a mutation directory | One `.mutation` file per experiment, named by the manifest (conventionally `mutations/`). The file format is described in [`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md#file-format). |
 | a refinement note | The mapping from spec to code, named by the manifest (conventionally `Refinement.md`), with `## Variable mapping`, `## Action mapping` and `## Property mapping` tables and an optional `## Excluded properties` table. [`atomic-commit/Refinement.md`](atomic-commit/Refinement.md) is the worked example. |
@@ -58,8 +59,11 @@ directory under `spec/` holds no `.tla`; when a `.tla` has no `.cfg` or no
 manifest, or a `.cfg` or manifest has no `.tla`; when a module directory has no
 `README.md`; when a manifest is malformed or names a mutation directory or note
 that does not exist; when a module header does not match its file name; when a
-`.tla` sits directly in `spec/`; or when two directories declare the same module
-name. It also fails when it finds no module at all.
+`.tla` sits directly in `spec/`; when two directories declare the same module
+name; or when a variant configuration and the manifest disagree (a variant cfg
+the manifest does not declare, a declared variant with no cfg, a variant cfg of
+no module, or a malformed variant name). It also fails when it finds no module at
+all.
 
 One module per directory is the norm. A directory may hold a second module (for
 example one that `EXTENDS` the first); each `.tla` is then its own module with
@@ -100,6 +104,7 @@ nothing is ever defaulted:
 | `counts.mutations` | `.mutation` files in the mutation directory. | `SpecMutationCatalogueTests`. |
 | `counts.behaviourRows` | Action and property rows of the note that assert a production behaviour. | `RefinementDetectorMappingTests`. |
 | `counts.distinctStates` | Distinct states TLC finds for the base model. | `TlcModelCheckTests`. |
+| `variants` | Optional, and the only optional key: `{ "<Variant>": { "distinctStates": N } }`, one entry per variant configuration, with the distinct states TLC finds under it. Omitted when the module has none; its absence is cross-checked against the disk, so it is never a silent default. | Discovery, `TlcModelCheckTests`. |
 
 Every count is an equality, not a floor. The gates that compare two derived sets
 (properties against mutation targets, actions against note rows) stay green when
@@ -121,6 +126,42 @@ these columns, one row per module in the directory:
 module README states its current totals; prose elsewhere should cite it rather
 than repeat a number nothing checks.
 
+### Variant configurations
+
+A variant configuration, `<Module>.<Variant>.cfg`, checks the module's unchanged
+specification under a different bound. It exists for a bound whose full check is
+too slow for the TLC budget: the module's own cfg keeps every property at the
+smaller bound, and the variant re-checks the properties that stay affordable -
+typically the invariants and action properties, since liveness is what grows -
+at the larger one. `spec/wal/WalDurability.TwoFaults.cfg` is the worked example:
+`WalDurability.cfg` checks everything with one fault, and the variant checks every
+invariant and both action properties with two, which is what reaches #4523.
+
+The variant changes the bound in its `CONSTANTS` block. TLC accepts both a value
+for a defined operator (`MaxFaults = 2`, where the module says `MaxFaults == 1`)
+and a definition override (`MaxFaults <- TwoFaults`), so a module need not turn
+its bound into a declared `CONSTANT` to have a variant. The variant name is a
+letter followed by letters or digits, and the manifest records it under
+`variants` with its state count.
+
+TLC ACCEPTS a value assignment to a name the specification does not have
+(`MaxFalts = 2`) and silently checks the unchanged model, so a misspelt bound
+would pass as a second, larger check while re-checking the base. Two gates refuse
+it, from opposite sides:
+
+- `SpecMutationCatalogueTests` requires every name a variant assigns or overrides
+  to be declared or defined by the specification, the variant to change at least
+  one assignment the base cfg makes, and `TypeOK` to be checked. No toolchain.
+- `TlcModelCheckTests.Each_variant_configuration_holds` runs the variant and
+  requires it to hold over exactly the recorded state count, and that count to
+  DIFFER from the base cfg's, which is the evidence the override took effect.
+
+A mutation that needs the larger bound to fire raises it in its own text edit
+(`MaxFaults == 1` to `MaxFaults == 2`); generated mutation cfgs are built from the
+module's own cfg, not from a variant. Classify the properties a variant leaves at
+the smaller bound as bounded-out in the refinement note (issue #2321), with the
+budget as the reason.
+
 ## The gates
 
 Every gate in `test/lattice/Formal/` that takes a module runs once per
@@ -128,12 +169,14 @@ discovered module, and each test case is named with the module
 (`Each_property_fires_under_its_mutation_and_not_on_the_base(AtomicCommit,TerminationNoFairness)`):
 
 - `TlcModelCheckTests` (category `Tlc`): the base model holds with the
-  manifest's state count, and each mutation runs as a two-arm (or, with
-  `DEADLOCK: off`, three-arm) experiment.
+  manifest's state count, each variant configuration holds with its own count,
+  and each mutation runs as a two-arm (or, with `DEADLOCK: off`, three-arm)
+  experiment.
 - `SpecMutationCatalogueTests`: every checked property is paired, the counts
   match, `TypeOK` is checked, temporal properties sit under `PROPERTIES`, every
-  mutation applies to the current base and changes something, and every
-  generated cfg names its target once.
+  mutation applies to the current base and changes something, every generated
+  cfg names its target once, and every variant assigns only names the
+  specification has.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -252,8 +295,12 @@ broken pipeline rather than a missing convenience.
 TLC time is dominated by how many TLC processes run, not by state-space size:
 the atomic-commit base model finishes in about six seconds on an idle machine,
 and most of each run is JVM start-up. A module costs one run for its base model,
-two per mutation (the control arm and the mutant) and one more per
-`DEADLOCK: off` mutation, so the atomic-commit module costs 43 runs.
+two per mutation (the control arm and the mutant), one more per
+`DEADLOCK: off` mutation and one per variant configuration, so the atomic-commit
+module costs 43 runs. A variant's run is usually the most expensive one of its
+module - it exists to check a larger bound - so measure it on two workers and keep
+it well under the per-run ceiling: `WalDurability.TwoFaults` takes about forty
+seconds there.
 
 Measured on a 16-core Windows workstation that other builds were loading at the
 time (so treat the figures as an upper bound), for the atomic-commit module's

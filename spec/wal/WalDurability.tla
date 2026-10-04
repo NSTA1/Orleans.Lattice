@@ -352,15 +352,21 @@ CaptureFail(l) ==
 (* drive and the deactivation barrier) release its block once it has       *)
 (* scanned through a persisted checkpoint holding no row (#3453), so a     *)
 (* leaf that owns nothing cannot hold its seeded block pin forever. The    *)
-(* release is bounded by the snapshot coverage the leaf has recorded, when *)
-(* it holds one: a recovery from that snapshot restarts from its coverage, *)
-(* not from the persisted checkpoint.                                      *)
-(* Production matches it since #4456 was fixed (LeafDurablePinCore).       *)
+(* release is bounded by the snapshot coverage the leaf holds, and with no *)
+(* snapshot it does not fire at all: the block stands until a capture -    *)
+(* which a checkpointed never-written leaf always reaches - records        *)
+(* coverage. A release with nothing durable behind it cannot be lowered,   *)
+(* and a later cold-rebuild capture can land below it; the GC then trims   *)
+(* past that snapshot and the leaf latches stale on its next activation    *)
+(* (#4523). Bounded this way, every published offset is at or below the    *)
+(* leaf's durable coverage, which only grows (ReleaseBackedBySnapshot).    *)
+(* THIS IS THE INTENDED DESIGN (#4523); production releases the persisted  *)
+(* checkpoint when the leaf holds no snapshot.                             *)
 (***************************************************************************)
 ClockLive(l) == clk[l] \/ cache[l] # {}
 
 NeverWrittenRelease(l) ==
-    IF cov[l] >= 0 /\ cov[l] < stCp[l] THEN cov[l] ELSE stCp[l]
+    IF cov[l] < 0 THEN -1 ELSE IF cov[l] < stCp[l] THEN cov[l] ELSE stCp[l]
 
 PublishPin(l) ==
     /\ up[l]
@@ -566,6 +572,13 @@ RecoveryNeverFallsOffLog ==
 \* must not leave it claiming an advance storage never recorded (#4017).
 PersistedBeliefHonest ==
     \A l \in Leaves : up[l] => stCp[l] \in {durCp[l], anchor[l]}
+
+\* Every trim entitlement the pin store has published is backed by durable
+\* snapshot coverage: a published offset is at or below the leaf's coverage,
+\* which only grows. The root-cause form of RecoveryNeverFallsOffLog's #4523
+\* violation, and reachable with no fault at all.
+ReleaseBackedBySnapshot ==
+    \A l \in Leaves : pinOff[l] >= 0 => snapCov[l] >= pinOff[l]
 
 \* Durable snapshot coverage never regresses.
 SnapshotCoverageMonotonic ==
