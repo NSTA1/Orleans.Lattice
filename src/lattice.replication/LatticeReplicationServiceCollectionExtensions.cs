@@ -131,6 +131,9 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // argument validation or the cut-point semantics.
         builder.Services.TryAddSingleton<LatticeRemoteSnapshotService>();
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
+        // The receiver bootstrap read fence the coordinator arms around every
+        // snapshot drain (issue #4526).
+        builder.Services.TryAddSingleton<IBootstrapReadFence, GrainBootstrapReadFence>();
         builder.Services.TryAddSingleton<ILatticeWalIntrospection, LatticeWalIntrospection>();
         builder.Services.TryAddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
         builder.Services.TryAddSingleton<ILatticeReplicationAdmin, LatticeReplicationAdmin>();

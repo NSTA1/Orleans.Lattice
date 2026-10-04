@@ -1,0 +1,20 @@
+# Pairs with SagaFallbackOnlyAcrossFull. A commit terminal is appended before
+# the decision is recorded (invariant I1 broken), so the window holds a commit
+# terminal d0 does not explain, and the increment falls back to fail safe.
+MODULE: SagaFallbackOnlyAcrossFullTerminalBeforeDecision
+TARGET: SagaFallbackOnlyAcrossFull
+CLASS: Invariant
+SUMMARY: a commit terminal precedes its recorded decision
+PERTURBS: Terminal
+
+--- FIND
+    /\ dec # "none"
+    /\ x \notin Terminated
+    /\ wal' = [wal EXCEPT ![TermPart[x]] =
+                 Append(@, [k |-> IF dec = "committed" THEN "commit" ELSE "abort", x |-> x])]
+--- REPLACE
+    \* MUTATION: a commit terminal before any decision.
+    /\ dec # "aborted"
+    /\ x \notin Terminated
+    /\ wal' = [wal EXCEPT ![TermPart[x]] = Append(@, [k |-> "commit", x |-> x])]
+--- END

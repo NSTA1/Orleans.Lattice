@@ -1,0 +1,21 @@
+# Pairs with BackupSagaConsistent. A batch committed in d0 is emitted from
+# whatever prepares the window holds, with no completeness check and no fall
+# back: a batch whose first prepare precedes the base's frontier is restored
+# half post-saga.
+MODULE: BackupSagaConsistentStraddleEmittedWithoutFallback
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a committed batch is emitted from the prepares the window happens to hold
+PERTURBS: Drain
+
+--- FIND
+         IF FallsBack
+         THEN FullLink(Lens, TRUE)
+         ELSE [kind |-> "incr", heads |-> NewHeads, emit |-> Emit,
+--- REPLACE
+         \* MUTATION: no completeness check and no fall back.
+         IF FALSE
+         THEN FullLink(Lens, TRUE)
+         ELSE [kind |-> "incr", heads |-> NewHeads,
+               emit |-> IF ~AbortSeen /\ d0 = "committed" THEN SeenPrep ELSE {},
+--- END

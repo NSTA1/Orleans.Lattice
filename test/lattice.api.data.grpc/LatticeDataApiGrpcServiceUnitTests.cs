@@ -187,6 +187,20 @@ public sealed class LatticeDataApiGrpcServiceUnitTests
     }
 
     [Test]
+    public void Get_maps_a_bootstrap_read_fence_to_unavailable()
+    {
+        // Issue #4526: a tree being bootstrapped from a snapshot refuses reads
+        // until the import completes. Transient, so the retry-later code.
+        _api.GetAsync("t", "k", Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<DataReadResult>(new LatticeTreeBootstrappingException("refused", "t")));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Get(new DataGetRequest { TreeId = "t", Key = "k" }, Context()));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+    }
+
+    [Test]
     public void Set_maps_an_unexpected_fault_to_internal()
     {
         _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())

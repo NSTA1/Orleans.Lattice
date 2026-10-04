@@ -134,6 +134,19 @@ public sealed class BackupManifestModelTests
     }
 
     [Test]
+    public void Consistency_cut_carries_the_undecided_sagas_when_supplied_and_none_by_default()
+    {
+        var undecided = new[] { Guid.NewGuid() };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(new BackupConsistencyCut(1, 2).UndecidedSagaIds, Is.Null,
+                "a cut captured before the field existed records no undecided sagas");
+            Assert.That(new BackupConsistencyCut(1, 2, undecidedSagaIds: undecided).UndecidedSagaIds, Is.EqualTo(undecided));
+        });
+    }
+
+    [Test]
     public void ContentHash_is_stable_for_identical_bytes()
     {
         var bytes = Encoding.UTF8.GetBytes("hello backup");

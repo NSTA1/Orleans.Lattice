@@ -90,7 +90,8 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// bracket in <see cref="InvokeRoutingFiltered"/>.
     /// </remarks>
     Task IIncomingGrainCallFilter.Invoke(IIncomingGrainCallContext context) =>
-        ClassifyIncomingTurn(context.Request) switch
+        RefuseIfBootstrapFenced(context.Request)
+        ?? ClassifyIncomingTurn(context.Request) switch
         {
             IncomingTurnKind.PointWrite => InvokePointWriteAsync(context),
             IncomingTurnKind.Serial => InvokeSerialTurnAsync(context),

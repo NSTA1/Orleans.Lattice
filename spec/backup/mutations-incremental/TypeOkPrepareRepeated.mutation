@@ -1,0 +1,17 @@
+# Pairs with TypeOK. A key's prepare is appended again and again, which a
+# bounded WAL does not admit. (Production keys a re-staged prepare by its
+# AtomicBatchIndex, so a retried prepare never completes a batch twice.)
+MODULE: TypeOkPrepareRepeated
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a key is prepared without bound
+PERTURBS: Prepare
+
+--- FIND
+    /\ x \notin Prepared
+    /\ wal' = [wal EXCEPT ![KeyPart[x]] = Append(@, [k |-> "prep", x |-> x])]
+--- REPLACE
+    \* MUTATION: a key may be prepared again.
+    /\ TRUE
+    /\ wal' = [wal EXCEPT ![KeyPart[x]] = Append(@, [k |-> "prep", x |-> x])]
+--- END
