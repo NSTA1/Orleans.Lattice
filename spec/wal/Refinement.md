@@ -124,12 +124,14 @@ Two pairings deserve a note:
   activation holding a snapshot starts below its coverage, so the refusal is
   load-bearing only in composition with such a path.
 
-## Detectors, and the four standing defect checks
+## Detectors
 
 The Detector column names tests over production code, never a TLA+ mutation: a
 mutation perturbs the spec, so it cannot notice production regressing. Every
 `Yes` and `Partial` detector was shown to go red by perturbing the production code
 it names and restored afterwards; the log is in the pull request.
+
+## Standing defect checks
 
 The mutations below reproduce **current production behaviour** rather than a historical
 defect. Each is the standing check for an open issue and must be re-proven against
@@ -139,7 +141,9 @@ the detector its fix adds when that fix lands in the bucket:
 |----------|-------------------------------|-------|
 | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded` | A never-written leaf releases its persisted checkpoint above its snapshot's coverage. | #4456 |
 
-Further mutations reproduced open defects until their fixes landed, and are now ordinary
+## Defect mutations whose fixes have landed
+
+These mutations reproduced open defects until their fixes landed, and are now ordinary
 regression mutations. Each fix's detectors were proven red with production perturbed back
 to the old behaviour, and green on the fix:
 
