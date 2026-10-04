@@ -6,6 +6,7 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: replaying a dead letter discards it instead of applying it
 PERTURBS: Replay
+BOUNDS: MaxWrites = 1
 
 --- FIND
 

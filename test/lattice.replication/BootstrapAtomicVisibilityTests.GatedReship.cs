@@ -73,4 +73,65 @@ public partial class BootstrapAtomicVisibilityTests
         // so the leaf's sweep or the saga's terminal now settles the staged bucket.
         Assert.That(await registry.GetStatusForTerminalAsync(txid), Is.EqualTo(TxStatus.Committed));
     }
+
+    [Test]
+    public async Task Snapshot_drain_row_of_a_delegated_saga_under_a_capture_gate_is_staged_not_deferred()
+    {
+        // Issue #4604: the bootstrap drain stops at any row the applier defers.
+        // A held decision gate (#4485) must not be one: a drained prepared row of
+        // a saga whose decision the gate keeps out of the snapshot is staged in a
+        // pending bucket, as live delivery stages it, so the drain completes.
+        const string receiverTree = "snap-gated-drain-receiver";
+        var key = $"gated-drain-{Guid.NewGuid():N}";
+        var txid = Guid.NewGuid();
+        var registry = TxRegistryRouting.GetRegistry(_cluster.Client, receiverTree, txid);
+        var receiverKey = LatticeCrossTreeReceiverGrain.ComputeKey(PreCutOrigin, $"xop-{txid:N}");
+        await registry.RegisterReceiverDecisionAuthorityAsync(txid, receiverKey);
+        await _cluster.Client.GetGrain<ILatticeCrossTreeReceiverGrain>(receiverKey)
+            .NotifyTerminalAsync(new CrossTreeReceiverTerminal
+            {
+                OriginClusterId = PreCutOrigin,
+                OperationId = $"xop-{txid:N}",
+                TreeId = receiverTree,
+                TransactionId = txid,
+                Committed = true,
+                WaitSet = [receiverTree],
+                ObservedSourceShards = [],
+                TerminalHlc = Hlc(6_100),
+            });
+
+        var token = Guid.NewGuid();
+        await registry.AcquireCaptureGateAsync(token, TxRegistryCaptureGateMode.Gate, CaptureGateLease);
+        ApplyResult result;
+        try
+        {
+            using (LatticeBootstrapApplyContext.BeginScope())
+            {
+                result = await ReceiverApplier.ApplyAsync(new WalRecord
+                {
+                    TreeId = receiverTree,
+                    Op = MutationKind.Set,
+                    Key = key,
+                    Value = new byte[] { 2 },
+                    Timestamp = Hlc(6_000),
+                    OriginClusterId = PreCutOrigin,
+                    TransactionId = txid,
+                    IsPrepared = true,
+                    AtomicBatchSize = 2,
+                    AtomicBatchIndex = 1,
+                });
+            }
+        }
+        finally
+        {
+            await registry.ReleaseCaptureGateAsync(token);
+        }
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(result.Deferred, Is.False, "a held decision gate must not defer a drained snapshot row");
+            Assert.That(await PendingKeysForAsync(receiverTree, txid), Is.EqualTo(new[] { key }),
+                "the drained prepared row is staged for its saga's terminal");
+        });
+    }
 }

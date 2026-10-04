@@ -8,6 +8,7 @@ CLASS: Temporal
 SUMMARY: the handoff pin satisfies a parked entry's dependency without draining the buffer
 PERTURBS: Bootstrap
 DEADLOCK: off
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
     /\ wake' = [wake EXCEPT ![BootTarget] = @ \/ buf[BootTarget] # {}]

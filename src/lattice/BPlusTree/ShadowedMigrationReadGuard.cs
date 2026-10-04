@@ -4,7 +4,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// How a leaf's read path may treat a migrated (pre-saga) value for a key that
 /// carries a destination-side shadow marker, once the shadowing saga's recorded
 /// <see cref="TxStatus"/> and whether the saga's terminal has already landed on
-/// the leaf are known. The three cases are mutually exclusive and total.
+/// the leaf are known, and whether the row incorporates the saga's marked prepare stamp. The four cases are mutually exclusive and total.
 /// </summary>
 /// <remarks>
 /// This enum, together with <see cref="ShadowedMigrationReadGuard"/>, is the
@@ -35,6 +35,21 @@ internal enum ShadowedReadDecision : byte
     /// backstopped) and the read is safe whichever way the decision went.
     /// </summary>
     ServeProjected,
+
+    /// <summary>
+    /// The saga is <see cref="TxStatus.Committed"/> or
+    /// <see cref="TxStatus.Indeterminate"/> and its terminal has not landed on
+    /// this leaf, but the marker carries the saga's marked original prepare stamp
+    /// P and the row is stamped at or above it (issue #4545). By property H every
+    /// write acknowledged after the prepare is stamped above P, and a pre-saga
+    /// value is stamped below it, so the row is the saga's own value or a later
+    /// write. Serving it cannot tear the batch: under a committed reading the
+    /// saga's other keys surface its value too, and under an indeterminate one
+    /// they read hidden. This is what releases a marker whose terminal this leaf
+    /// will never see - one a leaf split carried onto a sibling, or one installed
+    /// after a reactivation lost the leaf's terminal memory.
+    /// </summary>
+    ServeIncorporated,
 
     /// <summary>
     /// The saga is <see cref="TxStatus.Committed"/> - or
@@ -100,16 +115,52 @@ internal static class ShadowedMigrationReadGuard
     /// </para>
     /// </remarks>
     public static ShadowedReadDecision ResolveSaga(TxStatus status, bool terminalApplied)
+        => ResolveSaga(status, terminalApplied, rowIncorporatesMarkedPrepare: false);
+
+    /// <summary>
+    /// Resolves how the read path may treat a migrated value shadowed by a single
+    /// saga, given whether the row is stamped at or above the saga's marked
+    /// original prepare stamp (see <see cref="RowIncorporatesMarkedPrepare"/>).
+    /// </summary>
+    /// <param name="status">The saga's outcome as recorded by the per-tree transaction registry.</param>
+    /// <param name="terminalApplied">
+    /// <see langword="true"/> when the saga's terminal has already landed on this
+    /// leaf.
+    /// </param>
+    /// <param name="rowIncorporatesMarkedPrepare">
+    /// <see langword="true"/> when the marker carries the saga's marked prepare
+    /// stamp P and the row is stamped at or above it.
+    /// </param>
+    public static ShadowedReadDecision ResolveSaga(TxStatus status, bool terminalApplied, bool rowIncorporatesMarkedPrepare)
     {
         if (status is TxStatus.InFlight or TxStatus.Aborted)
         {
             return ShadowedReadDecision.PassThrough;
         }
 
-        return terminalApplied
-            ? ShadowedReadDecision.ServeProjected
+        if (terminalApplied)
+        {
+            return ShadowedReadDecision.ServeProjected;
+        }
+
+        return rowIncorporatesMarkedPrepare
+            ? ShadowedReadDecision.ServeIncorporated
             : ShadowedReadDecision.GateStaleRouting;
     }
+
+    /// <summary>
+    /// Whether a row stamped <paramref name="rowStamp"/> already incorporates a
+    /// saga whose marker carries <paramref name="markedPrepareStamp"/>: the
+    /// marker knows the saga's marked original prepare stamp P, and the row is
+    /// stamped at or above it. A marker without a marked stamp - installed by an
+    /// older silo, from an unmarked prepare, or from a source whose writes P does
+    /// not order - answers <see langword="false"/>, which keeps the gate exactly
+    /// as it was before issue #4545.
+    /// </summary>
+    /// <param name="rowStamp">The stamp of the row the read would serve.</param>
+    /// <param name="markedPrepareStamp">The marker's marked prepare stamp, or <see langword="null"/>.</param>
+    public static bool RowIncorporatesMarkedPrepare(HybridLogicalClock rowStamp, HybridLogicalClock? markedPrepareStamp)
+        => markedPrepareStamp is { } prepare && rowStamp.CompareTo(prepare) >= 0;
 
     /// <summary>
     /// The per-saga safety predicate the caller folds over the set of sagas
@@ -128,4 +179,16 @@ internal static class ShadowedMigrationReadGuard
     /// </param>
     public static bool IsSagaSafe(TxStatus status, bool terminalApplied) =>
         ResolveSaga(status, terminalApplied) != ShadowedReadDecision.GateStaleRouting;
+
+    /// <summary>
+    /// The per-saga safety predicate with the marked-prepare self-check (issue
+    /// #4545): <see langword="false"/> only for a committed or indeterminate saga
+    /// whose terminal has not landed here and whose marked prepare stamp the row
+    /// is not known to incorporate.
+    /// </summary>
+    /// <param name="status">The shadowing saga's recorded outcome.</param>
+    /// <param name="terminalApplied"><see langword="true"/> when the saga's terminal has already landed here.</param>
+    /// <param name="rowIncorporatesMarkedPrepare">See <see cref="RowIncorporatesMarkedPrepare"/>.</param>
+    public static bool IsSagaSafe(TxStatus status, bool terminalApplied, bool rowIncorporatesMarkedPrepare) =>
+        ResolveSaga(status, terminalApplied, rowIncorporatesMarkedPrepare) != ShadowedReadDecision.GateStaleRouting;
 }

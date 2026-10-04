@@ -2667,6 +2667,19 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<string, HashSet<Guid>>? _shadowedSagas;
 
+    /// <summary>
+    /// The marked original prepare stamp P of each shadow marker that was
+    /// installed with one, per key then per saga (issue #4545). A marker absent
+    /// from this map has no known P and keeps the pre-#4545 read gate; one
+    /// present here is released by the read gate once the row it guards is
+    /// stamped at or above P (<see cref="ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare"/>),
+    /// so a marker this leaf will never see a terminal for - carried here by a
+    /// leaf split, or installed after a reactivation forgot the terminal - can
+    /// no longer gate the key until the decision ages out. Activation-scoped and
+    /// cleared alongside <see cref="_shadowedSagas"/>.
+    /// </summary>
+    private Dictionary<string, Dictionary<Guid, HybridLogicalClock>>? _shadowMarkerStamps;
+
     /// <inheritdoc />
     public async Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
     {
@@ -2679,6 +2692,15 @@ internal sealed partial class BPlusLeafGrain
         if (keys.Count == 0)
             return;
 
+        // A marker installed after this leaf already applied the saga's terminal
+        // guards nothing here, and it would no longer be cleared: the terminal
+        // that clears it has come and gone. Left in place it is copied by the
+        // next leaf split onto a sibling that never sees the terminal, where it
+        // gates the key until the decision ages out (issue #4545).
+        if (_recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId))
+            return;
+
+        var carriesStamps = LatticeOriginalPrepareStampContext.HasStamps;
         _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
         foreach (var key in keys)
         {
@@ -2690,8 +2712,48 @@ internal sealed partial class BPlusLeafGrain
                 _shadowedSagas[key] = sagas;
             }
             sagas.Add(transactionId);
+
+            if (carriesStamps && LatticeOriginalPrepareStampContext.TryGetStamp(key, out var prepareStamp))
+            {
+                RecordShadowMarkerStamp(key, transactionId, prepareStamp);
+            }
         }
     }
+
+    /// <summary>
+    /// Records the marked prepare stamp <paramref name="prepareStamp"/> for the
+    /// marker on <paramref name="key"/> under <paramref name="transactionId"/>,
+    /// and merges this leaf's clock past it, so every write this leaf
+    /// acknowledges from now on is stamped above it (property H) and releases
+    /// the marker. Two installs naming different stamps keep the higher one,
+    /// which can only make the release later.
+    /// </summary>
+    private void RecordShadowMarkerStamp(string key, Guid transactionId, HybridLogicalClock prepareStamp)
+    {
+        _shadowMarkerStamps ??= new Dictionary<string, Dictionary<Guid, HybridLogicalClock>>(StringComparer.Ordinal);
+        if (!_shadowMarkerStamps.TryGetValue(key, out var bySaga))
+        {
+            bySaga = new Dictionary<Guid, HybridLogicalClock>();
+            _shadowMarkerStamps[key] = bySaga;
+        }
+
+        bySaga[transactionId] = bySaga.TryGetValue(transactionId, out var existing) && existing.CompareTo(prepareStamp) > 0
+            ? existing
+            : prepareStamp;
+        state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, prepareStamp);
+    }
+
+    /// <summary>
+    /// The marked prepare stamp of the marker on <paramref name="key"/> under
+    /// <paramref name="transactionId"/>, or <see langword="null"/> when it was
+    /// installed without one.
+    /// </summary>
+    private HybridLogicalClock? ShadowMarkerStamp(string key, Guid transactionId) =>
+        _shadowMarkerStamps is not null
+            && _shadowMarkerStamps.TryGetValue(key, out var bySaga)
+            && bySaga.TryGetValue(transactionId, out var stamp)
+            ? stamp
+            : null;
 
     /// <summary>
     /// Removes <paramref name="transactionId"/> from every key's
@@ -2702,6 +2764,23 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void ClearSagaShadow(Guid transactionId)
     {
+        if (_shadowMarkerStamps is not null)
+        {
+            List<string>? emptyStampKeys = null;
+            foreach (var (key, bySaga) in _shadowMarkerStamps)
+            {
+                if (bySaga.Remove(transactionId) && bySaga.Count == 0)
+                    (emptyStampKeys ??= new List<string>()).Add(key);
+            }
+            if (emptyStampKeys is not null)
+            {
+                foreach (var key in emptyStampKeys)
+                    _shadowMarkerStamps.Remove(key);
+            }
+            if (_shadowMarkerStamps.Count == 0)
+                _shadowMarkerStamps = null;
+        }
+
         if (_shadowedSagas is null || _shadowedSagas.Count == 0) return;
 
         List<string>? emptyKeys = null;
@@ -2776,8 +2855,15 @@ internal sealed partial class BPlusLeafGrain
     ///     and without it the read gates.
     ///   </description></item>
     /// </list>
+    /// <para>
+    /// A committed or indeterminate saga whose terminal has not landed here is
+    /// still served when its marker carries the saga's marked original prepare
+    /// stamp P and <paramref name="rowStamp"/> is at or above it (issue #4545):
+    /// the row is then the saga's own value or a later write, never the pre-saga
+    /// value the gate exists to hide.
+    /// </para>
     /// </summary>
-    private async ValueTask<bool> IsShadowedReadSafeAsync(HashSet<Guid> sagas)
+    private async ValueTask<bool> IsShadowedReadSafeAsync(string key, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
         foreach (var txid in sagas)
         {
@@ -2785,10 +2871,14 @@ internal sealed partial class BPlusLeafGrain
             // Per-saga safety is the shared, dependency-free
             // ShadowedMigrationReadGuard rule (see #1591): a committed saga is safe
             // only once its terminal has landed here (_recentlyTerminal is the
-            // single source of truth for that), otherwise the migrated pre-saga
-            // value would tear atomic visibility against a backstopped sibling.
+            // single source of truth for that), or once the row is known to
+            // incorporate its marked prepare (#4545); otherwise the migrated
+            // pre-saga value would tear atomic visibility against a backstopped
+            // sibling.
             var terminalApplied = _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
-            if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied))
+            var incorporated = ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare(
+                rowStamp, ShadowMarkerStamp(key, txid));
+            if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied, incorporated))
                 return false;
         }
         return true;
