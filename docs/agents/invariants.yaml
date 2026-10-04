@@ -436,7 +436,6 @@ invariants:
       - "The first replicated terminal flips the receiver registry before all source shards arrive."
       - "Prepared records enter the batched visible merge path instead of the pending bucket."
       - "Conflicting terminal outcomes are absorbed instead of rejected."
-      - "A terminal arrival that conflicts with a decision whose row was purged after the decision-retention window is recorded rather than rejected, because no row remains to classify against."
     detection_signals:
       - type: metric
         name: "orleans.lattice.replication.apply.duration"
@@ -452,13 +451,11 @@ invariants:
         source: "docs/lattice/atomic-writes.md"
       - step: "Route prepared Set and Delete records through the per-entry prepared apply hops."
         source: "docs/lattice.replication/replication-apply.md"
-      - step: "Reject a terminal arrival whose outcome conflicts with a decision row the registry still stores, tombstoned or not; the write-once rule holds within the decision-retention window and is not claimed across a purge."
-        source: "src/lattice/BPlusTree/TerminalDecisionGuard.cs#TerminalDecisionGuard"
+      - step: "Reject a terminal arrival whose outcome conflicts with an already recorded decision."
+        source: "docs/lattice/atomic-writes.md"
     sources:
       - "docs/lattice/atomic-writes.md"
       - "docs/lattice.replication/replication-apply.md"
-      - "src/lattice/BPlusTree/TerminalDecisionGuard.cs"
-      - "src/lattice/BPlusTree/Grains/TxRegistryGrain.cs"
   - id: atomic-cross-tree-global-decision
     name: "Cross-tree global decision"
     description: "A cross-tree atomic write has one coordinator decision that all participating trees resolve before exposing any prepared key."
