@@ -110,7 +110,7 @@ public class LatticeSnapshotProviderTests
     }
 
     [Test]
-    public async Task ExportAsync_skips_tombstoned_entries()
+    public async Task ExportAsync_ships_a_tombstoned_entry_as_a_committed_tombstone_row()
     {
         const string tree = "snap-tombstone";
         var lattice = _cluster.Client.GetGrain<ILattice>(tree);
@@ -121,8 +121,14 @@ public class LatticeSnapshotProviderTests
         var stream = await _provider.ExportAsync(tree, HybridLogicalClock.Zero);
         var entries = await DrainAsync(stream);
 
-        Assert.That(entries.Select(e => e.Key), Does.Not.Contain("dead"));
-        Assert.That(entries.Select(e => e.Key), Does.Contain("live"));
+        // A receiver bootstrapping in place over an older copy must learn of the
+        // delete, so it ships as a committed tombstone rather than as absence (#4504).
+        var dead = entries.Where(e => e.Key == "dead").ToList();
+        Assert.That(dead, Has.Count.EqualTo(1));
+        Assert.That(dead[0].IsTombstone, Is.True);
+        Assert.That(dead[0].IsPrepared, Is.False);
+        Assert.That(dead[0].Timestamp, Is.GreaterThan(HybridLogicalClock.Zero));
+        Assert.That(entries.Where(e => e.Key == "live").Select(e => e.IsTombstone), Is.EqualTo(new[] { false }));
     }
 
     [Test]

@@ -71,6 +71,18 @@ namespace Orleans.Lattice.Replication;
 /// itself serves (#2318).
 /// </para>
 /// <para>
+/// <b>Deletes.</b> The committed projection enumerates live keys only, so the
+/// export ends with a tombstone pass that ships every tombstone a source leaf
+/// still holds as a committed tombstone row (<see cref="SnapshotEntry.IsTombstone"/>
+/// set, <see cref="SnapshotEntry.IsPrepared"/> clear), and the prepared-row pass
+/// ships a pending delete of a saga the frozen registry view recorded as
+/// <see cref="TxStatus.Committed"/> the same way. A receiver that bootstraps in
+/// place over an existing copy - a peer that fell off the log - applies each as a
+/// Delete, so a key deleted while it was behind does not keep its old value
+/// (#4504). A tombstone the source has already reaped past
+/// <c>TombstoneGracePeriod</c> cannot ship (#4537).
+/// </para>
+/// <para>
 /// <b>Performance note.</b> The default implementation pays one
 /// per-key <see cref="ILattice.GetWithVersionAsync"/> round-trip on
 /// top of the leaf-chain enumeration. This is correct but not
@@ -238,6 +250,89 @@ internal sealed class LatticeSnapshotProvider(
                     Timestamp = versioned.Version,
                     ExpiresAtTicks = versioned.ExpiresAtTicks,
                 };
+            }
+        }
+
+        // Tombstone pass (#4504). The committed projection enumerates live
+        // keys only, so on its own a snapshot never ships a delete. A
+        // receiver that bootstraps in place - a peer that fell off the log
+        // re-bootstraps over its existing copy, which the drain does not
+        // clear - would keep the old value of every key the source deleted
+        // while it was behind, and the delete's WAL record is behind the trim
+        // point, so the incremental stream never delivers it either. Every
+        // tombstone the source still holds therefore ships as a committed
+        // tombstone row, which the drain applies as a Delete. Pass order is
+        // immaterial: a tombstone and a live row for the same key resolve by
+        // HLC under last-writer-wins on the receiver. A tombstone the source
+        // has already reaped (CompactTombstonesAsync, past
+        // TombstoneGracePeriod) cannot ship and remains a residual (#4537).
+        await foreach (var tombstone in EnumerateTombstonesAsync(treeName, asOfHlc, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return tombstone;
+        }
+    }
+
+    /// <summary>
+    /// Walks every shard's leaf chain on the source tree and emits a
+    /// committed tombstone row (<see cref="SnapshotEntry.IsTombstone"/> set,
+    /// <see cref="SnapshotEntry.IsPrepared"/> clear) for every key a leaf
+    /// still holds as a tombstone, stamped with the tombstone's own HLC. A
+    /// tombstone authored after a bounded export's <paramref name="asOfHlc"/>
+    /// is left to the incremental stream.
+    /// </summary>
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateTombstonesAsync(
+        string treeName,
+        HybridLogicalClock asOfHlc,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+
+        var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
+
+        // An empty version vector dominates nothing, so every leaf answers
+        // with every entry it holds, tombstones included.
+        var everything = new VersionVector();
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(false);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                var delta = await leaf.GetDeltaSinceAsync(everything).ConfigureAwait(false);
+                foreach (var (key, lww) in delta.Entries)
+                {
+                    if (!lww.IsTombstone)
+                    {
+                        continue;
+                    }
+
+                    if (hasUpperBound && lww.Timestamp > asOfHlc)
+                    {
+                        continue;
+                    }
+
+                    yield return new SnapshotEntry
+                    {
+                        Key = key,
+                        Value = Array.Empty<byte>(),
+                        Timestamp = lww.Timestamp,
+                        IsTombstone = true,
+                    };
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
             }
         }
     }
@@ -422,6 +517,23 @@ internal sealed class LatticeSnapshotProvider(
                     if (snap0.TryGetValue(m.TransactionId, out status)
                         && status is TxStatus.Committed or TxStatus.Aborted)
                     {
+                        if (status == TxStatus.Committed && m.IsTombstone)
+                        {
+                            // The committed pass reads a committed saga's
+                            // pending delete as an absent key and emits
+                            // nothing, so a receiver re-bootstrapping over a
+                            // copy that still holds the key would keep it
+                            // (#4504). Ship the delete as a committed
+                            // tombstone row instead.
+                            yield return new SnapshotEntry
+                            {
+                                Key = m.Key,
+                                Value = Array.Empty<byte>(),
+                                Timestamp = m.Timestamp,
+                                IsTombstone = true,
+                            };
+                        }
+
                         continue;
                     }
 
