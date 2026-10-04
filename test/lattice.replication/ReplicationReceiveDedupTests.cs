@@ -3,8 +3,8 @@ using Orleans.Lattice.Replication;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Unit tests for <see cref="ReplicationReceiveDedup"/>, the receiver's pure cycle-break,
-/// pinned-floor and high-water-mark rules (spec/replication/Replication.tla action
+/// Unit tests for <see cref="ReplicationReceiveDedup"/>, the receiver's pure cycle-break and
+/// high-water-mark rules (spec/replication/Replication.tla action
 /// <c>Deliver</c>).
 /// </summary>
 [TestFixture]
@@ -22,38 +22,6 @@ public class ReplicationReceiveDedupTests
             Assert.That(ReplicationReceiveDedup.IsOwnOrigin("site-b", "site-a"), Is.False);
             Assert.That(ReplicationReceiveDedup.IsOwnOrigin("SITE-A", "site-a"), Is.False);
         });
-    }
-
-    [Test]
-    public void IsCoveredByPinnedFloor_drops_at_and_below_the_floor_only()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(4), Hlc(5), false, false), Is.True);
-            Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(5), Hlc(5), false, false), Is.True);
-            Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(5, 1), Hlc(5), false, false), Is.False);
-            Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(6), Hlc(5), false, false), Is.False);
-        });
-    }
-
-    [Test]
-    public void IsCoveredByPinnedFloor_drops_nothing_when_no_floor_is_pinned()
-    {
-        Assert.That(
-            ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(1), HybridLogicalClock.Zero, false, false),
-            Is.False);
-    }
-
-    [Test]
-    public void IsCoveredByPinnedFloor_is_bypassed_by_a_bootstrap_drain()
-    {
-        Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(1), Hlc(5), true, false), Is.False);
-    }
-
-    [Test]
-    public void IsCoveredByPinnedFloor_is_bypassed_by_a_saga_prepare_phase_entry()
-    {
-        Assert.That(ReplicationReceiveDedup.IsCoveredByPinnedFloor(Hlc(1), Hlc(5), false, true), Is.False);
     }
 
     [Test]

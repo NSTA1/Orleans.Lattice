@@ -3529,6 +3529,8 @@ internal sealed partial class BPlusLeafGrain
     {
         if (_warmRescueInFlight)
             throw new InvalidOperationException("Cannot replace a leaf cache while its warm stale-cache rescue is persisting.");
+        _snapshotLoadFailedThisAttempt = false;
+        _snapshotLoadFaultThisAttempt = null;
         _warmCacheHydrations++;
         if (state.State.TreeId is null)
         {
@@ -3570,7 +3572,10 @@ internal sealed partial class BPlusLeafGrain
         if (lease is null)
         {
             // Cancelled while queued. Identical to the cancellation arm around
-            // the load below, and swallowed for the same reason.
+            // the load below, and swallowed for the same reason. Whether a
+            // snapshot exists is unknown, so it is a failed load, not an absent
+            // one (issue #4450).
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
 
@@ -3586,18 +3591,26 @@ internal sealed partial class BPlusLeafGrain
             // the load. Swallowed without observation for the same reason the
             // capture path swallows it: thousands of leaves standing down
             // together would turn one signal into a flood.
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
         catch (Exception ex)
         {
-            // Snapshot load is best-effort: a transient storage failure
-            // must not block the leaf coming online. The activation
-            // path falls through to the existing WAL-tail replay,
-            // which can still recover the projection as long as the
-            // WAL has not trimmed past the checkpoint.
+            // A failed load is NOT "no snapshot" (issue #4450). This arm used to
+            // fall through to the cold WAL replay on the reasoning that the
+            // replay "can still recover the projection as long as the WAL has
+            // not trimmed past the checkpoint". Under coverage-gated trim the
+            // WAL GC removes a checkpointed prefix precisely BECAUSE a snapshot
+            // covers it, so the snapshot that just failed to load may be the
+            // only durable copy of that prefix - and the leaf's durable pin,
+            // resolved against that snapshot's coverage and unlowerable, keeps
+            // the GC entitled to trim for as long as a cold rebuild runs. So the
+            // failure is recorded here, and the activation replay fails closed
+            // and retries through the barrier re-arm (LeafReplayStartPolicy).
             //
-            // The DECISION is unchanged; what changes is that it is no longer
-            // silent (issue #2364). Returning false here is indistinguishable
+            // History, kept because it explains the observation below: before
+            // #4450 the decision was silent as well as unsafe (issue #2364).
+            // Returning false here was indistinguishable
             // at every call site from "this leaf has no snapshot": both decline
             // the rehydrate, and OnActivateAsync then sees
             // (!rehydratedFromSnapshot && Cache.Count == 0), takes the -1
@@ -3638,11 +3651,12 @@ internal sealed partial class BPlusLeafGrain
             // recorded and no state written at this point, so the retry sees
             // exactly what this attempt saw.
             //
-            // The two arms must stay distinct. An ordinary storage fault keeps
-            // the best-effort fall-through unchanged, because there is nothing
-            // self-defeating about replaying the WAL when the store is merely
-            // unreachable - the replay may well succeed. It is only the MEMORY
-            // arm where the remedy and the fault are the same resource.
+            // The two arms must stay distinct. An ordinary storage fault also
+            // fails the activation replay (issue #4450), but it is declined by
+            // the replay-start decision after this returns, as a retryable
+            // LeafSnapshotUnavailableException. The MEMORY arm throws here,
+            // because there the remedy and the fault are the same resource and
+            // the retry must be made under a tightened admission estimate.
             if (IsResourceExhaustion(ex))
             {
                 // ... but breaking the loop is not the same as escaping it, and
@@ -3679,6 +3693,8 @@ internal sealed partial class BPlusLeafGrain
                     ex);
             }
 
+            _snapshotLoadFailedThisAttempt = true;
+            _snapshotLoadFaultThisAttempt = ex;
             return false;
         }
 
@@ -3713,10 +3729,14 @@ internal sealed partial class BPlusLeafGrain
         // RecordDurableSnapshotCoverage: reporting coverage for a prefix the
         // blob cannot actually reproduce is precisely what would authorise the
         // coverage-gated WAL GC to trim the last durable copy of that prefix.
-        // An unreadable blob is "no snapshot", so the activation falls through
-        // to the ordinary WAL replay with its own fall-off guards intact.
+        // An unreadable blob is NOT "no snapshot", though: a blob exists, and
+        // it may be the only durable copy of a prefix the WAL GC has already
+        // trimmed under its coverage. It is recorded as a failed load, and
+        // the activation replay fails closed rather than cold-replaying
+        // (issue #4450).
         if (!blob.ValidateRowPayload())
         {
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
 
@@ -3874,12 +3894,15 @@ internal sealed partial class BPlusLeafGrain
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
                     return false;
                 }
                 catch (Exception error)
                 {
                     ObserveSnapshotSegmentLoadFailure(error);
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
+                    _snapshotLoadFaultThisAttempt = error;
                     return false;
                 }
 
@@ -3889,12 +3912,15 @@ internal sealed partial class BPlusLeafGrain
                 // would then outrun the rows actually held - which is the one
                 // shape that lets coverage-gated WAL GC trim the last durable
                 // copy of a prefix. Declining instead leaves OnActivateAsync
-                // with !rehydrated and an empty cache, so it takes the -1
-                // replay-start override and replays the whole readable WAL.
+                // with !rehydrated and an empty cache, recorded as a failed
+                // load, so the replay fails closed and retries rather than
+                // rebuilding from a WAL the snapshot's coverage may already
+                // have let the GC trim (issue #4450).
                 if (segmentFrame is not { Length: > 0 })
                 {
                     ObserveSnapshotSegmentMissing();
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
                     return false;
                 }
 
@@ -4050,6 +4076,23 @@ internal sealed partial class BPlusLeafGrain
         }
         return true;
     }
+
+    /// <summary>
+    /// Set by the most recent <see cref="TryRehydrateFromSnapshotAsync"/> when it
+    /// declined because a snapshot could not be loaded - a storage fault, a
+    /// cancelled load, an unreadable payload, or a missing or unreadable segment -
+    /// as opposed to there being no snapshot at all (issue #4450). Read by the
+    /// activation replay's start decision (<see cref="LeafReplayStartPolicy"/>),
+    /// which fails the replay closed rather than cold-replaying, because the WAL
+    /// prefix the snapshot covered may survive only in the snapshot that failed.
+    /// </summary>
+    private bool _snapshotLoadFailedThisAttempt;
+
+    /// <summary>
+    /// The fault behind <see cref="_snapshotLoadFailedThisAttempt"/>, when there
+    /// was one, carried as the inner exception of a fail-closed replay.
+    /// </summary>
+    private Exception? _snapshotLoadFaultThisAttempt;
 
     /// <summary>
     /// Best-effort probe: has any WAL partition's oldest still-readable

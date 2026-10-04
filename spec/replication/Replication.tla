@@ -245,14 +245,15 @@ ShipSkip(e) ==
 (*                                                                         *)
 (* The pipeline is ReplicationApplier.ApplyAsync's, in order: the          *)
 (* receiver-side cycle-break (an own-origin entry is a dedup no-op), the   *)
-(* snapshot-pinned floor, the identity cache (TryAdd), the dependency      *)
+(* pinned floor (always zero: production installs none since #4476), the  *)
+(* identity cache (TryAdd), the dependency                                 *)
 (* check (which hands the entry to Park), and the merge, after which the   *)
 (* HWM advances (monotone max) and, if it advanced while entries are       *)
 (* buffered, a drain is scheduled. Every outcome but the park is           *)
 (* acknowledged at once: production acks a dedup, a cycle-break rejection *)
 (* and an apply alike as Accepted. A duplicate of an entry that is still   *)
 (* being parked is not processed until the park completes - the intended  *)
-(* design, see DuplicateOfParkingEntryAcked.                               *)
+(* design (#4465); see CursorNeverSkipsUnshippedDuplicateOfParkingAcked.   *)
 (***************************************************************************)
 Deliver(e, i) ==
     LET s == e[1]
@@ -302,7 +303,7 @@ Deliver(e, i) ==
 (* the buffer insert are separate steps because production separates them *)
 (* by awaits, and an apply on another call can advance the HWM and run its *)
 (* drain in between. Parking re-arms a drain - the intended design; the    *)
-(* ParkLostWakeup mutation is production's shape.                          *)
+(* EventualConvergenceParkLostWakeup mutation is production's shape.      *)
 (***************************************************************************)
 Park(x, p) ==
     /\ p \in parking[x]
@@ -412,7 +413,7 @@ Replay(x, r) ==
 (* re-sent by its shipper; a replay in progress returns to the dead-letter *)
 (* queue). The causal buffer survives and a drain is re-armed on           *)
 (* activation - the intended design; production's buffer is in memory      *)
-(* (mutation VolatileCausalBuffer).                                        *)
+(* (mutation EventualConvergenceVolatileCausalBuffer).                     *)
 (***************************************************************************)
 Restart(x) ==
     /\ faults < MaxFaults
@@ -449,14 +450,14 @@ Restart(x) ==
 (* later writes to the key carry higher HLCs; and an earlier frontier is a *)
 (* smaller one, which only satisfies fewer dependencies.                   *)
 (*                                                                         *)
-(* The intended design pins NO drop floor, because no HLC is a cut below   *)
-(* which every write of an origin is provably in the snapshot: per-leaf    *)
-(* clocks are unordered. Production pins the floor at the frontier         *)
-(* (mutation PinnedFloorDropsUncapturedWrites). The intended design also   *)
-(* takes the pointwise maximum with the vector already held, where         *)
-(* production replaces it (mutation PinRegressesHighWaterVector), and      *)
-(* re-arms a drain, because the pin can satisfy a parked entry's           *)
-(* dependency (mutation PinSkipsDrain).                                    *)
+(* The design pins NO drop floor, because no HLC is a cut below which     *)
+(* every write of an origin is provably in the snapshot: per-leaf clocks   *)
+(* are unordered. Production pinned the floor at the frontier until #4476  *)
+(* (mutation BootstrapHandoffLosesNothingPinnedFloor). The intended design *)
+(* also takes the pointwise maximum with the vector already held, where    *)
+(* production replaces it (mutation EventualConvergencePinRegressesVector, *)
+(* #4464), and re-arms a drain, because the pin can satisfy a parked      *)
+(* entry's dependency (mutation EventualConvergencePinSkipsDrain, #4464).  *)
 (***************************************************************************)
 Bootstrap ==
     /\ ~booted
@@ -581,7 +582,8 @@ Converged ==
 (* EventualConvergence: under a fair transport, once writing stops every  *)
 (* replica of every key reaches the same value - the value of every write *)
 (* to that key. Fails on protocol defects under this fairness, not only   *)
-(* without it: see ParkLostWakeup and ObserverRelativeTieBreak.           *)
+(* without it: see EventualConvergenceParkLostWakeup and                  *)
+(* EventualConvergenceObserverRelativeTieBreak.                           *)
 EventualConvergence == <>[]Converged
 
 =============================================================================

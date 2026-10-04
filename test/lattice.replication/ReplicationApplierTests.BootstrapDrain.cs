@@ -60,18 +60,18 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_outside_bootstrap_drain_scope_dedupes_entry_below_hwm()
+    public async Task ApplyAsync_outside_bootstrap_drain_scope_applies_entry_below_hwm_without_regressing_it()
     {
         var (applier, _, apply, hwm) = CreateApplier();
 
-        // Same HWM seed, plus a pinned snapshot floor at HLC=50: in the
-        // steady state an entry below a pinned causal floor must dedup
-        // (re-delivery / below-snapshot backlog on the live incremental
-        // stream). Without a pinned floor a below-HWM point write would
-        // apply (the corrected #1060 semantics), so the floor is what
-        // makes this a dedup - contrast the bootstrap-drain bypass above.
+        // Same HWM seed as the drain case above. Outside a drain scope a
+        // point write below the per-origin HWM is a genuine write under
+        // non-monotonic per-origin HLC (#1060), and no snapshot-pinned
+        // floor drops it either (#4463): it applies, and the HWM does not
+        // regress (TryAdvanceAsync rejects the lower candidate).
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
+        hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(false);
 
         var entry = SetEntry("k", Hlc(20, 1));
 
@@ -80,14 +80,13 @@ public partial class ReplicationApplierTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Applied, Is.False,
-                "Outside a bootstrap-drain scope, an entry whose source HLC is at or below a pinned snapshot floor must be deduped - everything at or below the floor is already contained in the pinned snapshot, so a below-floor arrival is a re-delivery / below-snapshot backlog and the canonical dedup behaviour must hold.");
+            Assert.That(result.Applied, Is.True);
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(50)));
         });
 
-        await apply.DidNotReceiveWithAnyArgs()
-            .ApplySetAsync(default!, default!, default, default!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+        await apply.Received(1)
+            .ApplySetAsync("k", Arg.Any<byte[]>(), Hlc(20, 1), RemoteCluster, null, Arg.Any<long>());
+        await hwm.Received(1).TryAdvanceAsync(RemoteCluster, Hlc(20, 1), Arg.Any<CancellationToken>());
     }
 
     [Test]

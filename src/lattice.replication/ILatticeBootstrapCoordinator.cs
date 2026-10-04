@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 /// entry through the local apply seam preserving the source HLC, and
 /// pins the snapshot's causal-stable frontier on the per-tree
 /// high-water-mark grain so the first incremental entry arriving after the
-/// snapshot sees a non-empty frontier and a snapshot-pinned floor.
+/// snapshot sees a non-empty frontier.
 /// <para>
 /// Triggered by the fall-off detector when the maintenance pass
 /// finds the receiver behind the source cluster's retained WAL,

@@ -1001,10 +1001,12 @@ projection-state slots** that the materialiser owns:
   the projection through the standard activation-time path, which
   under every `ProjectionRebuildPolicy` value first attempts to
   rehydrate from the leaf's captured snapshot. The rebuild neither
-  clears nor bypasses that snapshot: when the leaf has a usable one,
-  its cache is reloaded from it, and each partition the snapshot
+  clears nor bypasses a readable snapshot: when the leaf has a usable
+  one, its cache is reloaded from it, and each partition the snapshot
   covers replays only the WAL entries after the snapshot's captured
-  offset.
+  offset. A snapshot that is present but proven unreadable is cleared
+  first, accepting the loss - see
+  [An unreadable leaf snapshot](#an-unreadable-leaf-snapshot).
 
 **Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
 leaf's key range, and the sibling pointers stay intact. The rebuild
@@ -1036,6 +1038,42 @@ Error surface:
 | Tree id starts with the reserved system prefix `_lattice_` | `LatticeReservedTreeNamespaceException` (an `InvalidOperationException` subclass) |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
 | An access gate is configured and does not authorise the caller for whole-tree admin | `LatticeAuthorizationDeniedException` |
+| A leaf's snapshot load throws, so the rebuild cannot tell an unreachable snapshot from an unreadable one | `InvalidOperationException` (retry once the store answers) |
+
+### An unreadable leaf snapshot
+
+When a leaf's snapshot cannot be loaded - the store faults, the row
+payload is unreadable, or a segment is missing or unreadable - the
+leaf's replay **fails closed** (issue #4450). Data operations on the
+leaf fail with an internal `LeafSnapshotUnavailableException`, which
+implements `ILatticeLeafUnavailable`, and nothing is replayed. Under
+coverage-gated WAL trimming the WAL GC removes a checkpointed prefix
+precisely because a snapshot covers it, so the snapshot may be the
+only durable copy of acknowledged writes. Rebuilding the leaf from the
+WAL alone would bring it up without them and raise no fault.
+
+The condition is transient by design. The replay is retried on the
+next data operation or WAL GC touch, and succeeds once the snapshot
+loads. Whether the WAL tail still starts at offset `0` is not
+consulted: the leaf's durable WAL pin was resolved against the failed
+snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a rebuild would be running.
+
+If the snapshot is **permanently** unreadable, the prefix it covered
+is lost. Restore the tree from a backup, or call
+`ILattice.RebuildLeafProjectionAsync` for the leaf's shard to accept
+the loss. The rebuild loads each leaf's snapshot first. A snapshot that
+is present but proven unreadable (an unreadable row payload, or a
+missing or unreadable segment) is cleared, with a `Warning` naming the
+leaf and the accepted loss, so the next activation finds no snapshot
+and rebuilds from the WAL that survives. A readable or absent snapshot
+is left alone. A snapshot load that **throws** fails the rebuild
+instead: an unreachable store cannot be told apart from an unreadable
+snapshot, and discarding a snapshot that was merely unreachable would
+destroy writes the operator did not need to lose. Retry once the store
+answers. A snapshot row the storage provider cannot read at all - so
+its storage grain cannot activate - is beyond the rebuild's reach;
+restore the tree from a backup.
 
 ### Observe materialiser lag
 

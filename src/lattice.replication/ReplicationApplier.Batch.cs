@@ -563,14 +563,13 @@ internal sealed partial class ReplicationApplier
     ///   <item><description>Range-delete entries bypass HWM dedup and
     ///   apply through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
-    ///   <item><description>Point entries are deduped against the
-    ///   snapshot-pinned causal floor (single
-    ///   <see cref="IReplicationHighWaterMarkGrain.GetPinnedFloorAsync"/>
-    ///   read per run); the floor is constant across a run, so no
-    ///   in-memory running threshold is maintained. The incrementally
-    ///   advanced per-origin diagonal is deliberately NOT a drop
-    ///   threshold (per-origin HLC is non-monotonic in WAL-append
-    ///   order - #1060).</description></item>
+    ///   <item><description>Point entries have no HLC drop threshold:
+    ///   neither the incrementally advanced per-origin diagonal (per-origin
+    ///   HLC is non-monotonic in WAL-append order - #1060) nor a
+    ///   snapshot-pinned floor (no single HLC is downward-closed over what a
+    ///   snapshot holds - #4463). Exact duplicates are absorbed by the
+    ///   shadow-forward identity cache and the idempotent leaf-level
+    ///   merge.</description></item>
     ///   <item><description>The local vector clock is fetched on
     ///   demand the first time a causal-dep entry is seen, then
     ///   reused until an apply mutates it (a "dirty" flag re-fetches
@@ -661,11 +660,6 @@ internal sealed partial class ReplicationApplier
 
         var hwmGrain = GetHwmGrain(treeId);
         var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
-        // Snapshot-pinned causal floor for this origin - the sole valid
-        // point-write drop threshold (see ApplyAsync for the full
-        // rationale). Read once per run: pins never happen mid-run.
-        // Zero when no snapshot has been pinned, so nothing is dropped.
-        var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(origin!, cancellationToken).ConfigureAwait(false);
 
         // Bootstrap-drain mode: receiver-side bootstrap replay opens a
         // <see cref="LatticeBootstrapApplyContext"/> scope around the
@@ -688,12 +682,8 @@ internal sealed partial class ReplicationApplier
 
         // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
         // race scenario it closes). The cache instance is fetched once
-        // per run; per-entry TryAdd is performed after the pinned-floor
-        // dedupe so floor-deduped entries do not pollute the cache (which
-        // would break operator-driven re-pin recovery, where lowering
-        // the per-origin frontier must re-admit previously-deduped
-        // identity tuples). On apply failure the reservation is rolled
-        // back via Remove so the transport's retry path is not silently
+        // per run. On apply failure the reservation is rolled back via
+        // Remove so the transport's retry path is not silently
         // suppressed.
         var dedupeCache = _dedupeCaches.GetOrAdd(
             treeId,
@@ -945,31 +935,18 @@ internal sealed partial class ReplicationApplier
                 }
 
                 // Phase D1c: saga prepare-phase entries
-                // (IsPrepared && AtomicBatchSize > 0) bypass BOTH the
-                // pinned-floor dedup AND the causal-park gate below.
-                // See ReplicationApplier.ApplyAsync for the full
-                // rationale; the same conditions apply on the batched
-                // per-entry pass. Compute the flag once and reuse it
-                // for both gates.
+                // (IsPrepared && AtomicBatchSize > 0) bypass the
+                // causal-park gate below. See ReplicationApplier.ApplyAsync
+                // for the full rationale; the same conditions apply on the
+                // batched per-entry pass.
                 var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
-
-                if (ReplicationReceiveDedup.IsCoveredByPinnedFloor(
-                        entry.Timestamp,
-                        pinnedFloor,
-                        bootstrapMode,
-                        isPreparedAtomicBatch))
-                {
-                    outcome = LatticeReplicationMetrics.OutcomeDedup;
-                    continue;
-                }
 
                 // Shadow-forward dedupe cache: suppress the duplicate-emit
                 // pair that structural rewrites (split / merge) generate
                 // when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
-                // detailed race scenario. The check sits after the
-                // pinned-floor dedupe so floor-deduped entries do not
-                // pollute the cache.
+                // detailed race scenario. There is no HLC drop threshold
+                // ahead of it (#1060, #4463).
                 if (!dedupeCache.TryAdd(entry))
                 {
                     outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;

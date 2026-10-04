@@ -8,17 +8,15 @@ using Orleans.Lattice.Testing.Coyote;
 namespace Orleans.Lattice.Replication.Tests.Coyote;
 
 /// <summary>
-/// Which drop threshold a <see cref="ReplicationDedupConvergenceModel"/> run feeds the
-/// receiver's real <see cref="ReplicationReceiveDedup.IsCoveredByPinnedFloor"/>.
+/// Which point-write dedup rule a <see cref="ReplicationDedupConvergenceModel"/> run applies.
 /// </summary>
 public enum ReplicationDedupMode
 {
     /// <summary>
-    /// The fix: the threshold is the snapshot-pinned floor. Nothing in this model pins one, so
-    /// it stays <see cref="HybridLogicalClock.Zero"/> and only the identity cache and the
-    /// idempotent merge deduplicate.
+    /// The fix: no HLC threshold at all. Only the identity cache and the idempotent merge
+    /// deduplicate, as <see cref="ReplicationApplier"/> does since #1060 and #4463.
     /// </summary>
-    PinnedFloor,
+    IdentityAndMerge,
 
     /// <summary>
     /// The guard removed, reproducing the receiver half of #1060: the threshold is the
@@ -51,8 +49,7 @@ public enum ReplicationDedupMode
 /// backstop the bounded-progress liveness encoding requires.
 /// </para>
 /// <para>
-/// Safety, at every drop: an entry the receiver discards as a duplicate - by the floor or the
-/// identity cache - would not change the receiver's value. Liveness, at the end: the receiver's
+/// Safety, at every drop: an entry the receiver discards as a duplicate would not change the receiver's value. Liveness, at the end: the receiver's
 /// values equal the merge of every write. The identity cache holds fewer entries than the run
 /// delivers, so eviction and the idempotent-merge fallback behind it are exercised.
 /// </para>
@@ -123,22 +120,17 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
                     "PROBE: an entry was delivered below its origin's high-water mark");
             }
 
-            // Pinned because they are outside this model: no snapshot handoff runs here (the
-            // TLA+ Bootstrap action models it), and saga prepare-phase entries are #4436's scope.
-            const bool isBootstrapDrain = false;
-            const bool isPreparedAtomicBatch = false;
-            var threshold = _mode == ReplicationDedupMode.IncrementalDiagonal
-                ? HighWaterMark(hwm, origin)
-                : HybridLogicalClock.Zero;
-
             if (ReplicationReceiveDedup.IsOwnOrigin(origin, Receiver))
             {
                 acked.Add(entry);
                 return;
             }
 
-            if (ReplicationReceiveDedup.IsCoveredByPinnedFloor(entry.Timestamp, threshold, isBootstrapDrain, isPreparedAtomicBatch)
-                || !cache.TryAdd(entry))
+            // The guard reintroduces the removed rule, so it is written here rather than in the
+            // product: a drop at or below the origin's high-water mark.
+            var droppedOnDiagonal = _mode == ReplicationDedupMode.IncrementalDiagonal
+                && entry.Timestamp.CompareTo(HighWaterMark(hwm, origin)) <= 0;
+            if (droppedOnDiagonal || !cache.TryAdd(entry))
             {
                 AssertSubsumed(entry, lww, counter);
                 acked.Add(entry);

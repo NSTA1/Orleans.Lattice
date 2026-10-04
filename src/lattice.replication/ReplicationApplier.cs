@@ -141,8 +141,8 @@ internal sealed partial class ReplicationApplier(
     /// rejects the duplicate-emit pair a structural rewrite (shard split /
     /// merge) generates when it shadow-forwards a user write into a
     /// different shard, and any other recent re-delivery, without a leaf
-    /// hop. The per-origin high-water-mark is not a drop threshold for
-    /// incremental writes (only the snapshot-pinned causal floor is), so a
+    /// hop. There is no per-origin HLC drop threshold for point writes
+    /// (#1060, #4463), so a
     /// re-delivery evicted from the bounded cache under sustained churn falls
     /// through to the idempotent leaf-level last-writer-wins apply, which is
     /// a no-op for identical bytes.
@@ -430,8 +430,9 @@ internal sealed partial class ReplicationApplier(
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-            // Point-write dedup gate: the SNAPSHOT-PINNED CAUSAL FLOOR,
-            // not the incrementally-advanced per-origin diagonal.
+            // There is NO per-origin HLC drop threshold for point writes -
+            // neither the incrementally-advanced diagonal nor a
+            // snapshot-pinned floor.
             //
             // The source HLC is stamped per leaf (BPlusLeafGrain's own
             // clock) and WAL/replog partitions are keyed by
@@ -444,57 +445,34 @@ internal sealed partial class ReplicationApplier(
             // the incremental diagonal (`entry.Timestamp <= hwm`) treated
             // every such entry as a duplicate and silently discarded it -
             // the receiver half of the #1060 replication-gap (US
-            // shipped == EU applied == 1041 of 3967). Correctness for the
-            // incremental stream is instead upheld by the shadow-forward
-            // identity cache below (exact (origin, hlc, key, op) tuple)
-            // plus the leaf-level per-key LWW guard (re-applying an
-            // already-present (key, source-HLC) is a no-op). A below-
-            // diagonal entry that survives both is a new write; its
+            // shipped == EU applied == 1041 of 3967).
+            //
+            // A snapshot-pinned floor is not a valid threshold either, for
+            // the same reason (#4463): no single HLC per origin is
+            // downward-closed over what a snapshot holds. The bootstrap
+            // pin seals the source coordinate at the maximum HLC anywhere
+            // in the snapshot, so a later source write on a leaf whose
+            // clock is at or below it is not in the snapshot; and a third
+            // origin's coordinate is the source's maximum applied HLC,
+            // which is non-monotonic in delivery order. Dropping at or
+            // below either silently lost writes the snapshot never held.
+            //
+            // Correctness for every point write is instead upheld by the
+            // shadow-forward identity cache below (exact (origin, hlc, key,
+            // op) tuple) plus the leaf-level per-key LWW guard
+            // (re-applying an already-present (key, source-HLC) is a
+            // no-op), exactly as for steady-state replication since #1060.
+            // A below-diagonal entry that survives both is a new write; its
             // out-of-order arrival is surfaced (observability-only) by the
             // FIFO-violation counter in RecordFifoState.
-            //
-            // The pinned floor IS a valid drop threshold: it is written
-            // only by PinSnapshotAsync (bootstrap-snapshot handoff or
-            // operator rollback re-pin), never by incremental
-            // TryAdvanceAsync, so every origin entry at or below it is
-            // provably contained in the pinned snapshot. Dropping those is
-            // the exactly-once optimisation for the snapshot -> incremental
-            // handoff: the peer may re-deliver a large below-snapshot
-            // backlog that is already captured by the restore, and the
-            // floor short-circuits it without a leaf round-trip. When no
-            // snapshot has been pinned the floor is HybridLogicalClock.Zero
-            // for every origin, so nothing is dropped.
-            //
-            // Bypasses (unchanged): bootstrap-drain delivery runs before
-            // the post-drain pin, so its floor is still Zero and the
-            // bypass is belt-and-braces; saga prepare-phase entries
-            // (IsPrepared && AtomicBatchSize > 0) carry non-monotonic
-            // per-leaf HLCs across the saga's touched leaves and are
-            // deduped by the per-leaf AddPreparedMutation LWW merge + the
-            // per-tx terminal-mark idempotency instead.
             var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
             var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
-            if (!isBootstrapDrain && !isPreparedAtomicBatch)
-            {
-                var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(entry.OriginClusterId!, cancellationToken);
-                if (ReplicationReceiveDedup.IsCoveredByPinnedFloor(
-                        entry.Timestamp,
-                        pinnedFloor,
-                        isBootstrapDrain,
-                        isPreparedAtomicBatch))
-                {
-                    outcome = LatticeReplicationMetrics.OutcomeDedup;
-                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
-                }
-            }
-
             // Shadow-forward dedupe cache: a structural rewrite (shard
             // split / merge) that shadow-forwards a
             // user write into a different shard generates a duplicate
             // emit pair with identical (origin, hlc, key, op). This cache
-            // is the primary exact-identity dedup for incremental point
-            // writes (the pinned-floor gate above only covers entries
-            // provably inside a snapshot); it catches recent re-deliveries
+            // is the exact-identity dedup for point writes (there is no
+            // HLC drop threshold above); it catches recent re-deliveries
             // without a leaf hop, and any re-delivery evicted from the
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it

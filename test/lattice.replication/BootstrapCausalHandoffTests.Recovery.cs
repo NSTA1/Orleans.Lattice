@@ -14,12 +14,12 @@ namespace Orleans.Lattice.Replication.Tests;
 public partial class BootstrapCausalHandoffTests
 {
     /// <summary>
-    /// Recovery 6: pinning the same frontier twice is idempotent -
-    /// the second pin neither admits previously-deduped entries nor
-    /// changes the dedup verdict for incremental traffic.
+    /// Recovery 6: pinning the same frontier twice is idempotent - the
+    /// diagonal stays at the pinned value, and a below-diagonal entry
+    /// still applies (the pin is not a drop floor, #4463).
     /// </summary>
     [Test]
-    public async Task After_pin_re_pinning_same_frontier_is_idempotent_for_dedup_verdict()
+    public async Task After_pin_re_pinning_same_frontier_is_idempotent()
     {
         var h = CreateHarness();
         var frontier = Vector((OriginA, Hlc(100)));
@@ -27,14 +27,12 @@ public partial class BootstrapCausalHandoffTests
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
 
-        // Below-diagonal entry must still be HWM-deduped after the
-        // second pin - the second pin is a no-op for dedup behaviour.
         var below = SetEntry("k-below", Hlc(50), OriginA);
         var belowResult = await h.Applier.ApplyAsync(below);
 
         Assert.Multiple(() =>
         {
-            Assert.That(belowResult.Applied, Is.False);
+            Assert.That(belowResult.Applied, Is.True);
             Assert.That(belowResult.HighWaterMark, Is.EqualTo(Hlc(100)));
             Assert.That(h.HwmRows[OriginA], Is.EqualTo(Hlc(100)),
                 "Per-origin diagonal must remain at the pinned value after redundant re-pin.");
@@ -44,30 +42,27 @@ public partial class BootstrapCausalHandoffTests
     /// <summary>
     /// Recovery 7: re-pinning a lower frontier (operator-driven
     /// rollback / restore-from-older-snapshot) overwrites the
-    /// per-origin diagonal unconditionally. An entry that was
-    /// previously HWM-deduped against the higher frontier must apply
-    /// after the lower re-pin.
+    /// per-origin diagonal. Entries apply under either pin - neither is
+    /// a drop floor (#4463) - and after the lower re-pin the diagonal
+    /// advances from the lowered value.
     /// </summary>
     [Test]
-    public async Task After_pin_re_pinning_lower_frontier_admits_previously_deduped_entries()
+    public async Task After_pin_re_pinning_lower_frontier_lowers_the_diagonal()
     {
         var h = CreateHarness();
 
-        // First pin at HLC 200 - a subsequent entry at HLC 50 dedups.
         await h.Hwm.PinSnapshotAsync(Hlc(200), Vector((OriginA, Hlc(200))), CancellationToken.None);
-        var firstResult = await h.Applier.ApplyAsync(SetEntry("k-replay", Hlc(50), OriginA));
-        Assert.That(firstResult.Applied, Is.False, "Below-diagonal entry dedups under the higher pin.");
+        var firstResult = await h.Applier.ApplyAsync(SetEntry("k-first", Hlc(50), OriginA));
+        Assert.That(firstResult.Applied, Is.True, "A below-diagonal entry applies under the higher pin.");
 
         // Operator rolls back: re-pin at HLC 25.
         await h.Hwm.PinSnapshotAsync(Hlc(25), Vector((OriginA, Hlc(25))), CancellationToken.None);
 
-        // The same HLC 50 entry now applies - it is above the new
-        // diagonal of 25.
-        var secondResult = await h.Applier.ApplyAsync(SetEntry("k-replay", Hlc(50), OriginA));
+        var secondResult = await h.Applier.ApplyAsync(SetEntry("k-second", Hlc(50), OriginA));
 
         Assert.Multiple(() =>
         {
-            Assert.That(secondResult.Applied, Is.True, "Entry above the lower re-pinned diagonal must apply.");
+            Assert.That(secondResult.Applied, Is.True);
             Assert.That(secondResult.HighWaterMark, Is.EqualTo(Hlc(50)));
             Assert.That(h.HwmRows[OriginA], Is.EqualTo(Hlc(50)),
                 "Per-origin diagonal must advance from the lowered pin to the applied entry's HLC.");

@@ -18,14 +18,14 @@ namespace Orleans.Lattice.Replication.Tests.Coyote;
 public sealed class ReplicationConvergenceCoyoteTests
 {
     /// <summary>
-    /// The fix: dropping only below the snapshot-pinned floor (none is pinned here) never drops
-    /// a new write, and every replica value converges, under reordering, loss and duplication.
+    /// The fix: deduplicating only on exact identity and the idempotent merge never drops a new
+    /// write, and every replica value converges, under reordering, loss and duplication.
     /// </summary>
     [Test]
-    public void Pinned_floor_dedup_never_drops_a_new_write_and_converges()
+    public void Identity_and_merge_dedup_never_drops_a_new_write_and_converges()
     {
         CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
-            new ReplicationDedupConvergenceModel(ReplicationDedupMode.PinnedFloor));
+            new ReplicationDedupConvergenceModel(ReplicationDedupMode.IdentityAndMerge));
     }
 
     /// <summary>
@@ -55,10 +55,10 @@ public sealed class ReplicationConvergenceCoyoteTests
     /// fix does not depend on duplication or loss to look correct.
     /// </summary>
     [Test]
-    public void Pinned_floor_dedup_converges_over_a_reliable_transport()
+    public void Identity_and_merge_dedup_converges_over_a_reliable_transport()
     {
         CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
-            new ReplicationDedupConvergenceModel(ReplicationDedupMode.PinnedFloor, drops: 0, duplicates: 0));
+            new ReplicationDedupConvergenceModel(ReplicationDedupMode.IdentityAndMerge, drops: 0, duplicates: 0));
     }
 
     /// <summary>

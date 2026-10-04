@@ -37,8 +37,7 @@ replication says nothing about it.
   delivered in any order, and the cursor moves only on the acknowledgement of
   the next entry (`Deliver`).
 - **The receiver's apply pipeline**, in production's order (`Deliver`): the
-  receiver-side cycle-break, the snapshot-pinned drop floor, the shadow-forward
-  identity cache, the causal dependency check (`Park`, `Drain`), the merge and
+  receiver-side cycle-break, the shadow-forward identity cache, the causal dependency check (`Park`, `Drain`), the merge and
   the monotone high-water mark; dead-lettering of failed applies and evicted
   buffer entries (`ApplyFails`, `Evict`) and operator replay (`Replay`); a
   receiver restart that loses volatile state (`Restart`).
@@ -99,11 +98,12 @@ there.
 ## Production defects this module found
 
 Writing the module turned up three defects. The module checks the intended
-design, and each defect stands as a mutation that reproduces current
-production until its fix lands:
+design, and each defect stands as a mutation that reproduces the production
+shape, kept after the fix lands as the check that reintroducing it is caught:
 
-- #4463 - the bootstrap pin installs a drop floor that discards writes the
-  snapshot does not hold (`BootstrapHandoffLosesNothingPinnedFloor`).
+- #4463, fixed by #4476 - the bootstrap pin installed a drop floor that
+  discarded writes the snapshot did not hold
+  (`BootstrapHandoffLosesNothingPinnedFloor`).
 - #4464 - the causal buffer can strand or lose parked entries (four
   `EventualConvergence*` mutations).
 - #4465 - a duplicate of an entry still in flight is acknowledged, so an
