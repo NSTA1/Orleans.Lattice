@@ -366,15 +366,21 @@ internal sealed class LatticeBackupCaptureService(
 
     /// <summary>
     /// Captures a cross-tree-consistent set behind a single causal fence. Each
-    /// attempt drains every in-flight cross-tree saga touching the set to a
-    /// terminal decision, selects the fence, captures every tree, then
-    /// re-observes: the attempt is accepted only when no cross-tree saga
-    /// registered on the set during the capture window (each registry's monotonic
-    /// epoch is unchanged and nothing is in-flight). Because the per-tree snapshot
-    /// resolves a cross-tree batch's visibility against the single coordinator
-    /// decision, a batch terminal before every capture is uniformly visible and a
-    /// batch not yet started is uniformly absent - so no cross-tree batch is torn
-    /// across the set boundary.
+    /// attempt fences every member's saga decision registry (no new cross-tree
+    /// saga can register on the set), drains every in-flight cross-tree saga
+    /// touching the set to a terminal decision, then holds a single saga
+    /// decision gate across every member (issue #4485), re-checks that no
+    /// cross-tree saga is still delegated on any member, selects the fence,
+    /// captures every tree, and re-observes. The attempt is accepted only when
+    /// the re-check was clean, no cross-tree saga registered on the set during
+    /// the capture window (each registry's monotonic epoch is unchanged and
+    /// nothing is in-flight), and the gate was held without a lapse throughout.
+    /// Each member resolves the sagas still pending in its baselines against its
+    /// own decisions as of the gate, and under the gate no decision is recorded
+    /// anywhere on the set: a cross-tree batch finalized on every member before
+    /// the gate is uniformly visible, and one finalized on none is uniformly
+    /// absent - so no cross-tree batch is torn across the set boundary, and no
+    /// batch is torn within a member either.
     /// </summary>
     private async Task<LatticeBackupSetCaptureResult> CaptureFencedSetAsync(
         LatticeBackupSetCaptureRequest request,
@@ -399,54 +405,162 @@ internal sealed class LatticeBackupCaptureService(
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            // Step 1: drain in-flight cross-tree sagas touching the set and
-            // capture the per-tree registration epoch at the drained moment.
-            var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
-                grainFactory, registries, options, cancellationToken).ConfigureAwait(false);
-            totalDrainWait += waited;
-            totalDrained += drained;
-
-            // Step 2: select the fence and capture every tree as of it.
-            var fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
-            var members = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
-
-            // Step 3: re-observe. The window is stable iff no cross-tree saga
-            // registered on any set tree during the capture (epoch unchanged) and
-            // nothing is in-flight now.
-            //
-            // Both clauses observe a PROXY for cross-tree quiescence, not
-            // quiescence itself, and the two clauses cover different populations:
-            //
-            //  * The epoch clause covers exactly the sagas that REGISTERED a
-            //    cross-tree delegation on this tree during the capture window.
-            //    It is a monotonic counter compared as a delta across the window,
-            //    so a saga that registered and finalized entirely inside the
-            //    window is still caught (the counter does not decrement), but a
-            //    saga that registered BEFORE the window is not covered by it at
-            //    all - that population is the drain gate's job (step 1).
-            //  * The in-flight clause covers the delegation rows live at the
-            //    instant of the re-observation. It is an absolute count, not a
-            //    delta, so it is sensitive to a row that is present now for any
-            //    reason - including a row stranded by a failed persist.
-            //
-            // The asymmetry matters: because the epoch is compared as a delta and
-            // the count absolutely, a spurious epoch bump is absorbed into the
-            // baseline and would be invisible here, whereas a spurious row is
-            // not. That is why TxRegistryGrain unwinds a failed Mark* persist by
-            // restoring the delegation rows rather than by bumping the epoch.
-            var stable = true;
+            // Issue #4485. One gate token covers every member tree for the whole
+            // attempt. Step 0 FENCES each member's saga decision registry: no
+            // NEW cross-tree saga can register a delegation on the set, so the
+            // drain below terminates (a sub-saga refused at its park votes
+            // Failed and its coordinator aborts; decisions are still recorded).
+            var gateToken = Guid.NewGuid();
+            var highWaters = new int[registries.Length];
             for (var i = 0; i < registries.Length; i++)
             {
-                var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
-                    grainFactory, registries[i]).ConfigureAwait(false);
-                if (!CrossTreeFenceWindow.IsStable(epochBefore[i], after.RegistrationEpoch, after.InFlightCount))
+                highWaters[i] = await TxRegistryFanOut.AcquireCaptureGateAsync(
+                    grainFactory, registries[i], gateToken, TxRegistryCaptureGateMode.Fence, SnapshotDecisionGateContext.Lease)
+                    .ConfigureAwait(false);
+            }
+
+            List<LatticeBackupCaptureResult>? members = null;
+            long fenceHlc = 0;
+            var stable = false;
+            var recheckClean = false;
+            var valid = false;
+            try
+            {
+                bool renewed;
+                using (var renewStop = new CancellationTokenSource())
                 {
-                    stable = false;
-                    break;
+                    var renewal = RenewSetGateAsync(grainFactory, registries, highWaters, gateToken, renewStop.Token);
+                    try
+                    {
+                        // Step 1: drain in-flight cross-tree sagas touching the set
+                        // and capture the per-tree registration epoch at the drained
+                        // moment. The drain runs OUTSIDE the decision gate: a
+                        // cross-tree sub-saga drains only by recording its local
+                        // finalize, which the gate would refuse.
+                        var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
+                            grainFactory, registries, options, cancellationToken).ConfigureAwait(false);
+                        totalDrainWait += waited;
+                        totalDrained += drained;
+
+                        // Step 2: GATE every member. From here no saga decision is
+                        // recorded on any member tree, and each registry key has
+                        // snapshotted its local decisions (D0).
+                        for (var i = 0; i < registries.Length; i++)
+                        {
+                            var covered = await TxRegistryFanOut.AcquireCaptureGateAsync(
+                                grainFactory, registries[i], gateToken, TxRegistryCaptureGateMode.Gate, SnapshotDecisionGateContext.Lease)
+                                .ConfigureAwait(false);
+                            highWaters[i] = Math.Max(highWaters[i], covered);
+                        }
+
+                        // Step 3: re-check under the gate. A cross-tree saga finalized
+                        // on one member before its gate but still delegated on another
+                        // would be post-saga on the first and pre-saga on the second;
+                        // its live delegation row is what refuses the attempt. Under
+                        // the fence no row can register, and under the gate none can
+                        // be cached away, so a clean re-check is stable for the rest
+                        // of the attempt.
+                        recheckClean = true;
+                        for (var i = 0; i < registries.Length; i++)
+                        {
+                            var underGate = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
+                                grainFactory, registries[i]).ConfigureAwait(false);
+                            if (!CrossTreeFenceWindow.IsRecheckClean(underGate.InFlightCount, underGate.UnresolvableCount))
+                            {
+                                recheckClean = false;
+                                break;
+                            }
+                        }
+
+                        if (recheckClean)
+                        {
+                            // Step 4: select the fence and capture every tree as of
+                            // it, each member resolving its pending buckets against
+                            // its own D0 under the set's gate.
+                            fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
+                            using (SnapshotDecisionGateContext.With(gateToken))
+                            {
+                                members = await CaptureMembersAsync(request, cancellationToken).ConfigureAwait(false);
+                            }
+
+                            // Step 5: re-observe. The window is stable iff no
+                            // cross-tree saga registered on any set tree during the
+                            // capture (epoch unchanged) and nothing is in-flight now.
+                            //
+                            // Both clauses observe a PROXY for cross-tree quiescence,
+                            // not quiescence itself, and the two clauses cover
+                            // different populations:
+                            //
+                            //  * The epoch clause covers exactly the sagas that
+                            //    REGISTERED a cross-tree delegation on this tree during
+                            //    the capture window. It is a monotonic counter compared
+                            //    as a delta across the window, so a saga that
+                            //    registered and finalized entirely inside the window is
+                            //    still caught (the counter does not decrement), but a
+                            //    saga that registered BEFORE the window is not covered
+                            //    by it at all - that population is the drain gate's job
+                            //    (step 1).
+                            //  * The in-flight clause covers the delegation rows live
+                            //    at the instant of the re-observation. It is an absolute
+                            //    count, not a delta, so it is sensitive to a row that is
+                            //    present now for any reason - including a row stranded
+                            //    by a failed persist.
+                            //
+                            // The asymmetry matters: because the epoch is compared as a
+                            // delta and the count absolutely, a spurious epoch bump is
+                            // absorbed into the baseline and would be invisible here,
+                            // whereas a spurious row is not. That is why
+                            // TxRegistryGrain unwinds a failed Mark* persist by
+                            // restoring the delegation rows rather than by bumping the
+                            // epoch.
+                            //
+                            // Under the fence and gate this and the step-3 re-check are
+                            // mutually redundant defence in depth: a row can be live
+                            // here only if a lapsed lease admitted a registration,
+                            // which also moves the epoch (the #4440 backup model fires
+                            // only when both are skipped).
+                            stable = true;
+                            for (var i = 0; i < registries.Length; i++)
+                            {
+                                var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
+                                    grainFactory, registries[i]).ConfigureAwait(false);
+                                if (!CrossTreeFenceWindow.IsStable(epochBefore[i], after.RegistrationEpoch, after.InFlightCount))
+                                {
+                                    stable = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        renewStop.Cancel();
+                        renewed = await renewal.ConfigureAwait(false);
+                    }
+                }
+
+                // Step 6: release with validation. The cut is accepted only when the
+                // gate was held without a lapse on every registry key of every member
+                // for the whole attempt, and no member's registry shard high-water
+                // moved; otherwise a decision may have crossed the capture.
+                valid = renewed;
+            }
+            finally
+            {
+                // Every member's hold is released however the attempt ended, so
+                // a failed or cancelled capture never leaves sagas waiting on its
+                // lease.
+                for (var i = 0; i < registries.Length; i++)
+                {
+                    if (!await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, registries[i], highWaters[i], gateToken)
+                            .ConfigureAwait(false))
+                    {
+                        valid = false;
+                    }
                 }
             }
 
-            if (stable)
+            if (recheckClean && stable && valid && members is not null)
             {
                 var fence = new BackupSetFence(
                     fenceHlc, totalDrained, totalDrainWait.TotalMilliseconds, attempt);
@@ -471,20 +585,61 @@ internal sealed class LatticeBackupCaptureService(
                 return new LatticeBackupSetCaptureResult(manifest, stampedMembers);
             }
 
-            // A cross-tree saga registered on the set mid-capture: the captured
-            // members may be torn. Discard them (they remain as content-addressed
-            // orphan per-tree backups) and retry with a fresh fence.
+            // A cross-tree saga was still delegated under the gate, one registered
+            // on the set mid-capture, or the gate was not held throughout: the
+            // captured members may be torn. Discard them (they remain as
+            // content-addressed orphan per-tree backups) and retry with a fresh
+            // fence and gate.
             BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
             logger.LogDebug(
-                "Backup set '{SetName}' fence attempt {Attempt} saw a cross-tree saga register during capture; retrying.",
-                request.Name, attempt);
+                "Backup set '{SetName}' fence attempt {Attempt} was not accepted (re-check clean: {RecheckClean}, "
+                + "window stable: {Stable}, gate held: {GateHeld}); retrying.",
+                request.Name, attempt, recheckClean, stable, valid);
         }
 
         throw new LatticeBackupCrossTreeFenceException(
             $"Could not establish a stable cross-tree fence for backup set '{request.Name}' over "
             + $"{scopes.Count} trees within {options.MaxCrossTreeFenceAttempts} attempts: a cross-tree atomic "
-            + "write kept registering on the set during each capture window. Retry when the set is quieter or "
+            + "write was still in flight, or registered on the set, during each capture window, or the capture "
+            + "could not hold the saga decision gate. Retry when the set is quieter or "
             + $"raise {nameof(LatticeBackupOptions.MaxCrossTreeFenceAttempts)}.");
+    }
+
+    /// <summary>
+    /// Renews a backup set's capture hold on every member's registry keys every
+    /// <see cref="SnapshotDecisionGateContext.RenewInterval"/> until
+    /// <paramref name="stop"/> fires (issue #4485). Returns <see langword="false"/>
+    /// as soon as any member's hold is found no longer live, so the attempt is
+    /// discarded rather than accepted.
+    /// </summary>
+    private static async Task<bool> RenewSetGateAsync(
+        IGrainFactory grainFactory,
+        string[] registries,
+        int[] highWaters,
+        Guid gateToken,
+        CancellationToken stop)
+    {
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(SnapshotDecisionGateContext.RenewInterval, stop).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return true;
+            }
+
+            for (var i = 0; i < registries.Length; i++)
+            {
+                if (!await TxRegistryFanOut.RenewCaptureGateAsync(
+                        grainFactory, registries[i], highWaters[i], gateToken, SnapshotDecisionGateContext.Lease)
+                        .ConfigureAwait(false))
+                {
+                    return false;
+                }
+            }
+        }
     }
 
     /// <summary>

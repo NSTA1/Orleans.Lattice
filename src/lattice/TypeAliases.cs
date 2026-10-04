@@ -337,6 +337,10 @@ internal static class TypeAliases
     internal const string TxRegistryState = "ol.txr";
     internal const string TxRegistryHighWaterState = "ol.txh";
     internal const string TxRegistryWriteFailed = "ol.txf";
+    internal const string TxDecisionGateRefused = "ol.dgx";
+    internal const string TxDecisionGateRefusal = "ol.dgk";
+    internal const string TxRegistryCaptureGateMode = "ol.dgm";
+    internal const string SnapshotDecisionGate = "ol.dgs";
     internal const string LatticeStateWriteFailed = "ol.swf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";

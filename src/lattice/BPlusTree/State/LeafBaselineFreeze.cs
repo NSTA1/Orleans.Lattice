@@ -46,4 +46,14 @@ internal sealed class LeafBaselineFreeze
     /// sagas.
     /// </summary>
     [Id(2)] public IReadOnlyList<LeafBaselinePendingEntry> Pending { get; set; } = Array.Empty<LeafBaselinePendingEntry>();
+
+    /// <summary>
+    /// The sagas whose terminal the leaf had already applied when it was frozen
+    /// (its per-activation terminal record). The fold feeds them to the orphan
+    /// guard when it resolves a still-pending bucket against a snapshot
+    /// capture's decision snapshot (issue #4485), so a surviving orphan bucket
+    /// never shadows the value its own terminal already settled. Never
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(3)] public IReadOnlyList<Guid> RecentlyTerminal { get; set; } = Array.Empty<Guid>();
 }

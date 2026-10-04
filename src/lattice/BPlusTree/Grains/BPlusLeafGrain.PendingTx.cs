@@ -1178,6 +1178,26 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// The terminal-intent twin of <see cref="ResolvePendingStatusAsync"/> for
+    /// the activation self-terminalise sweep, which APPLIES the answer (issue
+    /// #4485). It asks <see cref="ITxRegistryGrain.GetStatusForTerminalAsync"/>,
+    /// which returns a terminal verdict only once it is durably recorded on the
+    /// registry, and never under a snapshot capture's decision gate for a saga
+    /// not decided before it - so this sweep cannot land a terminal a capture's
+    /// decision snapshot does not account for. Ignores the read-path ambient
+    /// snapshot contexts: the sweep is not a read.
+    /// </summary>
+    private async ValueTask<TxStatus> ResolvePendingStatusForTerminalAsync(Guid txid)
+    {
+        if (txid == Guid.Empty) return TxStatus.InFlight;
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
+        return await TxRegistryRouting
+            .GetRegistry(grainFactory, treeId, txid)
+            .GetStatusForTerminalAsync(txid);
+    }
+
+    /// <summary>
     /// Issue #2190. Self-terminalises every saga prepare still resident in
     /// <c>_pendingTx</c> after activation-time replay whose saga the per-tree
     /// <see cref="ITxRegistryGrain"/> reports as terminally decided, by applying
@@ -1301,7 +1321,7 @@ internal sealed partial class BPlusLeafGrain
             TxStatus decision;
             try
             {
-                decision = await ResolvePendingStatusAsync(txid);
+                decision = await ResolvePendingStatusForTerminalAsync(txid);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {

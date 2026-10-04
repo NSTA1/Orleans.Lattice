@@ -56,7 +56,7 @@ public sealed class AtomicVisibilityGateTests
     }
 
     [Test]
-    public void Indeterminate_always_hides_key([Values] bool alreadyTerminal, [Values] bool preparedHidden)
+    public void Indeterminate_hides_key_when_no_terminal_was_applied_here([Values] bool preparedHidden)
     {
         // An indeterminate reading is a refusal to answer, not an answer. The
         // gate must hide rather than fall through: falling through would publish
@@ -65,20 +65,21 @@ public sealed class AtomicVisibilityGateTests
         // Hiding is the only outcome that is never wrong for a committed saga
         // and never wrong for an aborted one.
         Assert.That(
-            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal, preparedHidden),
+            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal: false, preparedHidden),
             Is.EqualTo(PendingReadOutcome.Hidden));
     }
 
     [Test]
-    public void Indeterminate_is_checked_before_the_already_terminal_orphan_rule()
+    public void Already_terminal_orphan_falls_through_under_an_indeterminate_outcome([Values] bool preparedHidden)
     {
-        // Ordering guard. `alreadyTerminal` short-circuits Committed to
-        // FallThroughToPreSaga; if the Indeterminate branch sat below that test
-        // it would inherit the same fall-through and silently reintroduce the
-        // very disclosure this case exists to prevent.
+        // Issue #4428. The orphan guard is tested ahead of the Indeterminate arm:
+        // this leaf already applied the saga's terminal, so its row is the outcome,
+        // materialised, and serving it asserts nothing the leaf does not hold.
+        // Hiding it kept a committed value unreadable for as long as the registry
+        // row stayed masked, which nothing guarantees will end.
         Assert.That(
-            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal: true, preparedHiddenByTombstoneOrExpiry: false),
-            Is.EqualTo(PendingReadOutcome.Hidden));
+            AtomicVisibilityGate.ResolveKey(TxStatus.Indeterminate, alreadyTerminal: true, preparedHidden),
+            Is.EqualTo(PendingReadOutcome.FallThroughToPreSaga));
     }
 
     [Test]
@@ -189,6 +190,25 @@ public sealed class AtomicVisibilityGateTests
             Candidate(TxStatus.InFlight, 1),
         ];
         Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(candidates), Is.EqualTo(-1));
+    }
+
+    [Test]
+    public void SelectDecidingPrepare_skips_an_already_terminal_indeterminate_orphan()
+    {
+        // Issue #4428: an orphan cannot change the row whatever its saga's
+        // status, so it must not hide a committed prepare beside it either.
+        PreparedCandidate[] alone = [Candidate(TxStatus.Indeterminate, 2, alreadyTerminal: true)];
+        PreparedCandidate[] besideCommitted =
+        [
+            Candidate(TxStatus.Indeterminate, 2, alreadyTerminal: true),
+            Candidate(TxStatus.Committed, 1),
+        ];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(alone), Is.EqualTo(-1));
+            Assert.That(AtomicVisibilityGate.SelectDecidingPrepare(besideCommitted), Is.EqualTo(1));
+        });
     }
 
     [Test]

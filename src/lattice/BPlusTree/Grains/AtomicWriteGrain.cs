@@ -664,6 +664,14 @@ internal sealed class AtomicWriteGrain(
                 throw;
             }
         }
+        catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+        {
+            // Issue #4485: a backup set's fence refused the delegation. Not a
+            // retryable park blip - RunSagaAsync rolls this sub-saga back so it
+            // votes Failed. Nothing was persisted (the registration precedes the
+            // paused-phase write), so there is nothing to revert.
+            throw;
+        }
         catch (LatticeStateWriteFailedException conflict) when (conflict.Conflict)
         {
             // The paused-phase persist lost an ETag check (issue #3572): this
@@ -2187,7 +2195,9 @@ internal sealed class AtomicWriteGrain(
         List<WalRecord>? buffer = null;
         for (var i = 0; i < records.Length; i++)
         {
-            if (records[i] is { } r)
+            // A copy a resize undo discarded has had its log released; a terminal
+            // it took before the discard is discarded with it (issue #4474).
+            if (records[i] is { } r && _discardedTerminalCopies?.Contains(r.TreeId) != true)
             {
                 buffer ??= new List<WalRecord>(records.Length);
                 buffer.Add(r);
@@ -2195,6 +2205,36 @@ internal sealed class AtomicWriteGrain(
         }
         if (buffer is null) return;
         await writer.AppendManyAsync(buffer, CancellationToken.None);
+    }
+
+    /// <summary>
+    /// The physical copies this activation found discarded by a resize undo
+    /// while broadcasting terminals; see <see cref="TerminalCopyWasDiscardedAsync"/>.
+    /// </summary>
+    private HashSet<string>? _discardedTerminalCopies;
+
+    /// <summary>
+    /// Whether the physical copy that refused a saga terminal is the destination
+    /// of an undone resize, discarded by <see cref="ITreeDeletionGrain.DiscardDerivedPhysicalTreeAsync"/>.
+    /// The undo discards every write that copy took, so a terminal addressed to it
+    /// counts as delivered: the batch prepared on it is discarded with it, whole.
+    /// Following the refusal to the copy the tree resolves to now - the old copy
+    /// the undo restored, which lays keys out by the same map - would land the
+    /// terminal and its committed-values backstop on some of that copy's shards
+    /// only and tear the batch there, and refusing it outright would stall the
+    /// saga on every retry (issue #4474). A purge never marks a copy discarded,
+    /// so a resize's old copy is not answered here. Asked only on a refusal.
+    /// </summary>
+    private async Task<bool> TerminalCopyWasDiscardedAsync(string physicalTreeId)
+    {
+        if (_discardedTerminalCopies?.Contains(physicalTreeId) == true) return true;
+        if (!await grainFactory.GetGrain<ITreeDeletionGrain>(physicalTreeId).IsDiscardedAsync()) return false;
+        (_discardedTerminalCopies ??= new HashSet<string>(StringComparer.Ordinal)).Add(physicalTreeId);
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: terminal addressed to {PhysicalTreeId}, a copy a resize undo discarded, counts as delivered; its batch is discarded with the copy.",
+            OperationKey,
+            physicalTreeId);
+        return true;
     }
 
     /// <summary>
@@ -2224,6 +2264,13 @@ internal sealed class AtomicWriteGrain(
     /// returning. The returned record is null when no WAL adapter is
     /// registered (single-node / unit-test path) or when the shard
     /// rejected the call before constructing one.
+    /// </para>
+    /// <para>
+    /// A refusal by a copy a resize undo discarded counts the terminal as
+    /// delivered and returns null, before any routing refresh: that copy's
+    /// batch is discarded with it, so the terminal is never re-sent to the
+    /// copy the tree resolves to now (issue #4474). See
+    /// <see cref="TerminalCopyWasDiscardedAsync"/>.
     /// </para>
     /// </summary>
     private async Task<WalRecord?> MarkOneShardAsync(
@@ -2292,6 +2339,7 @@ internal sealed class AtomicWriteGrain(
                 // the new owner; AppendTxTerminalAsync is shard-keyed so
                 // the refreshed call may resolve to a different physical
                 // tree id under online resize.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
             }
             catch (StaleTreeRoutingException)
@@ -2299,7 +2347,15 @@ internal sealed class AtomicWriteGrain(
                 // Tree alias swapped mid-saga (online resize). Refresh
                 // routing under the same logical tree id and retry against
                 // the new physical tree.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
+            }
+            catch (InvalidOperationException)
+            {
+                // A copy a resize undo discarded refuses as a deleted tree; any
+                // other refusal of this kind keeps surfacing as before.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
+                throw;
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
@@ -2462,7 +2518,24 @@ internal sealed class AtomicWriteGrain(
             // partial cross-tree view is ever observable.
             if (state.State.ExternalAuthorityKey is { } authorityKey)
             {
-                await ParkPreparedAsync(authorityKey);
+                try
+                {
+                    await ParkPreparedAsync(authorityKey);
+                }
+                catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+                {
+                    // Issue #4485: a cross-tree-consistent backup set is fencing
+                    // this tree's registry, so this sub-saga cannot register.
+                    // Retrying the park would hold every sibling participant's
+                    // delegation open for the fence's whole life and starve the
+                    // set's drain. Roll this sub-saga back instead (the Compensate
+                    // path records the abort and drops the staged buckets, then
+                    // throws), so it votes Failed and its coordinator aborts.
+                    await EnterCompensateAsync(
+                        "a cross-tree-consistent backup set capture is fencing this tree's saga decision registry; retry the cross-tree atomic write once the capture completes.");
+                    await RunSagaAsync();
+                }
+
                 return;
             }
 
@@ -2630,6 +2703,37 @@ internal sealed class AtomicWriteGrain(
 
         Logger.LogInformation(
             "Atomic-write saga {OperationKey}: rolled back because {Reason}.",
+            OperationKey, reason);
+    }
+
+    /// <summary>
+    /// Moves an executed-but-undecided saga to
+    /// <see cref="AtomicWritePhase.Compensate"/> with <paramref name="reason"/> as
+    /// its failure message and persists the move, restoring the prior phase if
+    /// the persist fails. The caller then drives the Compensate path.
+    /// </summary>
+    private async Task EnterCompensateAsync(string reason)
+    {
+        var prevPhase = state.State.Phase;
+        var prevFailureMessage = state.State.FailureMessage;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        state.State.Phase = AtomicWritePhase.Compensate;
+        state.State.FailureMessage = reason;
+        state.State.RetriesOnCurrentStep = 0;
+        try
+        {
+            await WriteSagaStateAsync("park-fenced-to-compensate");
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.FailureMessage = prevFailureMessage;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            throw;
+        }
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: rolled back because {Reason}",
             OperationKey, reason);
     }
 

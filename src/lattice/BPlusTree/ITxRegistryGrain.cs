@@ -569,6 +569,103 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<int> GetPinnedDecisionCountAsync();
+
+    /// <summary>
+    /// Acquires (or upgrades) a snapshot capture's hold on this registry under
+    /// <paramref name="token"/> for <paramref name="lease"/> (issue #4485).
+    /// Several captures may hold the registry at once; the strongest live hold
+    /// decides what is refused. Writes and prepares are never refused.
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="TxRegistryCaptureGateMode.Fence"/> refuses every NEW cross-tree
+    /// delegation registration (<see cref="RegisterExternalDecisionAuthorityAsync"/>
+    /// and <see cref="RegisterReceiverDecisionAuthorityAsync"/>) with
+    /// <see cref="TxDecisionGateRefusedException"/>.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="TxRegistryCaptureGateMode.Gate"/> additionally refuses every
+    /// <see cref="MarkCommittedAsync"/> / <see cref="MarkAbortedAsync"/> that
+    /// would record a new decision (a repeat of an existing decision is
+    /// admitted), never caches a delegated coordinator verdict, and answers
+    /// <see cref="GetStatusForTerminalAsync"/> from local decisions only. On
+    /// acquisition it snapshots its local decisions (read-committed, with
+    /// expired tombstones reported as <see cref="TxStatus.Indeterminate"/> and
+    /// no coordinator dialled): the capture's D0, served by
+    /// <see cref="GetCaptureGateStatusManyAsync"/>.
+    /// </description></item>
+    /// </list>
+    /// A hold that is neither renewed nor released lapses at the end of its
+    /// lease, so a crashed capture cannot wedge sagas. The hold is kept in
+    /// memory only: a registry reactivation drops it, which
+    /// <see cref="ReleaseCaptureGateAsync"/> then reports so the capture fails
+    /// closed.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="mode">The strength of the hold.</param>
+    /// <param name="lease">How long the hold lasts unless renewed.</param>
+    /// <returns>A task that completes once the hold is in force (and, for a gate, once D0 is captured).</returns>
+    [AlwaysInterleave]
+    Task AcquireCaptureGateAsync(Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease);
+
+    /// <summary>
+    /// Extends the hold under <paramref name="token"/> to <c>now + lease</c>.
+    /// Returns <see langword="false"/> when the hold is not live (never
+    /// acquired, released, lapsed, or lost to a reactivation); a lapsed hold is
+    /// never revived.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="lease">The new lease, measured from now.</param>
+    /// <returns>Whether the hold was live and is now extended.</returns>
+    [AlwaysInterleave]
+    Task<bool> RenewCaptureGateAsync(Guid token, TimeSpan lease);
+
+    /// <summary>
+    /// Releases the hold under <paramref name="token"/>. Returns
+    /// <see langword="true"/> only when the hold was live, without a lapse, from
+    /// its acquisition until this call; the capture accepts its cut only when
+    /// every registry it held returns <see langword="true"/>.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>Whether the hold was continuously live.</returns>
+    [AlwaysInterleave]
+    Task<bool> ReleaseCaptureGateAsync(Guid token);
+
+    /// <summary>
+    /// Resolves <paramref name="txids"/> against the decision snapshot (D0) the
+    /// gate under <paramref name="token"/> captured. A txid absent from D0 is
+    /// <see cref="TxStatus.InFlight"/>. Throws
+    /// <see cref="TxDecisionGateRefusedException"/> with
+    /// <see cref="TxDecisionGateRefusal.GateLapsed"/> when the gate is not live,
+    /// so a capture never resolves against a lapsed gate.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="txids">The transaction ids to resolve.</param>
+    /// <returns>The per-txid status as of D0.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(Guid token, IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// The status read for a caller about to APPLY a terminal on the strength of
+    /// the answer: the leaf self-terminalise sweep and the shard split's
+    /// retroactive sweep (issue #4485). A terminal verdict is returned only when
+    /// it is durably recorded on this registry, so every terminal applied
+    /// anywhere follows a local decision. A delegated txid is resolved against
+    /// its coordinator and the verdict returned only once it is durably cached;
+    /// while a capture holds the gate no verdict is cached, so such a txid reads
+    /// <see cref="TxStatus.InFlight"/>.
+    /// </summary>
+    /// <param name="txid">The transaction id.</param>
+    /// <returns>The recorded status.</returns>
+    [AlwaysInterleave]
+    Task<TxStatus> GetStatusForTerminalAsync(Guid txid);
+
+    /// <summary>
+    /// Batched <see cref="GetStatusForTerminalAsync"/>.
+    /// </summary>
+    /// <param name="txids">The transaction ids.</param>
+    /// <returns>The per-txid recorded status.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(IReadOnlyList<Guid> txids);
 }
 
 /// <summary>

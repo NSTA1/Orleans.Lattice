@@ -1300,6 +1300,23 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken);
 
     /// <summary>
+    /// <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/> for a
+    /// snapshot capture that holds a saga decision gate (issue #4485): every
+    /// leaf's fold resolves its still-pending prepared buckets against the
+    /// gate's decision snapshot (see
+    /// <see cref="IBPlusLeafGrain.FoldTailOntoFrozenGatedAsync"/>), so every
+    /// shard of the capture puts each saga on the same side.
+    /// </summary>
+    /// <param name="token">The cursor's per-open baseline token. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="decisionGate">The capture's decision gate.</param>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk and the per-leaf folds.</param>
+    /// <returns>As <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/>.</returns>
+    Task<SnapshotBaselineCaptureResult> CaptureGatedSnapshotBaselineAsync(
+        Guid token,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
     /// While the returned task is incomplete or the split has not been completed,
     /// every write to a key whose virtual slot is in <paramref name="movedSlots"/>

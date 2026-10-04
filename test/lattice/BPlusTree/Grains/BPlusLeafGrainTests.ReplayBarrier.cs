@@ -126,7 +126,7 @@ public partial class BPlusLeafGrainTests
         // Saga and transaction terminals.
         "ApplyTxTerminalAsync", "MarkSagaShadowAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync",
+        "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "TryBeginOrphanRetirementAsync",
         "AbsorbSuccessorRangeAsync",
