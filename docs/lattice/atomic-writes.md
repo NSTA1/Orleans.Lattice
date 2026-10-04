@@ -386,6 +386,47 @@ idempotent) until every touched shard has received its terminal.
 Readers that race the fan-out continue to observe the registry-recorded
 outcome via dial-back until their pending entries are drained.
 
+### A commit applies each value at its prepare stamp
+
+A committed saga's value is installed under last-writer-wins at the stamp
+its prepare was given (`P`), not at a stamp minted when the terminal
+arrives. The leaf installs the value only when the key has no row, or a row
+stamped below `P`, and it stores the value AT `P`. A write acknowledged
+after the prepare is stamped above `P` on the leaf that holds the key, so
+it survives the terminal whether it is a local write or a write a split
+shadow-forwarded in as a migration, and whichever lands first. Earlier, the
+drain re-stamped the value above every row the leaf held, so a later write
+imported as a migration was overwritten and lost (issue #4522).
+
+The read path agrees with the drain. Before the terminal lands, a reader
+that resolves a committed prepare treats any row stamped at or above `P` as
+superseding it, so the saga's older value never surfaces between a later
+write and the drain.
+
+`P` has to travel with every copy of a prepare:
+
+- The routing tier names the shard it dispatches each prepared write to, and
+  a leaf of that shard knows the stamp it mints is the original.
+- A split's live shadow-forward and its retroactive sweep carry `P` to the
+  destination, which buckets the prepare at `P`.
+- A committed-values backstop the sweep applies carries `P` too.
+- A leaf split hands its new sibling the donor's clock, so the sibling
+  stamps later writes above every prepare the donor minted.
+- The write-ahead log records whether a prepare's stamp is original, so
+  replay rebuilds the same decision.
+
+A prepare without that evidence is applied as before, at a fresh dominating
+stamp, with the migrated-row exception that lets a saga beat a pre-saga
+value a split migrates in above the destination's clock. That covers:
+
+- a prepare written by a silo that predates this change, which keeps a
+  rolling upgrade safe;
+- a prepare an online resize copies;
+- a committed-values backstop sent directly by the saga coordinator.
+
+A resize copy stamps its mirrored writes with its own clock, which does not
+order them against `P`.
+
 ### Sharded decision registry
 
 A tree's decision registry can be split into

@@ -324,6 +324,12 @@ public partial class BPlusLeafGrainTests
     /// (i.e. fromExclusive=-1, covering offsets [0, head]), not
     /// from the stale persisted checkpoint of 42.
     /// </para>
+    /// <para>
+    /// EVERY partition is checkpointed at 42. With only the scalar slot set,
+    /// partitions 1 to 7 start at the -1 sentinel anyway and the -1 slice
+    /// request arrives whether or not the override fires, so the test passed
+    /// with the override removed (issue #4433).
+    /// </para>
     /// </summary>
     [Test]
     public async Task Activation_replays_from_minus_one_when_cache_starts_empty_and_no_snapshot_rehydrated()
@@ -335,6 +341,9 @@ public partial class BPlusLeafGrainTests
             preloadedSnapshot: null,
             persistedCheckpoint: 42,
             walHead: 42);
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+        state.State.ProjectionCheckpointOffsetsByPartition =
+            Enumerable.Repeat(42L, LatticeOptions.DefaultWalPartitions).ToArray();
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
@@ -348,8 +357,8 @@ public partial class BPlusLeafGrainTests
         // starting from the -1 sentinel, covering the full (-1, 42]
         // window. If activation had trusted the persisted checkpoint
         // of 42, the slice request would have been (42, 42] = empty
-        // and dropped silently.
-        await coord.Received().ReadSliceAsync(
+        // and dropped silently. Every partition is asked for it.
+        await coord.Received(LatticeOptions.DefaultWalPartitions).ReadSliceAsync(
             -1L,
             Arg.Any<long>(),
             Arg.Any<int>(),

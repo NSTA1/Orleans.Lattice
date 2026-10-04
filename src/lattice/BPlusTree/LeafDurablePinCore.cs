@@ -20,6 +20,25 @@ namespace Orleans.Lattice.BPlusTree;
 internal static class LeafDurablePinCore
 {
     /// <summary>
+    /// Whether a partition of a never-written leaf (<c>Clock == Zero</c>) has
+    /// been scanned through a durable checkpoint (issue #3453): it holds no live
+    /// cache row and its <b>persisted</b> checkpoint is <c>&gt;= 0</c>. The one
+    /// definition of the never-written release's condition: <see cref="Resolve"/>
+    /// takes that arm on it, and the grain's flush paths decide on it whether to
+    /// opt in.
+    /// </summary>
+    /// <remarks>
+    /// The persisted checkpoint, never the pending one: published offsets merge
+    /// by monotonic maximum, so an over-report can never be lowered, and every
+    /// replay starts from the persisted offset (issue #3476).
+    /// </remarks>
+    /// <param name="hasLiveData">Whether any live cache row routes to the partition.</param>
+    /// <param name="persistedCheckpoint">The partition's persisted checkpoint.</param>
+    /// <returns><see langword="true"/> when the partition is never-written and scanned through.</returns>
+    public static bool IsNeverWrittenScannedThrough(bool hasLiveData, long persistedCheckpoint)
+        => !hasLiveData && persistedCheckpoint >= 0;
+
+    /// <summary>
     /// Resolves the durable pin for one partition.
     /// </summary>
     /// <param name="currentCheckpoint">
@@ -100,7 +119,7 @@ internal static class LeafDurablePinCore
         // checkpoint is proven checkpointed, so its next capture (the drive's,
         // the deactivation barrier's or the zero-coverage repair's) stamps the
         // checkpoint and the release follows it.
-        if (releaseNeverWrittenScannedThrough && !hasLiveData && persistedCheckpoint >= 0)
+        if (releaseNeverWrittenScannedThrough && IsNeverWrittenScannedThrough(hasLiveData, persistedCheckpoint))
         {
             return coveredOffset >= 0
                 ? new LeafDurablePinDecision(

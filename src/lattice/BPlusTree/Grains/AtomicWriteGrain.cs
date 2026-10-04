@@ -2245,11 +2245,14 @@ internal sealed class AtomicWriteGrain(
     /// broadcast outlived <c>SoftDeleteDuration</c> - would otherwise fail on
     /// every retry and never complete. The redirect is the copy the tree resolves
     /// to now; when that is still the refusing copy there is nothing to redeliver
-    /// to. Asked only on a refusal.
+    /// to. Asked only on a refusal. The purge is recognised by the refusal's
+    /// type - a tombstoned shard refuses an unrouted terminal with
+    /// <see cref="LatticeTreePurgedException"/> (issue #4503) - or, for the purge
+    /// guard's plain refusal, by the copy's deletion record; never by message text.
     /// </summary>
-    private async Task<RoutingInfo?> ResolvePurgedTerminalCopyRedirectAsync(string physicalTreeId)
+    private async Task<RoutingInfo?> ResolvePurgedTerminalCopyRedirectAsync(string physicalTreeId, bool refusedAsPurged)
     {
-        if (!await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, physicalTreeId)) return null;
+        if (!refusedAsPurged && !await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, physicalTreeId)) return null;
         var refreshed = await grainFactory.GetGrain<ILattice>(state.State.TreeId).GetRoutingAsync(forceRefresh: true);
         return string.Equals(refreshed.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal) ? null : refreshed;
     }
@@ -2425,13 +2428,14 @@ internal sealed class AtomicWriteGrain(
                 if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
             }
-            catch (InvalidOperationException)
+            catch (InvalidOperationException refusal)
             {
                 // A copy a resize undo discarded refuses as a deleted tree, and a
                 // resize's old copy refuses the same way once it is purged; any
                 // other refusal of this kind keeps surfacing as before.
                 if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
-                purgedCopyRedirect = await ResolvePurgedTerminalCopyRedirectAsync(physicalTreeId);
+                purgedCopyRedirect = await ResolvePurgedTerminalCopyRedirectAsync(
+                    physicalTreeId, refusal is LatticeTreePurgedException);
                 if (purgedCopyRedirect is null) throw;
             }
 

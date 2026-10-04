@@ -108,7 +108,10 @@ Operators monitor `rate(wal_entries_shipped)` per tree-peer pair against the WAL
 | `hlc_skew` | A blocked entry evicted from a full causal-apply buffer (`CausalBufferMaxEntries` / `CausalBufferMaxBytes`) to make room for a newer park. |
 | `mode_mismatch` | The receiver-side merge-mode gate rejected an entry whose wire `Mode` disagrees with the merge mode the receiver resolves locally for the tree. |
 | `foreign_tenant` / `tenant_offline` / `tenant_suspended` | The tenant-isolation gate refused the write: unknown tenant / tenant not resident in this region / tenant suspended or disabled (the matching `apply.duration` outcomes are `rejected-foreign-tenant`, `rejected-tenant-offline`, and `rejected-tenant-suspended` above). |
+| `poisoned_saga` | The sender withheld a later prepare or a terminal of a saga one of whose prepares it parked as `schema`, so the peer never commits the saga without that write (see [Poisoned sagas](replication-drivers.md#poisoned-sagas)). Each such saga also counts once on `shipper.saga_poisoned`. |
 | `oversized` | Reserved. Nothing emits it today; it is published for host decorators that wrap the canonical applier with a per-entry size check. |
+
+`orleans.lattice.replication.shipper.saga_poisoned` counts the sagas a shipper withholds from a peer, tagged `tree`, `peer` and `outcome`: `poisoned` when a saga is withheld (the peer serves it as never written while this cluster has it decided, until the peer is re-bootstrapped), `refused` when the shipper's bounded poison list is full and it stops advancing past the failing batch instead of letting a saga through torn. Alert on any increment; the matching warning or error log names the transaction id.
 
 `orleans.lattice.replication.dead_letter.removed` is tagged `discarded` (explicit operator discard), `replayed` (removed after a replay that returned without throwing, whatever its `Applied` result - except a replay deferred by a restore saga's receive fence, which leaves the entry parked for a later replay), or `evicted` (FIFO capacity eviction during a later enqueue).
 
@@ -408,6 +411,7 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `{entry}` | `tree` | [Causal+ instruments](#causal-instruments) |
 | `orleans.lattice.replication.dead_letter.enqueued` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
 | `orleans.lattice.replication.dead_letter.removed` | `Counter<long>` | `{entry}` | `tree`, `reason` | [DLQ reasons](#dlq-enqueue-reason-classification) |
+| `orleans.lattice.replication.shipper.saga_poisoned` | `Counter<long>` | `{saga}` | `tree`, `peer`, `outcome` | [DLQ reasons](#dlq-enqueue-reason-classification) |
 | `orleans.lattice.replication.peer.fell_off_log` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | `Counter<long>` | `{event}` | `tree`, `origin` | [Fall-off detection](#fall-off-the-log-detection-peerfell_off_log--peerfell_off_log_suppressed) |
 | `orleans.lattice.replication.bootstrap.entries_received` | `Counter<long>` | `{entry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
