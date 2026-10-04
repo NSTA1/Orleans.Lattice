@@ -28,8 +28,10 @@ internal sealed class ReplicationHighWaterMarkState
     /// an empty vector on first activation; the per-origin diagonal
     /// entries are advanced monotonically by
     /// <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/> and
-    /// replaced unconditionally by
-    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>.
+    /// replaced unconditionally by the restore re-seed's
+    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>, and raised
+    /// pointwise (never lowered) by the bootstrap handoff's
+    /// <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>.
     /// </summary>
     [Id(0)] public VersionVector Vector { get; set; } = new();
 

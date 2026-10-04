@@ -562,7 +562,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // bootstrap entries can drop a still-pending saga key with a
         // strictly-earlier source HLC and break per-saga all-or-nothing
         // visibility on the bootstrapped peer. The post-drain
-        // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
         // in <see cref="PinAndCompleteAsync"/> atomically installs the
         // per-origin HWM at the snapshot's AsOfHlc, so steady-state
         // dedup is preserved across the bootstrap-to-incremental
@@ -794,13 +794,24 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             frontier.Entries[sourceClusterId] = cut;
         }
 
-        // Idempotent: PinSnapshotAsync replaces the per-origin
-        // high-water-mark vector with the supplied frontier and installs no
-        // drop floor (it does not consult asOfHlc), so a crash between this call and the
-        // WriteStateAsync below replays safely on reactivation - a second pin
-        // with an identical frontier is a no-op.
+        // Idempotent: MergeBootstrapFrontierAsync raises the per-origin
+        // high-water-mark vector to the pointwise maximum of what it already
+        // holds and the supplied frontier, and installs no drop floor (it does
+        // not consult asOfHlc), so a crash between this call and the
+        // WriteStateAsync below replays safely on reactivation. It must not
+        // REPLACE the vector (#4464): this receiver may already have applied
+        // an origin's writes above the source's frontier, and moving the
+        // vector backwards would strand an entry parked on a dependency those
+        // writes met.
         await hwm
-            .PinSnapshotAsync(asOfHlc, frontier, CancellationToken.None)
+            .MergeBootstrapFrontierAsync(asOfHlc, frontier, CancellationToken.None)
+            .ConfigureAwait(true);
+
+        // Re-arm the causal-apply buffer: the merge can satisfy a parked
+        // entry's dependencies, and a later apply of the dependency itself no
+        // longer advances the vector, so nothing else would drain it (#4464).
+        await _grainFactory.GetGrain<ICausalApplyBufferGrain>(treeName)
+            .DrainAsync()
             .ConfigureAwait(true);
 
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
