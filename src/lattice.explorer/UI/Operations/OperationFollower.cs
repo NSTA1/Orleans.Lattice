@@ -18,6 +18,7 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
 {
     private readonly ClusterStatusPoller _poller = new(time);
     private Func<CancellationToken, Task<LatticeOperationStatus?>>? _read;
+    private int _generation;
 
     /// <summary>Raised when the status, the not-found flag or the last error changes; raised off the renderer.</summary>
     public event Action? Changed;
@@ -36,7 +37,8 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
 
     /// <summary>
     /// Reads the status once and, while it is not terminal, keeps following it.
-    /// Replaces any earlier follow.
+    /// Replaces any earlier follow: a read of the earlier follow that answers later
+    /// is discarded.
     /// </summary>
     /// <param name="read">Reads the status; <see langword="null"/> means not found.</param>
     /// <param name="cancellationToken">Cancels the first read.</param>
@@ -47,13 +49,14 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
     {
         ArgumentNullException.ThrowIfNull(read);
         _poller.Stop();
+        var generation = Interlocked.Increment(ref _generation);
         _read = read;
         Status = null;
         NotFound = false;
         LastError = null;
 
         var outcome = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        if (outcome != ClusterPollOutcome.Settled && ReferenceEquals(_read, read))
+        if (outcome != ClusterPollOutcome.Settled && Volatile.Read(ref _generation) == generation)
         {
             _poller.Follow(ReadAsync);
         }
@@ -71,31 +74,51 @@ internal sealed class OperationFollower(TimeProvider time) : IDisposable
     /// <inheritdoc />
     public void Dispose()
     {
+        Interlocked.Increment(ref _generation);
         _read = null;
         _poller.Dispose();
     }
 
     private async Task<ClusterPollOutcome> ReadAsync(CancellationToken cancellationToken)
     {
+        var generation = Volatile.Read(ref _generation);
         var read = _read;
         if (read is null)
         {
             return ClusterPollOutcome.Settled;
         }
 
-        ClusterPollOutcome outcome;
+        LatticeOperationStatus? status;
+        Exception? failure = null;
         try
         {
-            var status = await read(cancellationToken).ConfigureAwait(false);
+            status = await read(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            status = null;
+            failure = exception;
+        }
+
+        // A later start, or disposal, superseded this read while it was out: its
+        // answer belongs to an operation no longer followed, so it changes nothing.
+        if (Volatile.Read(ref _generation) != generation)
+        {
+            return ClusterPollOutcome.Settled;
+        }
+
+        ClusterPollOutcome outcome;
+        if (failure is not null)
+        {
+            LastError = failure;
+            outcome = ClusterPollOutcome.Failed;
+        }
+        else
+        {
             Status = status ?? Status;
             NotFound = status is null;
             LastError = null;
             outcome = status is null || status.IsTerminal ? ClusterPollOutcome.Settled : ClusterPollOutcome.Running;
-        }
-        catch (Exception exception) when (!cancellationToken.IsCancellationRequested)
-        {
-            LastError = exception;
-            outcome = ClusterPollOutcome.Failed;
         }
 
         Changed?.Invoke();
