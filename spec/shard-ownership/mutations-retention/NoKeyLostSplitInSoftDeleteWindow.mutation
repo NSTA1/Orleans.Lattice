@@ -1,41 +1,21 @@
-# Pairs with NoKeyLost. Bounds the extent of the split/resize interlock: an
-# adaptive split is refused only while a resize is in flight and is allowed on
-# the resized copy during the completed resize's soft-delete window (the rule
-# first proposed for #4452). The old copy still mirrors index-for-index into
-# the resized copy and a saga stays bound to it (#4369), so a split that moves
-# k2 to s2 on the resized copy takes the mirrored prepare onward, but the
-# terminal the bound saga sends after the split has committed reaches only the
-# resized copy's s1. The s2 bucket is never resolved, and once the registry
-# forgets the saga it reads as a revert of an acknowledged commit.
-#
-# The weaker rule also lets an undo move the alias off a split it admitted on
-# the resized copy, which production abandons (AbandonRetargetedSplitAsync,
-# #4264) and the base, whose interlock makes that unreachable, has no action
-# for. A second edit lets such a split count as finished, standing for the
-# abandon, so the mutant cannot deadlock and the invariant is the only thing
-# TLC can report.
+# Pairs with NoKeyLost. Reproduces the rule first proposed for #4452, which
+# #4478 replaced: a split may run on the resized copy during the completed
+# resize's soft-delete window, but the terminal the old copy mirrors for a
+# saga bound to it reaches only the resized copy's shard at the same index,
+# not the split destination the split moved the slot to. The bucket the
+# split's sweep placed on the destination is never consumed, and once the
+# registry forgets the saga it reads as a revert of an acknowledged commit.
+# #4478's terminal closure (TerminalFanOutResolver's split-forward targets)
+# is what the base models. The edit lies in TermClosure, the operator the
+# terminal mirror uses, so the mutation declares no PERTURBS.
 MODULE: NoKeyLostSplitInSoftDeleteWindow
 TARGET: NoKeyLost
 CLASS: Invariant
-SUMMARY: a split on the resized copy during the soft-delete window strands the bound saga's bucket on the split target
-PERTURBS: SplitBegin
+SUMMARY: a split on the resized copy in the soft-delete window strands the bound saga's bucket, because the mirrored terminal does not follow it
 
 --- FIND
-SplitBegin ==
-    /\ sp = "idle"
-    /\ rz \in {"idle", "purged", "undone"}
+TermClosure(s) == IF spCopy = R /\ sp # "idle" /\ s = s1 THEN {<<R, s2>>} ELSE {}
 --- REPLACE
-SplitBegin ==
-    /\ sp = "idle"
-\* MUTATION: the interlock covers only a resize in flight, not its soft-delete window.
-    /\ rz \notin {"snap", "copied", "swapped", "undoing"}
---- END
-
---- FIND
-    /\ sg \in {"idle", "done"}
-    /\ sp \in {"idle", "done"}
---- REPLACE
-    /\ sg \in {"idle", "done"}
-\* MUTATION: a split the undo stranded counts as finished (AbandonRetargetedSplitAsync).
-    /\ sp \in {"idle", "done"} \/ alias # spCopy
+\* MUTATION: the terminal mirror reaches only the shard at the same index.
+TermClosure(s) == {}
 --- END
