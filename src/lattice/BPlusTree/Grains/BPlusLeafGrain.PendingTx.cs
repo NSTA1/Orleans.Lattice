@@ -128,6 +128,18 @@ internal sealed partial class BPlusLeafGrain
     private Dictionary<(Guid TransactionId, int Partition), long>? _pendingTxOffsets;
 
     /// <summary>
+    /// Parallel side-map to <see cref="_pendingTx"/> recording, per
+    /// <c>(transactionId, key)</c>, the atomic-batch membership (size, index)
+    /// the prepared mutation was written under, when it carried one. A sweep
+    /// that copies the bucket onto another shard replays it with the same
+    /// membership (issue #4499), so the copy is indistinguishable from a
+    /// dispatched prepare on the destination's write-ahead log. Strictly
+    /// in-memory and rebuilt from WAL replay exactly like
+    /// <see cref="_pendingTx"/>: the prepared WAL record carries both fields.
+    /// </summary>
+    private Dictionary<Guid, Dictionary<string, (int Size, int Index)>>? _pendingTxBatches;
+
+    /// <summary>
     /// Idempotency dedup set. Populated as terminal marks apply or replay so a
     /// re-applied <see cref="MutationKind.TxCommit"/> /
     /// <see cref="MutationKind.TxAbort"/> for the same transaction id is
@@ -396,6 +408,7 @@ internal sealed partial class BPlusLeafGrain
         int capacityHint = 1,
         byte[]? delta = null,
         LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
+        (int Size, int Index) batch = default,
         bool stampOriginal = false)
     {
         if (transactionId == Guid.Empty)
@@ -470,6 +483,18 @@ internal sealed partial class BPlusLeafGrain
             // delta join is commutative, associative, and idempotent), so
             // last-write-here is safe under re-delivery.
             deltaBucket[key] = (delta, mode);
+        }
+
+        if (batch.Size > 0)
+        {
+            var pendingBatches = _pendingTxBatches ??= new Dictionary<Guid, Dictionary<string, (int, int)>>();
+            if (!pendingBatches.TryGetValue(transactionId, out var batchBucket))
+            {
+                batchBucket = new Dictionary<string, (int, int)>(capacityHint);
+                pendingBatches[transactionId] = batchBucket;
+            }
+
+            batchBucket[key] = batch;
         }
 
 #if LATTICE_DIAG
@@ -635,6 +660,7 @@ internal sealed partial class BPlusLeafGrain
         // fold instead.
         Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
         _pendingTxDeltas?.Remove(transactionId, out deltaBucket);
+        _pendingTxBatches?.Remove(transactionId);
 
         // Keys the caller re-routes to the leaf that declares them (a split
         // narrowed this leaf's span after their prepare landed) are never
@@ -1058,6 +1084,7 @@ internal sealed partial class BPlusLeafGrain
         // staged delta never became visible, so the abort discards it exactly
         // as it discards the pending LWW value.
         _pendingTxDeltas?.Remove(transactionId);
+        _pendingTxBatches?.Remove(transactionId);
         RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
 
@@ -2053,6 +2080,12 @@ internal sealed partial class BPlusLeafGrain
                     mode = dm.Mode;
                 }
 
+                var membership = _pendingTxBatches is not null
+                    && _pendingTxBatches.TryGetValue(txid, out var batchBucket)
+                    && batchBucket.TryGetValue(key, out var b)
+                    ? b
+                    : default;
+
                 result.Add(new PendingMutationSnapshot
                 {
                     TransactionId = txid,
@@ -2066,6 +2099,8 @@ internal sealed partial class BPlusLeafGrain
                     WalOffset = walOffset,
                     Delta = delta,
                     Mode = mode,
+                    AtomicBatchSize = membership.Size,
+                    AtomicBatchIndex = membership.Index,
                     StampIsOriginal = IsPrepareStampOriginal(txid, key),
                 });
             }

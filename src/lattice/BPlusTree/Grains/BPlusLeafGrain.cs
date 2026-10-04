@@ -1318,6 +1318,7 @@ internal sealed partial class BPlusLeafGrain(
                 newEntry,
                 delta: preparedDelta,
                 mode: preparedMode,
+                batch: LatticeAtomicBatchContext.Current ?? default,
                 stampOriginal: stampOriginal);
         }
         else
@@ -1901,6 +1902,13 @@ internal sealed partial class BPlusLeafGrain(
                     && atomicBatchDeltaMap.TryGetValue(key, out var d)
                     ? d
                     : null;
+                // The same membership the batch's WAL records were stamped
+                // with above, so a sweep can replay it (#4499).
+                var membership = atomicBatchSize > 0
+                    ? (atomicBatchSize, atomicBatchIndexMap is not null && atomicBatchIndexMap.TryGetValue(key, out var mapped)
+                        ? mapped
+                        : atomicBatchBaseIndex + i)
+                    : default((int, int));
                 AddPreparedMutation(
                     transactionId,
                     key,
@@ -1908,6 +1916,7 @@ internal sealed partial class BPlusLeafGrain(
                     count,
                     delta: perEntryDelta,
                     mode: perEntryDelta is not null ? preparedMode : LatticeMergeMode.LwwRegister,
+                    batch: membership,
                     stampOriginal: walEntries[i].PrepareStampOriginal);
             }
         }
@@ -2176,7 +2185,7 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? relocatedSplit = null;
         if (isPrepared)
         {
-            AddPreparedMutation(transactionId, key, tombstone, stampOriginal: stampOriginal);
+            AddPreparedMutation(transactionId, key, tombstone, batch: batch ?? default, stampOriginal: stampOriginal);
         }
         else
         {

@@ -135,6 +135,7 @@ internal sealed partial class BPlusLeafGrain
         _pendingTx = null;
         _unmarkedPrepares = null;
         _pendingTxOffsets = null;
+        _pendingTxBatches = null;
         _recentlyTerminal = null;
         _backstoppedTerminals = null;
         _terminalLandedClock = null;

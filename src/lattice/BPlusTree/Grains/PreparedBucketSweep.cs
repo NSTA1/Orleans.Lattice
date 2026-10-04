@@ -287,6 +287,15 @@ internal static class PreparedBucketSweep
             using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
             using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
             using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);
+            // Replay the batch membership the source stamped, so the copy
+            // reaches the destination's WAL as a member of its atomic batch
+            // (#4499): a replicating peer tallies it and exempts it from the
+            // causal-apply gate exactly as it does the dispatched prepare. A
+            // snapshot without membership (a sender predating the slot, or a
+            // non-batch prepare) opens no scope.
+            using var batchScope = snapshot.AtomicBatchSize > 0
+                ? LatticeAtomicBatchContext.With((snapshot.AtomicBatchSize, snapshot.AtomicBatchIndex))
+                : null;
             // Issue #4522: carry the prepare's original stamp when the source
             // leaf's prepare was marked and the caller's target orders writes on
             // P's clock lineage, so the target buckets it AT P and marks it.
