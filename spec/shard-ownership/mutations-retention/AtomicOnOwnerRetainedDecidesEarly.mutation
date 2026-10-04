@@ -1,0 +1,19 @@
+# Pairs with AtomicOnOwner. The saga records its decision once any entry is
+# dispatched rather than every one, so readers see a committed batch with one
+# key staged and the other not.
+MODULE: AtomicOnOwnerRetainedDecidesEarly
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the decision is recorded once any entry is dispatched, so readers see the batch torn
+PERTURBS: SagaDecide
+
+--- FIND
+SagaDecide ==
+    /\ sg = "exec"
+    /\ prepped = Keys
+--- REPLACE
+SagaDecide ==
+    /\ sg = "exec"
+\* MUTATION: any dispatched entry is enough.
+    /\ prepped # {}
+--- END

@@ -1,0 +1,17 @@
+# Pairs with SplitCompletes. The freeze step records nothing: the source is
+# never put into Reject, so the split never reaches its commit while the
+# coordinator keeps retrying it.
+MODULE: SplitCompletesFreezeNeverLands
+TARGET: SplitCompletes
+CLASS: Temporal
+SUMMARY: the freeze step leaves the source accepting, so the split never reaches its commit
+PERTURBS: SplitFreeze
+
+--- FIND
+    /\ ~Fenced(spCopy, s1)
+    /\ sp' = "frozen"
+--- REPLACE
+    /\ ~Fenced(spCopy, s1)
+\* MUTATION: the source never enters Reject.
+    /\ sp' = "swept"
+--- END

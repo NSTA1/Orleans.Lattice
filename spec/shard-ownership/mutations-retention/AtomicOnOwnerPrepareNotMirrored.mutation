@@ -1,0 +1,16 @@
+# Pairs with AtomicOnOwner. A prepare the old copy accepts while a resize
+# forwards is not mirrored into the resized copy, so a batch partly prepared
+# after the snapshot has a bucket there for one key only, and once the commit
+# is decided the resized copy reads it torn.
+MODULE: AtomicOnOwnerPrepareNotMirrored
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: a prepare during a resize is not mirrored, so the resized copy reads the batch torn
+PERTURBS: SagaPrepare
+
+--- FIND
+                         IF j = k /\ <<x, y>> \in Landing(c, s, k)
+--- REPLACE
+\* MUTATION: the prepare lands only where it was routed.
+                         IF j = k /\ <<x, y>> = <<c, s>>
+--- END

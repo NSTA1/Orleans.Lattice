@@ -1,0 +1,17 @@
+# Pairs with ResizeCompletes. The fence step records nothing, so the flip,
+# which waits for every captured shard to be fenced, is never enabled and the
+# resize never finishes.
+MODULE: ResizeCompletesFenceNeverLands
+TARGET: ResizeCompletes
+CLASS: Temporal
+SUMMARY: the fence step records nothing, so the flip never becomes enabled
+PERTURBS: ResizeFence
+
+--- FIND
+    /\ s \in rzShards \ fence
+    /\ fence' = fence \cup {s}
+--- REPLACE
+    /\ s \in rzShards \ fence
+\* MUTATION: EnterRejectingAsync has no effect.
+    /\ fence' = fence
+--- END

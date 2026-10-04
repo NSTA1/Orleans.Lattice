@@ -1,0 +1,17 @@
+# Pairs with ReshardCompletes. On reaching its target the coordinator clears
+# its active flag without recording completion, so a reshard that started
+# never reports complete. Fairness is unchanged.
+MODULE: ReshardCompletesForgetsCompletion
+TARGET: ReshardCompletes
+CLASS: Temporal
+SUMMARY: the reshard coordinator goes idle at its target instead of completing
+PERTURBS: ReshardFinish
+
+--- FIND
+    /\ rmap = s2
+    /\ rs' = "complete"
+--- REPLACE
+    /\ rmap = s2
+\* MUTATION: completion is never recorded.
+    /\ rs' = "idle"
+--- END

@@ -12307,7 +12307,7 @@
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "concurrency": {
-        "rule": "A reshard with a different target is rejected; a resize is rejected only when the requested reshard target requires a migration, because the empty-tree re-pin fast path runs before the resize interlock.",
+        "rule": "A reshard with a different target is rejected; a resize in flight, or a completed resize that can still be undone while the previous copy mirrors into the resized one, rejects a reshard only when the requested target requires a migration, because the empty-tree re-pin fast path runs before the resize interlock.",
         "source": "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
       },
       "sources": [

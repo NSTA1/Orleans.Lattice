@@ -1,0 +1,21 @@
+# Pairs with SagaBatchOnOneCopy. Reproduces #4369 as it stood before #4376: the
+# pre-decision check re-binds to the resized copy although the bound copy
+# mirrors into it, leaving the whole batch's prepares on T under a decision
+# taken on R.
+MODULE: SagaBatchOnOneCopyPreDecisionRebindIgnoresMirror
+TARGET: SagaBatchOnOneCopy
+CLASS: Invariant
+SUMMARY: the pre-decision check re-binds although the bound copy mirrors, stranding the batch on the old copy
+PERTURBS: SagaRebindBeforeDecision
+
+--- FIND
+    /\ prepped = Keys
+    /\ alias # bound
+    /\ ~BoundMirrors
+    /\ bound' = alias
+--- REPLACE
+    /\ prepped = Keys
+    /\ alias # bound
+\* MUTATION: re-bind whether or not the bound copy mirrors.
+    /\ bound' = alias
+--- END

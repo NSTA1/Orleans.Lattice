@@ -1,0 +1,17 @@
+# Pairs with NoResurrection. The undo does not arm the resized copy to
+# redirect (#4357), so after the swap back a router that cached the resized
+# copy keeps reading it while a newer write lands on the old copy.
+MODULE: NoResurrectionUndoLeavesResizedCopyServing
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: the undo arms nothing on the resized copy, so a reader still on it is served a value the old copy has superseded
+PERTURBS: UndoArm
+
+--- FIND
+    /\ alias = R
+    /\ redir' = TRUE
+--- REPLACE
+    /\ alias = R
+\* MUTATION: ArmRedirectsAsync arms nothing.
+    /\ redir' = FALSE
+--- END
