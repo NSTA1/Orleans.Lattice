@@ -133,6 +133,27 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task<bool> HoldsShardMigrationsAsync();
 
     /// <summary>
+    /// Reports whether this tree's resize forbids an adaptive split
+    /// (issue #4478): <see langword="true"/> while a resize is in flight and
+    /// while an undo is pending or running, and <see langword="false"/> once a
+    /// resize has completed - unlike <see cref="HoldsShardMigrationsAsync"/>,
+    /// which goes on holding while the copy the resize replaced still mirrors
+    /// into the resized copy. A split is allowed in that window because the
+    /// mirror follows each key to the shard of the resized copy that owns it
+    /// now, and a terminal of a saga bound to the replaced copy reaches every
+    /// shard of the resized copy a split moved that copy's slots to. Online
+    /// consolidations and reshards keep the longer hold.
+    /// <para>
+    /// Fails closed: a resize or undo state change not yet persisted is
+    /// <see langword="true"/>. Marked
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a split's
+    /// check is not held behind a resize phase or snapshot slice. A pure read.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HoldsShardSplitsAsync();
+
+    /// <summary>
     /// Reports whether this tree's resize state still names
     /// <paramref name="physicalTreeId"/> - as the old physical tree an undo would
     /// recover, or as the destination an in-flight or completed resize built. A

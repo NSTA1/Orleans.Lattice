@@ -1111,7 +1111,7 @@ internal sealed partial class ShardRootGrain(
             // of N entries would pay N sequential shadow-forward RTTs. Mirrors
             // MergeManyAsync's pattern. LWW on the destination absorbs any
             // interleaving with the drain reader.
-            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
+            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
             // Preserve the local exception as the primary diagnostic. The
             // older shape (try { local } finally { await forwardTask; }) would
@@ -1580,7 +1580,8 @@ internal sealed partial class ShardRootGrain(
             // shard's local apply is authoritative for the returned set.
             var forwardTask = TrackShadowForward(
                 (entries, predicate),
-                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
+                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate),
+                static s => ShadowForwardRefusal.PerEntry(s));
 
             System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
             IReadOnlyList<string> written = Array.Empty<string>();
@@ -3116,7 +3117,7 @@ internal sealed partial class ShardRootGrain(
         // destination tree's perspective the forwarded write is a normal merge,
         // NOT a cross-shard migration, so isCrossShardMigration is deliberately
         // not threaded through TrackShadowForward.
-        var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s));
+        var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync. Decided by node TYPE so a
