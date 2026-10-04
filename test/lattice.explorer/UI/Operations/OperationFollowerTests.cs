@@ -23,13 +23,13 @@ public sealed class OperationFollowerTests
 
         await follower.StartAsync(_ =>
         {
-            reads++;
+            Interlocked.Increment(ref reads);
             return Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Succeeded));
         }, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(reads, Is.EqualTo(1));
+            Assert.That(Volatile.Read(ref reads), Is.EqualTo(1));
             Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Succeeded));
             Assert.That(follower.IsFollowing, Is.False);
             Assert.That(time.ArmedTimers, Is.Zero);
@@ -48,21 +48,24 @@ public sealed class OperationFollowerTests
 
         await follower.StartAsync(_ =>
         {
-            reads++;
+            // The follower reads on its own continuation, not on the test's
+            // thread, so a plain ++ here can lose an increment and strand every
+            // later barrier on a count the follower has already passed.
+            Interlocked.Increment(ref reads);
             return Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(states.Dequeue()));
         }, CancellationToken.None);
 
         Assert.That(follower.IsFollowing, Is.True);
         Advance(time);
-        ReadsReach(() => reads, 2);
+        ReadsReach(() => Volatile.Read(ref reads), 2);
         Advance(time);
-        ReadsReach(() => reads, 3);
+        ReadsReach(() => Volatile.Read(ref reads), 3);
 
         Assert.Multiple(() =>
         {
-            Assert.That(SpinWait.SpinUntil(() => !follower.IsFollowing, TimeSpan.FromSeconds(10)), Is.True, "a finished operation is no longer followed");
+            FollowBarriers.Reaches(() => !follower.IsFollowing, "a finished operation is no longer followed");
             Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Succeeded));
-            Assert.That(changes, Is.EqualTo(3), "every read raises Changed");
+            Assert.That(Volatile.Read(ref changes), Is.EqualTo(3), "every read raises Changed");
         });
     }
 
@@ -78,8 +81,8 @@ public sealed class OperationFollowerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(SpinWait.SpinUntil(() => follower.NotFound, TimeSpan.FromSeconds(10)), Is.True);
-            Assert.That(SpinWait.SpinUntil(() => !follower.IsFollowing, TimeSpan.FromSeconds(10)), Is.True);
+            FollowBarriers.Reaches(() => follower.NotFound, "an operation that is gone is reported not found");
+            FollowBarriers.Reaches(() => !follower.IsFollowing, "an operation that is gone is no longer followed");
             Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Running));
         });
     }
@@ -94,27 +97,27 @@ public sealed class OperationFollowerTests
 
         await follower.StartAsync(_ =>
         {
-            reads++;
-            return reads == 2
+            var read = Interlocked.Increment(ref reads);
+            return read == 2
                 ? Task.FromException<LatticeOperationStatus?>(fail)
                 : Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Running));
         }, CancellationToken.None);
 
         Advance(time);
-        ReadsReach(() => reads, 2);
+        ReadsReach(() => Volatile.Read(ref reads), 2);
         Assert.Multiple(() =>
         {
-            Assert.That(SpinWait.SpinUntil(() => follower.LastError is not null, TimeSpan.FromSeconds(10)), Is.True);
+            FollowBarriers.Reaches(() => follower.LastError is not null, "a failed read is recorded");
             Assert.That(follower.LastError, Is.SameAs(fail));
             Assert.That(follower.Status, Is.Not.Null, "the last good status survives a failed read");
             Assert.That(follower.IsFollowing, Is.True, "a failed read keeps following");
         });
 
         Advance(time);
-        Assert.That(reads, Is.EqualTo(2), "after a failed read the follower waits twice as long");
+        Assert.That(Volatile.Read(ref reads), Is.EqualTo(2), "after a failed read the follower waits twice as long");
         Advance(time);
-        ReadsReach(() => reads, 3);
-        Assert.That(SpinWait.SpinUntil(() => follower.LastError is null, TimeSpan.FromSeconds(10)), Is.True);
+        ReadsReach(() => Volatile.Read(ref reads), 3);
+        FollowBarriers.Reaches(() => follower.LastError is null, "a good read clears the recorded failure");
     }
 
     [Test]
@@ -142,14 +145,14 @@ public sealed class OperationFollowerTests
 
         await follower.StartAsync(_ =>
         {
-            reads++;
-            return Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Running) with { CancelRequested = reads > 1 });
+            var read = Interlocked.Increment(ref reads);
+            return Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Running) with { CancelRequested = read > 1 });
         }, CancellationToken.None);
         await follower.RefreshAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(reads, Is.EqualTo(2));
+            Assert.That(Volatile.Read(ref reads), Is.EqualTo(2));
             Assert.That(follower.Status!.CancelRequested, Is.True);
         });
     }
@@ -185,11 +188,10 @@ public sealed class OperationFollowerTests
     }
 
     private static void ReadsReach(Func<int> reads, int expected) =>
-        Assert.That(SpinWait.SpinUntil(() => reads() == expected, TimeSpan.FromSeconds(10)), Is.True, $"the follower reads {expected} time(s)");
+        FollowBarriers.ReadsReach(reads, expected);
 
-    private static void Advance(ManualTimeProvider time)
-    {
-        Assert.That(SpinWait.SpinUntil(() => time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True, "the follower re-arms");
-        time.Advance(ClusterStatusPoller.Interval);
-    }
+    // The next wait is armed on the follow's continuation once the read returns;
+    // FollowBarriers.Advance waits for it before moving the clock again.
+    private static void Advance(ManualTimeProvider time) =>
+        FollowBarriers.Advance(time, ClusterStatusPoller.Interval);
 }

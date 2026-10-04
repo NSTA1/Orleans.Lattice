@@ -1,0 +1,107 @@
+schema: lattice.agents/procedure/v1
+id: replication-peer-status
+name: "Monitor replication peer lag and unhealthy links"
+surfaces:
+  in_process:
+    api: "ILatticeReplicationStatus.GetPeerStatusAsync"
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus.GetPeerStatusAsync"
+  grpc:
+    api: "/orleans.lattice.api.replication.status/GetPeerStatus"
+    source: "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcMethods.cs#LatticeReplicationStatusGrpcMethods.GetPeerStatusMethodName"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/replication.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/replication.json"
+  - id: status-api-registered
+    check: "The peer-status facade is registered after AddLatticeReplication so the telemetry reader exists."
+    source: "docs/lattice.api.replication/api.md"
+  - id: replication-authority
+    check: "Caller has Replication capability over any tree whose rows should be reported."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+  - id: query-valid
+    check: "The query is non-null, has non-negative page size, and uses an unmodified continuation token from the same filters."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#GetPeerStatusAsync"
+steps:
+  - n: 1
+    action: "Read the first page of peer status for all visible trees or a selected tree and peer."
+    api: "ILatticeReplicationStatus.GetPeerStatusAsync / GetPeerStatus"
+    expects: "Returns local region id and rows ordered by tree id, peer region id and direction."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#GetPeerStatusAsync"
+  - n: 2
+    action: "Page until ContinuationToken is null."
+    api: "ILatticeReplicationStatus.GetPeerStatusAsync / GetPeerStatus"
+    expects: "A page can be shorter than the page size and still carry a continuation."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#GetPeerStatusAsync"
+  - n: 3
+    action: "For each row, inspect Health, EntriesBehind, BytesBehind, ConsecutiveErrors, TimeSinceLastContact and InFlight."
+    api: "ReplicationPeerStatusEntry"
+    expects: "Lagging or Stalled identifies a link above configured thresholds."
+    source: "src/lattice.api.abstractions/Replication/Model/ReplicationPeerStatusEntry.cs#ReplicationPeerStatusEntry.Health"
+  - n: 4
+    action: "For unhealthy outbound links, check peer endpoint reachability, shared-secret rotation, origin binding and sender backlog."
+    api: "transport and replication metrics"
+    expects: "Transport failures show as consecutive errors or stale outbound contact while sender cursor does not advance."
+    source: "docs/lattice.replication/transport-security.md"
+  - n: 5
+    action: "When lag reflects WAL retention fall-off or a persistent gap, run the replication re-seed procedure."
+    api: "ILatticeFallOffLogDetector.CheckAndTriggerAsync or ILatticeReplicationAdmin.RequestSnapshotAsync"
+    expects: "A detected retained-WAL gap triggers or requests snapshot bootstrap."
+    source: "docs/lattice.replication/auto-bootstrap.md"
+postconditions:
+  - check: "Peer status is a point-in-time telemetry report, not a durable record or cursor source."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+  - check: "Unauthorized trees are omitted, and an unauthorized tree filter returns an empty page without reading telemetry."
+    source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+  - check: "Rows can join to replication config entries by effective tree id."
+    source: "docs/lattice.api.replication/api.md"
+failure_modes:
+  - id: unauthorized-hidden
+    signal: "A filtered query returns an empty page for a tree the caller may not manage."
+    effect: "The result is indistinguishable from an authorized tree with no links."
+    response: "Verify caller authorization before treating an empty page as topology absence."
+  - id: unreachable-peer
+    signal: "Outbound row is Lagging or Stalled with rising ConsecutiveErrors or stale TimeSinceLastContact."
+    effect: "Batches are not being acknowledged and the sender backlog may grow."
+    response: "Restore network reachability, HTTPS endpoint configuration, shared secret and origin binding, then let the shipper retry."
+  - id: inbound-silence
+    signal: "Inbound row has old TimeSinceLastContact under finite inbound thresholds."
+    effect: "The peer has not recently had entries applied locally, but idle peers do not refresh inbound contact."
+    response: "Size inbound thresholds above expected write gaps or verify the peer is expected to write."
+  - id: read-path-failure
+    signal: "The peer-status facade fails because a silo does not answer the cluster-wide read."
+    effect: "No partial page is returned."
+    response: "Fix the failing silo or retry once the read path is healthy."
+  - id: status-omits-rejected-inbound
+    signal: "Expected inbound row is absent after non-enrolled, mode-mismatch, or missing-enrollment-source traffic."
+    effect: "Rejected runs do not plant peer-status rows for peer-controlled tree ids."
+    response: "Inspect receiver enrollment, mode configuration and dead-letter metrics instead of relying on peer status alone."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: false
+  mechanism: "Peer-status monitoring is read-only and has no state to roll back."
+  steps: []
+  source: "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus"
+concurrency:
+  - rule: "Rows are ordered by effective tree id, peer id and direction, and continuation tokens are issued only after rows returned to the caller."
+    source: "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus.GetPeerStatusAsync"
+  - rule: "When the same link appears on more than one silo, the facade keeps the most recent contact whole."
+    source: "docs/lattice.api.replication/README.md"
+  - rule: "A silo that fails to answer a peer-status read fails the whole read rather than producing a partial page."
+    source: "docs/lattice.api.replication/README.md"
+  - rule: "New inbound contact rows are bounded by the inbound-row cap; existing inbound pairs keep updating after the cap is reached."
+    source: "src/lattice.replication/ReplicationPeerStats.cs#ReplicationPeerStats.DefaultMaxInboundRows"
+sources:
+  - "docs/lattice.api.replication/README.md"
+  - "docs/lattice.api.replication/api.md"
+  - "docs/lattice.replication/health-check.md"
+  - "docs/lattice.replication/observability.md"
+  - "docs/lattice.replication/transport-security.md"
+  - "docs/lattice.replication/auto-bootstrap.md"
+  - "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs"
+  - "src/lattice.api.abstractions/Replication/Model/ReplicationPeerStatusEntry.cs"
+  - "src/lattice.api.replication/LatticeReplicationStatus.cs"
+  - "src/lattice.api.replication/LatticeReplicationStatusOptions.cs"
+  - "src/lattice.api.replication.grpc/LatticeReplicationStatusGrpcMethods.cs"

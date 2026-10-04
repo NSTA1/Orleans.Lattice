@@ -323,7 +323,12 @@ saga's batch and its terminals and mirrors them, so the batch lands whole on
 both copies and a resize undo never restores a copy holding part of it
 ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)). A swap that
 lands after the decision is recorded leaves the batch on its bound copy, where the terminal broadcast
-delivers it whole. A batch therefore commits wholly on one copy - kept or
+delivers it whole. When that copy is a resized copy whose resize is then undone,
+the undo discards it with every write it took, so a terminal the discarded copy
+refuses counts as delivered: it is neither re-sent to the copy the undo restored,
+which would land part of the batch there, nor retried until the saga stalls, and
+the saga completes
+([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
 
@@ -591,6 +596,16 @@ saga's coordinator cannot be dialled at all (see
 on a multi-key read, when a leaf has no tree id bound yet and so has no
 registry to consult; a single-key read on such a leaf instead resolves
 the saga as in flight and serves the pre-saga value.
+
+The one exception is a leaf that has already applied the saga's
+terminal. Its row already holds what the saga left there, so a
+prepared bucket that survives beside it - an orphan a replayed
+shadow-forward re-installed - can never change the key, and every read
+path serves the row whatever the registry reports, `Indeterminate`
+included. Hiding the key there would keep a committed, materialised
+value unreadable for as long as the row stays masked, and nothing
+guarantees the lazy purge that ends the mask ever runs on an idle
+registry shard (issue #4428).
 
 Snapshots carry the masked row explicitly rather than dropping it, so
 absence from a snapshot means only "no decision recorded". That

@@ -191,13 +191,13 @@ public partial class TreeDeletionIntegrationTests
     private async Task<bool> WaitForLoopRemindersAsync(
         IHotShardMonitorGrain monitor, IShardHealingOrchestratorGrain healing, bool present)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         while (true)
         {
             if (await HasReminderAsync(monitor, HotShardMonitorReminder) == present
                 && await HasReminderAsync(healing, ShardHealingReminder) == present)
                 return true;
-            if (DateTime.UtcNow > deadline) return false;
+            if (Environment.TickCount64 > deadline) return false;
             await Task.Delay(100);
         }
     }

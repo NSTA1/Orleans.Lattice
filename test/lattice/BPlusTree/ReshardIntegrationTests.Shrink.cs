@@ -115,11 +115,11 @@ public partial class ReshardIntegrationTests
         async Task AwaitAnotherWriterRoundAsync()
         {
             var seen = Volatile.Read(ref completedRounds);
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+            var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
             while (Volatile.Read(ref completedRounds) == seen)
             {
                 if (writer.IsCompleted) await writer;
-                if (DateTime.UtcNow > deadline) Assert.Fail("The writer made no progress across a fold pass.");
+                if (Environment.TickCount64 > deadline) Assert.Fail("The writer made no progress across a fold pass.");
                 await Task.Delay(5);
             }
         }

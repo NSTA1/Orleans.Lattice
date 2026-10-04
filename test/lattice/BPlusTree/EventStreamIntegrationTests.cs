@@ -35,8 +35,8 @@ public sealed class EventStreamIntegrationTests
         Func<LatticeTreeEvent, bool> predicate,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(10));
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(10)).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             foreach (var evt in sink)
             {
@@ -176,8 +176,8 @@ public sealed class EventStreamIntegrationTests
             // Wait for the applied write's event rather than sleeping for a fixed
             // window: the count must reach exactly one more than before (and the
             // equality below still catches a stale-CAS event that should never fire).
-            var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
-            while (DateTime.UtcNow < deadline
+            var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(10).TotalMilliseconds;
+            while (Environment.TickCount64 < deadline
                 && sink.Count(e => e.Kind == LatticeTreeEventKind.Set && e.Key == "cas") < setCountBefore + 1)
             {
                 await Task.Delay(25);

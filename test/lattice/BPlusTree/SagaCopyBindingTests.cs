@@ -67,4 +67,41 @@ public sealed class SagaCopyBindingTests
             Assert.That(SagaCopyBinding.RebindsAfterRefusal(null, Old), Is.False);
         });
     }
+
+    [Test]
+    public void DispatchCopy_places_an_unbound_or_bound_to_resolved_dispatch_on_the_resolved_copy(
+        [Values(null, Resized)] string? mirror)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SagaCopyBinding.DispatchCopy(null, Resized, mirror), Is.EqualTo(Resized));
+            Assert.That(SagaCopyBinding.DispatchCopy(Resized, Resized, mirror), Is.EqualTo(Resized));
+        });
+    }
+
+    [Test]
+    public void DispatchCopy_places_a_bound_dispatch_on_the_bound_copy_when_it_mirrors_into_the_resolved_one()
+    {
+        // #4454: the batch belongs on the resize source, which takes it through its
+        // fence and mirrors it, not on the destination the tree flipped to.
+        Assert.That(SagaCopyBinding.DispatchCopy(Old, Resized, boundMirrorDestination: Resized), Is.EqualTo(Old));
+    }
+
+    [Test]
+    public void DispatchCopy_refuses_a_bound_dispatch_when_the_bound_copy_mirrors_nowhere_or_elsewhere(
+        [Values(null, "tree/resized/other")] string? mirror)
+    {
+        Assert.That(SagaCopyBinding.DispatchCopy(Old, Resized, mirror), Is.Null);
+    }
+
+    [Test]
+    public void AfterRefusal_stays_bound_when_the_bound_copy_mirrors_into_the_new_one_and_rebinds_otherwise()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SagaCopyBinding.AfterRefusal(Old, Resized, Resized), Is.EqualTo(SagaCopyBindingVerdict.StayBound));
+            Assert.That(SagaCopyBinding.AfterRefusal(Old, Resized, null), Is.EqualTo(SagaCopyBindingVerdict.Rebind));
+            Assert.That(SagaCopyBinding.AfterRefusal(Old, Old, null), Is.EqualTo(SagaCopyBindingVerdict.Commit));
+        });
+    }
 }

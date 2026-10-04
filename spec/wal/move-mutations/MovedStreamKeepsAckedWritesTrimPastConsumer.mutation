@@ -1,0 +1,15 @@
+# Pairs with MovedStreamKeepsAckedWrites. The GC trims to the allocator's head
+# rather than below what the consumer has read - the lagging-consumer
+# fall-off-the-log class WalGcTrimFloorModel pins at the core level.
+MODULE: MovedStreamKeepsAckedWritesTrimPastConsumer
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: the GC trims past the consumer's read position
+PERTURBS: GcTrim
+
+--- FIND
+         /\ t - 1 <= cons
+--- REPLACE
+\* MUTATION: the trim ignores the consumer.
+         /\ t - 1 < next
+--- END

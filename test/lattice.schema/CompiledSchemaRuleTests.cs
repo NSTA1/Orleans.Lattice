@@ -48,6 +48,34 @@ public class CompiledSchemaRuleTests
         Assert.That(compiled.Validate(new byte[] { 0xC3, 0x28 }), Is.Not.Null);
     }
 
+    /// <summary>
+    /// Regression: a regex rule runs over the raw write payload with no trimming
+    /// or normalising, and in .NET <c>$</c> also matches immediately before a
+    /// line feed that ends the input. A pattern anchored with <c>$</c> therefore
+    /// admits a value with a newline smuggled onto the end, which is a
+    /// validation bypass for any caller that trusts the rule; <c>\z</c> is the
+    /// anchor that admits only the true end of input, and the non-backtracking
+    /// engine accepts it, so the linear-time guarantee is unchanged. This pins
+    /// the semantics the Explorer's format patterns depend on.
+    /// </summary>
+    [Test]
+    public void Compile_regex_end_of_input_anchor_refuses_a_trailing_newline_that_dollar_admits()
+    {
+        var dollar = CompiledSchemaRule.Compile(LatticeSchemaRule.Regex("^[A-Z]{2}$"));
+        var endOfInput = CompiledSchemaRule.Compile(LatticeSchemaRule.Regex("^[A-Z]{2}\\z", description: "a two-letter country code"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(dollar.Validate(Utf8("GB")), Is.Null);
+            Assert.That(dollar.Validate(Utf8("GB\n")), Is.Null, "why $ is not a safe tail anchor here");
+
+            Assert.That(endOfInput.Validate(Utf8("GB")), Is.Null);
+            Assert.That(endOfInput.Validate(Utf8("GB\n")), Is.EqualTo("a two-letter country code"));
+            Assert.That(endOfInput.Validate(Utf8("GB\r\n")), Is.EqualTo("a two-letter country code"));
+            Assert.That(endOfInput.Validate(Utf8("GB\nX")), Is.EqualTo("a two-letter country code"));
+        });
+    }
+
     [Test]
     public void Compile_uncompilable_regex_throws_at_set_time()
     {

@@ -94,6 +94,9 @@ SplitRejects(c, s, k) == c = spCopy /\ s = s1 /\ k = k2 /\ sp \in SplitFrozen
 
 Fenced(c, s) == c = T /\ s \in fence
 Redirected(c) == c = R /\ redir
+\* The old copy after the purge. The intended design refuses a routed operation
+\* there, so the caller refreshes its pair; production answers a read as the
+\* empty tree and accepts a write (#4503).
 Gone(c) == c = T /\ rz = "purged"
 
 \* Whether copy c can still become, or still is, the tree's copy.
@@ -161,8 +164,9 @@ Landing(c, s, k) ==
 Landable(c, s, k) == \A x \in Landing(c, s, k) : x = <<c, s>> \/ ~SplitRejects(x[1], x[2], k)
 
 \* The copies a write acknowledged on copy c obliges to hold it: while a
-\* resize is in flight R must hold everything T acknowledged.
-AckCopies(c) == IF c = T /\ rz \in FwdPhases THEN {T, R} ELSE {c}
+\* resize is in flight, or once it completed and purged T, R must hold
+\* everything T acknowledged, because the logical tree acknowledged it.
+AckCopies(c) == IF c = T /\ rz \in FwdPhases \cup {"purged"} THEN {T, R} ELSE {c}
 
 \* Whether the bound copy mirrors everything into the copy the tree resolves to.
 BoundMirrors == bound = T /\ alias = R /\ ResizeMirrors(T, s1)
@@ -346,17 +350,17 @@ ResizeRetire ==
     /\ rz' = "retired"
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
 
-\* The purge after SoftDeleteDuration clears T's shard rows. A router whose
-\* cached pair still names T is assumed gone by then (see RefinementRetention.md).
+\* The purge after SoftDeleteDuration clears T's shard rows. A router may still
+\* hold a pair naming T: nothing bounds a routing activation's lifetime below
+\* SoftDeleteDuration, so the pairs stay published (#4503).
 ResizePurge ==
     /\ rz = "retired"
     /\ rz' = "purged"
-    /\ published' = {p \in published : p[1] # T}
     /\ row' = [row EXCEPT ![T] = [s \in Shards |-> [k \in Keys |-> Absent]]]
     /\ pend' = [pend EXCEPT ![T] = [s \in Shards |-> [k \in Keys |-> "none"]]]
     /\ term' = [term EXCEPT ![T] = [s \in Shards |-> FALSE]]
     /\ fence' = {}
-    /\ UNCHANGED <<alias, rmap, rmapR, rmapOld, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
 
 \* Undo after the flip, first step: ArmRedirectsAsync arms the resized copy's
 \* shards to redirect routers that still address it (#4357). The undo arms R

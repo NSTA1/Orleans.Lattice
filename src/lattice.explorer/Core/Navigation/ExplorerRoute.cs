@@ -284,9 +284,9 @@ public sealed record ExplorerRoute
     /// <paramref name="value"/> in the query string. An empty or
     /// <see langword="null"/> value removes the key.
     /// </summary>
-    /// <param name="key">The canonical lower-case query key.</param>
+    /// <param name="key">The canonical lower-case query key. Not a tenant-scope key: use <see cref="WithTenant"/> or <see cref="WithAllTenants"/>.</param>
     /// <param name="value">The raw value, or empty to remove the key.</param>
-    /// <exception cref="ArgumentException"><paramref name="key"/> is not canonical lower case.</exception>
+    /// <exception cref="ArgumentException"><paramref name="key"/> is not canonical lower case, or is one of the shell's tenant-scope keys.</exception>
     public ExplorerRoute WithParameter(string key, string? value)
     {
         var parameters = Parameters.With(key, value);

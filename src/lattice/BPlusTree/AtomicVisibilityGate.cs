@@ -28,7 +28,8 @@ internal enum PendingReadOutcome
     /// the reader (it does <b>not</b> fall through to the pre-saga value).
     /// <para>
     /// Also the outcome for a saga whose status is
-    /// <see cref="TxStatus.Indeterminate"/>: the registry cannot say whether the
+    /// <see cref="TxStatus.Indeterminate"/>, unless this leaf has already
+    /// applied the saga's terminal: the registry cannot say whether the
     /// saga committed, so the reader is shown neither candidate value. Absence is
     /// the only answer that asserts nothing, and it is the reason this case
     /// exists separately from <see cref="FallThroughToPreSaga"/> rather than
@@ -103,6 +104,17 @@ internal static class AtomicVisibilityGate
     /// nothing downstream has to learn a new outcome.
     /// </para>
     /// <para>
+    /// <b>Why the orphan guard is tested before the Indeterminate arm.</b> The
+    /// argument above is about choosing between the prepared value and the
+    /// pre-saga value without knowing the outcome. A leaf that has already
+    /// applied the saga's terminal does not face that choice: its row is the
+    /// outcome, materialised, and the surviving bucket is an orphan the terminal
+    /// will never drain. Hiding the key there would keep a committed value
+    /// unreadable for as long as the registry row stays masked - the retention
+    /// window has elapsed and nothing guarantees the lazy purge ever runs on an
+    /// idle registry shard (issue #4428).
+    /// </para>
+    /// <para>
     /// <b>Old nodes.</b> An older build that receives the unknown enum value
     /// takes this method's <c>status == Committed</c> test as false and returns
     /// <see cref="PendingReadOutcome.FallThroughToPreSaga"/> - the pre-widening
@@ -114,18 +126,31 @@ internal static class AtomicVisibilityGate
         bool alreadyTerminal,
         bool preparedHiddenByTombstoneOrExpiry)
     {
+        if (alreadyTerminal)
+        {
+            // The orphan guard is tested first, ahead of every outcome arm,
+            // Indeterminate included (issue #4428). alreadyTerminal means this
+            // leaf has already applied the saga's terminal, so its committed row
+            // already holds whatever the saga left here - the committed value,
+            // or the pre-saga value after an abort - and the surviving bucket is
+            // an orphan that terminal can never drain. Serving the row asserts
+            // nothing the leaf does not already hold, whatever the registry is
+            // willing to report; hiding the key instead would keep a committed,
+            // materialised value unreadable for as long as the registry row
+            // stays masked, which nothing guarantees will end.
+            return PendingReadOutcome.FallThroughToPreSaga;
+        }
+
         if (status == TxStatus.Indeterminate)
         {
-            // Checked ahead of the Committed test so the orphan guard cannot
-            // reroute it: alreadyTerminal means this leaf already applied the
-            // saga's terminal, which is a claim about THIS leaf's projection,
-            // not about the saga's outcome. Under an indeterminate outcome we
-            // have no basis to prefer the projected value over the prepared one,
-            // and serving either would assert what the registry declined to.
+            // Under an outcome the registry declined to report, and with no
+            // terminal applied here, there is no basis to prefer the row over
+            // the prepared value, and serving either would assert what the
+            // registry declined to.
             return PendingReadOutcome.Hidden;
         }
 
-        if (status == TxStatus.Committed && !alreadyTerminal)
+        if (status == TxStatus.Committed)
         {
             return preparedHiddenByTombstoneOrExpiry
                 ? PendingReadOutcome.Hidden
@@ -171,15 +196,16 @@ internal static class AtomicVisibilityGate
     /// the row can decide. That is an <see cref="TxStatus.Indeterminate"/> saga
     /// (which hides the key - the strictly weaker answer wins, because the
     /// registry cannot say whether that saga's value is the one the key settles
-    /// on), or a <see cref="TxStatus.Committed"/> saga whose terminal has not been
-    /// applied here (which surfaces its prepared value, newest HLC first when
-    /// several have committed) - in both cases only when the leaf's committed row
-    /// does not already supersede the prepare, because the commit drain skips a
+    /// on), or a <see cref="TxStatus.Committed"/> saga (which surfaces its
+    /// prepared value, newest HLC first when several have committed) - in every
+    /// case only when this leaf has not already applied that saga's terminal and
+    /// the leaf's committed row does not already supersede the prepare. An
+    /// already-terminal orphan cannot change the row whatever its saga's status,
+    /// Indeterminate included (issue #4428), and the commit drain skips a
     /// prepare that a newer, non-migrated row dominates (the orphan-drain guard
     /// in <c>BPlusLeafGrain.ApplyTxCommit</c>), so such a bucket never lands.
-    /// <see cref="TxStatus.InFlight"/> and <see cref="TxStatus.Aborted"/> buckets,
-    /// and already-terminal orphans, are invisible to readers whatever their age,
-    /// so they never decide.
+    /// <see cref="TxStatus.InFlight"/> and <see cref="TxStatus.Aborted"/> buckets
+    /// are invisible to readers whatever their age, so they never decide.
     /// </para>
     /// <para>
     /// <b>The defect it closes.</b> The multi-key read paths used to keep whichever
@@ -201,7 +227,7 @@ internal static class AtomicVisibilityGate
         for (var i = 0; i < candidates.Length; i++)
         {
             var candidate = candidates[i];
-            if (candidate.SupersededByRow)
+            if (candidate.SupersededByRow || candidate.AlreadyTerminal)
                 continue;
 
             if (candidate.Status == TxStatus.Indeterminate)
@@ -209,7 +235,7 @@ internal static class AtomicVisibilityGate
                 if (newestIndeterminate < 0 || candidate.Timestamp.CompareTo(candidates[newestIndeterminate].Timestamp) > 0)
                     newestIndeterminate = i;
             }
-            else if (candidate.Status == TxStatus.Committed && !candidate.AlreadyTerminal)
+            else if (candidate.Status == TxStatus.Committed)
             {
                 if (newestCommitted < 0 || candidate.Timestamp.CompareTo(candidates[newestCommitted].Timestamp) > 0)
                     newestCommitted = i;

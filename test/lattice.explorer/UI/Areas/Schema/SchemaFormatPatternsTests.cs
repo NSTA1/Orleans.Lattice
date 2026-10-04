@@ -34,8 +34,56 @@ public sealed class SchemaFormatPatternsTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(pattern, Does.StartWith("^").And.EndWith("$"));
+            Assert.That(pattern, Does.StartWith("^").And.EndWith("\\z"));
             Assert.That(SchemaPatterns.TryCompile(pattern, out _, out var error), Is.True, error);
+            Assert.That(SchemaFormatPatterns.TryRecognise(pattern, out var recognised), Is.True);
+            Assert.That(recognised, Is.EqualTo(format));
+        });
+    }
+
+    /// <summary>
+    /// Regression: the tail anchor used to be <c>$</c>, which in .NET also
+    /// matches immediately before a line feed that ends the input, so every
+    /// format accepted its own passing example with a newline smuggled onto the
+    /// end. These patterns compile to a cluster-enforced regex rule applied to
+    /// the raw write payload, so that was a validation bypass and not a display
+    /// quirk.
+    /// </summary>
+    /// <param name="name">The format under test.</param>
+    [TestCaseSource(nameof(Formats))]
+    public void Each_format_refuses_its_example_with_a_trailing_newline(string name)
+    {
+        var format = Enum.Parse<SchemaTextFormat>(name);
+        var passing = SchemaFormatPatterns.PassingExampleOf(format);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaFormatPatterns.IsMatch(format, passing), Is.True, "the example itself still passes");
+            Assert.That(SchemaFormatPatterns.IsMatch(format, passing + "\n"), Is.False, "trailing line feed");
+            Assert.That(SchemaFormatPatterns.IsMatch(format, passing + "\r\n"), Is.False, "trailing carriage return and line feed");
+            Assert.That(SchemaFormatPatterns.IsMatch(format, passing + "\n\n"), Is.False, "two trailing line feeds");
+        });
+    }
+
+    /// <summary>
+    /// A policy saved before the anchor changed carries the <c>$</c> form.
+    /// Recognising it as its format card would show a card whose save silently
+    /// rewrote the stored pattern, so it is deliberately not recognised: the
+    /// builder shows the real pattern and the operator chooses the format card,
+    /// which writes the <c>\z</c> form.
+    /// </summary>
+    /// <param name="name">The format under test.</param>
+    [TestCaseSource(nameof(Formats))]
+    public void A_legacy_dollar_anchored_pattern_is_not_recognised_as_its_format(string name)
+    {
+        var format = Enum.Parse<SchemaTextFormat>(name);
+        var pattern = SchemaFormatPatterns.PatternOf(format);
+        var legacy = string.Concat(pattern.AsSpan(0, pattern.Length - 2), "$");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pattern, Does.EndWith("\\z"));
+            Assert.That(SchemaFormatPatterns.TryRecognise(legacy, out _), Is.False, legacy);
             Assert.That(SchemaFormatPatterns.TryRecognise(pattern, out var recognised), Is.True);
             Assert.That(recognised, Is.EqualTo(format));
         });
@@ -89,11 +137,31 @@ public sealed class SchemaFormatPatternsTests
     }
 
     [TestCase("StartsWith", "a.b", "^a\\.b")]
-    [TestCase("EndsWith", "(x)", "\\(x\\)$")]
+    [TestCase("EndsWith", "(x)", "\\(x\\)\\z")]
     [TestCase("Contains", "1+1", "1\\+1")]
     public void A_text_match_becomes_an_escaped_pattern(string match, string text, string pattern)
     {
         Assert.That(SchemaPatterns.ForMatch(Enum.Parse<SchemaTextMatch>(match), text), Is.EqualTo(pattern));
+    }
+
+    /// <summary>
+    /// Regression: an "ends with" card taken over as a regex used to be anchored
+    /// with <c>$</c>, so the enforced pattern accepted the text followed by a
+    /// newline - which <see cref="string.EndsWith(string, StringComparison)"/>,
+    /// the behaviour the card claims, does not.
+    /// </summary>
+    [Test]
+    public void An_ends_with_pattern_refuses_a_trailing_newline()
+    {
+        var regex = SchemaPatterns.Compile(SchemaPatterns.ForMatch(SchemaTextMatch.EndsWith, "-final"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(regex.IsMatch("order-final"), Is.True);
+            Assert.That(regex.IsMatch("order-final\n"), Is.False);
+            Assert.That(regex.IsMatch("order-final\r\n"), Is.False);
+            Assert.That(regex.IsMatch("order-final-x"), Is.False);
+        });
     }
 
     [Test]

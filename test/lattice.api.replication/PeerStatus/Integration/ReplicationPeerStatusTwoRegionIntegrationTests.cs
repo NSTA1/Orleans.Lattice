@@ -122,10 +122,10 @@ public sealed class ReplicationPeerStatusTwoRegionIntegrationTests
 
     private static async Task WaitForAsync(Func<Task<bool>> condition, Func<string> failure)
     {
-        var deadline = DateTime.UtcNow + ConvergenceTimeout;
+        var deadline = Environment.TickCount64 + (long)ConvergenceTimeout.TotalMilliseconds;
         while (!await condition())
         {
-            if (DateTime.UtcNow >= deadline)
+            if (Environment.TickCount64 >= deadline)
             {
                 Assert.Fail(failure());
             }

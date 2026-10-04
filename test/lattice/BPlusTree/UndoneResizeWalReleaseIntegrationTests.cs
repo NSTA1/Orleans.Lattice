@@ -151,7 +151,7 @@ public sealed class UndoneResizeWalReleaseIntegrationTests
 
     private async Task AssertHoldsRetentionAsync(string physicalTreeId)
     {
-        var deadline = DateTime.UtcNow + SettleBudget;
+        var deadline = Environment.TickCount64 + (long)SettleBudget.TotalMilliseconds;
         int pins;
         long entries;
         do
@@ -161,7 +161,7 @@ public sealed class UndoneResizeWalReleaseIntegrationTests
             if (pins > 0 && entries > 0) return;
             await Task.Delay(100);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         Assert.Fail($"precondition: the destination should hold materialiser pins and WAL entries, but held {pins} pins and {entries} entries.");
     }
@@ -170,7 +170,7 @@ public sealed class UndoneResizeWalReleaseIntegrationTests
     {
         // Polled because a still-resident leaf can briefly re-publish a pin
         // after the release; without the fix neither count ever reaches zero.
-        var deadline = DateTime.UtcNow + SettleBudget;
+        var deadline = Environment.TickCount64 + (long)SettleBudget.TotalMilliseconds;
         int pins;
         long entries;
         do
@@ -180,7 +180,7 @@ public sealed class UndoneResizeWalReleaseIntegrationTests
             if (pins == 0 && entries == 0) return;
             await Task.Delay(100);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         Assert.Fail($"the discarded destination should retain no materialiser pins and no WAL, but still held {pins} pins and {entries} entries.");
     }

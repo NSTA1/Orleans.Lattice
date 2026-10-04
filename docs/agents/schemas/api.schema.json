@@ -1,0 +1,984 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nsta1.github.io/Orleans.Lattice/docs/agents/schemas/api.schema.json",
+  "schema": "lattice.agents/json-schema/v1",
+  "title": "Orleans.Lattice agent API specification",
+  "description": "One public API surface: its packages, in-process and gRPC binding, the registrations that make it available on a host, its types, every operation with errors, retry, idempotency and concurrency, and the error taxonomy those errors resolve to.",
+  "type": "object",
+  "required": [
+    "schema",
+    "surface",
+    "packages",
+    "sources",
+    "in_process",
+    "grpc",
+    "availability",
+    "types",
+    "operations",
+    "error_taxonomy"
+  ],
+  "properties": {
+    "schema": {
+      "const": "lattice.agents/api/v1"
+    },
+    "surface": {
+      "type": "string",
+      "minLength": 1
+    },
+    "packages": {
+      "$ref": "#/$defs/packages"
+    },
+    "sources": {
+      "$ref": "#/$defs/sources"
+    },
+    "in_process": {
+      "type": "object",
+      "required": [
+        "interface",
+        "registration",
+        "source"
+      ],
+      "properties": {
+        "interface": {
+          "type": "string",
+          "minLength": 1
+        },
+        "registration": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "object",
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        }
+      },
+      "additionalProperties": false
+    },
+    "grpc": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "service",
+            "methods_source",
+            "marshalling",
+            "metadata",
+            "auth"
+          ],
+          "properties": {
+            "service": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "methods_source": {
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/source"
+                }
+              ]
+            },
+            "marshalling": {
+              "type": "string",
+              "minLength": 1
+            },
+            "metadata": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "purpose",
+                  "source"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "purpose": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "$ref": "#/$defs/source"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "auth": {
+              "type": "object",
+              "required": [
+                "interceptor",
+                "authorizer",
+                "decision",
+                "source"
+              ],
+              "properties": {
+                "interceptor": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "authorizer": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "decision": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "$ref": "#/$defs/source"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "availability": {
+      "type": "object",
+      "required": [
+        "in_process",
+        "requires",
+        "grpc_server",
+        "grpc_client",
+        "absent"
+      ],
+      "properties": {
+        "in_process": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "registration",
+              "package",
+              "source"
+            ],
+            "properties": {
+              "registration": {
+                "type": "string",
+                "minLength": 1
+              },
+              "package": {
+                "$ref": "#/$defs/package"
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              },
+              "provides": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 1
+        },
+        "requires": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "kind",
+              "reason",
+              "source"
+            ],
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "enum": [
+                  "options",
+                  "registration"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              },
+              "arguments": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "grpc_server": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "registration",
+              "package",
+              "source"
+            ],
+            "properties": {
+              "registration": {
+                "type": "string",
+                "minLength": 1
+              },
+              "package": {
+                "$ref": "#/$defs/package"
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              },
+              "provides": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "grpc_client": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "registration",
+              "package",
+              "source"
+            ],
+            "properties": {
+              "registration": {
+                "type": "string",
+                "minLength": 1
+              },
+              "package": {
+                "$ref": "#/$defs/package"
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              },
+              "provides": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "absent": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/claim"
+            }
+          ]
+        },
+        "session_filtering": {
+          "$ref": "#/$defs/claim"
+        },
+        "capabilities_report": {
+          "$ref": "#/$defs/claim"
+        }
+      },
+      "additionalProperties": false
+    },
+    "types": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "kind",
+          "source"
+        ],
+        "properties": {
+          "kind": {
+            "enum": [
+              "class",
+              "enum",
+              "exception",
+              "flags enum",
+              "interface",
+              "record",
+              "record struct",
+              "struct"
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "type",
+                "required"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "required": {
+                  "type": "boolean"
+                },
+                "notes": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "operations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "in_process",
+          "grpc_method",
+          "transport_scope",
+          "request",
+          "response",
+          "errors",
+          "retry",
+          "idempotency",
+          "concurrency",
+          "sources"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "in_process": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "minItems": 1
+              },
+              {
+                "type": "object",
+                "required": [
+                  "interface",
+                  "method",
+                  "signature"
+                ],
+                "properties": {
+                  "interface": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "method": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "signature": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "grpc_method": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^/[A-Za-z0-9_.]+/[A-Za-z0-9_]+$"
+              }
+            ]
+          },
+          "transport_scope": {
+            "enum": [
+              "both",
+              "grpc_only",
+              "in_process_only",
+              "mcp_tool"
+            ]
+          },
+          "request": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "name",
+                    "type",
+                    "required"
+                  ],
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                    },
+                    "type": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "required": {
+                      "type": "boolean"
+                    },
+                    "default": {
+                      "type": "string"
+                    },
+                    "notes": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "parameters"
+                ],
+                "properties": {
+                  "parameters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "name",
+                        "type",
+                        "required"
+                      ],
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                        },
+                        "type": {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        "required": {
+                          "type": "boolean"
+                        },
+                        "default": {
+                          "type": "string"
+                        },
+                        "notes": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "$ref": "#/$defs/uncertain"
+              }
+            ]
+          },
+          "response": {
+            "oneOf": [
+              {
+                "type": "string",
+                "minLength": 1
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "meaning": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "shape": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "$ref": "#/$defs/uncertain"
+              }
+            ]
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "error_id",
+                "condition"
+              ],
+              "properties": {
+                "error_id": {
+                  "$ref": "#/$defs/id"
+                },
+                "condition": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "retry": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "safe",
+                  "policy",
+                  "source"
+                ],
+                "properties": {
+                  "safe": {
+                    "oneOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "const": "conditional"
+                      }
+                    ]
+                  },
+                  "policy": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "$ref": "#/$defs/source"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "$ref": "#/$defs/uncertain"
+              }
+            ]
+          },
+          "idempotency": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "idempotent",
+                  "basis",
+                  "source"
+                ],
+                "properties": {
+                  "idempotent": {
+                    "oneOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "const": "conditional"
+                      }
+                    ]
+                  },
+                  "basis": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "$ref": "#/$defs/source"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "$ref": "#/$defs/uncertain"
+              }
+            ]
+          },
+          "concurrency": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "rule",
+                  "source"
+                ],
+                "properties": {
+                  "rule": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "source": {
+                    "$ref": "#/$defs/source"
+                  }
+                },
+                "additionalProperties": false
+              },
+              {
+                "$ref": "#/$defs/uncertain"
+              }
+            ]
+          },
+          "sources": {
+            "$ref": "#/$defs/sources"
+          },
+          "deprecated": {
+            "type": "object",
+            "required": [
+              "replacement",
+              "removal"
+            ],
+            "properties": {
+              "replacement": {
+                "type": "string",
+                "minLength": 1
+              },
+              "removal": {
+                "type": "string",
+                "minLength": 1
+              },
+              "diagnostic": {
+                "type": "string",
+                "minLength": 1
+              },
+              "migration": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          },
+          "transport_scope_source": {
+            "$ref": "#/$defs/source"
+          },
+          "operation_kind": {
+            "type": "string",
+            "pattern": "^[a-z]+\\.[a-z0-9-]+$"
+          },
+          "facade_operation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string",
+                "pattern": "^api/[a-z]+\\.json#[a-z0-9-]+$"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^api/[a-z]+\\.json#[a-z0-9-]+$"
+                },
+                "minItems": 2
+              }
+            ]
+          },
+          "tool_annotations": {
+            "type": "object",
+            "required": [
+              "read_only",
+              "destructive",
+              "source"
+            ],
+            "properties": {
+              "read_only": {
+                "type": "boolean"
+              },
+              "destructive": {
+                "type": "boolean"
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              }
+            },
+            "additionalProperties": false
+          },
+          "availability": {
+            "type": "object",
+            "required": [
+              "module",
+              "package",
+              "opt_in",
+              "requires",
+              "source"
+            ],
+            "properties": {
+              "module": {
+                "type": "string",
+                "minLength": 1
+              },
+              "package": {
+                "$ref": "#/$defs/package"
+              },
+              "opt_in": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "required": [
+                      "parameter",
+                      "option",
+                      "source"
+                    ],
+                    "properties": {
+                      "parameter": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "option": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "source": {
+                        "$ref": "#/$defs/source"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "requires": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              },
+              "note": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "error_taxonomy": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "grpc_status",
+          "meaning"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "grpc_status": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "meaning": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "retryable": {
+            "oneOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "const": "conditional"
+              }
+            ]
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "statement",
+            "source"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/uncertain"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "package": {
+      "type": "string",
+      "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+      }
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uncertain": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "properties": {
+        "status": {
+          "const": "uncertain"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,18 @@
+# Pairs with PersistedBeliefHonest, and reproduces issue #4017: the checkpoint
+# commit wrote the advance into state.State before awaiting the persist, and a
+# persist that threw left it there, so the activation went on believing it had
+# durably recorded an offset storage never received.
+MODULE: PersistedBeliefHonestFailedPersistKeepsAdvance
+TARGET: PersistedBeliefHonest
+CLASS: Invariant
+SUMMARY: a failed checkpoint persist is not rolled back
+PERTURBS: PersistFail
+
+--- FIND
+    /\ faults < MaxFaults
+    /\ stCp' = stCp
+--- REPLACE
+    /\ faults < MaxFaults
+\* MUTATION: no rollback of the commit.
+    /\ stCp' = [stCp EXCEPT ![l] = rp[l]]
+--- END

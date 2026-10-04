@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_tree_reshard"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tree_reshard), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
   - id: target-in-range
     check: "Target shard count is at least 2 and at most the smaller of 4096 and the tree's virtual slot count."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReshardTreeAsync"
@@ -59,6 +62,10 @@ failure_modes:
     signal: "ArgumentOutOfRangeException for a target below 2 or above the smaller of 4096 and the tree's virtual slot count."
     effect: "No reshard is started."
     response: "Pick a target in range."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: false
   mechanism: "A started reshard runs to its target; there is no revert operation. Reshard again to the previous count to undo its effect."

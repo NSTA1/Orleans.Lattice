@@ -1,0 +1,15 @@
+# Pairs with ShippingNeverSkips. The reader is clamped at the allocator's next
+# offset rather than at the durable-contiguous watermark (WalShippingWatermark),
+# so with flushes completing out of order it reads past a still-unfilled hole.
+MODULE: ShippingNeverSkipsReaderIgnoresInflight
+TARGET: ShippingNeverSkips
+CLASS: Invariant
+SUMMARY: a reader is shown offsets above an in-flight append
+PERTURBS: ReadStep
+
+--- FIND
+    /\ ReadFrom(l) < Watermark
+--- REPLACE
+\* MUTATION: the horizon ignores in-flight flushes.
+    /\ ReadFrom(l) < next
+--- END

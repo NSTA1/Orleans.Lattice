@@ -975,6 +975,54 @@ production detectors, each proven red by perturbing production, in
 | `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
 
+### WAL durability property catalogue (epic #4430, issue #4432)
+
+The WAL durability lifecycle has a TLA+ specification of its own, `spec/wal/`
+(`WalDurability.tla` for the leaf lifecycle under crash-anywhere recovery,
+`WalMove.tla` for shard moves), and an end-to-end Coyote companion,
+`WalDurabilityLifecycleModel` / `WalDurabilityLifecycleCoyoteTests`. The model
+drives five production cores together:
+
+- `WalOffsetAllocationCore`;
+- `WalShippingWatermark`;
+- `LeafDurablePinCore` (extracted for this epic from `BPlusLeafGrain.ResolveDurablePinForPartition`);
+- `WalGcTrimCore` with `WalGcOffsetAdmission`;
+- `WalFallOffCore` (extracted for this epic from the fall-off detector and the cold-replay guard).
+
+Each guard arm removes one fix, and the guard test requires the violation to be
+reported under that fix's own assertion tag, not merely some violation.
+
+| TLA+ property | Plain-language property | Core(s) | Encoding (model + assertion) | Guard test | Net-new vs cited |
+|----------------|-------------------------|---------|------------------------------|------------|------------------|
+| `AckedWriteDurable` | An acknowledged write is recoverable by its owner from its durable snapshot and the readable WAL. | All five | `WalDurabilityLifecycleModel` `[AckedWriteDurable]` after every step. | None of its own: every guard arm that loses a write is caught earlier by a more specific tag. | Net-new. |
+| `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
+| `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
+| `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
+| `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. | Net-new. |
+| `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
+| `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
+| `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
+| `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
+| `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. | Cited. |
+| `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
+| `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
+
+**Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
+table says so rather than borrowing one:
+
+- `AckedWriteDurable`;
+- `ReadPositionHonest`;
+- `RecoveryNeverFallsOffLog`;
+- `EveryAckedWriteMaterialised`;
+- `ReclamationEventuallyAdvances`.
+
+`SnapshotCoverageMonotonic` and `StreamEventuallyComplete` are not encoded in
+Coyote at all. The TLA+ catalogue pairs every one of them with a firing mutation.
+The four defects the model found (#4450, #4451, #4456, #4467) are fixed, and their
+mutations in `spec/wal/` are now ordinary regression checks.
+
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
 Key ownership across adaptive split, reshard, online resize and undo is
@@ -1114,6 +1162,8 @@ marker. Locally the fixture calls `Assert.Ignore` when the toolchain is missing
 (see "Categorization conventions" above). This reverses an earlier decision to
 keep TLC out of per-PR CI; the "CI decision" section of `spec/README.md` records
 why. `spec/` is outside `Orleans.Lattice.slnx` and is not built by `dotnet`.
+
+The WAL durability lifecycle has its own modules under `spec/wal/` (`WalDurability.tla`, `WalMove.tla`), with the same mutation, refinement and Coyote pattern; see `spec/wal/README.md` and the WAL durability property catalogue above.
 
 ## Hygiene gates
 
