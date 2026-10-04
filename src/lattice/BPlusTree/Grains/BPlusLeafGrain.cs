@@ -731,7 +731,7 @@ internal sealed partial class BPlusLeafGrain(
             // loop re-fans under a fresh snapshot.
             if (lww.IsMigrated && TryGetShadowedSagas(key, out var sagas))
             {
-                return await GetWithShadowedMigratedAsync(key, lww.Value, sagas);
+                return await GetWithShadowedMigratedAsync(key, lww.Value, lww.Timestamp, sagas);
             }
 #if LATTICE_DIAG
             // DIAG: single-key read-return path.
@@ -759,9 +759,9 @@ internal sealed partial class BPlusLeafGrain(
     /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
     /// retry loop re-fans under a fresh snapshot.
     /// </summary>
-    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HashSet<Guid> sagas)
+    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
-        if (await IsShadowedReadSafeAsync(sagas))
+        if (await IsShadowedReadSafeAsync(key, rowStamp, sagas))
         {
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG read1-shadow-pass] gid={context.GrainId} key={key} valRound={DiagDecodeRound(migratedValue)}");
@@ -1079,7 +1079,7 @@ internal sealed partial class BPlusLeafGrain(
                 // is installed.
                 if (lww.IsMigrated && TryGetShadowedSagas(key, out var shadowSagas))
                 {
-                    if (!await IsShadowedReadSafeAsync(shadowSagas))
+                    if (!await IsShadowedReadSafeAsync(key, lww.Timestamp, shadowSagas))
                     {
 #if LATTICE_DIAG
                         DiagSink.Write($"[DIAG read-shadow-stale] silo={DiagSiloTag} gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");

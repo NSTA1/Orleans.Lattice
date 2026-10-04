@@ -154,6 +154,77 @@ public sealed class ShadowMarkerLeafSplitIntegrationTests
         Assert.That(read, Is.EqualTo(migratedValue));
     }
 
+    /// <summary>
+    /// Installs a marker for a committed saga on a leaf that never applies the
+    /// saga's terminal. That is indistinguishable, on the leaf, from the
+    /// reactivation counter-trace the shard-ownership retention model found:
+    /// the leaf applied the terminal, a reactivation forgot it, and a delayed
+    /// marker install arrived. The marker carries the saga's marked prepare
+    /// stamp P, as the shadow forward and the split sweep now send it.
+    /// </summary>
+    private async Task<(Exception? Failure, byte[]? Read, TimeSpan Elapsed)> ReadUnderOrphanedMarkerAsync(
+        HybridLogicalClock rowStamp, HybridLogicalClock prepareStamp)
+    {
+        var (tree, shard, treeId) = await CreateSingleShardTreeAsync("shadow-selfcheck");
+        const string key = "k-m";
+        var txid = Guid.NewGuid();
+        await TxRegistryRouting.GetRegistry(_cluster.Client, treeId, txid).MarkCommittedAsync(txid);
+
+        await shard.MergeManyAsync(
+            new Dictionary<string, LwwValue<byte[]>> { [key] = LwwValue<byte[]>.Create(Bytes("row"), rowStamp) },
+            isCrossShardMigration: true);
+        using (LatticeOriginalPrepareStampContext.With(new Dictionary<string, HybridLogicalClock> { [key] = prepareStamp }))
+        {
+            await shard.MarkSagaShadowAsync(txid, [key]);
+        }
+
+        TestContext.Out.WriteLine(
+            $"gated row: stamp={rowStamp}, IsMigrated=true, marker P={prepareStamp}, "
+            + $"row {(rowStamp.CompareTo(prepareStamp) >= 0 ? ">=" : "<")} P");
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            return (null, await tree.GetAsync(key), started.Elapsed);
+        }
+        catch (Exception ex)
+        {
+            return (ex, null, started.Elapsed);
+        }
+    }
+
+    [Test]
+    public async Task A_marker_whose_terminal_this_leaf_never_sees_is_released_once_the_row_is_at_its_prepare_stamp()
+    {
+        var p = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks, Counter = 2 };
+
+        var (failure, read, elapsed) = await ReadUnderOrphanedMarkerAsync(rowStamp: p, prepareStamp: p);
+
+        Assert.That(failure, Is.Null,
+            $"the read failed after {elapsed.TotalSeconds:N1} s with {failure?.GetType().Name}: the row already "
+            + "holds the saga's value at its prepare stamp, so the marker must not gate it");
+        Assert.That(read, Is.EqualTo(Bytes("row")));
+    }
+
+    /// <summary>
+    /// The control: a migrated row below the saga's prepare stamp is the
+    /// pre-saga value. Under a committed saga whose terminal never reached this
+    /// leaf, serving it would lose the saga's write, so the gate must hold and
+    /// the reader must surface the failure within its read budget.
+    /// </summary>
+    [Test]
+    public async Task A_marker_whose_terminal_this_leaf_never_sees_still_gates_a_row_below_its_prepare_stamp()
+    {
+        var p = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks, Counter = 2 };
+        var below = new HybridLogicalClock { WallClockTicks = p.WallClockTicks - 1, Counter = 0 };
+
+        var (failure, read, elapsed) = await ReadUnderOrphanedMarkerAsync(rowStamp: below, prepareStamp: p);
+
+        Assert.That(read, Is.Null, "a pre-saga row must never be served under a committed saga");
+        Assert.That(failure, Is.Not.Null);
+        Assert.That(elapsed, Is.LessThan(ClusterResponseTimeout), "the read budget bounds the refusal");
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
