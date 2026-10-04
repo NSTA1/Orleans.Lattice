@@ -73,7 +73,7 @@ Writing the modules against production found defects that tests had not, each
 filed and kept as a standing mutation: a split in flight across a resize
 (#4452, fixed), an undo that let both copies serve (#4453, fixed), a mid-dispatch
 re-bind that ignores the bound copy's mirror (#4454, fixed), an online snapshot that
-drops prepared buckets (#4455), a split sweep that treats an undeterminable
+drops prepared buckets (#4455, fixed), a split sweep that treats an undeterminable
 registry answer as in flight (#4473), a saga that never completes once the
 copy it is bound to is discarded by an undo (#4474) or, as an old copy, purged
 (#4475), saga values installed at a stamp that overwrites a later write (#4522), a

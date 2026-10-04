@@ -213,7 +213,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map (fixed, #4466) | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow` |
 | #4453 | The undo cleared the old copy's fence before the swap and armed the resized copy after it (fixed, #4457) | `UniqueOwnerUndoClearsBeforeSwap` |
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror (fixed, #4521) | `SagaBatchOnOneCopyRebindIgnoresMirror` |
-| #4455 | The online snapshot does not copy prepared buckets | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
+| #4455 | The online snapshot does not copy prepared buckets (fixed, #4506) | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
