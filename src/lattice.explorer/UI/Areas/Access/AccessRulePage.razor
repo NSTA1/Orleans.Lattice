@@ -23,7 +23,7 @@ else
 {
     <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The rule could not be read")">
         <ChildContent>@failure.Message</ChildContent>
-        <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
     </LtEmptyState>
 }
 else if (_candidates is { Count: > 1 })
