@@ -180,6 +180,24 @@ public partial class ReplicationPeerStats
     /// Outbound-only by design - the receiver does not pipeline into
     /// itself - so this method has no inbound counterpart.
     /// </summary>
+    /// <summary>
+    /// Records whether the local sender has taken the peer off the log after a
+    /// write-ahead-log trim lost records it never shipped (issue #4534), and
+    /// since when; <see langword="null"/> clears it. Surfaces on the peer-status
+    /// read path, where such a link reports as stalled until it is re-seeded.
+    /// </summary>
+    internal void RecordReseedRequired(string tree, string peer, DateTimeOffset? since)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, ReplicationContactDirection.Outbound), static _ => new PeerState());
+        lock (entry)
+        {
+            entry.ReseedRequiredSince = since;
+        }
+    }
+
     public void RecordInFlight(string tree, string peer, long depth)
     {
         ArgumentNullException.ThrowIfNull(tree);
@@ -458,6 +476,7 @@ public partial class ReplicationPeerStats
         public long EntriesBehind;
         public long BytesBehind;
         public long InFlight;
+        public DateTimeOffset? ReseedRequiredSince;
         public long ConsecutiveErrors;
         public DateTimeOffset? LastContactTimestamp;
     }

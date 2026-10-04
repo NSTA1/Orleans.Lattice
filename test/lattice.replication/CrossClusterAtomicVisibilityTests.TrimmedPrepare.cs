@@ -115,12 +115,14 @@ public partial class CrossClusterAtomicVisibilityTests
                 });
             });
 
-        var shipper = CreateShipper(tree, feeds, walEncoder, transport);
+        var stats = new ReplicationPeerStats();
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, stats);
         await PumpAsync(shipper, ticks: 2);
 
         Assert.Multiple(() =>
         {
             Assert.That(shipper.ReseedRequired, Is.True, "a trimmed gap must take the peer off the log");
+            Assert.That(ReseedSeconds(stats, tree), Is.Not.Null, "the peer-status row must show the outstanding re-seed");
             Assert.That(shippedSagaRecords, Is.Zero, "no saga record may reach a peer that lost records");
         });
 
@@ -153,10 +155,16 @@ public partial class CrossClusterAtomicVisibilityTests
         Assert.Multiple(() =>
         {
             Assert.That(shipper.ReseedRequired, Is.False, "an echoed later epoch clears the marker");
+            Assert.That(ReseedSeconds(stats, tree), Is.Null, "the peer-status row must clear with the marker");
             Assert.That(shippedSagaRecords, Is.EqualTo(1),
                 "after the re-seed the shipper re-ships every retained saga record from the lowest retained entry");
         });
     }
+
+    private static double? ReseedSeconds(ReplicationPeerStats stats, string tree) =>
+        stats.ReadStatusPage(new ReplicationPeerStatusReadRequest { TreeId = tree, Limit = 10 })
+            .Single(r => r.Direction == ReplicationContactDirection.Outbound)
+            .ReseedRequiredSeconds;
 
     private static async Task PumpAsync(Orleans.Lattice.Replication.Grains.ReplicationShipperGrain shipper, int ticks)
     {

@@ -685,6 +685,8 @@ The shipper therefore treats a shipping read whose first entry is above the requ
 
 Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. The shipper then clears the marker, rewinds every partition to its lowest retained entry, and resumes: the export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them. A range-scoped re-replay never advances the echoed epoch.
 
+While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
+
 A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
 
 ### Deferred cursor persistence

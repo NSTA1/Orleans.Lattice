@@ -121,7 +121,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `Unknown` | Not enough is known to judge the link: it has never made a successful contact and no threshold has been crossed. Also the value an entry from a peer that predates the field decodes to. |
 | `Healthy` | Every signal is within its lagging threshold. |
 | `Lagging` | At least one signal is past its lagging threshold and none is past its stalled threshold. |
-| `Stalled` | At least one signal is past its stalled threshold. |
+| `Stalled` | At least one signal is past its stalled threshold, or the sender has taken the peer off the log after a write-ahead-log trim lost records it never shipped and is waiting for the peer to re-seed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)); such a peer receives no saga records until it does. |
 
 ## Exceptions
 

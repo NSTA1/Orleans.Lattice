@@ -2463,6 +2463,7 @@ internal sealed partial class ReplicationShipperGrain(
         // frontier so the entries after it are not re-shipped every tick.
         // Without holds the two are equal.
         PrepareTerminalHoldsForTick(partitions);
+        ReportReseedState();
 
         for (var p = 0; p < partitions; p++)
         {

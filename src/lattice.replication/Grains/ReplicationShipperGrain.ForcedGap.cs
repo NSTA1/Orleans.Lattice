@@ -58,6 +58,7 @@ internal sealed partial class ReplicationShipperGrain
 
         // Durable before the merge consumes past the gap.
         await state.WriteStateAsync();
+        ReportReseedState();
 
         Logger.LogWarning(
             "{Context}: WAL partition {Partition} was trimmed past the unshipped cursor (requested sequence {Requested}, "
@@ -96,12 +97,23 @@ internal sealed partial class ReplicationShipperGrain
         state.State.ReseedRequiredEpoch = null;
         state.State.ReseedRequiredSinceUtcTicks = 0;
         await state.WriteStateAsync();
+        ReportReseedState();
 
         Logger.LogInformation(
             "{Context}: the peer completed a bootstrap from export epoch {Echoed} (marker {Marker}); saga records "
             + "resume and every partition re-ships from its lowest retained entry.",
             LogContext, echoed, marker);
     }
+
+    /// <summary>
+    /// Publishes the re-seed state to the peer-status read path, where a peer
+    /// awaiting a re-seed classifies as stalled.
+    /// </summary>
+    private void ReportReseedState() =>
+        _peerStats.RecordReseedRequired(
+            _treeName,
+            _peerClusterId,
+            ReseedRequired ? new DateTimeOffset(state.State.ReseedRequiredSinceUtcTicks, TimeSpan.Zero) : null);
 
     /// <summary>Removes every saga record staged in the current batch.</summary>
     private void PurgeSagaRecordsFromDrainBuffer()
