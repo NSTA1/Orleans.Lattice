@@ -23,6 +23,9 @@ replication says nothing about it.
 | [`ReplicationCausalDelivery.tla`](ReplicationCausalDelivery.tla), [`.cfg`](ReplicationCausalDelivery.cfg), [`.manifest.json`](ReplicationCausalDelivery.manifest.json) | The focused companion module: causal-dependency delivery under head-of-line blocking (below). |
 | [`causal-delivery-mutations/`](causal-delivery-mutations/) | The companion module's mutation catalogue. |
 | [`ReplicationCausalDelivery.Refinement.md`](ReplicationCausalDelivery.Refinement.md) | The companion module's refinement note. |
+| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) | The second companion module: an in-place re-bootstrap after the source reaped a delete (below). |
+| [`rebootstrap-mutations/`](rebootstrap-mutations/) | The second companion module's mutation catalogue. |
+| [`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md) | The second companion module's refinement note. |
 
 ## What is modelled
 
@@ -100,6 +103,30 @@ its own (or a restart aborts it and the entry is re-sent), so the stall always
 ends; the main module's freer delivery therefore loses no liveness behaviour
 there.
 
+## The re-bootstrap companion
+
+`Replication.tla` does not model tombstone garbage collection, so its snapshot
+can carry every delete the source ever made. Production reaps a tombstone after
+`TombstoneGracePeriod`, and a receiver that fell off the source's log is behind
+a trim that did not wait for it. A delete that is both behind the trim point and
+reaped then reaches the receiver by no path: not the stream, not the export.
+
+`ReplicationReBootstrap.tla` checks the design of #4537, a reconcile in the
+re-bootstrap's drain, over one key and two clusters. Before the export opens,
+the receiver pre-captures each live entry whose origin is the source. A
+pre-captured key the export does not carry is deleted, attributed to the source
+at the captured HLC. The reconcile fabricates a write, so it is gated on every
+other way a key can be missing from an export: the export's scope, a reshard
+during the scan, and a restore, purge or rebind since the receiver's copy was
+aligned with the source. `ReconcileDeletesOnlyDeleted` checks that every
+fabricated tombstone is dominated by a delete the source really authored.
+`EventualConvergenceReapedDeleteNotReconciled` is current production, with no
+reconcile.
+
+A key the receiver holds under another origin cannot be reconciled: the
+receiver cannot prove the source held that value. The module states that
+residual exactly, as `Residual`, and #4549 owns it.
+
 ## Production defects this module found
 
 Writing the module turned up three defects. The module checks the intended
@@ -125,6 +152,11 @@ fixes.
 
 ## Open production gaps
 
+- #4537 - an in-place re-bootstrap cannot reconcile a delete whose source
+  tombstone was reaped (`EventualConvergenceReapedDeleteNotReconciled`, in
+  the re-bootstrap companion).
+- #4549 - the residual of #4537: a reaped delete of a key the receiver holds
+  under another origin.
 - #4504 - a snapshot bootstrap never ships a delete: the export skips a
   tombstoned key and the drain does not clear the receiver's copy. A receiver
   re-bootstrapped in place after the source trimmed its log past a delete
@@ -152,7 +184,8 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 `Replication.cfg` held with deadlock checking on, over 241,332 distinct states
 (1,309,271 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
-generated) at a depth of 16.
+generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
+held over 56,135 distinct states (163,127 generated) at a depth of 17.
 
 ## Counts
 
@@ -167,3 +200,4 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 4 | 3 | 11 | 18 | 16 | 241,332 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
+| `ReplicationReBootstrap` | 2 | 1 | 10 | 12 | 11 | 56,135 |

@@ -1,0 +1,13 @@
+{
+  "mutations": "rebootstrap-mutations",
+  "refinement": "ReplicationReBootstrap.Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 2,
+    "properties": 1,
+    "actions": 10,
+    "mutations": 12,
+    "behaviourRows": 11,
+    "distinctStates": 56135
+  }
+}
