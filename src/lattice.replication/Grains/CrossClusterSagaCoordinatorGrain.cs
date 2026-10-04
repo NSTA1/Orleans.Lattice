@@ -290,19 +290,22 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
             throw;
         }
 
-        var allCommit = true;
-        string? abortDetail = null;
+        // The single global decision is the extracted, model-checked fold:
+        // commit only when every participant voted Commit.
+        var votes = new SagaVote[responses.Length];
         for (var i = 0; i < responses.Length; i++)
         {
-            var vote = responses[i].Vote;
-            participants[i].Vote = vote;
-            if (vote != SagaVote.Commit)
-            {
-                allCommit = false;
-                abortDetail ??= string.IsNullOrEmpty(responses[i].Detail)
-                    ? $"participant '{participants[i].ClusterId}' voted {vote}."
-                    : $"participant '{participants[i].ClusterId}': {responses[i].Detail}";
-            }
+            votes[i] = responses[i].Vote;
+            participants[i].Vote = votes[i];
+        }
+
+        var allCommit = CrossClusterSagaDecisionCore.Decide(votes, out var dissent);
+        string? abortDetail = null;
+        if (!allCommit)
+        {
+            abortDetail = string.IsNullOrEmpty(responses[dissent].Detail)
+                ? $"participant '{participants[dissent].ClusterId}' voted {votes[dissent]}."
+                : $"participant '{participants[dissent].ClusterId}': {responses[dissent].Detail}";
         }
 
         if (allCommit)

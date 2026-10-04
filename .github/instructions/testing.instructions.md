@@ -974,6 +974,7 @@ production detectors, each proven red by perturbing production, in
 | `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
 | `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
+| `ReconcileDeletesOnlyDeleted` | An in-place re-bootstrap turns an export's absence into a delete only where the source really deleted the key (`ReplicationReBootstrap.tla`, the reconcile of a reaped delete). | None yet: the reconcile is #4537. | TLA+ only. | Not applicable until #4537 extracts the decision. | TLA+ only. |
 
 ### WAL durability property catalogue (epic #4430, issue #4432)
 
@@ -1059,6 +1060,34 @@ Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
 `..._only_the_..._assertion_fires`) that disables exactly the assertion it
 targets and requires a clean run. The assurance document is
 [`docs/lattice/verified-shard-ownership.md`](../../docs/lattice/verified-shard-ownership.md).
+
+### Backup and restore property catalogue (epic #4430, issue #4440)
+
+The backup area's properties are checked by four TLA+ modules under
+[`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
+naming the production symbols and detector tests per row. Its Coyote models
+live in the backup and replication test projects, not in `test/lattice/`, and
+drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
+`BackupChainFrontier` (origin normalisation and chain frontier, core unit suite
+only, not schedule-sensitive) and `CrossClusterSagaDecisionCore` (coordinated
+restore decision).
+
+| Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
+|--------|---------------|-------------------------|-------------------------|
+| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) are the detectors. |
+| `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
+| `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
+| `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
+| `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
+| `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
+| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
+| `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
+
+What these do not cover - the participant fence timer, a batch in flight across
+a whole cutover, reader atomicity across set members, in-place and cold
+restores, resharded trees, and the receiver side (#4480) - is listed in each
+module's refinement note and in
+[`docs/lattice.backup/verified-backup.md`](../../docs/lattice.backup/verified-backup.md).
 
 ## Browser UI tier
 

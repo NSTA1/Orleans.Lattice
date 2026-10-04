@@ -434,6 +434,9 @@ public partial class BootstrapAtomicVisibilityTests
             siloBuilder.ConfigureLattice(
                 AgedTree,
                 o => o.TxDecisionRetention = TimeSpan.FromMilliseconds(300));
+            siloBuilder.ConfigureLattice(
+                AgedReceiverTree,
+                o => o.TxDecisionRetention = TimeSpan.FromMilliseconds(300));
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = ClusterId);
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }

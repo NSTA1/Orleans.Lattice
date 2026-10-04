@@ -172,7 +172,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             return;
         }
 
-        var origin = string.IsNullOrEmpty(mutation.OriginClusterId) ? null : mutation.OriginClusterId;
+        var origin = BackupChainFrontier.NormalizeOrigin(mutation.OriginClusterId);
 
         // The WAL mutation carries the authoring merge mode per record, so the
         // incremental path reads the true per-key mode directly - no durable
@@ -204,15 +204,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 
         if (origin is { } originId)
         {
-            var ticks = mutation.Timestamp.WallClockTicks;
-            if (ticks < 0)
-            {
-                ticks = 0;
-            }
-            if (!_perOriginHighWater.TryGetValue(originId, out var current) || ticks > current)
-            {
-                _perOriginHighWater[originId] = ticks;
-            }
+            BackupChainFrontier.Observe(_perOriginHighWater, originId, mutation.Timestamp.WallClockTicks);
         }
     }
 

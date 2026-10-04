@@ -1,0 +1,13 @@
+# Pairs with TypeOK. A participant records a vote outside the vote domain.
+MODULE: TypeOkVoteRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a participant's vote takes a value outside its declared domain
+PERTURBS: Build
+
+--- FIND
+    /\ \E v \in {"yes", "no"} :
+--- REPLACE
+    \* MUTATION: an undeclared vote value.
+    /\ \E v \in {"yes", "no", "maybe"} :
+--- END

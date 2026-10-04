@@ -1,0 +1,26 @@
+# Pairs with SetSagaConsistent (the requested InFlightRecheckSkipped). The set
+# capture skips the in-flight re-check under the gate AND does not validate
+# the registration epoch. Skipping either alone is safe in this design, and
+# is measured clean: a delegation row can be live at the gate only if a lease
+# lapse let a registration in after the drain, and that registration also
+# moves the epoch the drain recorded. The two checks back each other up; only
+# losing both admits a set that is torn across its members.
+MODULE: SetSagaConsistentRecheckAndEpochSkipped
+TARGET: SetSagaConsistent
+CLASS: Invariant
+SUMMARY: the gated in-flight re-check and the epoch validation are both skipped
+PERTURBS: Recheck, Validate
+
+--- FIND
+    /\ IF kind = "single" \/ \A T \in Members : ~InFlight(T)
+--- REPLACE
+    \* MUTATION: no re-check.
+    /\ IF TRUE
+--- END
+
+--- FIND
+          /\ kind = "set" => \A T \in Members : epoch[T] = before[T]
+--- REPLACE
+          \* MUTATION: no epoch validation.
+          /\ TRUE
+--- END

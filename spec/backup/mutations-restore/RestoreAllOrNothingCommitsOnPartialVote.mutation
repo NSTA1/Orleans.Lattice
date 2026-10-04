@@ -1,0 +1,14 @@
+# Pairs with RestoreAllOrNothing. The coordinator commits once ANY participant
+# voted yes, so one cluster cuts over while another has already compensated.
+MODULE: RestoreAllOrNothingCommitsOnPartialVote
+TARGET: RestoreAllOrNothing
+CLASS: Invariant
+SUMMARY: the decision commits without a unanimous yes
+PERTURBS: Decide
+
+--- FIND
+         /\ d = "commit" => \A c \in Clusters : vote[c] = "yes"
+--- REPLACE
+         \* MUTATION: one yes suffices.
+         /\ d = "commit" => \E c \in Clusters : vote[c] = "yes"
+--- END

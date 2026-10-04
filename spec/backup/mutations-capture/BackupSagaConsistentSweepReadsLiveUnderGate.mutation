@@ -1,0 +1,29 @@
+# Pairs with BackupSagaConsistent (the requested SweepReadsLiveUnderGate). A
+# self-terminalise or retroactive sweep reads the coordinator's live verdict
+# under the gate instead of a local decision, and applies a terminal for a
+# txid this tree has not decided, breaking invariant I1: that shard reads
+# post-saga while another still resolves the saga against the snapshot.
+MODULE: BackupSagaConsistentSweepReadsLiveUnderGate
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a sweep applies a terminal from a live coordinator verdict while the gate is held
+PERTURBS: Sweep
+
+--- FIND
+Sweep(t, sh) ==
+    /\ sh \in Writes(t)
+    /\ prep[t][sh]
+    /\ term[t][sh] = "none"
+    /\ loc[t][TreeOf[sh]] # "none"
+    /\ term' = [term EXCEPT ![t][sh] = IF loc[t][TreeOf[sh]] = "committed" THEN "commit" ELSE "abort"]
+--- REPLACE
+Sweep(t, sh) ==
+    /\ sh \in Writes(t)
+    /\ prep[t][sh]
+    /\ term[t][sh] = "none"
+    \* MUTATION: under the gate the read dials the coordinator.
+    /\ \/ loc[t][TreeOf[sh]] # "none"
+       \/ Gated(TreeOf[sh]) /\ dec[t] # "inflight"
+    /\ LET v == IF loc[t][TreeOf[sh]] # "none" THEN loc[t][TreeOf[sh]] ELSE dec[t]
+       IN term' = [term EXCEPT ![t][sh] = IF v = "committed" THEN "commit" ELSE "abort"]
+--- END
