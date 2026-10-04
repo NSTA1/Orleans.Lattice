@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Skipping the reconcile when
+# the shard map changed mid-export is safe only if the re-bootstrap is requested again;
+# otherwise r keeps the deleted value.
+MODULE: EventualConvergenceReshardSkipNotRetried
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a re-bootstrap whose reconcile a reshard skipped is not repeated, so the reaped delete is never reconciled
+PERTURBS: EndExport
+
+--- FIND
+    /\ booted' = (booted \/ (ex.phase = "full" /\ topo = ex.topo0))
+--- REPLACE
+\* MUTATION: the re-bootstrap completes whether or not the reconcile ran.
+    /\ booted' = (booted \/ ex.phase = "full")
+--- END

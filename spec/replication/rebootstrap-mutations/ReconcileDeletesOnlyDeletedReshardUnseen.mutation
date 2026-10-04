@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted. A reshard during the scan can make it pass
+# a key that is present throughout. If the shard-map version does not change, the
+# topology gate cannot see it and the reconcile deletes a live key.
+MODULE: ReconcileDeletesOnlyDeletedReshardUnseen
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: a reshard during the export is not detected, so a key the scan passed over is reconciled as deleted
+PERTURBS: Reshard
+
+--- FIND
+    /\ topo' = 1
+--- REPLACE
+\* MUTATION: the shard-map version does not change.
+    /\ topo' = topo
+--- END

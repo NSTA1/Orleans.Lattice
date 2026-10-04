@@ -1237,7 +1237,8 @@ internal sealed partial class BPlusLeafGrain
             mutation.Key,
             incoming,
             delta: mutation.Delta,
-            mode: mutation.Mode);
+            mode: mutation.Mode,
+            batch: (mutation.AtomicBatchSize, mutation.AtomicBatchIndex));
         AdvanceProjectionClock(mutation.Timestamp);
     }
 
@@ -1272,7 +1273,7 @@ internal sealed partial class BPlusLeafGrain
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
         };
-        AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone);
+        AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone, batch: (mutation.AtomicBatchSize, mutation.AtomicBatchIndex));
         AdvanceProjectionClock(mutation.Timestamp);
     }
 

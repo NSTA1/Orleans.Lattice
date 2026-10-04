@@ -248,6 +248,15 @@ internal static class PreparedBucketSweep
             using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
             using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
             using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);
+            // Replay the batch membership the source stamped, so the copy
+            // reaches the destination's WAL as a member of its atomic batch
+            // (#4499): a replicating peer tallies it and exempts it from the
+            // causal-apply gate exactly as it does the dispatched prepare. A
+            // snapshot without membership (a sender predating the slot, or a
+            // non-batch prepare) opens no scope.
+            using var batchScope = snapshot.AtomicBatchSize > 0
+                ? LatticeAtomicBatchContext.With((snapshot.AtomicBatchSize, snapshot.AtomicBatchIndex))
+                : null;
             // Carry the typed CRDT delta so the destination leaf's prepared
             // commit records it in its pending-tx delta side-map and folds it
             // on the saga's terminal (the per-replica union) rather than

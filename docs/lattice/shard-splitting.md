@@ -42,7 +42,11 @@ stateDiagram-v2
    *S*'s leaf chain, snapshots every in-flight prepared saga mutation whose
    key hashes into a moved virtual slot, and replays each one into *T*'s
    pending-transaction buckets under its original transaction id, HLC,
-   origin, vector clock, and expiry, so any prepared write that landed on *S*
+   origin, vector clock, expiry, and atomic-batch membership (batch size
+   and index, so the copy reaches *T*'s write-ahead log exactly as the
+   saga's own dispatch would have written it and a replicating peer
+   tallies it like any other member of the batch,
+   [#4499](https://github.com/NSTA1/Orleans.Lattice/issues/4499)), so any prepared write that landed on *S*
    before the window opened survives the topology change. A saga the
    transaction registry already reports as committed or aborted has its
    terminal applied to *T* directly instead. The sweep is idempotent per
