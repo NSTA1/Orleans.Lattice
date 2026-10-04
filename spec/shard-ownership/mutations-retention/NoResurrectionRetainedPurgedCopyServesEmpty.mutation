@@ -1,4 +1,4 @@
-# Pairs with NoResurrection. Reproduces current production (#4503): once the
+# Pairs with NoResurrection. Reproduces production before #4503 was fixed (#4528): once the
 # old copy of a completed resize is purged, a routed operation on it is no
 # longer refused. A read answers as the empty tree (the purge cleared its
 # rows, PrepareForReadAsync with purgedAnswersEmpty), so a router that cached

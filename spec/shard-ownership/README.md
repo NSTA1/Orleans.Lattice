@@ -219,7 +219,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
 | #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
 | #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design) | `NoKeyLostMigrationImportDropped` |
-| #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
+| #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false; fixed, #4528) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the

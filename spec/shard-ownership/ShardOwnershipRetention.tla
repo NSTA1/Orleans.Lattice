@@ -94,9 +94,9 @@ SplitRejects(c, s, k) == c = spCopy /\ s = s1 /\ k = k2 /\ sp \in SplitFrozen
 
 Fenced(c, s) == c = T /\ s \in fence
 Redirected(c) == c = R /\ redir
-\* The old copy after the purge. The intended design refuses a routed operation
-\* there, so the caller refreshes its pair; production answers a read as the
-\* empty tree and accepts a write (#4503).
+\* The old copy after the purge. A routed operation there is refused, so the
+\* caller refreshes its pair: the purge leaves a tombstone that refuses a router
+\* whose logical tree resolves elsewhere (#4503, fixed by #4528).
 Gone(c) == c = T /\ rz = "purged"
 
 \* Whether copy c can still become, or still is, the tree's copy.

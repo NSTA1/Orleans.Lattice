@@ -44,7 +44,6 @@ may still hold any pair the registry ever published.
 | Intended design in the base | Production today | Issue | Mutation reproducing production |
 |---|---|---|---|
 | The split's sweep resolves an Indeterminate answer to the recorded decision behind it, as the #4445 leaf refusal does (`SplitSweep`) | The pre-check reads `GetStatusAsync` and treats Indeterminate as InFlight; the replay is refused at the destination, leaving only an activation-scoped shadow marker | #4473 | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
-| A routed operation on a purged old copy is refused, so the caller refreshes its pair (`Gone` in `RoutedRefused`) | A routed read answers as the empty tree and a routed write is accepted, re-seeding the purged copy; a routing activation that cached the old pair across `SoftDeleteDuration` is never told to refresh | #4503 | `NoResurrectionRetainedPurgedCopyServesEmpty` |
 | A terminal a purged old copy refuses is delivered to the copy it mirrored into, following that copy's own layout; one the copy an undo discarded refuses counts as delivered (`SagaTerminal`, `TermTargets`) | The broadcast fails on a purged copy, and on a copy the undo discarded (the refusal is `InvalidOperationException`, which it does not follow), so the saga never completes | #4475, #4474 | in `ShardOwnership`: `SagaCompletesPurgedCopyRefusesTerminal`, `SagaCompletesDiscardedCopyRefusesTerminal` (`AtomicOnOwnerDiscardedCopyTerminalRedirects` stands against a fix that follows the refusal) |
 | The terminal's committed-values backstop installs a key it finds no bucket for last-writer-wins at the saga's own stamp (`TermRow`) | The backstop is stamped above whatever the row holds, so it overwrites a later write of a moved key | #4522 | `NoKeyLostRetainedFreshStampBackstop` |
 
@@ -53,6 +52,11 @@ landed (#4466): production holds a split until no shard of the replaced copy
 mirrors into the resized one, which is the base's `SplitBegin`.
 `NoKeyLostSplitInSoftDeleteWindow` stays as the standing check on the rule the
 fix first proposed, which stopped at the end of the resize.
+
+The purged copy's routed reads (#4503) left this table when their fix landed
+(#4528): the purge leaves a tombstone that refuses a router whose logical tree
+resolves elsewhere, which is the base's `Gone`.
+`NoResurrectionRetainedPurgedCopyServesEmpty` stays as the standing check.
 
 The snapshot's prepared buckets (#4455) left this table when their fix landed
 (#4506): the online snapshot sweeps each source shard's prepared buckets onto
@@ -109,7 +113,7 @@ That is the intended design #4475's fix has to meet.
 | `ResizeFence(s)` | One old shard enters Rejecting before the flip | `TreeResizeGrain.SwapAliasAsync` calling `ShardRootGrain.EnterRejectingAsync` (#4362). | Yes: `TreeResizeGrainTests.SwapAlias_fences_every_old_shard_before_moving_the_alias`. |
 | `ResizeFlip` | The alias and map move in one write | `ILatticeRegistry.SwapAliasAsync` from `TreeResizeGrain.SwapAliasAsync`. | Yes: `AliasSwapRoutingAtomicityIntegrationTests.SwapAliasAsync_writes_the_alias_and_the_map_in_one_row`. |
 | `ResizeRetire` | Reject, then soft-delete the old copy | `TreeResizeGrain.RejectOldShardsAsync` and `TreeResizeGrain.CleanupOldTreeAsync`. | Yes: `TreeResizeGrainTests.Cleanup_soft_deletes_a_later_resizes_old_physical_tree`. |
-| `ResizePurge` | The purge clears the old copy | `ShardRootGrain.PurgeAsync`. Pairs naming the old copy stay published, as in `ShardOwnership`; a routed read on the purged copy being refused is the intended design (#4503). | Partial: `ShardRootGrainPurgeTests.PurgeAsync_clears_the_single_root_leaf_when_tree_is_flat`. A routed read on the purged copy answers empty until #4503's fix lands. |
+| `ResizePurge` | The purge clears the old copy | `ShardRootGrain.PurgeAsync`. Pairs naming the old copy stay published, as in `ShardOwnership`; the purge leaves a tombstone that refuses a routed read whose logical tree resolves elsewhere (#4503). | Yes: `ShardRootGrainPurgeTests.PurgeAsync_clears_the_single_root_leaf_when_tree_is_flat`, `ShardRootGrainPurgeTests.PurgeAsync_leaves_only_a_purge_tombstone`, `ShardRootGrainPurgeTests.A_routed_call_whose_tree_resolves_elsewhere_is_refused_as_stale`, `PurgedCopyStaleRoutingIntegrationTests.A_stale_router_is_refused_by_a_purged_first_resize_copy` and `PurgedCopyStaleRoutingIntegrationTests.A_stale_router_is_refused_by_a_purged_later_resize_copy_which_is_not_resurrected`. |
 | `UndoArm` | The resized copy is armed to redirect, before the swap | `AliasCutoverShardMaps.ArmRedirectsAsync` from `TreeResizeGrain.UndoResizeCoreAsync` (#4453). | Yes: `TreeResizeGrainTests.UndoResize_after_swap_arms_the_resized_copy_before_the_swap_and_lifts_the_old_fence_after_it`. |
 | `UndoSwap` | The alias and the old map move back | `ILatticeRegistry.SwapAliasAsync` from `TreeResizeGrain.UndoResizeCoreAsync`. | Yes: `TreeResizeGrainTests.UndoResize_recovers_old_tree_and_removes_alias`. |
 | `UndoClear` | The old copy's fence lifts, after the swap | `ShardRootGrain.ClearShadowForwardAsync` on every old shard (#4453). | Yes: `TreeResizeGrainTests.UndoResize_after_swap_arms_the_resized_copy_before_the_swap_and_lifts_the_old_fence_after_it`. |
@@ -131,7 +135,7 @@ That is the intended design #4475's fix has to meet.
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
 | `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Partial: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip` and `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`. A backstop stamped above the row overwrites a later write of a moved key (#4522). |
-| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. A read through a pair naming the purged old copy answers empty (#4503). |
+| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Yes: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it` and `PurgedCopyStaleRoutingIntegrationTests.A_stale_router_is_refused_by_a_purged_first_resize_copy`. |
 | `AtomicOnOwner` | A fresh reader that gets an answer for both keys sees the batch on both or on neither. | Yes: `AtomicWriteGrainTests.ExecuteAsync_binds_its_prepared_dispatch_to_the_copy_it_prepared_on`. |
 | `OwnerMonotonic` | A fresh reader's value never moves backwards across a mask, a retirement, a late forward or a reactivation; a hidden read in between does not launder a reversion. | Partial: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight` and `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx`. A sweep under Indeterminate leaves only a marker that a reactivation loses (#4473). |
 | `SplitCompletes` | A split that opened its window finishes. | Yes: `TreeShardSplitGrainTests.ProcessNextPhase_drives_the_shadow_write_phase_through_the_full_split_pass`. |
@@ -204,7 +208,6 @@ check inside the harness's per-run budget.
 | #4473 | The sweep treating Indeterminate as InFlight (`SplitSweep`, `OwnerMonotonic`). |
 | #4474 | A terminal the copy an undo discarded refuses (`SagaTerminal`, `SagaCompletes`). |
 | #4475 | A terminal a purged old copy refuses, and following the resized copy's layout after it (`SagaTerminal`, `SagaCompletes`, `NoStrandedBucket`). |
-| #4503 | A routed read on a purged old copy (`ResizePurge`, `NoResurrection`). |
 | #4522 | The stamp of the terminal's committed-values backstop (`SagaTerminal`, `NoKeyLost`). |
 
 When one of these lands, its rows move from `Partial` to `Yes` with the fix's
