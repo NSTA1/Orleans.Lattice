@@ -79,7 +79,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private readonly record struct DurableResize(
         bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId,
-        ResizePhase Phase, int CopyShardCount)
+        ResizePhase Phase, int CopyShardCount, string? AliasReservationId)
     {
         public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
     }
@@ -109,7 +109,8 @@ internal sealed class TreeResizeGrain(
     private DurableResize CaptureResize() => new(
         state.State.InProgress, state.State.Complete, state.State.OperationId,
         state.State.OldPhysicalTreeId, state.State.SnapshotTreeId,
-        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount);
+        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount,
+        state.State.AliasReservationId);
 
     private DurableIntent CaptureIntent() => new(
         undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
@@ -151,9 +152,21 @@ internal sealed class TreeResizeGrain(
     /// <inheritdoc />
     /// <remarks>
     /// A completed resize whose undo has been accepted still has work outstanding,
-    /// so the keepalive keeps the phase loop armed until the unwind lands.
+    /// so the keepalive keeps the phase loop armed until the unwind lands. So does
+    /// a completed resize that still holds the tree's alias reservation, which a
+    /// completion interrupted before its release leaves behind: the next phase
+    /// tick releases it (issue #4527).
     /// </remarks>
-    protected override bool InProgress => state.State.InProgress || UndoPending;
+    protected override bool InProgress =>
+        state.State.InProgress || UndoPending || HoldsReservationAfterCompletion;
+
+    /// <summary>
+    /// <see langword="true"/> when no resize is running or unwinding but the
+    /// persisted state still holds the tree's alias reservation - left by a
+    /// completion interrupted between persisting itself and releasing it.
+    /// </summary>
+    private bool HoldsReservationAfterCompletion =>
+        !state.State.InProgress && state.State.AliasReservationId is not null && _undoRunning == 0;
 
     /// <summary>
     /// <see langword="true"/> while an accepted undo still names the current
@@ -977,7 +990,18 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     protected internal override async Task ProcessNextPhaseAsync()
     {
-        if (!state.State.InProgress && !UndoPending) return;
+        if (!state.State.InProgress && !UndoPending)
+        {
+            // A completion interrupted before it released the tree's alias
+            // reservation (issue #4527): release it, then retire the loop.
+            if (HoldsReservationAfterCompletion)
+            {
+                await ReleaseAliasAsync();
+                await CompleteCoordinatorAsync();
+            }
+
+            return;
+        }
 
         try
         {
@@ -1394,8 +1418,13 @@ internal sealed class TreeResizeGrain(
 
         await PublishResizeCompletedAsync();
 
-        await CompleteCoordinatorAsync();
+        // Release the alias reservation before retiring the coordinator, so the
+        // keepalive reminder that CompleteCoordinatorAsync unregisters is still
+        // armed if the release is interrupted: InProgress stays true while a
+        // completed resize holds the reservation, and the next phase tick
+        // releases it (issue #4527).
         await ReleaseAliasAsync();
+        await CompleteCoordinatorAsync();
     }
 
     private async Task ReserveAliasAsync()
@@ -1434,10 +1463,25 @@ internal sealed class TreeResizeGrain(
     /// <remarks>
     /// Answers from the resize state as last persisted: this read is interleaved,
     /// and a completion a phase has applied in memory but not yet durably written
-    /// may still be reverted, which would make completion non-monotonic.
+    /// may still be reverted, which would make completion non-monotonic. A
+    /// completed resize is not idle while its persisted state still holds the
+    /// tree's alias reservation (issue #4527): completion is persisted before the
+    /// reservation is released, and reporting idle in between let a caller's
+    /// delete or alias change be refused as "alias operation in progress" by a
+    /// resize that had already reported itself complete. The reservation is
+    /// persisted before it is taken and cleared only after it is released, so
+    /// once this answers idle the completion's reservation is gone. The
+    /// reservation an undo of a completed resize takes is not counted, so such an
+    /// undo leaves the resize reading complete, as documented.
     /// </remarks>
-    public Task<bool> IsIdleAsync() =>
-        Task.FromResult(!DurableResizeState.InProgress);
+    public Task<bool> IsIdleAsync()
+    {
+        var durable = DurableResizeState;
+        var completionHoldsReservation = durable is { Complete: true, AliasReservationId: not null }
+            && !DurableUndoPending
+            && _undoRunning == 0;
+        return Task.FromResult(!durable.InProgress && !completionHoldsReservation);
+    }
 
     /// <summary>
     /// How long <see cref="HoldsShardMigrationsAsync"/> waits for one old-copy

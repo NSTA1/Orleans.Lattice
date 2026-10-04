@@ -951,6 +951,30 @@ recorded as out-of-scope. The wall-clock, real-RPC, grain-local synchronous-stat
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
 
+### Property catalogue: plain replication (issue #4438)
+
+The replication module, `spec/replication/Replication.tla` (with its companion
+`ReplicationCausalDelivery.tla`), checks plain, non-saga cross-cluster
+replication; sagas carried over replication are out of its scope (#4436). Its
+decisions run in production through two pure cores, `ReplicationShipEligibility`
+and `ReplicationReceiveDedup`, and three Coyote models in
+`test/lattice.replication/Coyote/` execute them. Every guard test removes one
+fix and requires each reported violation to carry its own property's label
+(`AssertViolationOf`), so a guard cannot pass on a neighbouring assertion. Each
+model also has an `Exploration_reaches_*` probe proving the exploration reaches
+the state its guard depends on. Spec actions and properties are mapped to
+production detectors, each proven red by perturbing production, in
+`spec/replication/Refinement.md`.
+
+| TLA+ property | Plain-language property | Core | Encoding (model + assertion) | Guard test (proves non-vacuous) | Net-new vs cited |
+|---------------|-------------------------|------|------------------------------|---------------------------------|------------------|
+| `NoRelay` | A cluster ships only writes it authored; a write applied from a peer is never re-shipped. | `ReplicationShipEligibility.IsShipEligible` | `ReplicationCycleBreakModel` asserts every delivered write's origin is the sender or the receiver. | `Without_the_ship_filter_a_cluster_relays_a_peers_write` in `ReplicationConvergenceCoyoteTests`. | Net-new. |
+| `NoReflection` | A cluster never applies its own write received back from a peer. | `ReplicationReceiveDedup.IsOwnOrigin` | `ReplicationCycleBreakModel` asserts no receiver applies an entry of its own origin. | `Without_the_receiver_guard_an_echoed_own_write_is_applied`. | Net-new. |
+| `CursorNeverSkipsUnshipped` | The shipper's cursor never passes an entry the peer has not received; the scalar HLC cursor is not a skip criterion (#1060). | `ReplicationShipEligibility.IsBelowLegacyScalarCursor` | `ReplicationShipCursorModel` asserts every consumed entry was shipped. | `Scalar_cursor_filter_skips_an_unshipped_write`. | Net-new. |
+| `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
+| `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
+| `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
+
 ### WAL durability property catalogue (epic #4430, issue #4432)
 
 The WAL durability lifecycle has a TLA+ specification of its own, `spec/wal/`
@@ -975,15 +999,17 @@ reported under that fix's own assertion tag, not merely some violation.
 | `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
-| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. | Net-new. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. Its two-fault sibling #4523 (fixed) is reached only by the TLA+ `TwoFaults` variant configuration. | Net-new. |
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
+| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | Not encoded in Coyote. | `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
 | `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
-| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. | Cited. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is TLA+ only. | Cited. |
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
+| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
 
 **Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
@@ -994,10 +1020,12 @@ table says so rather than borrowing one:
 - `EveryAckedWriteMaterialised`;
 - `ReclamationEventuallyAdvances`.
 
-`SnapshotCoverageMonotonic` and `StreamEventuallyComplete` are not encoded in
-Coyote at all. The TLA+ catalogue pairs every one of them with a firing mutation.
-The four defects the model found (#4450, #4451, #4456, #4467) are fixed, and their
-mutations in `spec/wal/` are now ordinary regression checks.
+`SnapshotCoverageMonotonic`, `ReleaseBackedBySnapshot`, `StreamEventuallyComplete` and
+`FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
+every one of them with a firing mutation. The four defects the model found (#4450,
+#4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
+regression checks. The review (#4433) found #4523 (fixed) and #4525 (open: a standing mutation in
+`spec/wal/` and gap rows in its refinement note until its fix lands).
 
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
@@ -1006,8 +1034,9 @@ specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
 (routing, the operations, the saga's binding) and `ShardOwnershipRetention`
 (the registry's mask and retirement, late forwarded prepares and leaf
 reactivation, over a saga bound across a split and a resize). The seam between
-them, and what composing them would add, is described in that directory's
-README; coverage of one module is not coverage of the other. Three ownership
+them is described in that directory's README: each module's CI gate covers
+only that module, and their composition was checked once, clean, but is too
+large to gate. Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1016,15 +1045,15 @@ encoding is listed where one exists.
 
 | TLA+ property | Module | Plain-language property | Coyote encoding | Guard tests (prove non-vacuous) |
 |---------------|--------|-------------------------|-----------------|---------------------------------|
-| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`. |
+| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved, deciding whether a stale routed call is served through `ResizeFence.AdmitsBoundSaga`, so the core's refusal arm is what is checked. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`, `A_fence_that_admits_a_stale_routed_call_serves_the_old_copy`. |
 | `NoKeyLost` | both | The owner holds every acknowledged value. | TLA+ only. | Mutations, e.g. `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow`. |
-| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`. |
-| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
-| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
+| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form, through the core's refusal of an unbound or foreign-bound routed call. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`, `A_fence_that_admits_a_stale_routed_call_is_caught_only_by_the_stale_read_assertion`. |
+| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. It constrains copies, not shards: the router ignoring the binding on its own (#4358) is caught by `AtomicOnOwner` in the TLA+ module, not by this property. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere, that the bound copy at the decision is one the undo does not discard, and that a refused saga makes bounded progress; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_pre_decision_check_that_always_stays_bound_decides_on_a_copy_the_undo_discards`, `A_refusal_that_never_rebinds_stops_the_saga_making_progress`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
+| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerRouterIgnoresBinding` (#4358 on its own) and `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
 | `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
-| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
+| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
 `..._only_the_..._assertion_fires`) that disables exactly the assertion it

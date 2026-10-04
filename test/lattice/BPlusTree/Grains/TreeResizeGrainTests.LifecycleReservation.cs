@@ -74,6 +74,47 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
+    public async Task A_phase_tick_releases_the_reservation_an_interrupted_completion_left_and_then_reports_idle()
+    {
+        // Issue #4527: a completion persisted but interrupted before its release
+        // keeps the keepalive loop armed, and the next tick releases.
+        var (grain, state, _, factory, _) = CreateGrain();
+        state.State.InProgress = false;
+        state.State.Complete = true;
+        state.State.AliasReservationId = "resize:stranded";
+        await state.WriteStateAsync();
+
+        Assert.That(await grain.IsIdleAsync(), Is.False, "the stranded reservation is still held");
+
+        await grain.ProcessNextPhaseAsync();
+
+        await factory.GetGrain<ITreeDeletionGrain>(TreeId).Received(1).EndAliasChangeAsync("resize:stranded");
+        Assert.That(state.State.AliasReservationId, Is.Null);
+        Assert.That(await grain.IsIdleAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task Completion_releases_the_reservation_before_it_reports_idle()
+    {
+        var (grain, state, _, factory, _) = CreateGrain();
+        state.State.InProgress = true;
+        state.State.AliasReservationId = "resize:running";
+        await state.WriteStateAsync();
+        var deletion = factory.GetGrain<ITreeDeletionGrain>(TreeId);
+        var idleWhenReleased = true;
+        deletion.EndAliasChangeAsync("resize:running").Returns(async _ =>
+        {
+            idleWhenReleased = await grain.IsIdleAsync();
+        });
+
+        await grain.CompleteResizeAsync();
+
+        Assert.That(idleWhenReleased, Is.False, "a completion must not read as idle while it still holds the reservation");
+        Assert.That(state.State.AliasReservationId, Is.Null);
+        Assert.That(await grain.IsIdleAsync(), Is.True);
+    }
+
+    [Test]
     public void Resize_and_undo_refuse_when_lifecycle_cannot_be_reserved()
     {
         var (grain, _, _, factory, _) = CreateGrain();

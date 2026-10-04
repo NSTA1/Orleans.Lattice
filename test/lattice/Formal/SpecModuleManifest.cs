@@ -28,16 +28,31 @@ namespace Orleans.Lattice.Tests.Formal;
 /// rather than inferred, so a new action cannot opt itself out by omission.
 /// </param>
 /// <param name="Counts">The counts the gates re-derive and assert.</param>
+/// <param name="Variants">
+/// The module's variant configurations, by variant name, each with the number
+/// of distinct states TLC finds for the base specification under it. A variant
+/// is <c>&lt;Module&gt;.&lt;Variant&gt;.cfg</c>: the same specification checked
+/// under a different bound (see "Variant configurations" in
+/// <c>spec/README.md</c>). The <c>variants</c> key is the one optional key,
+/// because most modules have none; its absence is not a silent default but an
+/// assertion, cross-checked by discovery against the disk in both directions,
+/// that no variant configuration exists.
+/// </param>
 public sealed record SpecModuleManifest(
     string MutationsDirectory,
     string RefinementNote,
     IReadOnlyList<string> NonBehaviouralActions,
-    SpecModuleCounts Counts)
+    SpecModuleCounts Counts,
+    IReadOnlyDictionary<string, long> Variants)
 {
     /// <summary>The file-name suffix that marks a manifest: <c>AtomicCommit.manifest.json</c>.</summary>
     public const string FileSuffix = ".manifest.json";
 
     private static readonly string[] TopLevelKeys = ["mutations", "refinement", "nonBehaviouralActions", "counts"];
+
+    private const string VariantsKey = "variants";
+
+    private static readonly string[] VariantKeys = ["distinctStates"];
 
     private static readonly string[] CountKeys =
         ["invariants", "properties", "actions", "mutations", "behaviourRows", "distinctStates"];
@@ -63,7 +78,8 @@ public sealed record SpecModuleManifest(
         using (document)
         {
             var root = document.RootElement;
-            RequireKeys(source, root, TopLevelKeys, "the manifest");
+            var hasVariants = root.ValueKind == JsonValueKind.Object && root.TryGetProperty(VariantsKey, out _);
+            RequireKeys(source, root, hasVariants ? [.. TopLevelKeys, VariantsKey] : TopLevelKeys, "the manifest");
 
             var counts = root.GetProperty("counts");
             RequireKeys(source, counts, CountKeys, "'counts'");
@@ -86,8 +102,35 @@ public sealed record SpecModuleManifest(
                     checked((int)RequireCount(source, counts, "actions")),
                     checked((int)RequireCount(source, counts, "mutations")),
                     checked((int)RequireCount(source, counts, "behaviourRows")),
-                    RequireCount(source, counts, "distinctStates")));
+                    RequireCount(source, counts, "distinctStates")),
+                hasVariants ? ParseVariants(source, root.GetProperty(VariantsKey)) : new Dictionary<string, long>());
         }
+    }
+
+    private static Dictionary<string, long> ParseVariants(string source, JsonElement variants)
+    {
+        if (variants.ValueKind != JsonValueKind.Object || !variants.EnumerateObject().Any())
+        {
+            throw new InvalidOperationException(
+                $"{source}: '{VariantsKey}' must be a non-empty object of variant names; omit the key when the "
+                + "module has no variant configuration.");
+        }
+
+        var parsed = new Dictionary<string, long>(StringComparer.Ordinal);
+        foreach (var variant in variants.EnumerateObject())
+        {
+            if (!SpecModule.IsVariantName(variant.Name))
+            {
+                throw new InvalidOperationException(
+                    $"{source}: variant name '{variant.Name}' must be a letter followed by letters or digits, "
+                    + "because it is the middle segment of the variant's cfg file name.");
+            }
+
+            RequireKeys(source, variant.Value, VariantKeys, $"'{VariantsKey}.{variant.Name}'");
+            parsed[variant.Name] = RequireCount(source, variant.Value, "distinctStates");
+        }
+
+        return parsed;
     }
 
     private static void RequireKeys(string source, JsonElement element, string[] keys, string what)

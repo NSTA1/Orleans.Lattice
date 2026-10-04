@@ -344,7 +344,7 @@ internal sealed partial class ReplicationApplier(
             }
 
             var resolved = options.Get(entry.TreeId);
-            if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
+            if (ReplicationReceiveDedup.IsOwnOrigin(entry.OriginClusterId, resolved.ClusterId))
             {
                 // This is the receiving cluster's ONLY enforcement that a
                 // local-origin entry is never applied back onto its authoring

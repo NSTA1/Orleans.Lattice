@@ -1,0 +1,22 @@
+# Pairs with MovedStreamKeepsAckedWrites. An abort lowers the source's fence but
+# does not abandon the move or release its durable fence, so the source acknowledges
+# writes while the move's copy and fence still stand, and the flip that follows
+# discards them. The base abort abandons the move and releases the fence together.
+MODULE: MovedStreamKeepsAckedWritesAbortKeepsMoveLive
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: an abort unfences the source but leaves the move and its durable fence live, so a later flip discards writes
+PERTURBS: MoveAbort
+
+--- FIND
+    /\ move # "idle"
+    /\ move' = "idle"
+    /\ moveCopy' = {}
+    /\ dfence' = FALSE
+--- REPLACE
+\* MUTATION: the source is unfenced but the move is not abandoned.
+    /\ move # "idle"
+    /\ move' = move
+    /\ moveCopy' = moveCopy
+    /\ dfence' = dfence
+--- END

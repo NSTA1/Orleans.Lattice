@@ -662,7 +662,7 @@ internal sealed partial class ReplicationApplier
         }
 
         var resolved = options.Get(treeId);
-        if (string.Equals(origin, resolved.ClusterId, StringComparison.Ordinal))
+        if (ReplicationReceiveDedup.IsOwnOrigin(origin, resolved.ClusterId))
         {
             // Local-origin defence: the per-entry path classifies each
             // entry as Dedup with HighWaterMark=Zero. Replay the same

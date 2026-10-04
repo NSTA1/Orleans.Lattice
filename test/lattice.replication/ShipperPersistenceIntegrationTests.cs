@@ -188,6 +188,9 @@ public class ShipperPersistenceIntegrationTests
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
 
+        public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Entries.Count == 0 ? -1L : 0L);
+
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);
 

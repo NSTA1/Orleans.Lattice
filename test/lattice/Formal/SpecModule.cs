@@ -66,6 +66,26 @@ public sealed record SpecModule
     /// <summary>Reads the module's TLC model.</summary>
     public string ReadConfig() => File.ReadAllText(ConfigPath);
 
+    /// <summary>
+    /// The path of a variant configuration, <c>&lt;Module&gt;.&lt;Variant&gt;.cfg</c>:
+    /// the same specification checked under a different bound.
+    /// </summary>
+    /// <param name="variant">The variant's name, as the manifest records it.</param>
+    public string VariantConfigPath(string variant) => Path.Combine(Directory, $"{Name}.{variant}.cfg");
+
+    /// <summary>Reads a variant configuration.</summary>
+    /// <param name="variant">The variant's name, as the manifest records it.</param>
+    public string ReadVariantConfig(string variant) => File.ReadAllText(VariantConfigPath(variant));
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is a well-formed variant name: a letter
+    /// followed by letters or digits, so it is a single unambiguous segment of
+    /// the cfg file name.
+    /// </summary>
+    /// <param name="name">The candidate name.</param>
+    public static bool IsVariantName(string name) =>
+        !string.IsNullOrEmpty(name) && char.IsAsciiLetter(name[0]) && name.All(char.IsAsciiLetterOrDigit);
+
     /// <summary>Reads the module's refinement note.</summary>
     public string ReadRefinementNote() => File.ReadAllText(RefinementNotePath);
 

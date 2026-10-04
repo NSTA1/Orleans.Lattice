@@ -440,6 +440,14 @@ public class LatticeOptions
     /// Set to <see cref="TimeSpan.Zero"/> to purge on the first reminder tick, one
     /// minute after the delete, because the reminder period is clamped to at least
     /// one minute.
+    /// <para>
+    /// The window is not a bound on how long a routing activation may cache a
+    /// physical copy, and correctness does not depend on its length: the purge
+    /// leaves a tombstone on every shard, so a router that still caches a purged
+    /// copy - a resized tree's old copy, for instance - is refused with the same
+    /// stale-routing signal the window gives and retries on the live copy, rather
+    /// than reading an empty tree or losing a write (issue #4503).
+    /// </para>
     /// </summary>
     public TimeSpan SoftDeleteDuration { get; set; } = DefaultSoftDeleteDuration;
 
