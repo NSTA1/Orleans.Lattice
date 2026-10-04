@@ -38,22 +38,13 @@ internal static class McpToolActiveTenantScope
         var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
         if (httpContext is null)
         {
-            return NullScope.Instance;
+            return McpToolNoOpScope.Instance;
         }
 
         var tenant = services.GetService<ILatticeApiMcpActiveTenantBridge>()?.Resolve(httpContext);
 
         // Cold path: no tenant asserted. Leave the ambient context untouched (and
         // allocate nothing) so a tenancy-off head is byte-for-byte unchanged.
-        return tenant is null ? NullScope.Instance : LatticeActiveTenantContext.With(tenant);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
+        return tenant is null ? McpToolNoOpScope.Instance : LatticeActiveTenantContext.With(tenant);
     }
 }

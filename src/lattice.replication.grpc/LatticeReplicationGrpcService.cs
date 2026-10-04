@@ -318,7 +318,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// </exception>
     private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc)
     {
-        var stamped = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        var stamped = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
         if (string.IsNullOrWhiteSpace(stamped))
         {
             // Cold reject path only.
@@ -349,24 +349,6 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         throw new RpcException(new Status(StatusCode.PermissionDenied,
             $"The origin declared by {rpc} does not match the origin stamped on the call; "
             + "a peer may only act on its own origin."));
-    }
-
-    /// <summary>
-    /// Reads a request header by name, ordinal-ignore-case as HTTP/2 header
-    /// names are lower-cased on the wire. Mirrors the sibling helper on
-    /// <c>LatticeSagaGrpcService</c>.
-    /// </summary>
-    private static string? ReadHeader(ServerCallContext context, string key)
-    {
-        foreach (var entry in context.RequestHeaders)
-        {
-            if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return entry.Value;
-            }
-        }
-
-        return null;
     }
 
     /// <inheritdoc />

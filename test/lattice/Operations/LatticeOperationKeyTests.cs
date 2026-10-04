@@ -45,6 +45,34 @@ public sealed class LatticeOperationKeyTests
     }
 
     [Test]
+    public void ValidateOrGenerate_returns_a_supplied_valid_id_unchanged()
+    {
+        Assert.That(LatticeOperationKey.ValidateOrGenerate("nightly-1"), Is.EqualTo("nightly-1"));
+    }
+
+    [Test]
+    public void ValidateOrGenerate_generates_a_valid_id_when_none_is_supplied()
+    {
+        var id = LatticeOperationKey.ValidateOrGenerate(null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeOperationKey.IsValid(id), Is.True);
+            Assert.That(id, Has.Length.EqualTo(32));
+            Assert.That(LatticeOperationKey.ValidateOrGenerate(null), Is.Not.EqualTo(id));
+        });
+    }
+
+    [TestCase("")]
+    [TestCase("has space")]
+    public void ValidateOrGenerate_refuses_a_supplied_invalid_id_naming_the_operation_id_parameter(string id)
+    {
+        Assert.That(
+            () => LatticeOperationKey.ValidateOrGenerate(id),
+            Throws.ArgumentException.With.Property(nameof(ArgumentException.ParamName)).EqualTo("operationId"));
+    }
+
+    [Test]
     public void New_ids_are_valid_and_distinct()
     {
         var a = LatticeOperationKey.NewId();
