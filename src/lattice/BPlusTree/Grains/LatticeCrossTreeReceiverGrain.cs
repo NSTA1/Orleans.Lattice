@@ -162,7 +162,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // Later terminal: the wait set must be identical to the frozen one.
             // Config drift on the receiver between two terminals of the same
             // operation cannot be allowed to shrink or grow the barrier.
-            if (!WaitSetMatches(terminal.WaitSet))
+            if (!CrossTreeReceiverBarrier.WaitSetMatches(state.State.WaitSet, terminal.WaitSet))
             {
                 throw new InvalidOperationException(
                     $"Cross-tree receiver '{GrainContext.GrainId.Key}' received a terminal for tree " +
@@ -183,23 +183,14 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         // Record (or idempotently overwrite) this tree's terminal.
         state.State.Arrived[terminal.TreeId] = terminal;
 
-        // The barrier completes when every wait-set tree has arrived. The
-        // global verdict is commit iff every arrived terminal voted commit. A
-        // plain loop avoids the method-group delegate the LINQ All overload
-        // would allocate on every terminal.
-        var complete = true;
-        foreach (var waitTree in state.State.WaitSet)
-        {
-            if (!state.State.Arrived.ContainsKey(waitTree))
-            {
-                complete = false;
-                break;
-            }
-        }
-        if (complete)
+        // The barrier completes when every wait-set tree has arrived, and the
+        // global verdict is commit iff every arrived terminal voted commit. Both
+        // rules are the shared, dependency-free CrossTreeReceiverBarrier core,
+        // so the grain runs the rule the cross-cluster model checks.
+        if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
         {
             state.State.Decided = true;
-            state.State.Committed = state.State.Arrived.Values.All(t => t.Committed);
+            state.State.Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived);
             // Mark the decision non-durable until the write below completes, so
             // an interleaving GetDecisionAsync cannot publish it early.
             _decisionAwaitingPersist = true;
@@ -263,29 +254,6 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             Committed = state.State.Committed,
             TreesToFinalize = finalize,
         };
-    }
-
-    /// <summary>
-    /// Returns <c>true</c> when <paramref name="incoming"/> is the same set
-    /// (ignoring order and duplicates) as the frozen wait set. The frozen wait
-    /// set is already de-duplicated, so equality holds iff every frozen tree is
-    /// present in <paramref name="incoming"/> and every incoming tree is present
-    /// in the frozen set. Both wait sets are tiny (one entry per replicated
-    /// participant), so the linear membership scans are cheaper than allocating
-    /// a <see cref="HashSet{T}"/> and a method-group delegate per later terminal.
-    /// </summary>
-    private bool WaitSetMatches(IReadOnlyList<string> incoming)
-    {
-        var frozen = state.State.WaitSet;
-        foreach (var tree in frozen)
-        {
-            if (!OrdinalStrings.Contains(incoming, tree)) return false;
-        }
-        foreach (var tree in incoming)
-        {
-            if (!frozen.Contains(tree)) return false;
-        }
-        return true;
     }
 
     /// <summary>

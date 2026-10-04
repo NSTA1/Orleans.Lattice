@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. The decision step writes an unstamped terminal for
+# the first source shard ahead of the stamped per-shard broadcast - the shape
+# of every terminal written outside AtomicWriteGrain's broadcast, which carries
+# a count of 0. The receiver takes it down the legacy path and marks the saga
+# on it alone, before the other shard's prepare has arrived.
+MODULE: RAllOrNothingDecisionShipsUncountedTerminal
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the origin's decision step ships an unstamped terminal ahead of the stamped broadcast, so the receiver marks early
+PERTURBS: OriginDecide
+
+--- FIND
+OriginDecide ==
+    /\ Origin!DecideTx(T)
+    /\ UNCHANGED xvars
+--- REPLACE
+OriginDecide ==
+    /\ Origin!DecideTx(T)
+\* MUTATION: an unstamped terminal is written with the decision.
+    /\ outbox' = outbox \cup {Term(k1, Origin!AllAcked(T), 0)}
+    /\ UNCHANGED <<xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars>>
+--- END

@@ -1,0 +1,21 @@
+# Pairs with RAllOrNothing. A failed dial to the cross-tree barrier drops the
+# receiver registry's delegation row, as a catch that "cleans up" an
+# unreachable coordinator would. ResolveReceiverDelegatedAsync's catch keeps
+# the row and answers Indeterminate; dropping it leaves the txid unknown, so the
+# registry answers InFlight and the gate serves the tree's key pre-saga while a
+# finalised sibling tree serves its key post-saga.
+MODULE: RAllOrNothingDialFailureDropsDelegation
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a failed dial to the receiver barrier drops the delegation row, so the tree reads InFlight
+PERTURBS: DialFault
+
+--- FIND
+    /\ rdial' = [rdial EXCEPT ![tr] = ~rdial[tr]]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, rdeleg, barrierVars>>
+--- REPLACE
+\* MUTATION: the failed dial forgets the delegation.
+    /\ rdial' = [rdial EXCEPT ![tr] = ~rdial[tr]]
+    /\ rdeleg' = [rdeleg EXCEPT ![tr] = FALSE]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, barrierVars>>
+--- END

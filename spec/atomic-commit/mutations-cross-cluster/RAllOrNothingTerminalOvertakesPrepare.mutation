@@ -1,0 +1,24 @@
+# Pairs with RAllOrNothing, and reproduces issue #4480: production does not
+# guarantee the ordering this module assumes. The transport may deliver a
+# source shard's terminal before that shard's prepare. The receiver's tally
+# completes, its leaf applies the commit with no bucket to drain - recording
+# the terminal and materialising nothing - and the prepare that arrives next is
+# refused as a late prepare for a terminal transaction. One key is served
+# post-saga and the other pre-saga, permanently.
+#
+# The shipper merges WAL partitions by HLC only within one pump tick, over the
+# pages it holds: a partition read empty earlier in the tick is not read again,
+# while a later partition is refilled, so a prepare appended after its
+# partition's last read can ship a tick after the terminal that resolves it.
+MODULE: RAllOrNothingTerminalOvertakesPrepare
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a source shard's terminal may be delivered before that shard's prepare, which the receiver then refuses
+PERTURBS: DeliverTerminal
+
+--- FIND
+    /\ \A p \in outbox : (p.type = "prep" /\ p.key = m.key) => p \in dlv
+--- REPLACE
+\* MUTATION: no per-shard ordering; any terminal may overtake its prepare.
+    /\ TRUE
+--- END
