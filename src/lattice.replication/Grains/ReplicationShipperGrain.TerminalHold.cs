@@ -91,11 +91,12 @@ internal sealed partial class ReplicationShipperGrain
         public long EmittedBatchId { get; set; }
 
         /// <summary>
-        /// Set when the shipper rebound to a new source log: the hold's sequence
-        /// refers to the retired log, so it no longer caps a cursor and ships at
-        /// once.
+        /// Set when the hold was carried across a rebind to a new source log. Its
+        /// sequence refers to the retired log, so it neither caps a cursor nor
+        /// waits on its own partition: it waits for the new log's tally or tail
+        /// barrier instead.
         /// </summary>
-        public bool Unconditional { get; set; }
+        public bool Carried { get; set; }
     }
 
     /// <summary>The prepared records of one saga the merge has consumed.</summary>
@@ -227,7 +228,7 @@ internal sealed partial class ReplicationShipperGrain
     {
         foreach (var existing in _terminalHolds)
         {
-            if (!existing.Unconditional && existing.Partition == partition && existing.Sequence == sequence)
+            if (!existing.Carried && existing.Partition == partition && existing.Sequence == sequence)
             {
                 return;
             }
@@ -253,7 +254,7 @@ internal sealed partial class ReplicationShipperGrain
         var needed = false;
         foreach (var hold in _terminalHolds)
         {
-            if (!hold.Unconditional && hold.TailBarrier is null && !HasCompleteTally(hold))
+            if (hold.TailBarrier is null && !HasCompleteTally(hold))
             {
                 needed = true;
                 break;
@@ -277,7 +278,7 @@ internal sealed partial class ReplicationShipperGrain
         var tails = await Task.WhenAll(reads);
         foreach (var hold in _terminalHolds)
         {
-            if (!hold.Unconditional && hold.TailBarrier is null && !HasCompleteTally(hold))
+            if (hold.TailBarrier is null && !HasCompleteTally(hold))
             {
                 hold.TailBarrier = tails;
             }
@@ -290,13 +291,10 @@ internal sealed partial class ReplicationShipperGrain
     /// <summary>Whether the peer has acknowledged every prepare the hold waits on.</summary>
     private bool IsReleasable(TerminalHold hold)
     {
-        if (hold.Unconditional)
-        {
-            return true;
-        }
-
-        // Every entry ahead of the terminal in its own partition.
-        if (hold.Partition >= _ackedNext.Length || _ackedNext[hold.Partition] < hold.Sequence)
+        // Every entry ahead of the terminal in its own partition. A hold carried
+        // across a rebind has no position in the log now being read.
+        if (!hold.Carried
+            && (hold.Partition >= _ackedNext.Length || _ackedNext[hold.Partition] < hold.Sequence))
         {
             return false;
         }
@@ -323,7 +321,7 @@ internal sealed partial class ReplicationShipperGrain
         var bound = Math.Min(barrier.Length, _ackedNext.Length);
         for (var q = 0; q < bound; q++)
         {
-            if (q != hold.Partition && _ackedNext[q] < barrier[q])
+            if ((hold.Carried || q != hold.Partition) && _ackedNext[q] < barrier[q])
             {
                 return false;
             }
@@ -346,7 +344,7 @@ internal sealed partial class ReplicationShipperGrain
             }
 
             if (IsReleasable(hold)
-                || (!hold.Unconditional && hold.TailBarrier is null && !HasCompleteTally(hold)))
+                || (hold.TailBarrier is null && !HasCompleteTally(hold)))
             {
                 return true;
             }
@@ -426,7 +424,7 @@ internal sealed partial class ReplicationShipperGrain
         var cap = long.MaxValue;
         foreach (var hold in _terminalHolds)
         {
-            if (!hold.Unconditional && hold.Partition == partition && hold.Sequence < cap)
+            if (!hold.Carried && hold.Partition == partition && hold.Sequence < cap)
             {
                 cap = hold.Sequence;
             }
@@ -490,7 +488,7 @@ internal sealed partial class ReplicationShipperGrain
         var capped = false;
         foreach (var hold in _terminalHolds)
         {
-            if (!hold.Unconditional && hold.Record.Timestamp.CompareTo(lowest) <= 0)
+            if (hold.Record.Timestamp.CompareTo(lowest) <= 0)
             {
                 lowest = hold.Record.Timestamp;
                 capped = true;
@@ -513,33 +511,49 @@ internal sealed partial class ReplicationShipperGrain
     }
 
     /// <summary>
-    /// The source log was replaced under the shipper: the cursors restart at the
-    /// new log's start and the retired log is no longer read. A hold whose
-    /// prepares the peer has already acknowledged ships without waiting. Any
-    /// other hold is dropped with a warning: its unshipped prepares are
-    /// abandoned with the retired log, so releasing it would commit the saga on
-    /// the peer without them, and waiting for them would never end. Its
-    /// sequence also no longer caps a cursor, which now addresses the new log.
+    /// The source log was replaced under the shipper (an alias swap): the
+    /// cursors restart at the new log's start and the retired log is no longer
+    /// read. What happens to a terminal held from the retired log depends on why
+    /// the source moved (#4490):
+    /// <list type="bullet">
+    ///   <item><description>
+    ///     After a saga pause (a coordinated restore cutting over to the restored
+    ///     copy, the only alias move made while shipping is paused) every hold is
+    ///     dropped. Both clusters were reset to the cut: a saga before the cut is
+    ///     settled by each side's restored copy, a terminal after it must not
+    ///     cross the cut, and every bucket the peer staged from the retired log
+    ///     belonged to the copy its own cutover replaced.
+    ///   </description></item>
+    ///   <item><description>
+    ///     Otherwise (an online resize, its undo, a schema remediation, an
+    ///     operator alias change) each hold is carried forward by transaction: it
+    ///     waits for the new log's prepare tally or tail barrier, so it cannot
+    ///     overtake a prepare the new copy mirrored, and it does not strand the
+    ///     buckets the peer already staged from the retired log.
+    ///   </description></item>
+    /// </list>
     /// </summary>
-    private void ResetTerminalHoldsForNewSource()
+    private void ResetTerminalHoldsForNewSource(bool followsSagaPause)
     {
-        if (_terminalHolds.Count > 0)
+        if (followsSagaPause)
         {
-            _terminalHolds.RemoveAll(hold =>
+            if (_terminalHolds.Count > 0)
             {
-                if (IsReleasable(hold))
-                {
-                    hold.Unconditional = true;
-                    hold.EmittedBatchId = 0;
-                    return false;
-                }
-
-                Logger.LogWarning(
-                    "Dropping held saga terminal {Op} for transaction {TransactionId} on {Context}: the source log was replaced "
-                    + "before the peer acknowledged every prepare of the saga, and the retired log's unshipped prepares are not shipped.",
-                    hold.Record.Op, hold.Record.TransactionId, LogContext);
-                return true;
-            });
+                Logger.LogInformation(
+                    "{Context}: dropping {Count} held saga terminal(s) of the retired source log after a saga pause; "
+                    + "both clusters were restored to the cut.",
+                    LogContext, _terminalHolds.Count);
+                _terminalHolds.Clear();
+            }
+        }
+        else
+        {
+            foreach (var hold in _terminalHolds)
+            {
+                hold.Carried = true;
+                hold.TailBarrier = null;
+                hold.EmittedBatchId = 0;
+            }
         }
 
         Array.Clear(_ackedNext);

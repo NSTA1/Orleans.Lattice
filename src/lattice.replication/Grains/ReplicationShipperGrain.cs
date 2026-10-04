@@ -614,6 +614,14 @@ internal sealed partial class ReplicationShipperGrain(
     private bool _sourceIdentityResolved;
 
     /// <summary>
+    /// Set by <see cref="ResumeShippingAsync"/> and cleared by the next source
+    /// identity resolve: an alias move that resolve finds was made while
+    /// shipping was paused by a saga (a coordinated restore), which decides
+    /// what happens to held saga terminals of the retired log (#4490).
+    /// </summary>
+    private bool _resolvePendingAfterSagaPause;
+
+    /// <summary>
     /// Wall-clock time of the last source-identity resolve or event-driven
     /// rebind, measured on <see cref="_cursorFlushClock"/>. The gated per-tick
     /// refresh (<see cref="MaybeRefreshSourceIdentityAsync"/>) reads the registry
@@ -833,6 +841,17 @@ internal sealed partial class ReplicationShipperGrain(
         Logger.LogInformation(
             "{Context}: shipping resumed after cross-cluster saga {SagaId}.",
             LogContext, sagaId);
+
+        // A saga that paused shipping can have moved the source alias while the
+        // shipper was idle (a coordinated restore cuts over to the restored copy),
+        // and the alias-change push is best-effort. Force the first tick after the
+        // resume to re-resolve the source identity, and rebind with a cursor reset
+        // if it moved, before its first read or send: shipping on from the retired
+        // log would carry pre-restore records onto the peer's restored copy
+        // (#4490). The backstop interval alone does not cover this, because it
+        // measures from the last resolve, which may be moments before the pause.
+        _sourceIdentityResolved = false;
+        _resolvePendingAfterSagaPause = true;
 
         // Re-arm the pump so the resume takes effect on the next tick rather
         // than waiting a full keepalive period.
@@ -4231,6 +4250,8 @@ internal sealed partial class ReplicationShipperGrain(
         _walTreeId = physical;
         _sourceIdentityResolved = true;
         _lastSourceIdentityResolveUtc = _cursorFlushClock.GetUtcNow().UtcDateTime;
+        var followsSagaPause = _resolvePendingAfterSagaPause || state.State.AdminPauseSagaId is not null;
+        _resolvePendingAfterSagaPause = false;
 
         var bound = state.State.BoundPhysicalTreeId;
         if (string.IsNullOrEmpty(bound))
@@ -4261,7 +4282,7 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.PartitionCursors.Clear();
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
-        ResetTerminalHoldsForNewSource();
+        ResetTerminalHoldsForNewSource(followsSagaPause);
         await state.WriteStateAsync();
 
         if (_partitionGrainCache.Length >= partitions)

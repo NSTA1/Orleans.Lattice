@@ -329,6 +329,53 @@ public partial class TreeDeletionGrainTests
         Assert.That(await h.Grain.GetPhysicalRetentionAsync(), Is.EqualTo(PhysicalTreeRetention.Live));
     }
 
+    // --- IsDiscardedAsync ---
+
+    [Test]
+    public async Task IsDiscardedAsync_is_false_for_a_live_tree_and_a_recoverable_deletion()
+    {
+        var h = CreateDiscardHarness(4, 7, 9);
+        var live = await h.Grain.IsDiscardedAsync();
+        await h.Grain.DeleteDerivedPhysicalTreeAsync();
+        var deleted = await h.Grain.IsDiscardedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(live, Is.False);
+            Assert.That(deleted, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task IsDiscardedAsync_is_true_after_a_discard_and_stays_true_past_its_purge()
+    {
+        var h = CreateDiscardHarness(4, 7, 9);
+        await h.Grain.DiscardDerivedPhysicalTreeAsync();
+        var discarded = await h.Grain.IsDiscardedAsync();
+        await h.Grain.PurgeNowAsync();
+        var purged = await h.Grain.IsDiscardedAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(discarded, Is.True);
+            Assert.That(purged, Is.True,
+                "a saga bound to the copy may first reach it after the purge, and must still see it discarded");
+        });
+    }
+
+    [Test]
+    public async Task IsDiscardedAsync_is_false_once_a_deleted_copy_is_purged()
+    {
+        // A resize's old copy is deleted and purged, never discarded: a terminal
+        // it refuses after the purge is owed to the copy it mirrored into, not
+        // counted as delivered (#4474 against #4475).
+        var h = CreateDiscardHarness(4, 7, 9);
+        await h.Grain.DeleteDerivedPhysicalTreeAsync();
+        await h.Grain.PurgeNowAsync();
+
+        Assert.That(await h.Grain.IsDiscardedAsync(), Is.False);
+    }
+
     // --- DiscardIfAbandonedDerivedCopyAsync ---
 
     private const string AbandonedCopy = "logical-tree/resized/0123456789abcdef";
