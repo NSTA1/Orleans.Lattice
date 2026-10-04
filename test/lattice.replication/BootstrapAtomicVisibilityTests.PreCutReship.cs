@@ -20,6 +20,9 @@ public partial class BootstrapAtomicVisibilityTests
 {
     private const string PreCutOrigin = "snap-precut-origin";
 
+    /// <summary>A receiver tree with a sub-second <c>TxDecisionRetention</c>.</summary>
+    private const string AgedReceiverTree = "snap-precut-aged-retention-receiver";
+
     private IReplicationApplier ReceiverApplier =>
         _cluster.Silos.OfType<InProcessSiloHandle>().First()
             .SiloHost.Services.GetRequiredService<IReplicationApplier>();
@@ -184,6 +187,37 @@ public partial class BootstrapAtomicVisibilityTests
             Assert.That(await PendingKeysForAsync(receiverTree, txid), Is.Empty,
                 "a re-shipped prepare of a saga the snapshot settled must not be staged where no terminal will drain it");
             Assert.That(await receiver.GetAsync(keyB), Is.EqualTo(new byte[] { 2 }));
+        });
+    }
+
+    [Test]
+    public async Task Pre_cut_prepare_reshipped_after_the_receivers_decision_retention_still_settles_against_the_exported_abort()
+    {
+        // Re-shipping a long retained tail can outlast the receiver's decision
+        // retention. A decision row the drain imported must still be there to
+        // settle a prepare that arrives after that window. An aborted saga
+        // exercises it: a committed one leaves a committed row whose
+        // identity the receiver's dedup would match first.
+        var (_, keyB, txid) = await BootstrapReceiverOverSettledSagaAsync(
+            "snap-precut-late-source", AgedReceiverTree, committed: false, ageOut: false);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+
+        // Retire another saga on the same registry shard: ForgetAsync prunes
+        // every tombstone already past retention, so a forgotten imported
+        // row is physically gone by the time the late prepare arrives.
+        var registry = TxRegistryRouting.GetRegistry(_cluster.Client, AgedReceiverTree, txid);
+        var other = Guid.NewGuid();
+        await registry.MarkCommittedAsync(other);
+        await registry.ForgetAsync(other);
+
+        await ReshipPreCutPrepareAsync(AgedReceiverTree, keyB, 2, txid, index: 1, Hlc(6_000));
+
+        var receiver = _cluster.Client.GetGrain<ILattice>(AgedReceiverTree);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(await PendingKeysForAsync(AgedReceiverTree, txid), Is.Empty,
+                "a prepare re-shipped after the receiver's decision retention must not be staged where no terminal will drain it");
+            Assert.That(await receiver.GetAsync(keyB), Is.Null, "an aborted saga's prepare never becomes visible");
         });
     }
 

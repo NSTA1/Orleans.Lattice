@@ -841,8 +841,14 @@ source still stores a decision for. A decision row has no key or
 value; it carries the transaction id and `SettledDecision` (`true` for
 a commit). An aged-out row is resolved to its recorded verdict first,
 whether or not it has a resident bucket. The drain records each
-outcome in the receiver's transaction registry and retires it under
-the receiver's own decision retention.
+outcome in the receiver's transaction registry and does not forget
+it. Re-shipping a long retained tail can outlast the receiver's
+decision retention, and a prepare arriving after the row was purged
+would strand again. The receiver cannot yet observe the stream passing
+the export's cut, which is what would make retiring the row safe, so
+it retains one registry row per saga the source stored at the export
+([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524) tracks
+retiring them).
 
 The receiver then settles a replicated prepare against any decision
 its registry already holds, instead of staging it (the read uses the
@@ -860,4 +866,12 @@ One residual remains: a saga whose decision the source has already
 purged cannot be exported. A pre-cut prepare of such a saga, retained
 in the source's log past its decision retention with its terminal's
 partition trimmed, can still strand on a bootstrapped receiver (#4508).
+
+**Visibility while the drain runs.** Atomic visibility on the
+receiver is guaranteed from `LiveIncremental` onward. While the
+bootstrap is in `ApplyingSnapshot`, the receiver keeps serving reads
+and the drain installs committed rows one at a time, so a reader can
+observe some of a saga's keys before the rest. The decision rows and
+the settle above keep their outcome atomic once the import completes;
+they do not make the import itself atomic.
 
