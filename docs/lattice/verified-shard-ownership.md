@@ -32,6 +32,9 @@ reader is most likely to over-read are these.
   reactivation do to a saga bound across a split and a resize. A behaviour that
   needs a retention event together with a stale writer, a saga re-bind, a
   reshard, a refused flip or an undo before a flip is checked by **neither**
+  module's CI gate. Their composition was checked once, all properties of both
+  modules included, and is clean in this instance; it costs about ten minutes
+  of TLC, which is why it is not a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
 - **Alias moves other than a resize are not modelled.** A shadow-cutover
   restore, an explicit alias change and schema remediation move the alias too;

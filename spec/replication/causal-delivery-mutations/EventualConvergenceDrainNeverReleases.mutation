@@ -1,0 +1,19 @@
+# Pairs with EventualConvergence in ReplicationCausalDelivery. The drain is
+# never able to run, so an entry parked before its dependency arrived stays
+# in the buffer for ever even though the dependency is merged.
+MODULE: EventualConvergenceDrainNeverReleases
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the buffer is never drained, so a parked entry is stranded after its dependency arrives
+PERTURBS: Drain
+DEADLOCK: off
+
+--- FIND
+Drain ==
+    /\ wake
+--- REPLACE
+Drain ==
+\* MUTATION: no drain ever runs.
+    /\ FALSE
+    /\ wake
+--- END

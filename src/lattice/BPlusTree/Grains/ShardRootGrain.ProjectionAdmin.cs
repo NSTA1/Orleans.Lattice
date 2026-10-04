@@ -375,6 +375,22 @@ internal sealed partial class ShardRootGrain
     // and issue 1961.
     public Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(
         Guid token,
+        CancellationToken cancellationToken) =>
+        CaptureSnapshotBaselineEntryAsync(token, decisionGate: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<SnapshotBaselineCaptureResult> CaptureGatedSnapshotBaselineAsync(
+        Guid token,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(decisionGate);
+        return CaptureSnapshotBaselineEntryAsync(token, decisionGate, cancellationToken);
+    }
+
+    private Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineEntryAsync(
+        Guid token,
+        SnapshotDecisionGate? decisionGate,
         CancellationToken cancellationToken)
     {
         if (token == Guid.Empty)
@@ -391,11 +407,12 @@ internal sealed partial class ShardRootGrain
         var scan = BeginScanPage(nameof(CaptureSnapshotBaselineAsync));
         return GuardScanPageAsync(
             scan,
-            CaptureSnapshotBaselineCoreAsync(token, cancellationToken, scan));
+            CaptureSnapshotBaselineCoreAsync(token, decisionGate, cancellationToken, scan));
     }
 
     private async Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineCoreAsync(
         Guid token,
+        SnapshotDecisionGate? decisionGate,
         CancellationToken cancellationToken,
         ScanPageWalk scan)
     {
@@ -447,9 +464,13 @@ internal sealed partial class ShardRootGrain
         // every write in [frontier, capturedHead] back from its tail fold, so
         // the materialised baseline equals the shard's state at capturedHead
         // however long the walk took and however many writes landed during it.
-        // The uniform head also keeps a cross-leaf saga atomic: a terminal
-        // beyond capturedHead leaves its saga pending (invisible) on every leaf
-        // the saga touched.
+        // The uniform head also keeps a cross-leaf saga atomic WITHIN this
+        // shard: a terminal beyond capturedHead leaves its saga pending on every
+        // leaf of this shard the saga touched. Across shards that is not enough
+        // (each shard captures at its own moment, and a saga's terminal
+        // broadcast is one append per shard), so a gated capture resolves every
+        // still-pending bucket against the capture's single decision snapshot
+        // in the fold (issue #4485).
         var capturedHead = await SnapshotWalHeadAsync(cancellationToken);
 
         // Pass 2 (fold + union): fold each leaf's own (frontier, capturedHead]
@@ -590,7 +611,9 @@ internal sealed partial class ShardRootGrain
         Task<IReadOnlyList<LeafSnapshotRow>> FoldLeafTailAsync(int index)
         {
             var (leaf, freeze) = frozen[index];
-            return leaf.FoldTailOntoFrozenAsync(freeze, capturedHead, cancellationToken);
+            return decisionGate is null
+                ? leaf.FoldTailOntoFrozenAsync(freeze, capturedHead, cancellationToken)
+                : leaf.FoldTailOntoFrozenGatedAsync(freeze, capturedHead, decisionGate, cancellationToken);
         }
     }
 

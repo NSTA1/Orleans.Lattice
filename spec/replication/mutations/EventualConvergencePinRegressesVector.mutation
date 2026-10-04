@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence. Reproduces current production:
+# PinSnapshotAsync replaces the receiver's HWM vector with the frontier instead
+# of joining it. A receiver that had already applied an origin's writes above
+# the source's frontier goes backwards, and an entry parked on a dependency
+# those writes had met waits for an advance that never comes.
+MODULE: EventualConvergencePinRegressesVector
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the handoff replaces the HWM vector, so it can regress and strand a parked entry
+PERTURBS: Bootstrap
+DEADLOCK: off
+
+--- FIND
+       IN /\ hwm' = [hwm EXCEPT ![BootTarget] = [o \in Writers |-> Max({@[o], front[o]})]]
+--- REPLACE
+\* MUTATION: the frontier replaces the vector.
+       IN /\ hwm' = [hwm EXCEPT ![BootTarget] = front]
+--- END

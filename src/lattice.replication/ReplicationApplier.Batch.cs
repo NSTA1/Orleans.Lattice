@@ -339,6 +339,23 @@ internal sealed partial class ReplicationApplier
             RecordInboundContact(entries[startInclusive], success: true);
             return runResult;
         }
+        catch (TxDecisionGateRefusedException gated)
+            when (gated.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
+        {
+            // Issue #4485: a snapshot capture holds this run's tree's saga
+            // decision gate (or a backup set its fence), so a saga terminal in
+            // the run could not record its decision yet. Defer the run exactly as
+            // the receive fence does; the sender re-ships it, entries this run
+            // already applied are acknowledged as re-deliveries, and the refused
+            // terminal is re-applied once the capture releases the registry.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
         catch
         {
             RecordInboundContact(entries[startInclusive], success: false);
@@ -645,7 +662,7 @@ internal sealed partial class ReplicationApplier
         }
 
         var resolved = options.Get(treeId);
-        if (string.Equals(origin, resolved.ClusterId, StringComparison.Ordinal))
+        if (ReplicationReceiveDedup.IsOwnOrigin(origin, resolved.ClusterId))
         {
             // Local-origin defence: the per-entry path classifies each
             // entry as Dedup with HighWaterMark=Zero. Replay the same

@@ -949,7 +949,10 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if no resize operation is in progress for this tree -
     /// either the most recent resize has completed or no resize has ever been initiated.
-    /// Answers without waiting for an in-flight resize phase.
+    /// Answers without waiting for an in-flight resize phase. A completed resize
+    /// reports <c>true</c> only once it has released the tree's alias reservation,
+    /// so a <see cref="DeleteTreeAsync"/> issued as soon as this returns
+    /// <c>true</c> is not refused as an alias operation in progress.
     /// </summary>
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 

@@ -92,9 +92,12 @@ internal static class PreparedBucketSweep
                 // has no registry rows, so a lookup keyed by physicalTreeId
                 // reads InFlight for a committed saga and installs an orphan
                 // (issue #4368). The post-sweep cleanup reads the same way.
+                // Terminal-intent (issue #4485): this sweep APPLIES the
+                // answer, so it acts only on a decision durably recorded on
+                // the registry, never on an uncached coordinator verdict.
                 var preStatus = await TxRegistryRouting
                     .GetRegistry(grainFactory, decisionTreeId, snapshot.TransactionId)
-                    .GetStatusAsync(snapshot.TransactionId);
+                    .GetStatusForTerminalAsync(snapshot.TransactionId);
                 if (preStatus == TxStatus.Committed)
                 {
                     Dictionary<string, byte[]>? committedValues = null;
@@ -179,7 +182,7 @@ internal static class PreparedBucketSweep
         if (perTxSnapshots is { Count: > 0 })
         {
             var txids = new List<Guid>(perTxSnapshots.Keys);
-            var statuses = await TxRegistryFanOut.GetStatusManyAsync(
+            var statuses = await TxRegistryFanOut.GetStatusManyForTerminalAsync(
                 grainFactory, decisionTreeId, txids);
             foreach (var (txid, status) in statuses)
             {

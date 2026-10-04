@@ -157,6 +157,11 @@ internal sealed partial class TxRegistryGrain(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
         }
 
+        // Issue #4485: past the guard this call records a NEW decision (a repeat
+        // of an existing one returned above). A capture holding the decision
+        // gate refuses it; the caller retries once the gate is released.
+        ThrowIfDecisionGated();
+
         // A tombstoned decision is treated as absent for the CONFLICTING-outcome
         // case: the saga has already completed its post-fan-out cleanup, so a
         // fresh Mark carrying a different verdict is a new authoritative outcome
@@ -229,6 +234,9 @@ internal sealed partial class TxRegistryGrain(
                 throw new InvalidOperationException(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
         }
+
+        // Issue #4485: see MarkCommittedAsync.
+        ThrowIfDecisionGated();
 
         var now = TimeProvider.GetUtcNow();
         var tombstoneClear = ClearTombstone(txid, now, Retention);
@@ -452,6 +460,8 @@ internal sealed partial class TxRegistryGrain(
             return;
         }
 
+        ThrowIfRegistrationFenced();
+
         ThrowIfWouldCoexist(
             txid,
             state.State.ReceiverDecisionAuthorities,
@@ -505,6 +515,8 @@ internal sealed partial class TxRegistryGrain(
             return;
         }
 
+        ThrowIfRegistrationFenced();
+
         ThrowIfWouldCoexist(
             txid,
             state.State.ExternalAuthorities,
@@ -538,9 +550,22 @@ internal sealed partial class TxRegistryGrain(
     /// once resolved. A failed coordinator dial surfaces as
     /// <see cref="TxStatus.Indeterminate"/>, which hides the saga's prepared
     /// keys rather than disclosing their pre-saga values.
+    /// <para>
+    /// Issue #4485. With <paramref name="terminalIntent"/> the caller is about to
+    /// apply a terminal on the answer, so a verdict is returned only once it is
+    /// durably cached here (a failed cache write reads
+    /// <see cref="TxStatus.InFlight"/>), and nothing is dialled while a capture
+    /// holds the decision gate. Without it (a reader), a gated registry still
+    /// returns the coordinator's verdict but does not cache it.
+    /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey)
+    private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey, bool terminalIntent = false)
     {
+        if (terminalIntent && IsDecisionGated(out _))
+        {
+            return TxStatus.InFlight;
+        }
+
         TxStatus verdict;
         try
         {
@@ -579,6 +604,13 @@ internal sealed partial class TxRegistryGrain(
 
         if (!state.State.Decisions.ContainsKey(txid))
         {
+            // Issue #4485: a capture holding the decision gate admits no new
+            // local decision, and a cached verdict is one.
+            if (IsDecisionGated(out _))
+            {
+                return terminalIntent ? TxStatus.InFlight : verdict;
+            }
+
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
             var removed = state.State.ReceiverDecisionAuthorities.Remove(txid);
@@ -595,7 +627,13 @@ internal sealed partial class TxRegistryGrain(
             catch
             {
                 // The group commit already rolled the cache back; the verdict
-                // itself is durable at the coordinator, so it is still served.
+                // itself is durable at the coordinator, so it is still served
+                // to a reader. A terminal-applying caller must not act on a
+                // verdict that is not recorded here (issue #4485).
+                if (terminalIntent)
+                {
+                    return TxStatus.InFlight;
+                }
             }
         }
         return verdict;
@@ -618,15 +656,15 @@ internal sealed partial class TxRegistryGrain(
     /// divergence.
     /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid)
+    private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid, bool terminalIntent = false)
     {
         if (state.State.ExternalAuthorities.TryGetValue(txid, out var coordinatorKey))
         {
-            return await ResolveDelegatedAsync(txid, coordinatorKey);
+            return await ResolveDelegatedAsync(txid, coordinatorKey, terminalIntent);
         }
         if (state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var receiverKey))
         {
-            return await ResolveReceiverDelegatedAsync(txid, receiverKey);
+            return await ResolveReceiverDelegatedAsync(txid, receiverKey, terminalIntent);
         }
         return TxStatus.InFlight;
     }
@@ -641,9 +679,18 @@ internal sealed partial class TxRegistryGrain(
     /// coordinator dial surfaces as <see cref="TxStatus.Indeterminate"/>, which
     /// keeps the cross-tree batch hidden on this tree until it can be resolved
     /// rather than disclosing the participating keys' pre-saga values.
+    /// <para>
+    /// Issue #4485: <paramref name="terminalIntent"/> and the decision gate act
+    /// exactly as on <see cref="ResolveReceiverDelegatedAsync"/>.
+    /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey)
+    private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey, bool terminalIntent = false)
     {
+        if (terminalIntent && IsDecisionGated(out _))
+        {
+            return TxStatus.InFlight;
+        }
+
         TxStatus verdict;
         try
         {
@@ -675,6 +722,13 @@ internal sealed partial class TxRegistryGrain(
         // and future reads need no further coordinator round-trips.
         if (!state.State.Decisions.ContainsKey(txid))
         {
+            // Issue #4485: a capture holding the decision gate admits no new
+            // local decision, and a cached verdict is one.
+            if (IsDecisionGated(out _))
+            {
+                return terminalIntent ? TxStatus.InFlight : verdict;
+            }
+
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
             var removed = state.State.ExternalAuthorities.Remove(txid);
@@ -692,7 +746,13 @@ internal sealed partial class TxRegistryGrain(
             {
                 // Surface the resolved verdict for this read even though the
                 // cache write failed (the group commit already rolled the cache
-                // back); the next read re-dials and re-attempts.
+                // back); the next read re-dials and re-attempts. A
+                // terminal-applying caller must not act on a verdict that is not
+                // recorded here (issue #4485).
+                if (terminalIntent)
+                {
+                    return TxStatus.InFlight;
+                }
             }
         }
         return verdict;
@@ -705,22 +765,31 @@ internal sealed partial class TxRegistryGrain(
     /// from a tree-wide snapshot (which would read as a partial cross-tree
     /// view). In-flight delegations are left in place to be retried on the next
     /// snapshot.
+    /// <para>
+    /// While a capture holds the decision gate (issue #4485) a terminal verdict
+    /// is not cached; it is returned in <c>Uncached</c> instead, so a reader's
+    /// snapshot still reflects the coordinator's decision without recording a
+    /// new local decision.
+    /// </para>
     /// </summary>
     /// <returns>
     /// The number of delegations whose coordinator could not be reached, so a
     /// caller can tell "still preparing" apart from "could not find out". Every
     /// such delegation is also still counted among the remaining entries, which
     /// is the correct conservative accounting; this figure names the subset of
-    /// that count which is unreachable rather than pending.
+    /// that count which is unreachable rather than pending. Also returns the
+    /// terminal verdicts the gate kept from being cached, or
+    /// <see langword="null"/> when there are none.
     /// </returns>
     /// <param name="unresolvable">
     /// When supplied, receives the txid of every delegation whose coordinator
     /// could not be reached, so a snapshot can report it as
     /// <see cref="TxStatus.Indeterminate"/> rather than omit it (issue #4448).
     /// </param>
-    private async Task<int> ResolveAllDelegatedAsync(List<Guid>? unresolvable = null)
+    private async Task<(int Unresolvable, Dictionary<Guid, TxStatus>? Uncached)> ResolveAllDelegatedAsync(List<Guid>? unresolvable = null)
     {
         var unresolvableCount = 0;
+        Dictionary<Guid, TxStatus>? uncached = null;
         if (state.State.ExternalAuthorities.Count > 0)
         {
             // Snapshot the pending delegations: ResolveDelegatedAsync mutates the
@@ -729,10 +798,15 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, coordinatorKey) in pending)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                if (await ResolveDelegatedAsync(txid, coordinatorKey) == TxStatus.Indeterminate)
+                var verdict = await ResolveDelegatedAsync(txid, coordinatorKey);
+                if (verdict == TxStatus.Indeterminate)
                 {
                     unresolvableCount++;
                     unresolvable?.Add(txid);
+                }
+                else if (verdict is (TxStatus.Committed or TxStatus.Aborted) && !state.State.Decisions.ContainsKey(txid))
+                {
+                    (uncached ??= new Dictionary<Guid, TxStatus>())[txid] = verdict;
                 }
             }
         }
@@ -745,14 +819,19 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, receiverKey) in pendingReceiver)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                if (await ResolveReceiverDelegatedAsync(txid, receiverKey) == TxStatus.Indeterminate)
+                var verdict = await ResolveReceiverDelegatedAsync(txid, receiverKey);
+                if (verdict == TxStatus.Indeterminate)
                 {
                     unresolvableCount++;
                     unresolvable?.Add(txid);
                 }
+                else if (verdict is (TxStatus.Committed or TxStatus.Aborted) && !state.State.Decisions.ContainsKey(txid))
+                {
+                    (uncached ??= new Dictionary<Guid, TxStatus>())[txid] = verdict;
+                }
             }
         }
-        return unresolvableCount;
+        return (unresolvableCount, uncached);
     }
 
     /// <summary>
@@ -828,7 +907,7 @@ internal sealed partial class TxRegistryGrain(
         // pipelining. UnresolvableCount below reports the unreachable subset
         // separately so a fence reading this observation can distinguish
         // "sagas are still running" from "I could not find out".
-        var unresolvable = await ResolveAllDelegatedAsync();
+        var (unresolvable, _) = await ResolveAllDelegatedAsync();
 
         var inFlight = state.State.ExternalAuthorities.Count
             + state.State.ReceiverDecisionAuthorities.Count;
@@ -984,7 +1063,7 @@ internal sealed partial class TxRegistryGrain(
         // A delegation whose coordinator could not be reached is collected
         // and carried as Indeterminate below, as the point path reports it.
         var unresolvable = HasDelegations ? new List<Guid>() : null;
-        await ResolveAllDelegatedAsync(unresolvable);
+        var (_, uncachedVerdicts) = await ResolveAllDelegatedAsync(unresolvable);
 
         // Return a defensive copy so callers cannot mutate the
         // registry's persisted state through the returned reference.
@@ -1014,6 +1093,7 @@ internal sealed partial class TxRegistryGrain(
                 : status;
         }
         MaskUnresolvableDelegations(result, unresolvable);
+        MergeUncachedVerdicts(result, uncachedVerdicts);
         return result;
     }
 
@@ -1043,7 +1123,7 @@ internal sealed partial class TxRegistryGrain(
         // (including any verdicts just cached by the resolution pass).
         // Unreachable delegations are carried as Indeterminate (#4448).
         var unresolvable = HasDelegations ? new List<Guid>() : null;
-        await ResolveAllDelegatedAsync(unresolvable);
+        var (_, uncachedVerdicts) = await ResolveAllDelegatedAsync(unresolvable);
 
         // The revision captured inside the same synchronous block. Both
         // fields therefore reflect the exact same persisted state - no
@@ -1068,6 +1148,7 @@ internal sealed partial class TxRegistryGrain(
                 : status;
         }
         MaskUnresolvableDelegations(dict, unresolvable);
+        MergeUncachedVerdicts(dict, uncachedVerdicts);
         return new TxRegistrySnapshot
         {
             Decisions = dict,
