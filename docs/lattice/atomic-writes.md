@@ -323,7 +323,12 @@ saga's batch and its terminals and mirrors them, so the batch lands whole on
 both copies and a resize undo never restores a copy holding part of it
 ([#4369](https://github.com/NSTA1/Orleans.Lattice/issues/4369)). A swap that
 lands after the decision is recorded leaves the batch on its bound copy, where the terminal broadcast
-delivers it whole. A batch therefore commits wholly on one copy - kept or
+delivers it whole. When that copy is a resized copy whose resize is then undone,
+the undo discards it with every write it took, so a terminal the discarded copy
+refuses counts as delivered: it is neither re-sent to the copy the undo restored,
+which would land part of the batch there, nor retried until the saga stalls, and
+the saga completes
+([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
 
