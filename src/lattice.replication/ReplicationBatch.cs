@@ -121,4 +121,16 @@ public readonly record struct ReplicationBatch
     /// </para>
     /// </summary>
     public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }
+
+    /// <summary>
+    /// Set while the sender has taken this peer off the log after a
+    /// write-ahead-log trim lost records it never shipped (issue #4534): the
+    /// export epoch the peer must bootstrap past. The receiver starts a full
+    /// bootstrap from the sender when it has not completed one with a greater
+    /// epoch, and echoes its last completed epoch in
+    /// <see cref="ReplicationAck.BootstrapEpoch"/>. Carried out of band by the
+    /// transport (the gRPC transport sends it as a call header), so the batch
+    /// framing is unchanged.
+    /// </summary>
+    internal long? ReseedAfterEpoch { get; init; }
 }

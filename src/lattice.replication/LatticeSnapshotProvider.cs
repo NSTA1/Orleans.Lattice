@@ -133,8 +133,17 @@ internal sealed class LatticeSnapshotProvider(
             frontier = await hwm.GetVectorAsync(cancellationToken).ConfigureAwait(false);
         }
 
+        // Number the export before its registry snap0, which the enumeration
+        // takes when it starts (#4534): an epoch greater than the one a
+        // shipper recorded when it took a peer off the log therefore proves
+        // this export's snap0 came after that point.
+        var epoch = await _grainFactory
+            .GetGrain<Orleans.Lattice.Replication.Grains.IReplicationExportEpochGrain>(treeName)
+            .AdvanceAsync()
+            .ConfigureAwait(false);
+
         var entries = EnumerateAsync(treeName, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, asOfHlc, frontier, entries);
+        return new SnapshotStream(treeName, asOfHlc, frontier, entries) { ExportEpoch = epoch };
     }
 
     private async IAsyncEnumerable<SnapshotEntry> EnumerateAsync(

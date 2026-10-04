@@ -215,6 +215,21 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(7)] public AdvertisedCompressionDictionary[]? AdvertisedDictionaries { get; init; }
+
+    /// <summary>
+    /// The snapshot export epoch of the last full bootstrap this receiver
+    /// completed from the sender for the batch's tree, or <see langword="null"/>
+    /// when it has completed none (issue #4534). A sender that took this peer
+    /// off the log after a write-ahead-log trim lost records it never shipped
+    /// withholds saga records until it sees an epoch greater than the one it
+    /// recorded at that point, which proves the peer was re-seeded from an
+    /// export taken afterwards. A range-scoped re-replay never advances it.
+    /// <para>
+    /// Strictly additive on the wire: receivers built before this slot omit it,
+    /// and a sender that never takes a peer off the log ignores it.
+    /// </para>
+    /// </summary>
+    [Id(8)] public long? BootstrapEpoch { get; init; }
 }
 
 /// <summary>

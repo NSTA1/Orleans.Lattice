@@ -367,10 +367,22 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         var outcome = "error";
         try
         {
+            global::Grpc.Core.Metadata? headers = null;
+            if (batch.ReseedAfterEpoch is { } reseedAfter)
+            {
+                headers = new global::Grpc.Core.Metadata
+                {
+                    {
+                        LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader,
+                        reseedAfter.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    },
+                };
+            }
+
             using var call = channel.Invoker.AsyncUnaryCall(
                 _method.Push,
                 host: null,
-                options: new CallOptions(cancellationToken: cancellationToken),
+                options: new CallOptions(headers: headers, cancellationToken: cancellationToken),
                 request: envelopeBox);
 
             var ackBox = await call.ResponseAsync.ConfigureAwait(false);

@@ -171,6 +171,39 @@ public partial class ReplicationPeerStats
     }
 
     /// <summary>
+    /// Records whether the local sender has taken the peer off the log after a
+    /// write-ahead-log trim lost records it never shipped (issue #4534), and
+    /// since when; <see langword="null"/> clears it. Surfaces on the peer-status
+    /// read path, where such a link reports as stalled until it is re-seeded.
+    /// </summary>
+    internal void RecordReseedRequired(string tree, string peer, DateTimeOffset? since)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var key = new PeerKey(tree, peer, ReplicationContactDirection.Outbound);
+        PeerState? entry;
+        if (since is null)
+        {
+            // Clearing never creates a row: a peer the sender has not touched
+            // otherwise must not appear in the status read path.
+            if (!state.TryGetValue(key, out entry))
+            {
+                return;
+            }
+        }
+        else
+        {
+            entry = state.GetOrAdd(key, static _ => new PeerState());
+        }
+
+        lock (entry)
+        {
+            entry.ReseedRequiredSince = since;
+        }
+    }
+
+    /// <summary>
     /// Records the current per-peer outbound in-flight pipelining depth -
     /// the number of shipped-but-unacknowledged batches the sender holds
     /// open against the named peer. Called by the sender each time the
@@ -458,6 +491,7 @@ public partial class ReplicationPeerStats
         public long EntriesBehind;
         public long BytesBehind;
         public long InFlight;
+        public DateTimeOffset? ReseedRequiredSince;
         public long ConsecutiveErrors;
         public DateTimeOffset? LastContactTimestamp;
     }
