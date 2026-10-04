@@ -15,8 +15,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Coyote;
 /// pin, and the GC trims the prefix. Leaves stop at any step and reactivate from
 /// their snapshot or cold.
 /// <para>
-/// Every decision the model takes that production also takes is made by the
-/// production core: <see cref="WalOffsetAllocationCore.Assign"/> for offsets,
+/// Five of the decisions the model takes are made by production cores, called
+/// directly: <see cref="WalOffsetAllocationCore.Assign"/> for offsets,
 /// <see cref="WalShippingWatermark"/> for the reader's horizon,
 /// <see cref="LeafDurablePinCore.Resolve"/> for the published pin,
 /// <see cref="Orleans.Lattice.WalGcTrimCore.IsEntryEligible"/> with a
