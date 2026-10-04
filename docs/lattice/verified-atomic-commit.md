@@ -37,10 +37,10 @@ claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
 barrier, a transport that can reorder, lose and duplicate) and its failure modes
 are its own. The cross-cluster check is also narrower than its name: it assumes a
 source shard's terminal reaches the receiver after that shard's prepares, which
-production does not guarantee (issue #4480), and it reaches no stranded origin
-prepare at a bootstrap (issue #4481) and no re-shipped pre-cut record (issue
-#4482). Those departures are recorded as defects with a standing mutation each,
-not covered. The receiver's integration tests and the cross-cluster chaos suites
+the shipper's terminal hold provides (issue #4480), and it reaches no stranded
+origin prepare at a bootstrap (issue #4481) and no re-shipped pre-cut record
+(issue #4482). Those two departures are recorded as defects with a standing
+mutation each, not covered. The receiver's integration tests and the cross-cluster chaos suites
 in `test/lattice.replication/` remain the evidence for the deployed system
 (issue #2324).
 
@@ -159,7 +159,7 @@ delivery order, the late-prepare refusal, the whole-wait-set barrier, the
 register-before-notify order, and the Indeterminate answer for an undiallable
 delegation - and each must report a violation of one named property, checked by
 its tag in Coyote's bug report rather than accepted as any violation. Two of
-those guards reproduce production defects (issues #4480 and #4448), which is
+those guards reproduce production defects (issue #4480 as it stood before the shipper's terminal hold, and issue #4448), which is
 why they are guards rather than fixed-design tests.
 
 ### Every model ships a non-vacuous guard test

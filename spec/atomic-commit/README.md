@@ -299,10 +299,12 @@ holds with deadlock checking on; the state graph's depth is 18.
 
 The module models the protocol's intended design, and three places where
 production departs from it were filed as defects when the module was written,
-each kept as a standing mutation and a gap row in
+each kept as a standing mutation in
 [`RefinementCrossCluster.md`](RefinementCrossCluster.md): a terminal that
-overtakes its shard's prepare (#4480), a bootstrap over a stranded origin
-prepare (#4481), and pre-cut saga records re-shipped after a bootstrap (#4482).
+overtakes its shard's prepare (#4480, now fixed by the shipper's terminal hold,
+whose detectors the note cites), a bootstrap over a stranded origin prepare
+(#4481), and pre-cut saga records re-shipped after a bootstrap (#4482); the
+last two remain gap rows.
 The snapshot read paths' handling of an undiallable delegation (#4448) is
 reproduced on the receiver the same way.
 

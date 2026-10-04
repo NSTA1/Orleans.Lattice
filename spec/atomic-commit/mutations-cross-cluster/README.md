@@ -30,7 +30,7 @@ transport assumption or its read view already does.
 | `RAllOrNothingNotifyBeforeRegister` | `RAllOrNothing` | Invariant | `DeliverTerminal`, `ReceiverRegister`, `ReceiverNotify` | the barrier is notified before the delegation is registered |
 | `RAllOrNothingDialFailureDropsDelegation` | `RAllOrNothing` | Invariant | `DialFault` | a failed dial forgets the delegation, so the tree reads InFlight |
 | `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` | `RAllOrNothing` | Invariant | - (read view) | an undiallable delegation reads InFlight, as the snapshot read paths answer it (#4448) |
-| `RAllOrNothingTerminalOvertakesPrepare` | `RAllOrNothing` | Invariant | `DeliverTerminal` | a terminal is delivered before its shard's prepare, which is then refused (#4480) |
+| `RAllOrNothingTerminalOvertakesPrepare` | `RAllOrNothing` | Invariant | `DeliverTerminal` | a terminal is delivered before its shard's prepare, which is then refused (#4480, before the shipper's terminal hold) |
 | `RAllOrNothingExportOverStrandedPrepare` | `RAllOrNothing` | Invariant | `OriginForget` | the origin retires a row over a resident bucket and a bootstrapping receiver is exported a split saga (#4481) |
 | `RStrictIsolationTerminalOutcomeIgnored` | `RStrictIsolation` | Invariant | `DeliverTerminal` | the receiver records every terminal as a commit |
 | `RLinearizedTerminalsFanOutAppliesCommit` | `RLinearizedTerminals` | Invariant | `ReceiverFanOut` | the fan-out tells every leaf "commit" whatever was recorded |
@@ -76,7 +76,7 @@ reading the code the refinement note maps.
 
 | Property | Why it holds on the base | Cells the base cannot reach |
 | --- | --- | --- |
-| `RAllOrNothing` | The tally, the barrier, the register-before-notify order and the Indeterminate dial answer; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, and a bootstrap over a stranded origin prepare. All four are **blindly inexpressible**: production reaches them (#4480, #4480's unstamped-terminal route, #4448, #4481), and each is kept as a standing mutation and a gap row rather than as an action of the base. |
+| `RAllOrNothing` | The tally, the barrier, the register-before-notify order and the Indeterminate dial answer; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, and a bootstrap over a stranded origin prepare. The first two are **faithfully inexpressible** now that the shipper holds every terminal until its saga's prepares are acked (#4480); the last two are **blindly inexpressible**: production reaches them (#4448, #4481), and each is kept as a standing mutation and a gap row rather than as an action of the base. |
 | `RStrictIsolation` | The receiver records the outcome its terminals carry, which is the origin's. | None. |
 | `RLinearizedTerminals` | The receiver marks before it fans out, and the fan-out carries the recorded outcome. | None. |
 | `DelegationsDisjoint` | The registry's coexistence check on the foreign claim. | None: the claim is enabled for the whole window the authoring row exists. |

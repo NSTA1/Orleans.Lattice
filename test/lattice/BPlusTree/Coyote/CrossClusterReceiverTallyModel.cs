@@ -30,7 +30,7 @@ internal enum CrossClusterTallyGuard
 
     /// <summary>
     /// The transport may deliver a source shard's terminal before that shard's
-    /// prepare, which production allows (issue #4480;
+    /// prepare, which production allowed until the shipper's terminal hold (issue #4480;
     /// <c>RAllOrNothingTerminalOvertakesPrepare</c>).
     /// </summary>
     TerminalMayOvertakePrepare,
