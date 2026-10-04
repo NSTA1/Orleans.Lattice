@@ -635,8 +635,7 @@ public class LatticeReplicationOptions
     /// of a bounded re-ship window after a silo crash.
     /// <para>
     /// <strong>Crash safety.</strong> Receiver-side apply maintains a
-    /// per-origin high-water mark for status and pinned-snapshot
-    /// floors, drops entries at or below that pinned floor, and suppresses recent
+    /// per-origin high-water mark for status and causal dependencies, and suppresses recent
     /// exact duplicates by <c>(originClusterId, timestamp, key, op)</c>. Other
     /// replays inside the window are applied again and converge idempotently under
     /// the tree's merge semantics. No data is lost.
@@ -683,7 +682,6 @@ public class LatticeReplicationOptions
     /// crash-replay window beyond the
     /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
     /// bound the batch-count rule already guarantees. Receiver-side apply
-    /// drops entries at or below the receiver's snapshot-pinned floor and
     /// suppresses recent exact duplicates by <c>(originClusterId, timestamp, key,
     /// op)</c>. Other entries re-shipped inside the window re-apply idempotently
     /// under the tree's merge semantics, so no data is lost.

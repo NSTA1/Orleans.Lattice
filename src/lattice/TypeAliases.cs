@@ -588,6 +588,13 @@ internal static class TypeAliases
     // rather than a bare OutOfMemoryException.
     internal const string LeafSnapshotUnaffordable = "ol.lsu";
 
+    // Raised when a leaf's snapshot could not be loaded, so its WAL replay
+    // fails closed instead of rebuilding from a log whose prefix may survive
+    // only in that snapshot (issue 4450). Fails the replay barrier, which
+    // re-arms on the next touch, and crosses the grain boundary to the data
+    // operation that awaited it.
+    internal const string LeafSnapshotUnavailable = "ol.lsv";
+
     // What a starvation drive achieved on one leaf, returned to the WAL GC
     // blocked-leaf sweep (issue 2692 Half B). Crosses the IBPlusLeafGrain
     // boundary. An enum rather than a bool because "drove and lifted the pin",

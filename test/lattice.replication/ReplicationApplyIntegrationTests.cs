@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ReplicationApplyIntegrationTests
+public partial class ReplicationApplyIntegrationTests
 {
     private TwoSiteClusterFixture _fixture = null!;
 

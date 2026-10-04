@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -34,6 +37,17 @@ internal sealed partial class BPlusLeafGrain
     /// <inheritdoc />
     public async Task RebuildProjectionFromWalAsync()
     {
+        // Step 0 - an unreadable snapshot is discarded, accepting the loss
+        // (issue #4450). Every activation fails its replay closed on a snapshot
+        // that will not load, because under coverage-gated trim it may be the
+        // only durable copy of the prefix it covers. This explicit, operator-
+        // invoked rebuild is the one path allowed past that: a snapshot that
+        // is present but proven unreadable is cleared, so the next activation
+        // sees no snapshot and rebuilds from the WAL that survives. Run before
+        // anything is reset, so a store that cannot answer fails the rebuild
+        // and leaves this activation exactly as it was for the retry.
+        await DiscardUnreadableSnapshotForRebuildAsync();
+
         // Retire the replay before anything else (issue #2871). This method IS a
         // replay reset: it clears the projection and sets the checkpoint back so
         // the NEXT activation re-materialises it (from the leaf's snapshot where
@@ -178,5 +192,83 @@ internal sealed partial class BPlusLeafGrain
         context.Deactivate(new DeactivationReason(
             DeactivationReasonCode.ApplicationRequested,
             "Leaf projection rebuild from WAL requested via operator tooling."));
+    }
+
+    /// <summary>
+    /// Clears this leaf's snapshot when it is present but proven unreadable - an
+    /// unreadable row payload, or a segment that is missing or unreadable - so the
+    /// rebuild's next activation sees no snapshot and replays the WAL that survives,
+    /// accepting the loss of whatever only that snapshot held (issue #4450). A
+    /// readable or absent snapshot is left alone, exactly as before.
+    /// </summary>
+    /// <remarks>
+    /// A load that THROWS fails the rebuild instead of clearing. A storage fault
+    /// cannot be told apart from a transient one, and clearing a snapshot that was
+    /// merely unreachable would destroy the only durable copy of a prefix the
+    /// operator did not need to lose. The retry succeeds once the store answers.
+    /// </remarks>
+    private async Task DiscardUnreadableSnapshotForRebuildAsync()
+    {
+        var treeId = state.State.TreeId;
+        if (treeId is null || !context.GrainId.TryGetGuidKey(out var leafKey, out _))
+            return;
+
+        var snapshotGrain = grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey);
+        string? unreadable;
+        try
+        {
+            var blob = await snapshotGrain.LoadAsync(CancellationToken.None);
+            if (blob is null)
+                return;
+
+            unreadable = await DescribeUnreadableSnapshotAsync(snapshotGrain, blob);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Cannot rebuild the projection of a leaf of tree '{treeId}': its snapshot could not be read, so "
+                + "the rebuild cannot tell an unreachable snapshot from an unreadable one and will not discard it. "
+                + "Retry once the snapshot store is reachable.",
+                ex);
+        }
+
+        if (unreadable is null)
+            return;
+
+        ResolveLogger()?.LogWarning(
+            "Leaf {GrainId} of tree {TreeId}: projection rebuild is DISCARDING its unreadable snapshot ({Reason}), "
+            + "accepting the loss of any acknowledged write that only that snapshot held - under coverage-gated WAL "
+            + "trimming the WAL may no longer hold the prefix it covered. The leaf will rebuild from the WAL that "
+            + "survives. Restore the tree from a backup if that loss is not acceptable.",
+            context.GrainId,
+            treeId,
+            unreadable);
+
+        await snapshotGrain.ClearAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Returns why <paramref name="blob"/> cannot be rehydrated, or
+    /// <see langword="null"/> when every row it claims can be read. Mirrors the
+    /// rehydrate's own fail-closed checks; a segment read that throws propagates.
+    /// </summary>
+    private static async Task<string?> DescribeUnreadableSnapshotAsync(
+        ILeafSnapshotStorageGrain snapshotGrain,
+        LeafSnapshotBlob blob)
+    {
+        if (!blob.ValidateRowPayload())
+            return "unreadable row payload";
+
+        for (var segmentIndex = 0; segmentIndex < blob.SegmentCount; segmentIndex++)
+        {
+            var frame = await snapshotGrain.LoadSegmentFrameAsync(segmentIndex, CancellationToken.None);
+            if (frame is not { Length: > 0 })
+                return $"segment {segmentIndex} missing";
+
+            if (!new LeafSnapshotBlob { EncodedRows = frame }.ValidateRowPayload())
+                return $"segment {segmentIndex} unreadable";
+        }
+
+        return null;
     }
 }

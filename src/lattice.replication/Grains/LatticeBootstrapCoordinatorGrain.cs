@@ -61,7 +61,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// <c>WriteStateAsync</c> calls
     /// during the <see cref="LatticeBootstrapState.ApplyingSnapshot"/>
     /// phase. A silo crash may cost up to this many re-applied entries
-    /// on resume; snapshot-pinned floors, recent exact-identity dedupe, and
+    /// on resume; recent exact-identity dedupe and
     /// per-key LWW idempotency make the replay safe so the cost is bandwidth, not correctness.
     /// </summary>
     private const int CursorPersistEntryInterval = 100;
@@ -512,8 +512,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // export reports. On crash recovery this overwrites the prior
         // export's metadata - safe because the receiver will have
         // applied every entry up through the new export's AsOfHlc by
-        // the time it reaches IncrementalHandoff, and the per-origin
-        // Snapshot-pinned floors, recent exact-identity dedupe, and per-key LWW merge make any overlap safe.
+        // the time it reaches IncrementalHandoff, and recent
+        // exact-identity dedupe and per-key LWW merge make any overlap safe.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
         var pivotedToApplying = false;
@@ -691,10 +691,10 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// <summary>
     /// Pins the snapshot's as-of HLC and causal-stable frontier on
     /// the per-tree <see cref="IReplicationHighWaterMarkGrain"/> and
-    /// completes the bootstrap. The pin is the snapshot/incremental handoff seam:
-    /// the snapshot-pinned floor makes point writes at or below the pinned frontier
-    /// no-ops, while recent exact-identity dedupe and per-key LWW idempotency absorb
-    /// any remaining overlap.
+    /// completes the bootstrap. The pin is the snapshot/incremental handoff seam.
+    /// It installs the dependency vector but no drop floor (#4463): incremental
+    /// writes the snapshot already holds are absorbed by recent exact-identity
+    /// dedupe and per-key LWW idempotency, and writes it does not hold apply.
     /// </summary>
     private async Task PinAndCompleteAsync()
     {
@@ -718,10 +718,11 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // baselines). The snapshot's AsOfHlc cannot be used as the seal:
         // the export echoes back the upper bound it was opened with, and the
         // drain always opens it unbounded, so it is zero.
-        // Pinning the snapshot floor for source at the cut restores the
+        // Pinning the vector for source at the cut restores the
         // invariant that HWM[source] covers every locally-retained
-        // source-origin entry and makes incremental entries at or below the
-        // cut proper dedupe no-ops.
+        // source-origin entry. The seal is NOT a drop threshold (#4463):
+        // writes the source makes after the export on a leaf whose clock is
+        // at or below the cut are not in the snapshot and must still apply.
         var frontier = state.State.CausalStableFrontier;
         var cut = HybridLogicalClock.Zero;
         foreach (var clock in frontier.Entries.Values)
@@ -793,9 +794,9 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             frontier.Entries[sourceClusterId] = cut;
         }
 
-        // Idempotent: PinSnapshotAsync replaces both the per-origin
-        // high-water-mark vector and the pinned floor with the supplied frontier
-        // (it does not consult asOfHlc), so a crash between this call and the
+        // Idempotent: PinSnapshotAsync replaces the per-origin
+        // high-water-mark vector with the supplied frontier and installs no
+        // drop floor (it does not consult asOfHlc), so a crash between this call and the
         // WriteStateAsync below replays safely on reactivation - a second pin
         // with an identical frontier is a no-op.
         await hwm

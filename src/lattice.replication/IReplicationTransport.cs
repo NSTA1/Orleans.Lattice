@@ -26,8 +26,7 @@ namespace Orleans.Lattice.Replication;
 ///   </item>
 ///   <item>
 ///     <description>
-///       Be idempotent at the batch boundary. Receivers suppress entries
-///       at or below a snapshot-pinned floor and recent exact
+///       Be idempotent at the batch boundary. Receivers suppress recent exact
 ///       <c>(originClusterId, timestamp, key, op)</c> re-deliveries; older
 ///       repeats fall through to idempotent tree merges. A transport that
 ///       retries a batch on transient failure must not cause double-apply.
