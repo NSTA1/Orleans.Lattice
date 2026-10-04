@@ -4672,12 +4672,49 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    private string?[]? _preparedRouteKeys;
+    private string? _preparedRouteKeysTreeId;
+
+    /// <summary>
+    /// Names the shard a saga prepare-phase write is dispatched to (issue
+    /// #4522), so a leaf of that shard knows the stamp it mints is the
+    /// prepare's original stamp. A forward to another shard inherits this
+    /// route and so never matches there. Does nothing outside a prepare. The
+    /// <c>{physicalTreeId}/{shardIndex}</c> strings are cached per index, so a
+    /// steady-state prepare pays only the request-context write.
+    /// </summary>
+    private void StampPreparedRouteIfPrepared(string physicalTreeId, int shardIndex)
+    {
+        if (!LatticePreparedContext.Current)
+            return;
+
+        if (!string.Equals(_preparedRouteKeysTreeId, physicalTreeId, StringComparison.Ordinal))
+        {
+            _preparedRouteKeys = null;
+            _preparedRouteKeysTreeId = physicalTreeId;
+        }
+
+        var keys = _preparedRouteKeys;
+        if (keys is null || (uint)shardIndex >= (uint)keys.Length)
+        {
+            var grown = new string?[Math.Max(shardIndex + 1, keys?.Length ?? 0)];
+            if (keys is not null)
+                Array.Copy(keys, grown, keys.Length);
+            keys = grown;
+            _preparedRouteKeys = keys;
+        }
+
+        var routeKey = keys[shardIndex] ??= $"{physicalTreeId}/{shardIndex}";
+        LatticeOriginalPrepareStampContext.StampPreparedRoute(routeKey);
+    }
+
     private IShardRootGrain GetShardGrain(string key, RoutingInfo routing)
     {
         // Call synchronously AFTER the caller awaits routing: RequestContext
         // changes inside an async resolver would not flow back to its caller.
         StampRoutedIdentity(routing.PhysicalTreeId);
         var shardIndex = routing.Map.Resolve(key);
+        StampPreparedRouteIfPrepared(routing.PhysicalTreeId, shardIndex);
         var cache = _cachedShards;
         if (cache is not null
             && ReferenceEquals(_cachedShardsTreeId, routing.PhysicalTreeId)
@@ -4770,6 +4807,7 @@ internal sealed partial class LatticeGrain(
         // fan-out shard resolution too, so scans and multi-shard writes carry
         // the same self-heal signal to a retained shard.
         StampRoutedIdentity(physicalTreeId);
+        StampPreparedRouteIfPrepared(physicalTreeId, shardIndex);
 
         var cache = _cachedShards;
         if (cache is not null

@@ -1235,8 +1235,13 @@ internal sealed partial class BPlusLeafGrain(
         // strictly above stamp, causing the filter to silently drop this
         // entry on its next refresh. Passing stamp directly avoids that.
         // See PublishVersionAdvance's XML doc for the full invariant.
-        var stamp = AdvanceClockOrOverride();
         var isPrepared = LatticePreparedContext.Current;
+        HybridLogicalClock stamp;
+        var stampOriginal = false;
+        if (isPrepared)
+            (stamp, stampOriginal) = MintPreparedStamp(key);
+        else
+            stamp = AdvanceClockOrOverride();
         if (!isPrepared)
             PublishVersionAdvance(stamp);
         BumpLocalRevision();
@@ -1280,7 +1285,7 @@ internal sealed partial class BPlusLeafGrain(
                 state.State.ShardIndex ?? 0,
                 key,
                 newEntry,
-                isPrepared);
+                isPrepared) with { PrepareStampOriginal = stampOriginal };
             await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
@@ -1313,7 +1318,8 @@ internal sealed partial class BPlusLeafGrain(
                 newEntry,
                 delta: preparedDelta,
                 mode: preparedMode,
-                batch: LatticeAtomicBatchContext.Current ?? default);
+                batch: LatticeAtomicBatchContext.Current ?? default,
+                stampOriginal: stampOriginal);
         }
         else
         {
@@ -1741,11 +1747,30 @@ internal sealed partial class BPlusLeafGrain(
         // byte-identical.
         var atomicBatchDeleteSet = LatticeAtomicBatchContext.CurrentDeleteSet;
 
+        // Issue #4522: classify each prepared entry's stamp. The route check is
+        // per call; a carried original stamp is per key (only a forward carries
+        // them, so the common path never looks one up).
+        var routeOriginal = isPrepared
+            && LatticeHlcOverrideContext.Current is null
+            && IsPreparedRouteToThisShard();
+        var hasCarriedStamps = isPrepared && LatticeOriginalPrepareStampContext.HasStamps;
+
         for (var i = 0; i < count; i++)
         {
             var key = entries[i].Key;
             var value = entries[i].Value;
-            var stamp = AdvanceClockOrOverride();
+            HybridLogicalClock stamp;
+            var stampOriginal = routeOriginal;
+            if (hasCarriedStamps && LatticeOriginalPrepareStampContext.TryGetStamp(key, out var carried))
+            {
+                state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, carried);
+                stamp = carried;
+                stampOriginal = true;
+            }
+            else
+            {
+                stamp = AdvanceClockOrOverride();
+            }
             stamps[i] = stamp;
             var isDelete = atomicBatchDeleteSet is not null && atomicBatchDeleteSet.Contains(key);
             var lww = isDelete
@@ -1800,6 +1825,7 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchIndex = atomicBatchIndexForEntry,
                 IsPrepared = isPrepared,
                 ShardIndex = shardIndex,
+                PrepareStampOriginal = isPrepared && stampOriginal,
             };
         }
 
@@ -1890,7 +1916,8 @@ internal sealed partial class BPlusLeafGrain(
                     count,
                     delta: perEntryDelta,
                     mode: perEntryDelta is not null ? preparedMode : LatticeMergeMode.LwwRegister,
-                    batch: membership);
+                    batch: membership,
+                    stampOriginal: walEntries[i].PrepareStampOriginal);
             }
         }
         else
@@ -2097,7 +2124,12 @@ internal sealed partial class BPlusLeafGrain(
         // own Timestamp; the cache filter `lww.Timestamp > callerClock`
         // then delivers the tombstone on its next refresh. See
         // CommitSetAsync for the full invariant.
-        var stamp = AdvanceClockOrOverride();
+        HybridLogicalClock stamp;
+        var stampOriginal = false;
+        if (isPrepared)
+            (stamp, stampOriginal) = MintPreparedStamp(key);
+        else
+            stamp = AdvanceClockOrOverride();
         // Prepared deletes route to the pending-tx map and skip the
         // Version publication for the same reason as CommitSetAsync (see
         // the build-step comment there for the cache-callerClock argument).
@@ -2140,6 +2172,7 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchSize = batch?.Size ?? 0,
                 AtomicBatchIndex = batch?.Index ?? 0,
                 IsPrepared = isPrepared,
+                PrepareStampOriginal = stampOriginal,
             };
             await writer.AppendAsync(entry);
         }
@@ -2152,7 +2185,7 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? relocatedSplit = null;
         if (isPrepared)
         {
-            AddPreparedMutation(transactionId, key, tombstone, batch: batch ?? default);
+            AddPreparedMutation(transactionId, key, tombstone, batch: batch ?? default, stampOriginal: stampOriginal);
         }
         else
         {
@@ -2930,6 +2963,17 @@ internal sealed partial class BPlusLeafGrain(
                     ? inheritedSlots!.AsSpan().ToArray()
                     : inheritedSlots;
                 state.State.MovedAwayVirtualShardCount = inheritedVsc;
+                changed = true;
+            }
+
+            // The donor's clock (issue #4522): every stamp this sibling mints
+            // must be above every stamp the donor minted, so a write it accepts
+            // after a saga prepared one of its keys on the donor is stamped above
+            // that prepare. A merge only advances the clock, so it needs no
+            // revert if the persist below fails.
+            if (init.DonorClock.CompareTo(state.State.Clock) > 0)
+            {
+                state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, init.DonorClock);
                 changed = true;
             }
 
