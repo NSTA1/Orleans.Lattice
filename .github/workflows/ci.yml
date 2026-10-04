@@ -251,6 +251,7 @@ jobs:
       tier_scope: ${{ steps.tierscope.outputs.scope }}
       skipped_tiers: ${{ steps.tierscope.outputs.skipped_tiers }}
       tier_reason: ${{ steps.tierscope.outputs.reason }}
+      skip_tlc_reason: ${{ steps.tierscope.outputs.skip_tlc_reason }}
 
     steps:
       - uses: actions/checkout@v5
@@ -1488,6 +1489,7 @@ jobs:
           python3 .github/workflows/tier-scope.py \
             --event "$EVENT" \
             --base-ref "$BASE_REF" \
+            --changed-files /tmp/changed-files.txt \
             --github-output "$GITHUB_OUTPUT" \
             --summary-file "$GITHUB_STEP_SUMMARY"
 
@@ -1497,6 +1499,7 @@ jobs:
         env:
           SKIPPED_TIERS: ${{ steps.tierscope.outputs.skipped_tiers }}
           TIER_REASON: ${{ steps.tierscope.outputs.reason }}
+          SKIP_TLC_REASON: ${{ steps.tierscope.outputs.skip_tlc_reason }}
           MAX_LEGS: ${{ steps.tierscope.outputs.max_legs }}
         run: |
           set -euo pipefail
@@ -1517,6 +1520,7 @@ jobs:
             --max-legs "$MAX_LEGS" \
             --skip-tiers "$SKIPPED_TIERS" \
             --skip-reason "$TIER_REASON" \
+            --skip-tlc-reason "$SKIP_TLC_REASON" \
             --output-matrix /tmp/matrix.json \
             --report-file "$GITHUB_STEP_SUMMARY"
 
@@ -2491,6 +2495,7 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
           SKIPPED_TIERS: ${{ needs.plan.outputs.skipped_tiers }}
           TIER_REASON: ${{ needs.plan.outputs.tier_reason }}
+          SKIP_TLC_REASON: ${{ needs.plan.outputs.skip_tlc_reason }}
           PLAN: ${{ needs.plan.result }}
           EXTRAS: ${{ needs.extras.result }}
           TEST: ${{ needs.test.result }}
@@ -2535,6 +2540,10 @@ jobs:
           esac
           if [ -n "$SKIPPED_TIERS" ] && [ "$tiers_may_skip" != "true" ]; then
             echo "::error::Tiers '${SKIPPED_TIERS}' were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member pull request into an integration branch may skip tiers; this run must be fully gated."
+            ok=false
+          fi
+          if [ -n "$SKIP_TLC_REASON" ] && [ "$tiers_may_skip" != "true" ]; then
+            echo "::error::The TLC shards were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member pull request into an integration branch may skip them; this run must be fully gated."
             ok=false
           fi
 
@@ -2592,6 +2601,14 @@ jobs:
               echo "This green covers the tiers that ran and every guard and content"
               echo "gate. It asserts nothing about the tiers above, which run on the"
               echo "integration branch's push lane and on its pull request into main."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -n "$SKIP_TLC_REASON" ]; then
+            echo "::notice title=TLC shards skipped::${SKIP_TLC_REASON}."
+            {
+              echo "### TLC shards NOT run"
+              echo ""
+              echo "Reason: ${SKIP_TLC_REASON}."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
