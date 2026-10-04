@@ -66,6 +66,12 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Changed
 
+- **Performance - Tag index orphan checks batch and de-duplicate.** Reconcile probed every orphan candidate row, so a key carrying T tags paid T identical existence checks. Candidates now fold to distinct keys confirmed 32 at a time: 30-84% faster, 72-96% fewer bytes. ([#4495](https://github.com/NSTA1/Orleans.Lattice/pull/4495)) (`Orleans.Lattice`)
+
+- **Performance - Tag index orphan deletions overlap.** Each confirmed orphan issued two sequential row removals. They are now a bounded wave capped at the removal path's existing limit of 32: 23-30% faster, for 1-2% more bytes. ([#4495](https://github.com/NSTA1/Orleans.Lattice/pull/4495)) (`Orleans.Lattice`)
+
+- **Performance - Flag-mode tag add overlaps its writes.** The flag branch of `AddTagsForKeyAsync` ran 2N sequential awaits. Tag validation is hoisted into its own pass and the writes issued as a wave capped at 32: 27-52% faster, for 2-7% more bytes. ([#4495](https://github.com/NSTA1/Orleans.Lattice/pull/4495)) (`Orleans.Lattice`)
+
 - **Performance - OrMap answers liveness without counting.** `IsEmpty`, `Count`, `ContainsKey` and `Keys` all consumed `LiveEntryCount` only as `> 0`. A new any-query exits on the first live entry and probes before indexing: 96-98% faster, and 2104 bytes removed per wide-tombstone read. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
 
 - **Performance - OrMap dedup gating reads the incoming side only.** Both merge folds gated on the combined count, so a churned key built a hash index over its whole accumulated history to absorb a two-dot delta. Gating on the incoming side alone: 82% faster, 2104 fewer bytes. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
