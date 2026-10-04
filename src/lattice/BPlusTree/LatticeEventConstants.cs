@@ -261,6 +261,19 @@ public static class LatticeEventConstants
     internal const string PreparedRequestContextKey = "ol.prep";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key used to flag a saga prepare-phase
+    /// write as <em>forwarded</em>: a shard-to-shard shadow-forward or a
+    /// split's retroactive sweep replay, rather than the saga coordinator's own
+    /// prepare. Its value is the logical tree id whose registry records the
+    /// saga's decision. A forwarded prepare can reach the destination leaf after
+    /// its saga decided, so the leaf checks that decision before bucketing it
+    /// (issue #4445). Internal - set through
+    /// <see cref="LatticeForwardedPrepareContext"/>, and stripped from external
+    /// clients.
+    /// </summary>
+    internal const string ForwardedPrepareRequestContextKey = "ol.prep.fwd";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to communicate the WAL
     /// offset of the mutation currently being driven through
     /// <c>ILeafProjection.Apply</c>. The replay coordinator stamps the
