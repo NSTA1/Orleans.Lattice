@@ -237,7 +237,7 @@ Collapses redundant per-key versions before shipping. Keep enabled for normal de
 
 ### `ContentHashDedupElisionEnabled`
 
-Enables actual payload elision for repeated content. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
+Enables actual payload elision for repeated content. The receiver elides only a write it already merged exactly - the same content hash, origin, and source HLC - while its leaf still holds the key at that version or newer; the same bytes at another version always ship. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
 
 ### `WalRetention`
 

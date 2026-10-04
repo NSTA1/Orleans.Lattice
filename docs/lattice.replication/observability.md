@@ -146,7 +146,7 @@ The measurement is **observability-only**: it never elides, reorders, or alters 
 
 ## Content-manifest payload elision
 
-These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. An identical-content entry carrying a newer HLC advances the receiver's per-origin high-water-mark through a metadata-only update during the exchange.
+These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. The receiver counts an entry as held only when it already merged exactly that write - the same content hash, origin, and source HLC - and its leaf still holds the key at that version or a newer one ([#4585](https://github.com/NSTA1/Orleans.Lattice/issues/4585)); equal bytes at another version or from another origin always ship, because last-writer-wins orders writes by version, not content. An elided write above the receiver's per-origin high-water-mark (one it merged without moving the mark, such as a bootstrap row) advances the mark through a metadata-only update during the exchange.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|

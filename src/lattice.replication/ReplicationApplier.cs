@@ -682,8 +682,8 @@ internal sealed partial class ReplicationApplier(
     /// <summary>
     /// Records a successfully-applied point mutation into the
     /// receiver-side applied-content index so a subsequent inbound
-    /// content-manifest exchange can answer "do I already hold
-    /// byte-identical content for this key?". No-op when no index is
+    /// content-manifest exchange can answer "did I already merge exactly this
+    /// write?" (its source origin and HLC as well as its bytes, #4585). No-op when no index is
     /// registered or the tree's content-hash dedup master switch is off,
     /// so the index is maintained off-path-free under the default
     /// behaviour. Only last-writer-wins point Set / Delete entries that
@@ -708,10 +708,15 @@ internal sealed partial class ReplicationApplier(
 
         if (entry.Op == MutationKind.Set)
         {
+            // The write's own source identity is recorded with the hash (#4585):
+            // the exchange elides only this exact write, and only while the leaf
+            // still holds it or a newer one.
             _appliedContentIndex.RecordSet(
                 entry.TreeId!,
                 entry.Key ?? string.Empty,
                 ReplicationContentHash.Compute(in entry),
+                entry.OriginClusterId,
+                entry.Timestamp,
                 resolved.ContentHashDedupCacheSize);
         }
         else if (entry.Op == MutationKind.Delete)

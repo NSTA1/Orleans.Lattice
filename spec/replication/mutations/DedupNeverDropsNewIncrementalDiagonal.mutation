@@ -10,6 +10,7 @@ TARGET: DedupNeverDropsNew
 CLASS: Action
 SUMMARY: deduplicates on the incremental per-origin HWM, so a new write with a lower HLC to another key is dropped (#1060)
 PERTURBS: Deliver
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
              /\ w.h <= pinned[x][w.o]
