@@ -32,4 +32,26 @@ namespace Orleans.Lattice.Replication;
 [Immutable]
 public readonly record struct BootstrapCoordinatorStatus(
     [property: Id(0)] LatticeBootstrapState Phase,
-    [property: Id(1)] string? SourceClusterId);
+    [property: Id(1)] string? SourceClusterId)
+{
+    /// <summary>
+    /// Whether the tree's reads are refused because a snapshot drain is applying
+    /// an import, or a failed drain left a partial import behind (issue #4526).
+    /// While <see langword="true"/>, reads of the tree throw
+    /// <see cref="LatticeTreeBootstrappingException"/>.
+    /// </summary>
+    [Id(2)] public bool ReadFenced { get; init; }
+
+    /// <summary>
+    /// Snapshot entries the current drain attempt has applied so far. Progress
+    /// reporting for an operator watching a drain; reset when an attempt starts.
+    /// </summary>
+    [Id(3)] public long EntriesApplied { get; init; }
+
+    /// <summary>
+    /// Automatic re-drives of a bootstrap that failed after applying part of an
+    /// import. Non-zero means the tree has been held read-fenced across at least
+    /// one failed attempt.
+    /// </summary>
+    [Id(4)] public int RedriveAttempts { get; init; }
+}

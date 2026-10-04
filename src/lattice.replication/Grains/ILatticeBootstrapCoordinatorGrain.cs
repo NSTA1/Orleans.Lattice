@@ -26,6 +26,7 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// <see cref="BootstrapAsync"/> call.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<LatticeBootstrapState> GetStateAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -38,9 +39,13 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// <see langword="false"/> or the persisted source string is
     /// empty). Surfaces the in-progress source identity to the
     /// receiver-side fall-off detector so it can absorb duplicate
-    /// probes the coordinator would otherwise quietly no-op.
+    /// probes the coordinator would otherwise quietly no-op. Also carries the
+    /// read-fence and drain-progress fields an operator watches during a drain
+    /// (issue #4526), so it interleaves with a running drain rather than
+    /// waiting behind it.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
     Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -67,4 +72,16 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// error rather than a hung second call.
     /// </exception>
     Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Operator override (issue #4526): lifts the read fence a failed bootstrap
+    /// left up over a partial import and stops its automatic re-drive, so reads
+    /// may observe the partial import until a later bootstrap completes. Refused
+    /// with <see cref="InvalidOperationException"/> while a drain is running.
+    /// Fails closed: a shard that cannot be lifted leaves the fence recorded as
+    /// armed and the call throws.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a fence was lifted; <see langword="false"/> when none was armed.</returns>
+    Task<bool> ForceLiftReadFenceAsync(CancellationToken cancellationToken = default);
 }

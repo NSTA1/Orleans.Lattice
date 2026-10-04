@@ -52,7 +52,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     ILatticeWalIntrospection walIntrospection,
     ILogger<LatticeBootstrapCoordinatorGrain> logger,
     [PersistentState("bootstrap-coordinator", LatticeOptions.StorageProviderName)]
-    IPersistentState<BootstrapCoordinatorState> state)
+    IPersistentState<BootstrapCoordinatorState> state,
+    IBootstrapReadFence? readFence = null)
     : CoordinatorGrain<LatticeBootstrapCoordinatorGrain>(context, reminderRegistry, logger),
       ILatticeBootstrapCoordinatorGrain
 {
@@ -78,6 +79,22 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         optionsMonitor ?? throw new ArgumentNullException(nameof(optionsMonitor));
     private readonly ILatticeWalIntrospection _walIntrospection =
         walIntrospection ?? throw new ArgumentNullException(nameof(walIntrospection));
+
+    // Resolved from the activation's services when the constructor did not
+    // supply one. Never defaulted to a no-op: a drain with no fence to arm is
+    // refused (fails closed) rather than run unfenced (issue #4526).
+    private IBootstrapReadFence ReadFence =>
+        _readFence ??= context.ActivationServices?.GetService(typeof(IBootstrapReadFence)) as IBootstrapReadFence
+            ?? throw new InvalidOperationException(
+                $"No {nameof(IBootstrapReadFence)} is registered; a snapshot bootstrap cannot drain into tree '{TreeName}' without a read fence. Register replication with AddLatticeReplication.");
+
+    private IBootstrapReadFence? _readFence = readFence;
+
+    /// <summary>The first automatic re-drive delay of a failed, read-fenced bootstrap.</summary>
+    internal static readonly TimeSpan RedriveInitialDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>The cap on the automatic re-drive delay of a failed, read-fenced bootstrap.</summary>
+    internal static readonly TimeSpan RedriveMaxDelay = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Per-activation stopwatch timestamp captured when the coordinator
@@ -123,7 +140,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var source = state.State.InProgress && !string.IsNullOrEmpty(state.State.SourceClusterId)
             ? state.State.SourceClusterId
             : null;
-        return Task.FromResult(new BootstrapCoordinatorStatus(state.State.Phase, source));
+        return Task.FromResult(new BootstrapCoordinatorStatus(state.State.Phase, source)
+        {
+            ReadFenced = state.State.ReadFenceArmed,
+            EntriesApplied = state.State.EntriesApplied,
+            RedriveAttempts = state.State.RedriveAttempts,
+        });
     }
 
     /// <inheritdoc />
@@ -162,15 +184,24 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         if (state.State.InProgress)
         {
             // Idempotent: same source cluster - caller is retrying the
-            // kickoff, the in-flight work continues unchanged.
+            // kickoff, the in-flight work continues unchanged. That includes
+            // a failed bootstrap whose partial import keeps the tree
+            // read-fenced: its automatic re-drive is already scheduled.
             if (string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal))
             {
                 return false;
             }
 
-            throw new InvalidOperationException(
-                $"A bootstrap is already in progress for tree '{treeName}' from source cluster " +
-                $"'{state.State.SourceClusterId}'; cannot start a new bootstrap from '{sourceClusterId}'.");
+            // A failed bootstrap held only for its automatic re-drive (issue
+            // #4526) may be taken over by a different source: the new
+            // bootstrap re-drains the whole tree, which is what lifts the
+            // fence. Anything still running refuses.
+            if (state.State.Phase != LatticeBootstrapState.Failed)
+            {
+                throw new InvalidOperationException(
+                    $"A bootstrap is already in progress for tree '{treeName}' from source cluster " +
+                    $"'{state.State.SourceClusterId}'; cannot start a new bootstrap from '{sourceClusterId}'.");
+            }
         }
 
         // Persist intent BEFORE any external side effects. The phase
@@ -189,6 +220,9 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var prevLastAppliedHlc = state.State.LastAppliedHlc;
         var prevSnapshotAsOfHlc = state.State.SnapshotAsOfHlc;
         var prevCausalStableFrontier = state.State.CausalStableFrontier;
+        var prevEntriesApplied = state.State.EntriesApplied;
+        var prevRedriveAttempts = state.State.RedriveAttempts;
+        var prevNextRedriveAt = state.State.NextRedriveAtUtcTicks;
 
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
@@ -197,6 +231,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.LastAppliedHlc = HybridLogicalClock.Zero;
         state.State.SnapshotAsOfHlc = HybridLogicalClock.Zero;
         state.State.CausalStableFrontier = new VersionVector();
+        // The read-fence slots (ReadFenceArmed, FencedPhysicalTreeId,
+        // FencedShardIndices, ImportApplied) are deliberately carried over: a
+        // partial import left by an earlier failed bootstrap stays fenced until
+        // this one completes (issue #4526).
+        state.State.EntriesApplied = 0;
+        state.State.RedriveAttempts = 0;
+        state.State.NextRedriveAtUtcTicks = 0;
         try
         {
             await state.WriteStateAsync().ConfigureAwait(true);
@@ -210,6 +251,9 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.LastAppliedHlc = prevLastAppliedHlc;
             state.State.SnapshotAsOfHlc = prevSnapshotAsOfHlc;
             state.State.CausalStableFrontier = prevCausalStableFrontier;
+            state.State.EntriesApplied = prevEntriesApplied;
+            state.State.RedriveAttempts = prevRedriveAttempts;
+            state.State.NextRedriveAtUtcTicks = prevNextRedriveAt;
             throw;
         }
 
@@ -230,6 +274,14 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     protected internal override async Task ProcessNextPhaseAsync()
     {
         if (!state.State.InProgress) return;
+
+        // A failed bootstrap that left a partial import behind keeps the tree
+        // read-fenced and stays in progress only to be re-driven (issue #4526).
+        if (state.State.Phase == LatticeBootstrapState.Failed && state.State.ReadFenceArmed)
+        {
+            await RedriveIfDueAsync().ConfigureAwait(true);
+            return;
+        }
 
         try
         {
@@ -279,9 +331,28 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // recycles.
             var prevPhase = state.State.Phase;
             var prevInProgress = state.State.InProgress;
+            var prevNextRedriveAt = state.State.NextRedriveAtUtcTicks;
+
+            // Issue #4526. A drain that applied part of an import leaves the
+            // tree read-fenced: lifting the fence would expose the partial
+            // import, so the bootstrap stays in progress, keeps the fence, and
+            // is re-driven automatically with backoff until a drain completes.
+            // A fence armed before any entry was applied hides nothing and is
+            // lifted; if that lift fails the fence is kept and re-driven too,
+            // so no fence is ever left up without a coordinator to lift it.
+            var keepFence = state.State.ReadFenceArmed && state.State.ImportApplied;
+            if (state.State.ReadFenceArmed && !keepFence)
+            {
+                keepFence = !await TryLiftReadFenceAsync().ConfigureAwait(true);
+            }
 
             state.State.Phase = LatticeBootstrapState.Failed;
-            state.State.InProgress = false;
+            state.State.InProgress = keepFence;
+            if (keepFence)
+            {
+                state.State.NextRedriveAtUtcTicks =
+                    DateTime.UtcNow.Ticks + ComputeBackoff(state.State.RedriveAttempts + 1, RedriveInitialDelay, RedriveMaxDelay).Ticks;
+            }
             bool persisted;
             try
             {
@@ -295,6 +366,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                     LogContext);
                 state.State.Phase = prevPhase;
                 state.State.InProgress = prevInProgress;
+                state.State.NextRedriveAtUtcTicks = prevNextRedriveAt;
                 persisted = false;
             }
 
@@ -304,7 +376,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             // persisted state (Phase=ApplyingSnapshot, InProgress=true)
             // with no driver attached - a "looks in-progress but nothing
             // is running" zombie. Leaving the coordinator armed lets the
-            // next tick retry the persist.
+            // next tick retry the persist. A failure that keeps the read
+            // fence also keeps the coordinator armed, to re-drive it.
             if (persisted)
             {
                 // Terminal duration recording: outcome=failed. Emit
@@ -317,10 +390,194 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                     "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {PreviousPhase} -> Failed (LastAppliedHlc={LastAppliedHlc})",
                     TreeName, state.State.SourceClusterId, prevPhase, state.State.LastAppliedHlc);
 
-                await CompleteCoordinatorAsync().ConfigureAwait(true);
+                if (keepFence)
+                {
+                    Logger.LogWarning(
+                        "Bootstrap of tree '{TreeName}' from source '{SourceClusterId}' failed after applying part of the snapshot; the tree stays read-fenced (reads throw LatticeTreeBootstrappingException) and the bootstrap is re-driven automatically at {NextRedriveAtUtc:o}",
+                        TreeName, state.State.SourceClusterId, new DateTime(state.State.NextRedriveAtUtcTicks, DateTimeKind.Utc));
+                }
+                else
+                {
+                    await CompleteCoordinatorAsync().ConfigureAwait(true);
+                }
             }
             throw;
         }
+    }
+
+    /// <summary>
+    /// Re-drives a failed bootstrap that left a partial import read-fenced
+    /// (issue #4526) once its backoff has elapsed: the next tick re-exports and
+    /// re-drains the whole snapshot, and the fence lifts when that completes.
+    /// </summary>
+    private async Task RedriveIfDueAsync()
+    {
+        if (DateTime.UtcNow.Ticks < state.State.NextRedriveAtUtcTicks)
+        {
+            return;
+        }
+
+        var prevAttempts = state.State.RedriveAttempts;
+        state.State.RedriveAttempts = prevAttempts + 1;
+        state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.RedriveAttempts = prevAttempts;
+            state.State.Phase = LatticeBootstrapState.Failed;
+            throw;
+        }
+
+        _drainStartTimestamp ??= Stopwatch.GetTimestamp();
+        Logger.LogWarning(
+            "Re-driving bootstrap of read-fenced tree '{TreeName}' from source '{SourceClusterId}' (attempt {Attempt})",
+            TreeName, state.State.SourceClusterId, state.State.RedriveAttempts);
+    }
+
+    /// <summary>
+    /// Lifts the read fence on the shards it was armed on and clears the fence
+    /// slots, without persisting them. Returns whether every shard was lifted;
+    /// on a fault the slots are left recording the fence as armed.
+    /// </summary>
+    private async Task<bool> TryLiftReadFenceAsync()
+    {
+        try
+        {
+            await LiftReadFenceAsync().ConfigureAwait(true);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Could not lift the bootstrap read fence on tree '{TreeName}'; it stays armed and the bootstrap stays in progress to lift it",
+                TreeName);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Lifts the read fence on the recorded shards and clears the fence slots
+    /// in memory. The caller persists. A fault propagates with the slots intact.
+    /// </summary>
+    private async Task LiftReadFenceAsync()
+    {
+        if (state.State.FencedPhysicalTreeId is { } physical && state.State.FencedShardIndices is { } indices)
+        {
+            await ReadFence.SetAsync(new TreeBootstrapReadFence.Shards(physical, indices), fenced: false).ConfigureAwait(true);
+        }
+
+        state.State.ReadFenceArmed = false;
+        state.State.ImportApplied = false;
+        state.State.FencedPhysicalTreeId = null;
+        state.State.FencedShardIndices = null;
+    }
+
+    /// <summary>
+    /// Arms the read fence on every shard of the copy the tree routes to, then
+    /// checks nothing holds the drain (issue #4526). Returns
+    /// <see langword="false"/> when a split, consolidation, resize or undo is in
+    /// progress: the drain waits for a later tick, and a fence that hides no
+    /// partial import is lifted meanwhile. The fence slots are persisted before
+    /// any shard is armed, so a crash part-way through arming still lifts it.
+    /// </summary>
+    private async Task<bool> ArmReadFenceAsync()
+    {
+        var shards = await ReadFence.ResolveAsync(TreeName).ConfigureAwait(true);
+
+        // Fold in a set armed by an earlier attempt, so every shard ever armed
+        // is lifted. The interlock holds migrations and resizes while the fence
+        // is up, so the set only changes across a window in which it was down.
+        if (state.State.ReadFenceArmed
+            && state.State.FencedPhysicalTreeId is { } priorPhysical
+            && state.State.FencedShardIndices is { } priorIndices)
+        {
+            if (string.Equals(priorPhysical, shards.PhysicalTreeId, StringComparison.Ordinal))
+            {
+                shards = shards with
+                {
+                    ShardIndices = shards.ShardIndices.Union(priorIndices).Order().ToArray(),
+                };
+            }
+            else
+            {
+                await ReadFence.SetAsync(new TreeBootstrapReadFence.Shards(priorPhysical, priorIndices), fenced: false)
+                    .ConfigureAwait(true);
+            }
+        }
+
+        var prevArmed = state.State.ReadFenceArmed;
+        var prevPhysical = state.State.FencedPhysicalTreeId;
+        var prevIndices = state.State.FencedShardIndices;
+        state.State.ReadFenceArmed = true;
+        state.State.FencedPhysicalTreeId = shards.PhysicalTreeId;
+        state.State.FencedShardIndices = shards.ShardIndices;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.ReadFenceArmed = prevArmed;
+            state.State.FencedPhysicalTreeId = prevPhysical;
+            state.State.FencedShardIndices = prevIndices;
+            throw;
+        }
+
+        await ReadFence.SetAsync(shards, fenced: true).ConfigureAwait(true);
+
+        var blocker = await ReadFence.FindBlockerAsync(TreeName, shards).ConfigureAwait(true);
+        if (blocker is null)
+        {
+            return true;
+        }
+
+        if (!state.State.ImportApplied)
+        {
+            await LiftReadFenceAsync().ConfigureAwait(true);
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+
+        Logger.LogInformation(
+            "Bootstrap of tree '{TreeName}' from source '{SourceClusterId}' is waiting: {Blocker}. It retries on the next tick.",
+            TreeName, state.State.SourceClusterId, blocker);
+        return false;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ForceLiftReadFenceAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!state.State.ReadFenceArmed)
+        {
+            return false;
+        }
+
+        if (state.State.InProgress && state.State.Phase != LatticeBootstrapState.Failed)
+        {
+            throw new InvalidOperationException(
+                $"A snapshot bootstrap of tree '{TreeName}' is running ({state.State.Phase}); its read fence lifts when it completes and cannot be force-lifted while it runs.");
+        }
+
+        if (state.State.FencedPhysicalTreeId is null || state.State.FencedShardIndices is null)
+        {
+            var shards = await ReadFence.ResolveAsync(TreeName).ConfigureAwait(true);
+            state.State.FencedPhysicalTreeId = shards.PhysicalTreeId;
+            state.State.FencedShardIndices = shards.ShardIndices;
+        }
+
+        await LiftReadFenceAsync().ConfigureAwait(true);
+        var wasRedriving = state.State.InProgress;
+        state.State.InProgress = false;
+        await state.WriteStateAsync().ConfigureAwait(true);
+        if (wasRedriving)
+        {
+            await CompleteCoordinatorAsync().ConfigureAwait(true);
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -473,6 +730,15 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
 
+        // Issue #4526: no reader may observe the import part-way. Arm the read
+        // fence on every shard before anything is applied, and wait - without
+        // failing - while a migration or resize would move the tree off the
+        // shards it covers.
+        if (!await ArmReadFenceAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         // Resolve the per-tree merge mode once up-front. The resolver
         // is O(1) (a cached dictionary read in the default
         // ConfiguredLatticeMergeModeResolver implementation) and the
@@ -516,6 +782,10 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // exact-identity dedupe and per-key LWW merge make any overlap safe.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
+        // Recorded before the first entry is applied: from here on the tree may
+        // hold a partial import, so a failure keeps the read fence up (#4526).
+        state.State.ImportApplied = true;
+        state.State.EntriesApplied = 0;
         var pivotedToApplying = false;
         if (state.State.Phase != LatticeBootstrapState.ApplyingSnapshot)
         {
@@ -585,6 +855,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             }
 
             await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            state.State.EntriesApplied++;
 
             // Bootstrap progress instruments: increment once per
             // successfully-applied entry so operators can watch
@@ -616,6 +887,11 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             }
         }
 
+        // Every snapshot entry is applied: the import is whole, so lift the read
+        // fence before leaving the drain (issue #4526). Lifted before the phase
+        // is persisted: a crash in between resumes the drain, which re-arms the
+        // fence and re-applies the (idempotent) import.
+        await LiftReadFenceAsync().ConfigureAwait(true);
         state.State.Phase = LatticeBootstrapState.IncrementalHandoff;
         await state.WriteStateAsync().ConfigureAwait(true);
 

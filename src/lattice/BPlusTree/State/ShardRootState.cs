@@ -370,6 +370,16 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(23)] public bool IsPurged { get; set; }
+
+    /// <summary>
+    /// Whether this shard refuses reads because a receiver snapshot bootstrap is
+    /// draining into the tree (issue #4526). Set on every shard of the tree before
+    /// the drain applies its first entry and cleared only after it has applied the
+    /// last, so no reader observes a partial import; a failed drain leaves it set.
+    /// Writes are unaffected. Adding this slot is backward-compatible: state
+    /// persisted before the field existed deserializes to <c>false</c>.
+    /// </summary>
+    [Id(24)] public bool BootstrapReadFenced { get; set; }
 }
 
 /// <summary>
