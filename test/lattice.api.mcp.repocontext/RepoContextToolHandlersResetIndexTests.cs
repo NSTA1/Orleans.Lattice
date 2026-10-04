@@ -56,9 +56,9 @@ public sealed class RepoContextToolHandlersResetIndexTests
     /// </summary>
     private static async Task<RepoIndexProgress> PollUntilSettledAsync(RepoContextMcpHarness harness)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(30);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(30).TotalMilliseconds;
         var progress = await Job(harness).GetProgressAsync();
-        while (progress.Status is not (RepoIndexStatus.Completed or RepoIndexStatus.Failed) && DateTime.UtcNow < deadline)
+        while (progress.Status is not (RepoIndexStatus.Completed or RepoIndexStatus.Failed) && Environment.TickCount64 < deadline)
         {
             await Task.Delay(50);
             progress = await Job(harness).GetProgressAsync();
