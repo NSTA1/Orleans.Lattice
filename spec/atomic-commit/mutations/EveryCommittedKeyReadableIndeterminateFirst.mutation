@@ -1,0 +1,24 @@
+# Pairs with EveryCommittedKeyReadable, and restores the gate's arm order from
+# before issue #4428: the Indeterminate arm is tested ahead of the orphan
+# guard. A late reshard orphan bucket on a leaf that has already applied the
+# commit terminal is then hidden for as long as the registry reports
+# Indeterminate, and nothing guarantees either that the mask lifts or that the
+# orphan is discarded. Every such key was observed post-saga before its orphan
+# arrived, so the defect is visible only to the boxed form of the property:
+# the reader is served the committed value, then refused it for ever.
+MODULE: EveryCommittedKeyReadableIndeterminateFirst
+TARGET: EveryCommittedKeyReadable
+CLASS: Temporal
+SUMMARY: the gate tests its Indeterminate arm ahead of the orphan guard, so a late orphan hides a committed key for as long as the registry is masked
+
+--- FIND
+    THEN IF AlreadyTerminal(t, k) THEN Projected(t, k)
+         ELSE IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE Projected(t, k)
+--- REPLACE
+\* MUTATION: the Indeterminate arm is tested ahead of the orphan guard.
+    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE Projected(t, k)
+--- END

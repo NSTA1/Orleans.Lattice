@@ -118,9 +118,6 @@ internal sealed partial class ReplicationShipperGrain
         /// <summary>Highest consumed prepare sequence per partition, -1 for none.</summary>
         public long[] MaxSequence { get; private set; }
 
-        /// <summary>Set when a prepare of the saga was routed to the dead-letter queue instead of shipped.</summary>
-        public bool DeadLettered { get; set; }
-
         /// <summary>Set when a prepare carried an index outside its batch, so completeness cannot be judged.</summary>
         public bool Unreliable { get; private set; }
 
@@ -372,16 +369,11 @@ internal sealed partial class ReplicationShipperGrain
                 continue;
             }
 
-            if (_prepareTallies.TryGetValue(hold.Record.TransactionId, out var tally) && tally.DeadLettered)
+            if (IsPoisonedSagaRecord(hold.Record))
             {
-                // A prepare of this saga was parked on the dead-letter queue
-                // rather than shipped, so the peer stages no bucket for it and
-                // will serve the saga without that key until the entry is
-                // replayed from the queue.
-                Logger.LogWarning(
-                    "Releasing saga terminal {Op} for transaction {TransactionId} on {Context} although a prepare of the saga was dead-lettered; "
-                    + "the peer serves the saga without that prepare until it is replayed from the dead-letter queue.",
-                    hold.Record.Op, hold.Record.TransactionId, LogContext);
+                // A prepare of this saga was dead-lettered, so the terminal is
+                // parked rather than released (#4494); the next merge parks it.
+                continue;
             }
 
             hold.EmittedBatchId = _mergeBatchId;
@@ -401,20 +393,6 @@ internal sealed partial class ReplicationShipperGrain
         if (_terminalHolds.Count > 0)
         {
             _terminalHolds.RemoveAll(h => h.EmittedBatchId == batchId);
-        }
-    }
-
-    /// <summary>Marks the sagas of every prepared record in the drain buffer as dead-lettered.</summary>
-    private void MarkDeadLetteredPrepares()
-    {
-        foreach (var entry in _drainBuffer)
-        {
-            if (entry.IsPrepared
-                && entry.TransactionId != Guid.Empty
-                && _prepareTallies.TryGetValue(entry.TransactionId, out var tally))
-            {
-                tally.DeadLettered = true;
-            }
         }
     }
 
@@ -467,6 +445,13 @@ internal sealed partial class ReplicationShipperGrain
             }
 
             state.State.PartitionCursors[p] = target;
+            changed = true;
+        }
+
+        // Retire a poisoned saga in the same state write as the cursor move past
+        // its last parked terminal (#4494).
+        if (RetireSettledPoisonedSagas())
+        {
             changed = true;
         }
 

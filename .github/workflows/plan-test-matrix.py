@@ -81,6 +81,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 # Tier filters, matching the three test steps in ci.yml. The tuple order is the
@@ -276,31 +277,47 @@ def build_shard_filters(config: dict) -> list[dict]:
 
     result: list[dict] = []
     claimed: list[str] = []
+    claimed_categories: list[str] = []
     for entry in shards:
         name = entry["shard"]
         includes = [f"{root}.{prefix}" for prefix in entry.get("include", [])]
+        categories = list(entry.get("includeCategories", []))
+        for category in categories:
+            if not re.fullmatch(r"[A-Za-z0-9_]+", category):
+                raise SystemExit(f"shard {name!r} category {category!r} must be a plain identifier")
+            if category in claimed_categories:
+                raise SystemExit(f"shard {name!r} category {category!r} is already claimed by an earlier shard")
 
+        exclusions = [f"FullyQualifiedName!~{prefix}" for prefix in claimed] + [
+            f"TestCategory!={category}" for category in claimed_categories
+        ]
         if entry.get("complement"):
-            if includes:
+            if includes or categories:
                 raise SystemExit(f"shard {name!r} is the complement and must declare no includes")
-            if not claimed:
+            if not exclusions:
                 raise SystemExit(f"shard {name!r} is a complement of nothing")
-            terms = [f"FullyQualifiedName!~{prefix}" for prefix in claimed]
-            expression = "&".join(terms)
+            expression = "&".join(exclusions)
         else:
-            if not includes:
+            if not includes and not categories:
                 raise SystemExit(f"shard {name!r} declares no include prefixes")
-            positive = "|".join(f"FullyQualifiedName~{prefix}" for prefix in includes)
-            terms = [f"({positive})" if len(includes) > 1 else positive]
+            # A category shard selects by TestCategory, for cases a FullName
+            # prefix cannot address (a parameterized case's arguments sit
+            # inside parentheses the NUnit adapter's filter parser rejects).
+            positives = [f"FullyQualifiedName~{prefix}" for prefix in includes] + [
+                f"TestCategory={category}" for category in categories
+            ]
+            terms = [f"({'|'.join(positives)})" if len(positives) > 1 else positives[0]]
             # Subtract only the prefixes an earlier shard already claimed. A
             # shard that claims nothing new would silently run zero tests, so
             # say so now rather than letting it read as a passing empty leg.
-            narrowing = [p for p in claimed if any(p.startswith(inc) or inc.startswith(p) for inc in includes)]
-            if len(narrowing) == len(includes) and all(p in includes for p in narrowing):
-                raise SystemExit(f"shard {name!r} is fully claimed by an earlier shard")
-            terms += [f"FullyQualifiedName!~{prefix}" for prefix in claimed]
+            if includes and not categories:
+                narrowing = [p for p in claimed if any(p.startswith(inc) or inc.startswith(p) for inc in includes)]
+                if len(narrowing) == len(includes) and all(p in includes for p in narrowing):
+                    raise SystemExit(f"shard {name!r} is fully claimed by an earlier shard")
+            terms += exclusions
             expression = "&".join(terms)
             claimed.extend(includes)
+            claimed_categories.extend(categories)
 
         result.append({"shard": name, "filter": expression})
     return result

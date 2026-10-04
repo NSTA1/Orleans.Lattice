@@ -395,6 +395,12 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="Orleans.Lattice.Primitives.LwwValue{T}.Merge(LwwValue{T}, LwwValue{T})"/> so the
     /// strictly-greater HLC always wins.
     /// </summary>
+    /// <param name="stampOriginal">
+    /// Whether <paramref name="incoming"/> carries its prepare's original stamp
+    /// (issue #4522; see <see cref="IsPrepareStampOriginal"/>). Defaults to
+    /// unmarked, the pre-#4522 behaviour, so a path that cannot vouch for its
+    /// stamp keeps the old drain.
+    /// </param>
     private void AddPreparedMutation(
         Guid transactionId,
         string key,
@@ -402,7 +408,8 @@ internal sealed partial class BPlusLeafGrain
         int capacityHint = 1,
         byte[]? delta = null,
         LatticeMergeMode mode = LatticeMergeMode.LwwRegister,
-        (int Size, int Index) batch = default)
+        (int Size, int Index) batch = default,
+        bool stampOriginal = false)
     {
         if (transactionId == Guid.Empty)
         {
@@ -431,11 +438,17 @@ internal sealed partial class BPlusLeafGrain
 
         if (bucket.TryGetValue(key, out var existing))
         {
-            bucket[key] = LwwValue<byte[]>.Merge(existing, incoming);
+            var merged = LwwValue<byte[]>.Merge(existing, incoming);
+            bucket[key] = merged;
+            // The mark follows the value the merge kept: a re-delivered prepare
+            // that loses the merge leaves the surviving value's classification.
+            if (merged.Timestamp.Equals(incoming.Timestamp))
+                SetPrepareStampOriginal(transactionId, key, stampOriginal);
         }
         else
         {
             bucket[key] = incoming;
+            SetPrepareStampOriginal(transactionId, key, stampOriginal);
         }
 
         // The leaf clock dominates every prepared stamp it holds (issue #4530):
@@ -771,8 +784,16 @@ internal sealed partial class BPlusLeafGrain
             // strict-greater semantic.
             var replayStamping = _replayTerminalStamping || LatticeApplyOffsetContext.Current is not null;
             var baseTerminalStamp = replayStamping ? default : state.State.Clock;
+            var anyUsesTerminalStamp = false;
             foreach (var kvp in bucket)
             {
+                // A marked LWW prepare is applied at its own stamp (issue #4522,
+                // below), never at terminalStamp, so it must not pull
+                // terminalStamp: only unmarked keys and CRDT folds use it.
+                if (IsMarkedLwwPrepare(transactionId, kvp.Key, deltaBucket))
+                    continue;
+                anyUsesTerminalStamp = true;
+
                 if (Cache.TryGetRow(kvp.Key, out var preExisting))
                 {
                     // Mirror the orphan-drain skip condition below:
@@ -879,6 +900,20 @@ internal sealed partial class BPlusLeafGrain
                     continue;
                 }
 
+                // Issue #4522: a marked prepare carries its original stamp P, so
+                // the saga's value is applied under last-writer-wins AT P. A row
+                // stamped at or above P is a write acknowledged after the prepare
+                // - migrated or not - and survives; otherwise the value is stored
+                // at P, never at a fresh stamp that a later write forwarded in
+                // after this drain would then lose to. Unmarked prepares keep the
+                // pre-#4522 rule below, including the migrated-row carve-out.
+                if (IsPrepareStampOriginal(transactionId, kvp.Key))
+                {
+                    if (!IsRowAtOrAboveOriginalStamp(kvp.Key, kvp.Value.Timestamp))
+                        StoreAtOriginalStamp(kvp.Key, kvp.Value);
+                    continue;
+                }
+
                 // Orphan-drain guard. Under an online reshard, a saga's
                 // shadow-forwarded prepare can land on a destination
                 // leaf AFTER the saga's terminal broadcast already
@@ -955,10 +990,15 @@ internal sealed partial class BPlusLeafGrain
                 var restamped = kvp.Value with { Timestamp = terminalStamp };
                 StoreEntry(kvp.Key, restamped);
             }
-            AdvanceProjectionClock(terminalStamp);
+            // terminalStamp is used only by unmarked LWW keys and CRDT folds; a
+            // bucket of marked LWW prepares stores every value at its own stamp
+            // and advances nothing.
+            if (anyUsesTerminalStamp)
+                AdvanceProjectionClock(terminalStamp);
         }
 
         RemovePendingTxOffsetsForTransaction(transactionId);
+        ForgetPrepareStampClassification(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
         RecordTerminalLanded(transactionId);
 
@@ -1038,6 +1078,7 @@ internal sealed partial class BPlusLeafGrain
             return;
 
         var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
+        ForgetPrepareStampClassification(transactionId);
         // Drop the parallel CRDT-delta side-map entry for this saga so an
         // aborted prepared CRDT write leaks no folded contribution; the
         // staged delta never became visible, so the abort discards it exactly
@@ -1658,20 +1699,37 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether this leaf's committed row for <paramref name="key"/> already
     /// supersedes saga <paramref name="txid"/>'s prepared <paramref name="value"/>,
-    /// by the same comparison the commit drain's orphan-drain guard makes in
-    /// <see cref="ApplyTxCommit"/>: a newer, non-migrated row means the drain
-    /// skips the prepare, so the prepare can never become the key's visible value
-    /// whatever its saga's outcome. A CRDT-delta prepare is folded into the row
-    /// rather than LWW-merged, so the drain never skips it and no row supersedes it.
+    /// as the exact complement of the commit drain's install condition in
+    /// <see cref="ApplyTxCommit"/>:
+    /// <list type="bullet">
+    /// <item><description>
+    /// A marked prepare (issue #4522) is applied at its own stamp P only over a
+    /// row stamped below P, so any row stamped at or above P supersedes it,
+    /// migrated or not.
+    /// </description></item>
+    /// <item><description>
+    /// An unmarked prepare keeps the pre-#4522 drain: a newer, non-migrated row
+    /// means the drain skips the prepare, so the prepare can never become the
+    /// key's visible value whatever its saga's outcome.
+    /// </description></item>
+    /// </list>
+    /// A CRDT-delta prepare is folded into the row rather than LWW-merged, so the
+    /// drain never skips it and no row supersedes it.
     /// </summary>
     private bool IsPrepareSupersededByRow(string key, Guid txid, in LwwValue<byte[]> value)
     {
-        if (!Cache.TryGetRow(key, out var row) || row.IsMigrated)
+        if (!Cache.TryGetRow(key, out var row))
             return false;
 
         if (_pendingTxDeltas is not null
             && _pendingTxDeltas.TryGetValue(txid, out var deltas)
             && deltas.ContainsKey(key))
+            return false;
+
+        if (IsPrepareStampOriginal(txid, key))
+            return row.Timestamp.CompareTo(value.Timestamp) >= 0;
+
+        if (row.IsMigrated)
             return false;
 
         return row.Timestamp.CompareTo(value.Timestamp) > 0;
@@ -2043,6 +2101,7 @@ internal sealed partial class BPlusLeafGrain
                     Mode = mode,
                     AtomicBatchSize = membership.Size,
                     AtomicBatchIndex = membership.Index,
+                    StampIsOriginal = IsPrepareStampOriginal(txid, key),
                 });
             }
         }
@@ -2179,6 +2238,14 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        // Issue #4522: the original prepare stamp of each backstop key that has
+        // one - carried by the terminal delivery, or, for a stranded prepared
+        // key, the marked bucket's own stamp. Such a key is applied under
+        // last-writer-wins at that stamp, so a write acknowledged after the
+        // prepare survives; a key without one keeps the pre-#4522 fresh stamp.
+        // Captured before the drain below discards the bucket's classification.
+        var missingStamps = CollectBackstopOriginalStamps(transactionId, missingKeys, bucket, strandedPrepared);
+
         // Hot-path short-circuit: a duplicate terminal delivery with
         // nothing new to do. The flip side already ran (alreadyFlipped),
         // and either there is no backstop payload, or every payload key
@@ -2229,7 +2296,14 @@ internal sealed partial class BPlusLeafGrain
             var forwards = new Task[forwarded.Count];
             var f = 0;
             foreach (var (target, subset) in forwarded)
-                forwards[f++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).ApplyTxTerminalAsync(transactionId, committed: true, subset);
+            {
+                // Carry each forwarded key's original stamp (and only those),
+                // so the declaring leaf applies it at that stamp too.
+                using (LatticeOriginalPrepareStampContext.With(SelectStamps(missingStamps, subset.Keys)))
+                {
+                    forwards[f++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).ApplyTxTerminalAsync(transactionId, committed: true, subset);
+                }
+            }
             await Task.WhenAll(forwards);
         }
 
@@ -2392,6 +2466,8 @@ internal sealed partial class BPlusLeafGrain
             var baseClock = state.State.Clock;
             foreach (var kvp in missingKeys)
             {
+                if (missingStamps is not null && missingStamps.ContainsKey(kvp.Key))
+                    continue;
                 if (Cache.TryGetRow(kvp.Key, out var preExisting)
                     && preExisting.Timestamp.CompareTo(baseClock) > 0)
                 {
@@ -2399,6 +2475,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
             var stamp = Orleans.Lattice.HybridLogicalClock.Tick(baseClock);
+            var anyFreshStamp = false;
             var origin = LatticeOriginContext.Current;
             var vc = LatticeVectorClockContext.Current;
             var writer = ResolveCommitLogWriter();
@@ -2408,6 +2485,23 @@ internal sealed partial class BPlusLeafGrain
 
             foreach (var kvp in missingKeys)
             {
+                // Issue #4522 rule (d): a key with an original prepare stamp P is
+                // installed only over no row or a row stamped below P, and AT P.
+                // A row at or above P is a write acknowledged after the prepare
+                // and stands; the key is still recorded as backstopped below.
+                var keyStamp = stamp;
+                if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
+                {
+                    if (IsRowAtOrAboveOriginalStamp(kvp.Key, originalStamp))
+                        continue;
+                    keyStamp = originalStamp;
+                    state.State.Clock = Orleans.Lattice.HybridLogicalClock.Merge(state.State.Clock, originalStamp);
+                }
+                else
+                {
+                    anyFreshStamp = true;
+                }
+
                 if (writer is not null)
                 {
                     var entry = new WalRecord
@@ -2416,7 +2510,7 @@ internal sealed partial class BPlusLeafGrain
                         Op = MutationKind.Set,
                         Key = kvp.Key,
                         Value = kvp.Value,
-                        Timestamp = stamp,
+                        Timestamp = keyStamp,
                         IsTombstone = false,
                         ExpiresAtTicks = 0,
                         OriginClusterId = origin,
@@ -2456,7 +2550,7 @@ internal sealed partial class BPlusLeafGrain
                 var value = new Primitives.LwwValue<byte[]>
                 {
                     Value = kvp.Value,
-                    Timestamp = stamp,
+                    Timestamp = keyStamp,
                     OriginClusterId = origin,
                     VectorClock = vc,
                 };
@@ -2468,7 +2562,8 @@ internal sealed partial class BPlusLeafGrain
                 // write for a migration import.
             }
 
-            AdvanceProjectionClock(stamp);
+            if (anyFreshStamp)
+                AdvanceProjectionClock(stamp);
             // Lift Version[ReplicaId] to the backstop stamp so the
             // co-located LeafCacheGrain's next RefreshAsync observes
             // a non-empty delta containing the just-stamped backstop
@@ -2487,9 +2582,10 @@ internal sealed partial class BPlusLeafGrain
             // AND missing-key backstops (the bucket flip publishes
             // the post-flip Clock, but the backstop is stamped AFTER
             // and produces a strictly-greater stamp).
-            if (stamp.CompareTo(state.State.Version.GetClock(ReplicaId)) > 0)
+            var publishedStamp = anyFreshStamp ? stamp : state.State.Clock;
+            if (publishedStamp.CompareTo(state.State.Version.GetClock(ReplicaId)) > 0)
             {
-                state.State.Version.Entries[ReplicaId] = stamp;
+                state.State.Version.Entries[ReplicaId] = publishedStamp;
             }
             BumpLocalRevision();
 

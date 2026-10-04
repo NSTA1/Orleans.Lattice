@@ -527,18 +527,64 @@ When building the outbound framing header throws an `ArgumentException`
 or `InvalidOperationException` - schema-shape failures the batch can
 never recover from in its current form - the shipper:
 
-1. Parks every entry in the offending batch on the per-tree
+1. Poisons the saga of every prepare in the batch (see
+   [Poisoned sagas](#poisoned-sagas)).
+2. Parks every entry in the offending batch on the per-tree
    dead-letter store tagged with
    `LatticeReplicationMetrics.ReasonSchema` so a single poison entry never
    stalls the stream forever.
-2. Advances the cursor past the batch so the stream makes forward
-   progress.
-3. Logs a warning with the entry count and the new cursor position.
+3. Advances the cursor past the batch so the stream makes forward
+   progress, and persists the cursor with the poison list at once.
+4. Logs a warning with the entry count and the new cursor position.
 
 The DLQ enqueue is best-effort; a deterministically-failing DLQ does not
 pin the ship loop. The original entries remain in the WAL until the GC
 pass trims them, so an operator can still recover off the WAL even when
 the DLQ is unavailable.
+
+Parking is a loss for the peer, not a deferral: replaying a parked entry
+through `ILatticeReplicationDeadLetters` applies it on **this** cluster,
+where it is a no-op, and never sends it to the peer.
+
+#### Poisoned sagas
+
+A saga terminal that reached the peer after one of its prepares was
+parked would commit the saga there without that write - a torn batch the
+peer keeps, because the parked prepare never arrives. So a parked prepare
+poisons its saga for that peer (#4494):
+
+- Every later prepare and every terminal of the saga is parked too, with
+  reason `poisoned_saga`, instead of being shipped. A terminal already
+  held behind its prepares is parked rather than released. The peer keeps
+  the saga invisible: it serves it as never written, while this cluster
+  has it decided. A re-bootstrap of the peer ships the saga whole and
+  settles the prepares it already staged. No abort is sent to settle them:
+  this cluster never decided one.
+- Each poisoning logs a warning naming the transaction and the peer, and
+  counts on `orleans.lattice.replication.shipper.saga_poisoned`
+  (`outcome=poisoned`). Treat any increment as a divergence that needs a
+  re-bootstrap of that peer.
+- The poison list is persisted in the shipper's state with the cursors, so
+  a reactivation keeps withholding the saga. An entry retires only once the
+  saga can append no further record: the shipper has seen the origin
+  registry hold the saga's decision (or parked one of its terminals) and
+  later hold no row for it for a 10-minute grace - every terminal, a split's
+  late sweep terminal included, needs a recorded decision, and the grace lets
+  a sweep that read the decision just before the purge append its terminal
+  first - and the durable cursor has passed every partition tail sampled
+  after that. A count of the saga's terminals
+  is not a bound, because an unstamped or late sweep terminal can follow
+  the stamped ones. The registry is probed at most every 30 seconds, for
+  up to 64 sagas at a time.
+- The list is bounded (16,384 sagas). When it is full the shipper fails
+  closed: it neither parks the failing batch nor advances past it, logs an
+  error, counts `saga_poisoned{outcome=refused}`, and retries the batch on
+  its ship backoff, so the stream to that peer stalls rather than letting
+  a saga through torn.
+- A rebind to a new source log after a coordinated restore drops the list
+  (both clusters were reset to the cut). Any other rebind keeps it, because
+  the new copy can mirror the saga's records; partition tails sampled from
+  the retired log are dropped and re-sampled from the new one.
 
 ### Buffer reuse
 
@@ -648,7 +694,9 @@ held terminal are not re-shipped on every tick. After a restart, a held
 terminal whose prepares were acknowledged earlier releases on the tail
 barrier.
 
-A held terminal is never stranded:
+A held terminal is never stranded. A terminal of a saga whose prepare was
+dead-lettered is parked rather than released (see
+[Poisoned sagas](#poisoned-sagas)), so it never reaches the peer:
 
 - A prepare trimmed before it shipped (a peer that fell off the log) is
   passed by the acknowledged frontier like any other sequence.
@@ -658,12 +706,8 @@ A held terminal is never stranded:
   are carried forward to the new log (see
   [Source-identity rebind](#source-identity-rebind)).
 
-Two cases release without the guarantee:
+One case releases without the guarantee:
 
-- A prepare routed to the dead-letter queue (an encode failure) counts as
-  acknowledged. Its terminal is still released, with a warning naming the
-  transaction, and the peer serves the saga without that key until the
-  entry is replayed (#4494).
 - The hold assumes every key of the saga is replicated. A `KeyFilter` or
   `KeyPrefixes` that drops some of a saga's prepares yields an
   all-or-nothing view over the replicated subset only. That is the filter's
@@ -681,6 +725,21 @@ single read per tick; the shipping default is `8`, and the value must
 equal `LatticeOptions.WalPartitions` so the shipper reads every
 partition the commit-log writer fans across (see
 [`ReplogPartitions`](configuration.md#replogpartitions)).
+
+### Forced gap: a peer taken off the log
+
+A `WalRetention` ceiling trims the write-ahead log past a lagging consumer by design, so it can remove records the shipper has not yet delivered to its peer. Skipping the trimmed prefix is harmless for plain writes, but not for a saga: if the trimmed record was one of a saga's prepares and its terminal is still retained, the terminal reaches the peer without it, the receiver commits the saga and drains its other keys, and the lost key is missing - a torn saga ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A shipper cannot even name the transactions it lost.
+
+The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** (offsets are dense, and only a trim removes them). On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
+
+- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible;
+- **asks the peer to re-seed** on every push and liveness probe. The gRPC transport sends the recorded epoch in the `x-lattice-replication-reseed-after` call header. The receiver, having verified the caller's origin, starts a full bootstrap from that sender when it has not completed one from an export with a greater epoch and none is running (governed by `AutoBootstrapOnFallOffLog`), and echoes the epoch of its last completed one in `ReplicationAck.BootstrapEpoch`.
+
+Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. The shipper then clears the marker, rewinds every partition to its lowest retained entry, and resumes: the export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them. A range-scoped re-replay never advances the echoed epoch.
+
+While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
+
+A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
 
 ### Deferred cursor persistence
 
@@ -999,6 +1058,8 @@ emits; the table shows which driver is the source of each.
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
+| `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |
+| `shipper.saga_poisoned` | Shipper grain (poisoned saga) | A saga withheld from the peer (`outcome=poisoned`), or a full poison list refusing to advance (`outcome=refused`). |
 | `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
 
 ---

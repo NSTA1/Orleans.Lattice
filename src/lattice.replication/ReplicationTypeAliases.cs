@@ -102,6 +102,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-(tree, peer) shipper grain persistent state class.</summary>
     internal const string ReplicationShipperState = "olr.ss";
 
+    /// <summary>Alias for a saga the shipper withholds from its peer after a prepare was dead-lettered.</summary>
+    internal const string PoisonedSaga = "olr.sp";
+
     /// <summary>Alias for the per-tree maintenance grain interface.</summary>
     internal const string IReplicationMaintenanceGrain = "olr.gm";
 
@@ -275,5 +278,11 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusCursor"/>.</summary>
     internal const string ReplicationPeerStatusCursor = "olr.pc";
+
+    // Snapshot export epoch (#4534): a per-tree counter advanced by every full
+    // export at its registry snap0, so a shipper can tell a peer's re-seed
+    // happened after it took the peer off the log.
+    internal const string IReplicationExportEpochGrain = "olr.xg";
+    internal const string ReplicationExportEpochState = "olr.xs";
 
 }

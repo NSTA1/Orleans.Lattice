@@ -97,7 +97,10 @@ public partial class ReplicationShipperGrainTests
             StubReplogShardGrain[]? feeds = null,
             StubWalRecordEncoder? walEncoder = null,
             StubReplogShardGrain[]? reboundFeeds = null,
-            ILatticeRegistry? registry = null)
+            ILatticeRegistry? registry = null,
+            ILatticeMergeModeResolver? modeResolver = null,
+            IReplicationDeadLetterGrain? deadLetters = null,
+            ITxRegistryGrain? txRegistry = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
@@ -121,6 +124,16 @@ public partial class ReplicationShipperGrainTests
             factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         }
 
+        if (deadLetters is not null)
+        {
+            factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(deadLetters);
+        }
+
+        if (txRegistry is not null)
+        {
+            factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(txRegistry);
+        }
+
         var transport = Substitute.For<IReplicationTransport>();
         var stream = RecordAppliedStream(transport, walEncoder);
         var fakeState = new FakePersistentState<ReplicationShipperState>();
@@ -135,7 +148,7 @@ public partial class ReplicationShipperGrainTests
             Monitor(options), transport, new TestEncoder(), walEncoder, Substitute.For<IWalCursorRegistry>(),
             factory, fakeState,
             new ReplicationPeerStats(),
-            Substitute.For<ILatticeMergeModeResolver>(),
+            modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         grain.InitializeForTesting(Tree, Peer);
         return (grain, fakeState, feeds, stream);

@@ -1,6 +1,7 @@
 # Pairs with MovedStreamKeepsAckedWrites. The move copies the stream without
-# waiting for it to quiesce (WalMoveFenceCore's stale-observation abort is
-# skipped), so an append already in flight when the fence rose lands on the old
+# waiting for it to drain (WalShardGrain.DrainInFlightAsync is skipped; the
+# placement-version abort WalMoveFenceCore.ShouldAbortStaleQuiesce is a separate
+# check), so an append already in flight when the fence rose lands on the old
 # home after the copy, is acknowledged, and is dropped at the switch.
 MODULE: MovedStreamKeepsAckedWritesCopyUnquiesced
 TARGET: MovedStreamKeepsAckedWrites

@@ -21,6 +21,19 @@ public sealed class ReplicationLinkHealthClassifierTests
     private static ReplicationLinkHealth Classify(ReplicationPeerStatusRow row, LatticeReplicationStatusOptions? options = null) =>
         ReplicationLinkHealthClassifier.Classify(row, options ?? Defaults);
 
+    [Test]
+    public void Peer_awaiting_a_reseed_after_a_trim_lost_records_is_stalled_however_healthy_its_counters()
+    {
+        // #4534: the sender withholds saga records until the peer re-seeds.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Classify(Outbound() with { ReseedRequiredSeconds = 0 }), Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Outbound(contactSeconds: double.NaN) with { ReseedRequiredSeconds = 5 }),
+                Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Outbound()), Is.EqualTo(ReplicationLinkHealth.Healthy));
+        });
+    }
+
     [TestCase(0L, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind + 1, ReplicationLinkHealth.Lagging)]

@@ -67,4 +67,15 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// error rather than a hung second call.
     /// </exception>
     Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the export epoch of the last full bootstrap from
+    /// <paramref name="sourceClusterId"/> that reached
+    /// <see cref="LatticeBootstrapState.LiveIncremental"/>, or
+    /// <see langword="null"/> when none has (issue #4534). Interleaves with a
+    /// running bootstrap so the receive path never queues behind one.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
 }
