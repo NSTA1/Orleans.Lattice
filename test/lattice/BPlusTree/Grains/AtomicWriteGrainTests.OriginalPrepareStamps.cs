@@ -223,6 +223,51 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
+    public async Task A_terminal_re_resolved_after_a_split_of_the_same_copy_still_carries_the_stamp()
+    {
+        // b0c753b8's depth-13 trace is itself a re-resolve: the split commits,
+        // the map now routes the key to a new shard of the SAME physical tree,
+        // and the terminal reaches that shard with the key in its backstop
+        // subset. That delivery must carry P - the lineage guard keys on the
+        // physical tree, not on the shard the prepare was routed to - or the
+        // backstop falls back to a dominating stamp.
+        var before = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount);
+        var after = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount + 1);
+        var key = Enumerable.Range(0, 512).Select(i => $"key-{i}").First(k => before.Resolve(k) != after.Resolve(k));
+        var newOwner = after.Resolve(key);
+        var moved = Substitute.For<IShardRootGrain>();
+        moved.GetSplitForwardTargetsAsync().Returns(Task.FromResult(new List<int>()));
+        var deliveredToNewOwner = new List<(string[] Keys, Dictionary<string, HybridLogicalClock>? Stamps)>();
+        moved.AppendTxTerminalAsync(Arg.Any<Guid>(), true, Arg.Is<IReadOnlyDictionary<string, byte[]>?>(v => v != null), Arg.Any<CancellationToken>(), Arg.Any<bool>())
+            .Returns(ci =>
+            {
+                var stamps = CarriedStampsInContext();
+                lock (deliveredToNewOwner)
+                    deliveredToNewOwner.Add((((IReadOnlyDictionary<string, byte[]>)ci[2]).Keys.ToArray(), stamps is null ? null : new(stamps)));
+                return Task.FromResult<WalRecord?>(null);
+            });
+        var (grain, _, _, lattice, shard) = CreateGrain(configureFactory: f =>
+            f.GetGrain<IShardRootGrain>($"{TreeId}/{newOwner}").Returns(moved));
+        var split = false;
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(new RoutingInfo(TreeId, split ? after : before)));
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(new RoutingInfo(TreeId, split ? after : before)));
+        StubReadBack(shard, new() { [key] = StampP });
+        // The decision is recorded once the read-back is checkpointed; the
+        // split commits after it, before the broadcast re-resolves the owner.
+        shard.When(s => s.GetOriginalPrepareStampsAsync(Arg.Any<Guid>(), Arg.Any<bool>())).Do(_ => split = true);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries((key, [1])));
+
+        Assert.That(before.Resolve(key), Is.Not.EqualTo(newOwner), "PRECONDITION: the split moved the key");
+        var withKey = deliveredToNewOwner.Where(d => d.Keys.Contains(key)).ToList();
+        Assert.That(withKey, Is.Not.Empty, "PRECONDITION: the broadcast re-resolved the key to its new owner and backstopped it there");
+        Assert.That(withKey.All(d => d.Stamps is { } s && s[key] == StampP), Is.True,
+            "a re-resolve onto a shard of the same physical tree carries P");
+    }
+
+    [Test]
     public void The_lineage_guard_carries_stamps_only_to_the_copy_that_minted_them()
     {
         var (grain, state, _, _, _) = CreateGrain();
