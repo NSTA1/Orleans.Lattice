@@ -643,7 +643,8 @@ internal sealed class TreeResizeGrain(
             throw new InvalidOperationException(
                 $"Cannot undo the resize of replicated tree '{TreeId}' after its alias swap: writes the resized copy "
                 + "took may already have been shipped to a peer, and the undo cannot retract them there. "
-                + "Resize the tree again instead.");
+                + $"Resize the tree again, back to its previous sizing (MaxLeafKeys {state.State.OldRegistryEntry?.MaxLeafKeys}, "
+                + $"MaxInternalChildren {state.State.OldRegistryEntry?.MaxInternalChildren}), instead.");
         }
 
         await _undoIntentGate.WaitAsync().ConfigureAwait(true);

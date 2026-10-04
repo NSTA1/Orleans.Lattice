@@ -361,7 +361,9 @@ A resize of a replicated tree cannot be undone after its alias swap
 resized copy took may already have shipped, and last-writer-wins shipping
 never retracts them, so the rebind back to the old copy would leave them on
 the peer while this cluster discards them. An undo before the swap rebinds
-nothing, because the shipper never left the old copy.
+nothing, because the shipper never left the old copy. To return a replicated tree to its old
+shape, resize it again, back to its previous sizing: unlike an undo, a
+resize discards no write, so the clusters stay in agreement.
 
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the
