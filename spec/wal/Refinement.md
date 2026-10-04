@@ -231,25 +231,24 @@ from this specification.**
   That guard compares the trimmed tail with the persisted checkpoint, not with
   offset 0, so a cold start over a WAL trimmed through the persisted checkpoint
   passes it. No conclusion about either cell may be drawn from this specification.
-- **Flushes that land unacknowledged, or late.** The model's in-flight write is
-  either flushed and acknowledged, or lost with a shard crash. Production has two
-  more outcomes. `WalShardGrain.HandleFlushFailureAsync` faults the acknowledgements
-  of later slots even when their provider write succeeded, then resyncs the
-  allocator above the provider's highest offset, so a write can be durable and
-  unacknowledged. And a provider call abandoned by a crash or by an expired drain
-  (`ForceFaultRemainingSlotsForDrainBudgetExpiry`) can land after a new activation
-  has recovered its allocator below it (`WalOffsetAllocationCore.RecoveredNextOffset`
-  reads the provider's highest offset). The argument that no checked property is
-  affected: every WAL provider writes an offset create-only (the in-memory and file
-  providers throw on an existing offset, and the Azure Table provider uses a
-  transactional `Add`), so of a late write and a new append at the same offset one
-  fails and its acknowledgement is faulted; no acknowledged write is overwritten and
-  no offset carries two acknowledged writes (`OffsetContiguity`). A durable but
-  unacknowledged entry is outside `AckedWriteDurable`, `TrimCoveredBySnapshot` and
-  `EveryAckedWriteMaterialised`, which quantify over acknowledged writes, and it is
-  never in flight once the allocator has resynced above it, so `ShippingNeverSkips`
-  may show it to a reader. The argument rests on the providers' create-only write;
-  provider durability semantics beyond that are not modelled.- **Shard moves.** Specified in `WalMove.tla`, not here.
+- **Flushes that land unacknowledged, or late: an open defect, issue #4621.** The
+  model's in-flight write is either flushed and acknowledged, or lost with a shard
+  crash. Production has two more outcomes. `WalShardGrain.HandleFlushFailureAsync`
+  faults the acknowledgements of later slots even when their provider write
+  succeeded, then resyncs the allocator above the provider's highest offset, so a
+  write can be durable and unacknowledged. And a provider call abandoned at its
+  flush deadline, by an expired drain or by a crash can land after the allocator
+  has resynced above it. Every WAL provider writes an offset create-only, so no
+  acknowledged write is ever overwritten and no offset carries two acknowledged
+  writes (`OffsetContiguity`). But the review's argument that nothing else is
+  affected was wrong: the abandoned offset is a hole below the watermark, readers
+  advance past it, and when the write lands it sits below their cursors, so the
+  shipper, views and a warm leaf never see it while a cold rebuild applies it.
+  Reproduced on the real `WalShardGrain`, and by TLC at depth 7 with the model
+  extended by a late-landing action and the invariant that every readable owned
+  entry at or below a read position is in the projection. Until #4621 is fixed and
+  the model carries the late-landing action, no conclusion about late landings may
+  be drawn from this specification.- **Shard moves.** Specified in `WalMove.tla`, not here.
 - **Atomicity of a grain turn.** Each action is one atomic step. Production
   interleaves grain turns at await points (`[AlwaysInterleave]` methods, timers,
   the background replay task of #2909); the model's actions are coarser, so an
