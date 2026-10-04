@@ -23,6 +23,9 @@ public sealed class SyntheticSpecModule : IDisposable
     /// <summary>The single mutation's file stem.</summary>
     public const string MutationName = "TypeOkStepOverflows";
 
+    /// <summary>The synthetic module's variant configuration: the same model under a narrower wrap.</summary>
+    public const string VariantName = "Narrow";
+
     /// <summary>The detector the synthetic note cites, which must resolve under <c>test/</c>.</summary>
     public const string Detector =
         nameof(SpecModuleDiscoveryControlTests) + "." + nameof(SpecModuleDiscoveryControlTests.A_synthetic_module_is_discovered_and_passes_every_gate);
@@ -38,10 +41,12 @@ public sealed class SyntheticSpecModule : IDisposable
 
         TypeOK == x \in 0..2
 
+        Wrap == 3
+
         Init == x = 0
 
         Step ==
-            /\ x' = (x + 1) % 3
+            /\ x' = (x + 1) % Wrap
 
         Next ==
             \/ Step
@@ -71,8 +76,22 @@ public sealed class SyntheticSpecModule : IDisposable
             "mutations": 1,
             "behaviourRows": 2,
             "distinctStates": 3
+          },
+          "variants": {
+            "Narrow": { "distinctStates": 2 }
           }
         }
+        """;
+
+    private const string VariantConfig = """
+        \* Variant of Synthetic.cfg: the same model under a narrower wrap.
+        SPECIFICATION Spec
+
+        CONSTANTS
+            Wrap = 2
+
+        INVARIANTS
+            TypeOK
         """;
 
     private const string Mutation = """
@@ -80,13 +99,13 @@ public sealed class SyntheticSpecModule : IDisposable
         MODULE: SyntheticTypeOkStepOverflows
         TARGET: TypeOK
         CLASS: Invariant
-        SUMMARY: the step wraps at 4 rather than 3, so x leaves 0..2
+        SUMMARY: the step wraps one value late, so x leaves 0..2
         PERTURBS: Step
 
         --- FIND
-            /\ x' = (x + 1) % 3
+            /\ x' = (x + 1) % Wrap
         --- REPLACE
-            /\ x' = (x + 1) % 4
+            /\ x' = (x + 1) % (Wrap + 1)
         --- END
         """;
 
@@ -158,6 +177,7 @@ public sealed class SyntheticSpecModule : IDisposable
         synthetic.Write("README.md", IndexReadme, atRoot: true);
         synthetic.Write($"{ModuleName}.tla", Specification);
         synthetic.Write($"{ModuleName}.cfg", Config);
+        synthetic.Write($"{ModuleName}.{VariantName}.cfg", VariantConfig);
         synthetic.Write($"{ModuleName}{SpecModuleManifest.FileSuffix}", Manifest);
         synthetic.Write("Refinement.md", Note);
         synthetic.Write("README.md", ModuleReadme);

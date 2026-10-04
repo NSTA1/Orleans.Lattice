@@ -260,6 +260,9 @@ internal static class TypeAliases
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
 
+    /// <summary>Alias for the refusal a purged physical copy gives an unrouted call (issue #4503).</summary>
+    internal const string LatticeTreePurged = "ol.ltp";
+
     // Restore shadow-cutover - retained-previous-tree redirect primitive
     internal const string RetainedRedirectState = "ol.rrs";
 

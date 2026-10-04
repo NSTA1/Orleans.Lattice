@@ -1,0 +1,17 @@
+# Pairs with ReleaseBackedBySnapshot, and reproduces the never-written release
+# production had until issue #4523 was fixed (#4535): a never-written leaf that holds
+# no snapshot releases its block at its persisted checkpoint, publishing a trim
+# entitlement no durable snapshot backs. Reachable with no fault at all. The base
+# keeps the block until a capture records coverage, and bounds the release by it.
+MODULE: ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint
+TARGET: ReleaseBackedBySnapshot
+CLASS: Invariant
+SUMMARY: a never-written leaf with no snapshot releases at its persisted checkpoint, above any durable coverage
+PERTURBS: PublishPin
+
+--- FIND
+          THEN MergePin(l, "zero", NeverWrittenRelease(l))
+--- REPLACE
+\* MUTATION: with no snapshot the release is the persisted checkpoint.
+          THEN MergePin(l, "zero", IF cov[l] < 0 THEN stCp[l] ELSE NeverWrittenRelease(l))
+--- END

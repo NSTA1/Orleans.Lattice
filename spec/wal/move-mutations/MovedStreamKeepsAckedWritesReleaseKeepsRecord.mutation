@@ -1,0 +1,21 @@
+# Pairs with MovedStreamKeepsAckedWrites. A source activation that finds its fence
+# lapsed unfences itself but the registry release does not land, so the durable
+# fence is still held: the activation acknowledges writes and the flip, which
+# sees its fence intact, discards them. The base clears the record and unfences
+# in one step.
+MODULE: MovedStreamKeepsAckedWritesReleaseKeepsRecord
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: the release unfences the source but leaves the durable fence held, so a flip still succeeds
+PERTURBS: Release
+
+--- FIND
+    /\ dfence
+    /\ lapsed
+    /\ dfence' = FALSE
+--- REPLACE
+\* MUTATION: the record is not cleared.
+    /\ dfence
+    /\ lapsed
+    /\ dfence' = dfence
+--- END

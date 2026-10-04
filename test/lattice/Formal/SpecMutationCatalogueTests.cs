@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
@@ -148,6 +150,85 @@ public sealed class SpecMutationCatalogueTests
             Does.Contain(SpecMutationCatalogue.TypeInvariant),
             $"{module.Describe(module.ConfigPath)} must check {SpecMutationCatalogue.TypeInvariant} under INVARIANTS. "
             + "Every generated mutation cfg carries it so that an out-of-domain mutation cannot pass as a pairing.");
+    }
+
+    /// <summary>
+    /// A variant configuration checks the type invariant too, for the same
+    /// reason the base does: a variant is a second claim about the same
+    /// specification, and a bound changed by override can put a variable out of
+    /// its declared domain without any other invariant noticing.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Every_variant_configuration_checks_the_type_invariant(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        Assert.That(
+            SpecMutationCatalogue.ReadCheckedPropertiesByBlock(module.ReadVariantConfig(variant))[SpecMutationCatalogue.InvariantsBlock],
+            Does.Contain(SpecMutationCatalogue.TypeInvariant),
+            $"{module.Describe(module.VariantConfigPath(variant))} must check {SpecMutationCatalogue.TypeInvariant} under INVARIANTS.");
+    }
+
+    /// <summary>
+    /// Every name a variant configuration assigns or overrides belongs to the
+    /// specification, and the variant changes at least one assignment the base
+    /// configuration makes.
+    /// <para>
+    /// WHY THIS EXISTS. TLC rejects an override whose name it cannot find
+    /// (<c>Typo &lt;- Other</c>), but it ACCEPTS a value assignment to a name
+    /// the specification does not have (<c>MaxFalts = 2</c>) and silently checks
+    /// the unchanged model. A variant with a misspelt bound therefore passes as a
+    /// second, larger check while re-checking the base - the exact vacuity this
+    /// harness exists to refuse. The TLC gate catches the same mistake from the
+    /// other side, by requiring the variant's state count to differ from the
+    /// base's; this one catches it without a toolchain and names the culprit.
+    /// </para>
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Every_name_a_variant_configuration_assigns_belongs_to_the_specification(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        var where = module.Describe(module.VariantConfigPath(variant));
+        var assignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadVariantConfig(variant));
+        var baseAssignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadConfig());
+        var specifications = module.ReadSiblingSpecifications().Values.Select(SpecActions.StripComments).ToArray();
+
+        bool Defined(string name) => specifications.Any(text =>
+            Regex.IsMatch(text, $@"^{Regex.Escape(name)}(\([^)]*\))?\s*==", RegexOptions.Multiline));
+
+        bool Declared(string name) => specifications.Any(text =>
+            Regex.Matches(text, @"^\s*CONSTANTS?\b(?<names>[^\n]*(\n[ \t]+[^\n]*)*)", RegexOptions.Multiline)
+                .Any(m => Regex.IsMatch(m.Groups["names"].Value, $@"\b{Regex.Escape(name)}\b")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                assignments.Except(baseAssignments),
+                Is.Not.Empty,
+                $"{where} makes no assignment the base configuration does not already make, so it checks the base "
+                + "under the base's own bound. A variant exists to change a bound; state the change in its CONSTANTS "
+                + "block.");
+
+            foreach (var assignment in assignments)
+            {
+                Assert.That(
+                    Declared(assignment.Name) || Defined(assignment.Name),
+                    Is.True,
+                    $"{where} assigns '{assignment.Name}', which {module.Name} neither declares as a CONSTANT nor "
+                    + "defines. TLC would accept the value assignment and silently check the unchanged model.");
+
+                if (assignment.IsOverride)
+                {
+                    Assert.That(
+                        Defined(assignment.Value),
+                        Is.True,
+                        $"{where} overrides '{assignment.Name}' with '{assignment.Value}', which {module.Name} does not define.");
+                }
+            }
+        });
     }
 
     /// <summary>

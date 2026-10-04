@@ -1,0 +1,26 @@
+# Pairs with RecoveryNeverFallsOffLog, and reproduces issue #4523 end to end as
+# production had it until #4535 fixed it: a never-written leaf with no snapshot releases at its
+# persisted checkpoint; a cold rebuild (the first fault, a leaf stop) captures a
+# snapshot below that release; the GC trims past it; and the next activation (the
+# second fault) rehydrates the low snapshot and latches stale. It needs two faults,
+# so the mutation raises the fault budget to two - the base configuration's one
+# hid the defect. The base keeps the block until coverage exists.
+MODULE: RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: a never-written leaf releases above any coverage, and a later low cold-rebuild snapshot latches it stale after the trim
+PERTURBS: PublishPin
+
+--- FIND
+          THEN MergePin(l, "zero", NeverWrittenRelease(l))
+--- REPLACE
+\* MUTATION: with no snapshot the release is the persisted checkpoint.
+          THEN MergePin(l, "zero", IF cov[l] < 0 THEN stCp[l] ELSE NeverWrittenRelease(l))
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the defect needs two faults.
+MaxFaults == 2
+--- END

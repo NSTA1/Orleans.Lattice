@@ -8,11 +8,9 @@ SUMMARY: a move is started without consulting the move budget
 PERTURBS: MoveFence
 
 --- FIND
-    /\ move = "idle"
     /\ moves < MaxMoves
-    /\ move' = "fenced"
+    /\ ~dfence
 --- REPLACE
 \* MUTATION: the move budget is not consulted.
-    /\ move = "idle"
-    /\ move' = "fenced"
+    /\ ~dfence
 --- END

@@ -4,10 +4,10 @@
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
     "invariants": 5,
-    "properties": 1,
-    "actions": 9,
-    "mutations": 9,
-    "behaviourRows": 13,
-    "distinctStates": 497
+    "properties": 2,
+    "actions": 13,
+    "mutations": 17,
+    "behaviourRows": 18,
+    "distinctStates": 1617
   }
 }
