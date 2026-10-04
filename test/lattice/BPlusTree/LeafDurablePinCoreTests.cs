@@ -158,7 +158,8 @@ public sealed class LeafDurablePinCoreTests
     /// input in a small grid: a trim entitlement never exceeds the persisted
     /// checkpoint, a covered entitlement never exceeds the coverage either, the
     /// block carries no offset, and a release carries no positive offset unless
-    /// it is the never-written one.
+    /// it is the never-written one, which is bounded by coverage when the leaf
+    /// holds any (issue #4456).
     /// </summary>
     [Test]
     public void Every_trim_entitlement_is_bounded_by_the_persisted_checkpoint_over_the_whole_grid()
@@ -188,7 +189,7 @@ public sealed class LeafDurablePinCoreTests
                         Assert.That(d.Offset, Is.GreaterThanOrEqualTo(0).And.LessThanOrEqualTo(persisted).And.LessThanOrEqualTo(covered), label);
                         break;
                     case LeafDurablePinKind.ReleaseNeverWritten:
-                        Assert.That(d.Offset, Is.EqualTo(persisted).And.GreaterThanOrEqualTo(0), label);
+                        Assert.That(d.Offset, Is.EqualTo(covered >= 0 ? Math.Min(persisted, covered) : persisted).And.GreaterThanOrEqualTo(0), label);
                         Assert.That(liveData || !release, Is.False, label);
                         break;
                     case LeafDurablePinKind.Block:
