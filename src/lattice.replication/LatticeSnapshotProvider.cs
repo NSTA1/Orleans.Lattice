@@ -267,7 +267,7 @@ internal sealed class LatticeSnapshotProvider(
                     .ConfigureAwait(false);
                 if (recorded is TxStatus.Committed or TxStatus.Aborted)
                 {
-                    snap0[txid] = recorded;
+                    snap0![txid] = recorded;
                     status = recorded;
                 }
             }
