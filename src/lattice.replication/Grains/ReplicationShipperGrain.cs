@@ -1099,6 +1099,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
+            await ProbePoisonedSagaRetirementAsync(cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1328,9 +1329,21 @@ internal sealed partial class ReplicationShipperGrain(
             Logger.LogWarning(ex,
                 "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
                 _drainBuffer.Count, LogContext, sourceHlc);
-            await RouteBatchToDeadLetterAsync(ex, cancellationToken);
+            if (!await RouteBatchToDeadLetterAsync(ex, cancellationToken))
+            {
+                // Fail closed (#4494): the batch stays unparked and the cursor
+                // stays put; stop the tick so nothing after it is carved, and
+                // the next tick re-reads it.
+                ApplyBackoff(options, ex, "dead-letter-refused");
+                return true;
+            }
+
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
+
+            // Persist the poison list with the cursor move now, not at the next
+            // write interval.
+            await FlushCursorAsync(cancellationToken);
             return false;
         }
 
@@ -1910,6 +1923,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
+            await ProbePoisonedSagaRetirementAsync(cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2156,10 +2170,22 @@ internal sealed partial class ReplicationShipperGrain(
                 Logger.LogWarning(encodeFailure,
                     "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
                     _drainBuffer.Count, LogContext, failedSourceHlc);
-                await RouteBatchToDeadLetterAsync(encodeFailure, cancellationToken);
-                RetireTerminalHolds(failedBatchId);
-                await AdvanceCursorPipelinedAsync(
-                    failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
+                if (await RouteBatchToDeadLetterAsync(encodeFailure, cancellationToken))
+                {
+                    RetireTerminalHolds(failedBatchId);
+                    await AdvanceCursorPipelinedAsync(
+                        failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
+
+                    // Persist the poison list with the cursor move now, not at
+                    // the next write interval.
+                    await FlushCursorAsync(cancellationToken);
+                }
+                else
+                {
+                    // Fail closed (#4494): the batch stays unparked and the
+                    // cursor stays put; the next tick re-reads it.
+                    ApplyBackoff(options, encodeFailure, "dead-letter-refused");
+                }
             }
         }
         finally
@@ -2547,6 +2573,9 @@ internal sealed partial class ReplicationShipperGrain(
         _holdsEnabled = TerminalHoldsRequired(options);
         if (_terminalHolds.Count > 0)
         {
+            // A held terminal whose saga was poisoned since it was held is parked,
+            // not released (#4494).
+            await ParkPoisonedTerminalHoldsAsync(cancellationToken);
             await EnsureTailBarriersAsync(cancellationToken);
             EmitReleasableTerminalHolds(maxPerBatch);
         }
@@ -2688,6 +2717,15 @@ internal sealed partial class ReplicationShipperGrain(
 
             if (!ShouldShip(winningRecord, options))
             {
+                continue;
+            }
+
+            // A later prepare or a terminal of a saga poisoned by a dead-lettered
+            // prepare is parked, never shipped: the peer must not commit the saga
+            // without the lost write (#4494).
+            if (IsPoisonedSagaRecord(in winningRecord))
+            {
+                await ParkPoisonedRecordAsync(winningRecord, minPartition, winningShipping.Sequence, cancellationToken);
                 continue;
             }
 
@@ -4075,11 +4113,22 @@ internal sealed partial class ReplicationShipperGrain(
     /// retains the originals until the GC pass trims them, so an
     /// operator can still recover off the WAL even when the DLQ is
     /// unavailable.
+    /// <para>
+    /// The saga of every prepare in the batch is poisoned first (#4494), so its
+    /// terminals are parked rather than shipped. Returns <see langword="false"/>,
+    /// parking nothing, when the poison list cannot take the batch's sagas: the
+    /// caller must then not advance past the batch (fail closed).
+    /// </para>
     /// </summary>
-    private async Task RouteBatchToDeadLetterAsync(Exception encodeFailure, CancellationToken cancellationToken)
+    private async Task<bool> RouteBatchToDeadLetterAsync(Exception encodeFailure, CancellationToken cancellationToken)
     {
         var failureReason = encodeFailure.Message ?? "<no message>";
-        MarkDeadLetteredPrepares();
+        if (!TryPoisonDrainBufferSagas())
+        {
+            return false;
+        }
+
+        _pendingCursorWrites++;
         var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
         foreach (var entry in _drainBuffer)
         {
@@ -4099,6 +4148,8 @@ internal sealed partial class ReplicationShipperGrain(
                     LogContext, entry.Key, entry.Timestamp);
             }
         }
+
+        return true;
     }
 
     private void ParseGrainKey()
@@ -4279,6 +4330,7 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
         ResetTerminalHoldsForNewSource(followsSagaPause);
+        ResetPoisonedSagasForNewSource(followsSagaPause);
         await state.WriteStateAsync();
 
         if (_partitionGrainCache.Length >= partitions)

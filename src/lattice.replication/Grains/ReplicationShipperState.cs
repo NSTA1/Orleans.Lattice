@@ -126,4 +126,18 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(4)]
     public string? AdminPauseSagaId { get; set; }
+
+    /// <summary>
+    /// Sagas poisoned for this peer because a prepare of theirs was parked on
+    /// the dead-letter queue instead of shipped (#4494), keyed by transaction id.
+    /// Every later prepare and every terminal of a poisoned saga is parked as
+    /// well, so the peer never commits the saga without the lost write. Persisted
+    /// with the cursors so a reactivation keeps withholding the saga.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
+    /// <c>[Id(5)]</c> slot decodes to an empty map.
+    /// </remarks>
+    [Id(5)]
+    public Dictionary<Guid, PoisonedSaga> PoisonedSagas { get; set; } = new();
 }

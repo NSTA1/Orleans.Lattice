@@ -804,6 +804,43 @@ public static class LatticeReplicationMetrics
         Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
             description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
 
+    /// <summary>
+    /// Counter of sagas the outbound shipper poisoned for a peer because a
+    /// prepare of the saga was parked on the dead-letter queue instead of
+    /// shipped (#4494). Tagged by <see cref="TagTree"/>, <see cref="TagPeer"/>
+    /// and <see cref="TagOutcome"/>: <see cref="OutcomeSagaPoisoned"/> when the
+    /// saga is withheld from the peer (its other records are parked with
+    /// <see cref="ReasonPoisonedSaga"/>, and the peer serves the saga as never
+    /// written until it is re-bootstrapped), <see cref="OutcomeSagaPoisonRefused"/>
+    /// when the shipper's poison list is full and it stops advancing past the
+    /// failing batch instead (fail closed: the stream to that peer stalls until
+    /// an operator intervenes). Any increment needs operator attention; the
+    /// warning log names the transaction id.
+    /// </summary>
+    public static readonly Counter<long> ShipperSagaPoisoned =
+        Meter.CreateCounter<long>("orleans.lattice.replication.shipper.saga_poisoned", unit: "{saga}",
+            description: "Sagas withheld from a peer because a prepare was dead-lettered, tagged by tree, peer and outcome.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the saga
+    /// is withheld from the peer.
+    /// </summary>
+    public const string OutcomeSagaPoisoned = "poisoned";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the
+    /// poison list was full, so the shipper refused to advance past the batch.
+    /// </summary>
+    public const string OutcomeSagaPoisonRefused = "refused";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for a
+    /// later prepare or a terminal of a saga the shipper poisoned after one of
+    /// its prepares was dead-lettered (#4494). The record is parked rather than
+    /// shipped so the peer never commits the saga without the lost write.
+    /// </summary>
+    public const string ReasonPoisonedSaga = "poisoned_saga";
+
     // --- Per-peer observable gauges ----------------------------------------------
     //
     // The gauges below are registered lazily by ReplicationPeerStats so the
