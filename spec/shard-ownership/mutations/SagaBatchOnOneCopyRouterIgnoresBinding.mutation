@@ -1,8 +1,10 @@
 # Pairs with SagaBatchOnOneCopy. Reproduces #4358 in the setting it arose in:
 # the routing tier places a saga's prepares on whichever copy its cached pair
 # names, ignoring the binding, and (as before #4362) the flip does not wait for
-# the fence, so a saga bound to R leaves a prepare on T. Either edit alone is
-# caught by the other guard: the fence admits only a batch bound to its copy.
+# the fence, so a saga bound to R leaves a prepare on T. This property sees the
+# defect only with both edits: it constrains which copies hold buckets, not the
+# shard a bucket lands on. The router edit alone is caught by AtomicOnOwner (see
+# AtomicOnOwnerRouterIgnoresBinding), and the flip edit alone by UniqueOwner.
 MODULE: SagaBatchOnOneCopyRouterIgnoresBinding
 TARGET: SagaBatchOnOneCopy
 CLASS: Invariant

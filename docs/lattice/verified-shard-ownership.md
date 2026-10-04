@@ -32,14 +32,17 @@ reader is most likely to over-read are these.
   reactivation do to a saga bound across a split and a resize. A behaviour that
   needs a retention event together with a stale writer, a saga re-bind, a
   reshard, a refused flip or an undo before a flip is checked by **neither**
+  module's CI gate. Their composition was checked once, all properties of both
+  modules included, and is clean in this instance; it costs about ten minutes
+  of TLC, which is why it is not a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
 - **Alias moves other than a resize are not modelled.** A shadow-cutover
   restore, an explicit alias change and schema remediation move the alias too;
   none is covered here.
 - **Shard consolidation is not modelled.** The reshard here only grows.
-- **Cross-cluster replication is not modelled.** As for the
-  [atomic-commit protocol](verified-atomic-commit.md#scope-one-cluster), the
-  replicated half has no formal artefact.
+- **Cross-cluster replication is not modelled.** Unlike the
+  [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
+  replicated half has its own module, shard ownership's has no formal artefact.
 - **Where production has an open defect, the modules model the intended
   design.** Each such place has an issue and a standing mutation that
   reproduces production. A clean model run is a statement about the design once
@@ -69,11 +72,13 @@ each module is perturbed by at least one mutation. Both run in CI through
 Writing the modules against production found defects that tests had not, each
 filed and kept as a standing mutation: a split in flight across a resize
 (#4452, fixed), an undo that let both copies serve (#4453, fixed), a mid-dispatch
-re-bind that ignores the bound copy's mirror (#4454), an online snapshot that
-drops prepared buckets (#4455), a split sweep that treats an undeterminable
-registry answer as in flight (#4473), terminals re-sent to the wrong copy after
-an undo (#4474), a saga that never completes once its old copy is purged
-(#4475), and, found by the review of this coverage, a router that cached the
+re-bind that ignores the bound copy's mirror (#4454, fixed), an online snapshot that
+drops prepared buckets (#4455, fixed), a split sweep that treats an undeterminable
+registry answer as in flight (#4473), a saga that never completes once the
+copy it is bound to is discarded by an undo (#4474) or, as an old copy, purged
+(#4475), saga values installed at a stamp that overwrites a later write (#4522), a
+migration import dropped over a destination row the saga already resolved
+(#4564), and, found by the review of this coverage, a router that cached the
 old copy reading empty and losing writes once that copy is purged (#4503). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 

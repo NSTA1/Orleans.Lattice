@@ -28,6 +28,13 @@ public enum ResizeFenceGuard
 
     /// <summary>The alias flips before the old copy is fenced, as before #4362.</summary>
     FlipBeforeFence,
+
+    /// <summary>
+    /// A fenced shard admits a stale router's call as if it were the bound saga's
+    /// prepared batch: the fence's refusal arm is gone, which is what makes the
+    /// fence a fence (#4362).
+    /// </summary>
+    FenceAdmitsAStaleCall,
 }
 
 /// <summary>
@@ -44,7 +51,11 @@ public enum ResizeFenceAssertions
     /// <summary>The saga's batch lands on every shard of the old copy or on none (#4369).</summary>
     BatchWholeOnOldCopy = 1,
 
-    /// <summary>A router whose cached pair names the old copy is never served by it after the resized copy took a write (#4362).</summary>
+    /// <summary>
+    /// A router whose cached pair names the old copy is never served by it after
+    /// the resized copy took a write (#4362). Whether a fenced shard serves the
+    /// router's call is decided by <see cref="ResizeFence.AdmitsBoundSaga"/>.
+    /// </summary>
     NoStaleReadAfterFlip = 2,
 
     /// <summary>Both assertions.</summary>
@@ -205,8 +216,19 @@ public sealed class ResizeFenceModel : ICoyoteModel
                 return;
             }
 
+            // The stale router's call is routed through the logical alias, so it is
+            // never a direct terminal; it is a read, a plain write, or a prepare of
+            // another saga bound to the resized copy, never the bound saga's.
+            var prepared = runtime.RandomBoolean();
+            var served = !fenced[shard]
+                || ResizeFence.AdmitsBoundSaga(
+                    rejecting: true,
+                    directTerminal: false,
+                    preparedScope: prepared,
+                    boundPhysicalTreeId: _guard == ResizeFenceGuard.FenceAdmitsAStaleCall ? Old : (prepared ? Resized : null),
+                    physicalTreeId: Old);
             Specification.Assert(
-                !(alias == Resized && resizedTookWrite && !fenced[shard]),
+                !(alias == Resized && resizedTookWrite && served),
                 $"a router whose cached pair names the old copy was served by shard {shard} after the resized copy took a write it never mirrors back");
         }
     }

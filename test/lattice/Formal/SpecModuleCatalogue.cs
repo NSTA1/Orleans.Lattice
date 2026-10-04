@@ -111,7 +111,12 @@ public static class SpecModuleCatalogue
         var where = $"spec/{area}/";
 
         var specifications = Stems(directory, "*.tla", ".tla");
-        var configs = Stems(directory, "*.cfg", ".cfg");
+        var allConfigs = Stems(directory, "*.cfg", ".cfg");
+        var configs = allConfigs.Where(stem => !stem.Contains('.', StringComparison.Ordinal)).ToList();
+        var variantConfigs = allConfigs
+            .Where(stem => stem.Contains('.', StringComparison.Ordinal))
+            .Select(stem => (Stem: stem, Module: stem[..stem.IndexOf('.', StringComparison.Ordinal)], Variant: stem[(stem.IndexOf('.', StringComparison.Ordinal) + 1)..]))
+            .ToList();
         var manifests = Stems(directory, "*" + SpecModuleManifest.FileSuffix, SpecModuleManifest.FileSuffix);
 
         if (specifications.Count == 0)
@@ -130,6 +135,22 @@ public static class SpecModuleCatalogue
         foreach (var orphan in configs.Except(specifications, StringComparer.Ordinal))
         {
             problems.Add($"{where}{orphan}.cfg has no {orphan}.tla beside it.");
+        }
+
+        foreach (var variant in variantConfigs)
+        {
+            if (!specifications.Contains(variant.Module, StringComparer.Ordinal))
+            {
+                problems.Add(
+                    $"{where}{variant.Stem}.cfg is a variant configuration of {variant.Module}, but there is no "
+                    + $"{variant.Module}.tla beside it.");
+            }
+            else if (!SpecModule.IsVariantName(variant.Variant))
+            {
+                problems.Add(
+                    $"{where}{variant.Stem}.cfg: variant name '{variant.Variant}' must be a letter followed by "
+                    + "letters or digits.");
+            }
         }
 
         foreach (var orphan in manifests.Except(specifications, StringComparer.Ordinal))
@@ -174,6 +195,29 @@ public static class SpecModuleCatalogue
                 catch (InvalidOperationException error)
                 {
                     problems.Add(error.Message);
+                }
+            }
+
+            if (manifest is not null)
+            {
+                var onDisk = variantConfigs
+                    .Where(v => string.Equals(v.Module, name, StringComparison.Ordinal))
+                    .Select(v => v.Variant)
+                    .ToHashSet(StringComparer.Ordinal);
+
+                foreach (var undeclared in onDisk.Where(v => !manifest.Variants.ContainsKey(v)).Order(StringComparer.Ordinal))
+                {
+                    problems.Add(
+                        $"{where}{name}.{undeclared}.cfg is a variant configuration that "
+                        + $"{name}{SpecModuleManifest.FileSuffix} does not declare under 'variants', so no gate would "
+                        + "model-check it or assert its state count.");
+                }
+
+                foreach (var missing in manifest.Variants.Keys.Where(v => !onDisk.Contains(v)).Order(StringComparer.Ordinal))
+                {
+                    problems.Add(
+                        $"{where}{name}{SpecModuleManifest.FileSuffix} declares variant '{missing}', but "
+                        + $"{name}.{missing}.cfg does not exist.");
                 }
             }
 

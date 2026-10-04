@@ -1,0 +1,23 @@
+# Pairs with EventualConvergence. Reproduces current production: the causal
+# buffer lives in the applier's memory, and a parked entry has already been
+# acknowledged to its shipper, so a restart of the receiver loses it and
+# nothing re-sends it.
+MODULE: EventualConvergenceVolatileCausalBuffer
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a restart empties the causal buffer, losing parked entries that were already acknowledged
+PERTURBS: Restart
+
+--- FIND
+    /\ wake' = [wake EXCEPT ![x] = buf[x] # {}]
+--- REPLACE
+\* MUTATION: the buffer is volatile.
+    /\ buf' = [buf EXCEPT ![x] = {}]
+    /\ wake' = [wake EXCEPT ![x] = FALSE]
+--- END
+
+--- FIND
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, buf, booted>>
+--- REPLACE
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, booted>>
+--- END

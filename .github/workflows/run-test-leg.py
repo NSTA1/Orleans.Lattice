@@ -159,6 +159,24 @@ def run_item(item: dict, results_dir: str) -> dict:
         "leg": os.environ.get("LEG_ID", "?"),
         "job_url": os.environ.get("JOB_URL", ""),
     }
+    if item.get("excluded_tiers"):
+        # An untiered item run with some tiers' categories excluded from its
+        # filter. Carried into the record so the aggregate knows this item did
+        # not cover its whole package and does not judge it as if it had.
+        record["excluded_tiers"] = list(item["excluded_tiers"])
+        record["skip_reason"] = item.get("skip_reason", "")
+
+    if item.get("skip"):
+        # A tier skipped by policy (plan-test-matrix.py --skip-tiers). It is
+        # recorded rather than omitted so the aggregate can say exactly which
+        # (package, shard, tier) did not run, and so a skip can never be read
+        # as a pass. Nothing is executed and nothing is counted.
+        record.update(
+            {"outcome": "policy-skipped", "reason": item["skip"], "duration": 0.0,
+             "executed": 0, "failures": []}
+        )
+        print(f"::notice title={label}::Not run: {item['skip']}.")
+        return record
 
     if project is None:
         # A selected package with no test project is normal (a src-only package).
@@ -237,7 +255,8 @@ def write_summary(path: str, leg: dict, records: list[dict]) -> None:
         handle.write("| Item | Outcome | Tests | Duration | Estimate |\n")
         handle.write("| --- | --- | --- | --- | --- |\n")
         for record in records:
-            marks = {"passed": "pass", "failed": "FAIL", "empty": "empty", "skipped": "skipped"}
+            marks = {"passed": "pass", "failed": "FAIL", "empty": "empty", "skipped": "skipped",
+                     "policy-skipped": "NOT RUN (tier skipped by policy)"}
             handle.write(
                 f"| `{record['label']}` | {marks.get(record['outcome'], record['outcome'])} "
                 f"| {record['executed']} | {record['duration']:.2f} min "

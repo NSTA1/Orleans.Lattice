@@ -61,6 +61,7 @@ internal sealed partial class TxRegistryGrain(
 
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        ResolveWalPurgeGuardServices();
         if (context.ActivationServices?.GetService<LatticeOptionsResolver>() is { } resolver)
             _metricTreeId = await resolver.ResolveMetricTreeIdAsync(TreeId);
     }
@@ -278,7 +279,8 @@ internal sealed partial class TxRegistryGrain(
         DateTimeOffset PreviousForgottenAt,
         bool ClearedDecision,
         TxStatus PreviousDecision,
-        bool RetiredExpired);
+        bool RetiredExpired,
+        long? PreviousWalGeneration);
 
     /// <summary>
     /// Undo token for the cross-tree delegation drop the <c>Mark*</c> paths run
@@ -322,7 +324,8 @@ internal sealed partial class TxRegistryGrain(
         }
 
         var clearedDecision = state.State.Decisions.Remove(txid, out var previousDecision);
-        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision, wasExpired);
+        long? previousWalGeneration = state.State.ForgetWalGenerations.Remove(txid, out var walGeneration) ? walGeneration : null;
+        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision, wasExpired, previousWalGeneration);
     }
 
     /// <summary>
@@ -339,6 +342,10 @@ internal sealed partial class TxRegistryGrain(
         }
 
         state.State.ForgottenAt[txid] = clear.PreviousForgottenAt;
+        if (clear.PreviousWalGeneration is { } walGeneration)
+        {
+            state.State.ForgetWalGenerations[txid] = walGeneration;
+        }
         InvalidateExpiryMemo();
         if (clear.RetiredExpired)
         {
@@ -1208,6 +1215,10 @@ internal sealed partial class TxRegistryGrain(
     /// <inheritdoc />
     public async Task ForgetAsync(Guid txid)
     {
+        // Advance the decision-purge guard before this call mutates anything,
+        // so the prune below sees its latest cleared generation (#4508).
+        await RefreshWalPurgeGuardAsync();
+
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;
 
@@ -1222,12 +1233,16 @@ internal sealed partial class TxRegistryGrain(
 
         var droppedDecision = false;
         var addedForgottenAt = false;
+        var hadWalStamp = state.State.ForgetWalGenerations.TryGetValue(txid, out var prevWalStamp);
+        var stampedWal = false;
         if (hadDecision)
         {
-            if (retention == TimeSpan.Zero)
+            if (retention == TimeSpan.Zero && !WalPurgeGuardApplies)
             {
                 // Legacy semantic: tombstoning disabled, drop the
-                // decision immediately. Equivalent to the original
+                // decision immediately. A tree the decision-purge guard
+                // covers tombstones anyway (#4508): dropping here would purge
+                // a decision while the WAL can still retain its prepares. Equivalent to the original
                 // ForgetAsync behaviour before the tombstone feature.
                 state.State.Decisions.Remove(txid);
                 droppedDecision = true;
@@ -1243,6 +1258,11 @@ internal sealed partial class TxRegistryGrain(
                 state.State.ForgottenAt[txid] = now;
                 addedForgottenAt = true;
                 InvalidateExpiryMemo();
+                if (CurrentWalStamp() is { } walStamp)
+                {
+                    state.State.ForgetWalGenerations[txid] = walStamp;
+                    stampedWal = true;
+                }
             }
         }
 
@@ -1356,6 +1376,11 @@ internal sealed partial class TxRegistryGrain(
                     state.State.ForgottenAt.Remove(txid);
                     InvalidateExpiryMemo();
                 }
+                if (stampedWal)
+                {
+                    if (hadWalStamp) state.State.ForgetWalGenerations[txid] = prevWalStamp;
+                    else state.State.ForgetWalGenerations.Remove(txid);
+                }
                 if (droppedParticipants && prevParticipants is not null)
                 {
                     state.State.Participants[txid] = prevParticipants;
@@ -1390,6 +1415,8 @@ internal sealed partial class TxRegistryGrain(
                         if (entry.HadDecision)
                             state.State.Decisions[entry.Txid] = entry.Decision;
                         state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
+                        if (entry.WalGeneration is { } walGeneration)
+                            state.State.ForgetWalGenerations[entry.Txid] = walGeneration;
                     }
 
                     // The rows are back in the live-expired population, so the
@@ -1564,7 +1591,7 @@ internal sealed partial class TxRegistryGrain(
         // accumulate tally state in this branch - there is no
         // expected total to compare against, so the dedup set would
         // grow unbounded if cross-cluster delivery retries piled up.
-        if (expectedShardCount <= 0)
+        if (TerminalArrivalTally.IsUngated(expectedShardCount))
         {
             return new TerminalTallyResult
             {
@@ -2261,13 +2288,15 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, ts) in state.State.ForgottenAt)
             {
                 if (pinned is not null && pinned.Contains(txid)) continue;
+                if (!IsWalPurgeCleared(txid)) continue;
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
-                flushed.Add(new PrunedEntry(txid, hadDecision, decision, ts));
+                flushed.Add(new PrunedEntry(txid, hadDecision, decision, ts, WalGenerationOf(txid)));
             }
             foreach (var entry in flushed)
             {
                 state.State.Decisions.Remove(entry.Txid);
                 state.State.ForgottenAt.Remove(entry.Txid);
+                state.State.ForgetWalGenerations.Remove(entry.Txid);
             }
             if (flushed.Count > 0) InvalidateExpiryMemo();
             return new PruneResult(flushed.Count == 0 ? null : flushed, expiredPins);
@@ -2277,10 +2306,12 @@ internal sealed partial class TxRegistryGrain(
         foreach (var (txid, ts) in state.State.ForgottenAt)
         {
             if (pinned is not null && pinned.Contains(txid)) continue;
-            if (now - ts > retention)
+            // Held past its retention while the WAL may still retain a prepare
+            // of the saga (#4508). It stays masked from readers meanwhile.
+            if (now - ts > retention && IsWalPurgeCleared(txid))
             {
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
-                (expired ??= new List<PrunedEntry>()).Add(new PrunedEntry(txid, hadDecision, decision, ts));
+                (expired ??= new List<PrunedEntry>()).Add(new PrunedEntry(txid, hadDecision, decision, ts, WalGenerationOf(txid)));
             }
         }
         if (expired is null)
@@ -2291,6 +2322,7 @@ internal sealed partial class TxRegistryGrain(
         {
             state.State.Decisions.Remove(entry.Txid);
             state.State.ForgottenAt.Remove(entry.Txid);
+            state.State.ForgetWalGenerations.Remove(entry.Txid);
         }
         InvalidateExpiryMemo();
         return new PruneResult(expired, expiredPins);
@@ -2321,7 +2353,11 @@ internal sealed partial class TxRegistryGrain(
         Guid Txid,
         bool HadDecision,
         TxStatus Decision,
-        DateTimeOffset ForgottenAt);
+        DateTimeOffset ForgottenAt,
+        long? WalGeneration);
+
+    private long? WalGenerationOf(Guid txid) =>
+        state.State.ForgetWalGenerations.TryGetValue(txid, out var g) ? g : null;
 
     /// <summary>
     /// Aggregated outcome of one <see cref="PruneExpired"/> pass:

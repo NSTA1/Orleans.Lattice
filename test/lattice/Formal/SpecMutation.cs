@@ -597,4 +597,57 @@ public static class SpecMutationCatalogue
             [PropertiesBlock] = properties,
         };
     }
+
+    /// <summary>
+    /// Reads every assignment a cfg's <c>CONSTANT</c> / <c>CONSTANTS</c> blocks
+    /// make: <c>Name = value</c> (a value for a declared constant, or for a
+    /// defined operator, which TLC also accepts) and <c>Name &lt;- Other</c>
+    /// (a definition override). Used by the variant gates, because TLC accepts
+    /// an assignment to a name the specification does not have when it is
+    /// written <c>Name = value</c>, and silently checks the unchanged model.
+    /// </summary>
+    /// <param name="config">The cfg text.</param>
+    public static IReadOnlyList<CfgAssignment> ReadConstantAssignments(string config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var assignments = new List<CfgAssignment>();
+        var inConstants = false;
+
+        foreach (var raw in config.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var line = StripCfgComment(raw).Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var directive = Directive.Match(line);
+            if (directive.Success)
+            {
+                inConstants = directive.Groups[1].Value.StartsWith("CONSTANT", StringComparison.Ordinal);
+                line = directive.Groups[2].Value.Trim();
+                if (!inConstants || line.Length == 0)
+                {
+                    continue;
+                }
+            }
+
+            if (!inConstants)
+            {
+                continue;
+            }
+
+            var assignment = Regex.Match(line, @"^([A-Za-z][A-Za-z0-9_]*)\s*(=|<-)\s*(\S.*)$");
+            if (assignment.Success)
+            {
+                assignments.Add(new CfgAssignment(
+                    assignment.Groups[1].Value,
+                    assignment.Groups[2].Value == "<-",
+                    assignment.Groups[3].Value.Trim()));
+            }
+        }
+
+        return assignments;
+    }
 }

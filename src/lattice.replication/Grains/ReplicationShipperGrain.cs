@@ -1513,11 +1513,7 @@ internal sealed partial class ReplicationShipperGrain(
         // It does not drop saga terminals (issue #2324), because on a
         // replicated tree WalCommitLogWriter stamps the configured cluster id
         // onto any record that arrives without an origin, terminals included.
-        if (string.IsNullOrEmpty(entry.OriginClusterId))
-        {
-            return false;
-        }
-
+        //
         // Tombstone-reap envelopes are emitted by the per-leaf
         // `CompactTombstonesAsync` path to durably record a local
         // structural cleanup (physically remove a tombstone or expired
@@ -1537,11 +1533,7 @@ internal sealed partial class ReplicationShipperGrain(
         // carry the mutation category (`Category`), but `Op` alone
         // identifies a tombstone-reap envelope, so the filter keys on
         // `Op` directly.
-        if (entry.Op == MutationKind.Tombstone)
-        {
-            return false;
-        }
-
+        //
         // Cycle-break: only ship entries authored by the *local*
         // cluster. Under the WAL-as-sole-durability-boundary contract,
         // the per-shard WAL also captures entries installed by
@@ -1559,7 +1551,10 @@ internal sealed partial class ReplicationShipperGrain(
         // "don't ship a peer its own writes back" rule because
         // `_peerClusterId != options.ClusterId` is a wire-shape
         // invariant on every replication peer.
-        if (!string.Equals(entry.OriginClusterId, options.ClusterId, StringComparison.Ordinal))
+        //
+        // All three clauses are the pure ReplicationShipEligibility.IsShipEligible, the rule the
+        // replication TLA+ module and Coyote models check.
+        if (!ReplicationShipEligibility.IsShipEligible(entry.OriginClusterId, entry.Op, options.ClusterId))
         {
             return false;
         }
@@ -2687,10 +2682,11 @@ internal sealed partial class ReplicationShipperGrain(
                 TallyPrepare(in winningRecord, minPartition, winningShipping.Sequence, options);
             }
 
-            if (_legacyCursorMigrationPending
-                && !isPreparedAtomicBatch
-                && winningRecord.Timestamp != HybridLogicalClock.Zero
-                && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
+            if (ReplicationShipEligibility.IsBelowLegacyScalarCursor(
+                    _legacyCursorMigrationPending,
+                    isPreparedAtomicBatch,
+                    winningRecord.Timestamp,
+                    state.State.Cursor))
             {
                 continue;
             }

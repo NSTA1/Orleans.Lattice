@@ -9,7 +9,7 @@ SUMMARY: an append is admitted while a move has fenced the stream and is lost at
 PERTURBS: Append
 
 --- FIND
-    /\ move = "idle"
+    /\ ~afence
     /\ next < MaxOff
 --- REPLACE
 \* MUTATION: the fence check is dropped from the append.

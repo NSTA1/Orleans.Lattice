@@ -1,0 +1,28 @@
+# Pairs with SetCaptureCompletes, under the fairness Spec asserts. An aborted
+# cross-tree saga's finalize records the abort but leaves its delegation row,
+# so the tree reports a saga in flight forever and the drain gate never
+# passes. Every saga still terminates and every safety invariant holds.
+MODULE: SetCaptureCompletesAbortKeepsDelegation
+TARGET: SetCaptureCompletes
+CLASS: Temporal
+SUMMARY: an abort's finalize keeps the delegation row, so the drain gate waits forever
+PERTURBS: Finalize
+
+--- FIND
+Finalize(t, T) ==
+    /\ CrossTree(t)
+    /\ dec[t] # "inflight"
+    /\ deleg[t][T]
+    /\ ~Gated(T)
+    /\ loc' = [loc EXCEPT ![t][T] = dec[t]]
+    /\ deleg' = [deleg EXCEPT ![t][T] = FALSE]
+--- REPLACE
+Finalize(t, T) ==
+    /\ CrossTree(t)
+    /\ dec[t] # "inflight"
+    /\ deleg[t][T]
+    /\ ~Gated(T)
+    /\ loc' = [loc EXCEPT ![t][T] = dec[t]]
+    \* MUTATION: an abort does not drop the delegation row.
+    /\ deleg' = IF dec[t] = "aborted" THEN deleg ELSE [deleg EXCEPT ![t][T] = FALSE]
+--- END

@@ -582,6 +582,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
+            if (entry.IsDecision)
+            {
+                await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
+                continue;
+            }
+
             if (ToSnapshotWalRecord(entry, treeName, sourceClusterId, mergeMode) is not { } record)
             {
                 continue;
@@ -804,6 +810,38 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 LatticeTenantLabel.ForTree(treeName),
             });
         _drainStartTimestamp = null;
+    }
+
+    /// <summary>
+    /// Records a decision row from the export (#4482): the snapshot settled
+    /// saga <see cref="SnapshotEntry.TransactionId"/> with
+    /// <see cref="SnapshotEntry.SettledDecision"/>, so the receiver's
+    /// transaction registry records the same outcome. A saga record the
+    /// source's write-ahead log retained from before the cut and re-ships
+    /// after the bootstrap is then settled against that outcome on the
+    /// receiver instead of being staged in a pending bucket no terminal will
+    /// drain. Idempotent: a repeat records the same outcome.
+    /// <para>
+    /// The row is deliberately not forgotten. Re-shipping a long retained
+    /// tail can outlast the receiver's decision retention, and a prepare
+    /// arriving after the row was purged would strand again. The receiver
+    /// cannot yet observe the incremental stream passing the export's cut,
+    /// which is what would make retiring the row safe, so it retains one
+    /// row per saga the source stored at the export (#4524).
+    /// </para>
+    /// </summary>
+    internal static async Task ApplySettledDecisionAsync(IGrainFactory grainFactory, string treeName, SnapshotEntry entry)
+    {
+        if (entry.SettledDecision is not { } committed || entry.TransactionId == Guid.Empty)
+        {
+            return;
+        }
+
+        var registry = Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting.GetRegistry(grainFactory, treeName, entry.TransactionId);
+        await Orleans.Lattice.BPlusTree.Grains.TxRegistryWriteRetry.MarkDecisionAsync(
+            registry,
+            entry.TransactionId,
+            committed).ConfigureAwait(true);
     }
 
     /// <summary>

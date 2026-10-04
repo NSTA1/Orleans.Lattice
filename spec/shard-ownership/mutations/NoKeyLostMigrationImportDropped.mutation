@@ -1,0 +1,32 @@
+# Pairs with NoKeyLost. Reproduces current production (#4564): a cross-shard
+# migration import (MergeManyAsync with isCrossShardMigration) is dropped
+# whenever the destination already holds a non-migrated row, whatever the
+# stamps. Once the split's sweep has resolved a decided saga at the destination
+# (a terminal write, so non-migrated), a later write accepted on the source is
+# dropped by the shadow-forward and again by the final drain, so the map moves
+# to a destination without it. The intended design merges the import
+# last-writer-wins.
+MODULE: NoKeyLostMigrationImportDropped
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a migration import over a non-migrated destination row is dropped, losing a later write across the split
+PERTURBS: SplitCommit, LaterWrite
+
+--- FIND
+           into(x, s, k) == k = k2 /\ s = s2 /\ (x = c \/ (x = R /\ ResizeMirrors(c, s2)))
+--- REPLACE
+\* MUTATION: the import is dropped over a non-migrated destination row.
+           into(x, s, k) == k = k2 /\ s = s2 /\ (x = c \/ (x = R /\ ResizeMirrors(c, s2)))
+                            /\ ~(row[x][s][k] # Absent /\ ~mig[x][s][k])
+--- END
+
+--- FIND
+                        IF k = k2 /\ <<x, y>> \in Landing(c, s, k2)
+                        THEN LWW(row[x][y][k], WVal(c, s)) ELSE row[x][y][k]]]]
+--- REPLACE
+\* MUTATION: the split's shadow-forward is dropped over a non-migrated destination row.
+                        IF k = k2 /\ <<x, y>> \in Landing(c, s, k2)
+                           /\ ~(<<x, y>> # <<c, s>> /\ y = s2 /\ SplitMirrors(x, s1, k2)
+                                /\ row[x][y][k] # Absent /\ ~mig[x][y][k])
+                        THEN LWW(row[x][y][k], WVal(c, s)) ELSE row[x][y][k]]]]
+--- END

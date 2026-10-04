@@ -37,6 +37,18 @@ public static class SpecModuleCases
         return module.LoadMutations().Select(mutation => new object[] { module, mutation });
     }
 
+    /// <summary>One case per variant configuration of every discovered module.</summary>
+    public static IEnumerable<TestCaseData> Variants() => Expand(VariantsFor);
+
+    /// <summary>One case per variant configuration <paramref name="module"/>'s manifest declares.</summary>
+    public static IEnumerable<object[]> VariantsFor(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        return module.Manifest.Variants.Keys
+            .Order(StringComparer.Ordinal)
+            .Select(variant => new object[] { module, variant });
+    }
+
     /// <summary>
     /// One case per property the refinement note covers with a single-name
     /// row, mapped or excluded, of every discovered module: the rows a

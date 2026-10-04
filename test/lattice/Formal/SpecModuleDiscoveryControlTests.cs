@@ -114,6 +114,8 @@ public sealed class SpecModuleDiscoveryControlTests
 
     private static readonly string MutationFile = $"mutations/{SyntheticSpecModule.MutationName}.mutation";
 
+    private static readonly string VariantFile = $"{SyntheticSpecModule.ModuleName}.{SyntheticSpecModule.VariantName}.cfg";
+
     /// <summary>The broken copies, each paired with the gate that must report it.</summary>
     public static IEnumerable<Breakage> Breakages() =>
     [
@@ -130,9 +132,9 @@ public sealed class SpecModuleDiscoveryControlTests
         new("mutation count differs from manifest", nameof(SpecMutationCatalogueTests.The_catalogue_holds_the_documented_number_of_mutations),
             s => s.Write("mutations/Second.mutation", File.ReadAllText(Path.Combine(s.ModuleDirectory, MutationFile)).Replace("MODULE: SyntheticTypeOkStepOverflows", "MODULE: SyntheticSecond", StringComparison.Ordinal))),
         new("mutation anchor drifted", nameof(SpecMutationCatalogueTests.Every_mutation_applies_cleanly_to_the_current_base_specification),
-            s => s.Replace(MutationFile, "--- FIND\n    /\\ x' = (x + 1) % 3", "--- FIND\n    /\\ x' = (x + 2) % 3")),
+            s => s.Replace(MutationFile, "--- FIND\n    /\\ x' = (x + 1) % Wrap", "--- FIND\n    /\\ x' = (x + 2) % Wrap")),
         new("mutation changes nothing", nameof(SpecMutationCatalogueTests.Every_mutation_actually_changes_something),
-            s => s.Replace(MutationFile, "--- REPLACE\n    /\\ x' = (x + 1) % 4", "--- REPLACE\n    /\\ x' = (x + 1) % 3")),
+            s => s.Replace(MutationFile, "--- REPLACE\n    /\\ x' = (x + 1) % (Wrap + 1)", "--- REPLACE\n    /\\ x' = (x + 1) % Wrap")),
         new("action count differs from manifest", nameof(SpecActionMutationCoverageTests.The_specification_and_catalogue_yield_actions_and_perturbations_to_check),
             s => s.Replace(ManifestFile, "\"actions\": 1", "\"actions\": 2")),
         new("action row names the wrong action", nameof(SpecActionMutationCoverageTests.The_refinement_action_table_maps_exactly_the_actions_in_Next),
@@ -147,6 +149,14 @@ public sealed class SpecModuleDiscoveryControlTests
             s => s.Replace("Refinement.md", $"RecordTerminalDecisionAsync`. | Yes: `{SyntheticSpecModule.Detector}`", "RecordTerminalDecisionAsync`. | Yes: `SpecModuleDiscoveryControlTests.No_such_detector`")),
         new("behaviour row count differs from manifest", nameof(RefinementDetectorMappingTests.The_note_yields_the_expected_behaviour_asserting_denominator),
             s => s.Replace(ManifestFile, "\"behaviourRows\": 2", "\"behaviourRows\": 3")),
+        new("variant assigns a name the specification lacks", nameof(SpecMutationCatalogueTests.Every_name_a_variant_configuration_assigns_belongs_to_the_specification),
+            s => s.Replace(VariantFile, "    Wrap = 2", "    Wrpa = 2")),
+        new("variant overrides with an undefined name", nameof(SpecMutationCatalogueTests.Every_name_a_variant_configuration_assigns_belongs_to_the_specification),
+            s => s.Replace(VariantFile, "    Wrap = 2", "    Wrap <- Narrower")),
+        new("variant changes no assignment", nameof(SpecMutationCatalogueTests.Every_name_a_variant_configuration_assigns_belongs_to_the_specification),
+            s => s.Replace(VariantFile, "CONSTANTS\n    Wrap = 2\n", string.Empty)),
+        new("variant does not check the type invariant", nameof(SpecMutationCatalogueTests.Every_variant_configuration_checks_the_type_invariant),
+            s => s.Replace(VariantFile, "    TypeOK", "    Safe")),
         new("note states a census count", nameof(RefinementDetectorMappingTests.The_note_records_no_hand_maintained_census_count),
             s => s.Replace("Refinement.md", "for the Formal discovery controls.", "for the Formal discovery controls. The census found ten rows detected, three partial or undetected.")),
     ];
@@ -204,6 +214,11 @@ public sealed class SpecModuleDiscoveryControlTests
         new("directory with no module", "spec/empty/ contains no .tla module", s => s.Write("empty/notes.txt", "not a module", atRoot: true)),
         new("module left directly in spec", "Stray.tla sits directly in spec/", s => s.Write("Stray.tla", "---- MODULE Stray ----\n====", atRoot: true)),
         new("module name declared twice", "is declared in more than one directory", s => s.CopyModuleTo("copy")),
+        new("variant cfg the manifest does not declare", "does not declare under 'variants'", s => s.Replace(ManifestFile, "},\n  \"variants\": {\n    \"Narrow\": { \"distinctStates\": 2 }\n  }", "}")),
+        new("manifest variant with no cfg", "declares variant 'Narrow', but Synthetic.Narrow.cfg does not exist", s => s.Delete(VariantFile)),
+        new("variant cfg of no module", "is a variant configuration of Orphan, but there is no Orphan.tla", s => s.Write("Orphan.Narrow.cfg", "SPECIFICATION Spec")),
+        new("variant name malformed", "variant name '2x'", s => s.Write("Synthetic.2x.cfg", "SPECIFICATION Spec")),
+        new("manifest variants empty", "must be a non-empty object", s => s.Replace(ManifestFile, "\"Narrow\": { \"distinctStates\": 2 }", string.Empty)),
     ];
 
     /// <summary>

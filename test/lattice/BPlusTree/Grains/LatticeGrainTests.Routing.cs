@@ -67,6 +67,36 @@ public partial class LatticeGrainTests
         Assert.That(map, Is.Not.Null);
     }
 
+    [Test]
+    public async Task GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation()
+    {
+        // A resolve that read the registry before an invalidation must not
+        // publish what it read once it finishes, even when nothing newer is
+        // published by then: the invalidation is the only record that the pair
+        // went stale (RoutingPairPublishGate's epoch arm; shard-ownership review
+        // #4435, finding F9). The interleaving: a slow resolve reads the row that
+        // names the old copy; a forced refresh invalidates and resolves the new
+        // copy and publishes it; then the slow resolve finishes.
+        const string aliasId = "routing-epoch";
+        var (grain, factory, registry) = CreateGrainWithRegistry(aliasId);
+        SetupShardRoot(factory);
+        var staleRead = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var freshRead = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var answers = new Queue<Task<string>>(new[] { staleRead.Task, freshRead.Task });
+        registry.ResolveAsync(aliasId).Returns(_ => answers.Count > 0 ? answers.Dequeue() : Task.FromResult("physical-new"));
+
+        var slow = grain.GetRoutingAsync(forceRefresh: false);
+        var forced = grain.GetRoutingAsync(forceRefresh: true);
+        freshRead.SetResult("physical-new");
+        Assert.That((await forced).PhysicalTreeId, Is.EqualTo("physical-new"), "precondition: the refresh published the new copy");
+        staleRead.SetResult("physical-old");
+        Assert.That((await slow).PhysicalTreeId, Is.EqualTo("physical-old"), "the slow caller still gets the pair it read");
+
+        var next = await grain.GetRoutingAsync(forceRefresh: false);
+
+        Assert.That(next.PhysicalTreeId, Is.EqualTo("physical-new"),
+            "a pair read before the invalidation must not overwrite the one published after it");
+    }
     // --- GetRoutingAsync force-refresh overload tests ---
 
     [Test]

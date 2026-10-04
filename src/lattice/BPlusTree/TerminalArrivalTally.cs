@@ -20,6 +20,20 @@ namespace Orleans.Lattice.BPlusTree;
 internal static class TerminalArrivalTally
 {
     /// <summary>
+    /// Reports whether an arriving terminal is ungated: its producer stamped no
+    /// touched-shard count (<c>0</c>, the legacy shape every terminal written
+    /// outside the saga coordinator's broadcast carries). An ungated terminal is
+    /// final on arrival - the registry flips the saga's linearization mark at
+    /// once and keeps no tally state for it - which is all-or-nothing only for a
+    /// saga with a single source shard. For a multi-shard saga it marks the saga
+    /// before every source shard has reported; the cross-cluster TLA+ module's
+    /// <c>RAllOrNothingLegacyNoTallyMultiShard</c> mutation shows the split view
+    /// that follows.
+    /// </summary>
+    /// <param name="expectedShardCount">The touched-shard count the terminal carries.</param>
+    /// <returns><see langword="true"/> when the count is not positive.</returns>
+    public static bool IsUngated(int expectedShardCount) => expectedShardCount <= 0;
+    /// <summary>
     /// Folds an incoming expected-terminal count into the saga's recorded expected
     /// count. The expected count is monotonic non-decreasing: a later arrival that
     /// carries a larger gate stamp raises it, but a smaller (or stale) stamp never

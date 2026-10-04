@@ -168,6 +168,57 @@ public sealed class AliasSwapRoutingAtomicityIntegrationTests
     }
 
     /// <summary>
+    /// The swap must take the supplied map even when the logical row already
+    /// persists one of its own - the row of any tree that has been split,
+    /// resharded or resized. A swap that kept the row's persisted slots under the
+    /// new version would pair the new copy with the old copy's layout (#4336),
+    /// and a row with no persisted map cannot show it (shard-ownership review
+    /// #4435, finding F8).
+    /// </summary>
+    [Test]
+    public async Task SwapAliasAsync_replaces_a_persisted_map_on_the_logical_row()
+    {
+        var (logical, target) = await TwoTreesAsync(logicalShards: 4, targetShards: 3, persistLogicalMap: true);
+        Assert.That((await Registry.GetEntryAsync(logical))!.ShardMap!.Slots, Is.EqualTo(Map(4).Slots), "precondition: the logical row persists its own map");
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Registry.SwapAliasAsync(logical, target, Map(3), nextShardIndex: null, expectedPhysicalTreeId: logical);
+        }
+
+        var after = (await Registry.GetEntryAsync(logical))!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(after.PhysicalTreeId, Is.EqualTo(target));
+            Assert.That(after.ShardMap!.Slots, Is.EqualTo(Map(3).Slots), "the swap carries the new copy's map, not the row's old one");
+        });
+    }
+
+    /// <summary>
+    /// <see cref="A_warm_multi_get_after_a_swap_reads_the_new_copy_whole"/> for a
+    /// logical row that persists its own map before the swap (finding F8).
+    /// </summary>
+    [Test]
+    public async Task A_warm_multi_get_after_a_swap_reads_the_new_copy_whole_when_the_logical_row_persists_a_map()
+    {
+        var (logical, target) = await TwoTreesAsync(logicalShards: 4, targetShards: 3, persistLogicalMap: true);
+        var lattice = Grains.GetGrain<ILattice>(logical);
+        Assert.That((await lattice.GetManyAsync(Keys)).Values.Select(Text), Is.All.EqualTo(logical),
+            "precondition: the logical tree serves its own copy");
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Registry.SwapAliasAsync(logical, target, Map(3), null, expectedPhysicalTreeId: logical);
+        }
+
+        var read = await lattice.GetManyAsync(Keys);
+        Assert.Multiple(() =>
+        {
+            Assert.That(read.Count, Is.EqualTo(KeyCount), "no key reads as absent");
+            Assert.That(read.Values.Select(Text), Is.All.EqualTo(target), "every key comes from the new copy");
+        });
+    }
+    /// <summary>
     /// A point read carries no map-version guard, so only a staleness signal on the
     /// replaced copy moves a warmed activation off it after an explicit alias.
     /// </summary>
@@ -215,17 +266,17 @@ public sealed class AliasSwapRoutingAtomicityIntegrationTests
         return values;
     }
 
-    private async Task<(string Logical, string Target)> TwoTreesAsync(int logicalShards, int targetShards)
+    private async Task<(string Logical, string Target)> TwoTreesAsync(int logicalShards, int targetShards, bool persistLogicalMap = false)
     {
-        var logical = await SeededTreeAsync($"swap-logical-{Guid.NewGuid():N}", logicalShards);
+        var logical = await SeededTreeAsync($"swap-logical-{Guid.NewGuid():N}", logicalShards, persistLogicalMap);
         var target = await SeededTreeAsync($"{logical}-target", targetShards);
         return (logical, target);
     }
 
-    /// <summary>Registers a tree on the default map for <paramref name="shards"/> and writes every key with the tree's own id as its value.</summary>
-    private async Task<string> SeededTreeAsync(string treeId, int shards)
+    /// <summary>Registers a tree on the default map for <paramref name="shards"/> (persisted on its row when <paramref name="persistMap"/> is set) and writes every key with the tree's own id as its value.</summary>
+    private async Task<string> SeededTreeAsync(string treeId, int shards, bool persistMap = false)
     {
-        await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = shards });
+        await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = shards, ShardMap = persistMap ? Map(shards) : null });
         var lattice = Grains.GetGrain<ILattice>(treeId);
         foreach (var key in Keys)
             await lattice.SetAsync(key, System.Text.Encoding.UTF8.GetBytes(treeId));

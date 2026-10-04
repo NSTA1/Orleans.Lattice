@@ -1,0 +1,17 @@
+# Pairs with MovedStreamKeepsAckedWrites. The flip is guarded by the durable
+# fence, but a re-activated source does not derive its fence from it: it comes
+# up unfenced and acknowledges a write while the durable fence is still held, so
+# the guarded flip still succeeds and discards the write. The guard on the flip
+# is not sufficient on its own; the activation must honour the record too.
+MODULE: MovedStreamKeepsAckedWritesActivationIgnoresDurableFence
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: a re-activated source ignores the durable fence, so a guarded flip still discards a write it acknowledged
+PERTURBS: ShardCrash
+
+--- FIND
+    /\ afence' = (dfence /\ ~lapsed)
+--- REPLACE
+\* MUTATION: the new activation ignores the durable fence.
+    /\ afence' = FALSE
+--- END

@@ -137,7 +137,7 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
         // default local deployment. It also silently seeded a ""-keyed frontier into
         // BackupConsistencyCut, and wrote "" into BackupKeyDescriptor.OriginId,
         // which is documented as null for a single-origin tree.
-        var origin = string.IsNullOrEmpty(entry.OriginClusterId) ? null : entry.OriginClusterId;
+        var origin = BackupChainFrontier.NormalizeOrigin(entry.OriginClusterId);
 
         _keyDescriptors.Add(new BackupKeyDescriptor(
             entry.Key,
@@ -151,15 +151,7 @@ internal sealed class RawEntryCollector(Serializer serializer, BackupKeyMergeMod
 
         if (origin is { } originId)
         {
-            var ticks = entry.Timestamp.WallClockTicks;
-            if (ticks < 0)
-            {
-                ticks = 0;
-            }
-            if (!_perOriginHighWater.TryGetValue(originId, out var current) || ticks > current)
-            {
-                _perOriginHighWater[originId] = ticks;
-            }
+            BackupChainFrontier.Observe(_perOriginHighWater, originId, entry.Timestamp.WallClockTicks);
         }
         else
         {

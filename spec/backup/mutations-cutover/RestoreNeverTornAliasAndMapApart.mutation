@@ -1,0 +1,34 @@
+# Pairs with RestoreNeverTorn. The cutover moves the alias in one registry
+# write and the shard map in a later one - the shape before #4336 - so a
+# routing activation that refreshes between them pairs the shadow with the
+# previous copy's map and reads most of its keys as absent.
+MODULE: RestoreNeverTornAliasAndMapApart
+TARGET: RestoreNeverTorn
+CLASS: Invariant
+SUMMARY: the cutover writes the alias and the shard map in two steps
+PERTURBS: Swap
+
+--- FIND
+    /\ alias' = "shadow"
+    /\ map' = "shadow"
+    /\ rp' = "swapped"
+    /\ UNCHANGED <<route, redir, reserved, deleted, crashed>>
+--- REPLACE
+    /\ alias' = "shadow"
+    \* MUTATION: the map is written separately, later.
+    /\ rp' = "swapped"
+    /\ UNCHANGED <<map, route, redir, reserved, deleted, crashed>>
+--- END
+
+--- FIND
+    /\ redir' = [redir EXCEPT !["prev"] = "shadow"]
+    /\ reserved' = FALSE
+    /\ rp' = "committed"
+    /\ UNCHANGED <<alias, map, route, deleted, crashed>>
+--- REPLACE
+    /\ redir' = [redir EXCEPT !["prev"] = "shadow"]
+    /\ reserved' = FALSE
+    /\ rp' = "committed"
+    /\ map' = "shadow"
+    /\ UNCHANGED <<alias, route, deleted, crashed>>
+--- END
