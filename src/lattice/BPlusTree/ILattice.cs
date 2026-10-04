@@ -993,7 +993,12 @@ public interface ILattice : IGrainWithStringKey
     /// An observably empty tree is instead re-pinned directly to any count in
     /// range, smaller or larger, without running a migration; its shard map is
     /// rebuilt over the same virtual slot count. Throws
-    /// <see cref="InvalidOperationException"/> when a resize is in flight.
+    /// <see cref="InvalidOperationException"/> when a resize is in flight, and
+    /// after a resize completes for as long as it can still be undone and the
+    /// tree's previous physical copy still mirrors into the resized one - until
+    /// that copy is purged, <see cref="LatticeOptions.SoftDeleteDuration"/> after
+    /// the resize - because that shard-for-shard mirror cannot follow the splits
+    /// and folds a reshard is made of.
     /// </para>
     /// <para>
     /// Idempotent: a call with the same <paramref name="newShardCount"/>

@@ -143,6 +143,7 @@ public class TreeShardSplitGrainBoundedDrainTests
             },
         };
 
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeShardSplitGrain>(), state);

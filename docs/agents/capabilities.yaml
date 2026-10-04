@@ -2101,7 +2101,7 @@ capabilities:
       - sequence:
           - "start ReshardAsync on a tree"
           - "start ResizeAsync on the same tree before reshard completes"
-        hazard: "The reshard is refused with InvalidOperationException while resize is in flight, for a target that needs a migration; an observably empty tree is re-pinned even while a resize runs."
+        hazard: "The reshard is refused with InvalidOperationException while resize is in flight, and after it completes until it is undone or the previous copy is purged (SoftDeleteDuration), for a target that needs a migration; an observably empty tree is re-pinned even while a resize runs."
         source: "docs/lattice/online-reshard.md"
       - sequence:
           - "start ReshardAsync with target A"
@@ -2637,7 +2637,12 @@ capabilities:
       - sequence:
           - "start a resize"
           - "start a reshard before the resize completes"
-        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
+        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight, or while a completed resize can still be undone and the previous copy mirrors into the resized one, for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
+        source: "docs/lattice/tree-sizing.md"
+      - sequence:
+          - "an adaptive split or online consolidation is in flight on the tree"
+          - "start a resize"
+        hazard: "Resize and shard-migration interlock; ResizeAsync throws InvalidOperationException while a split or consolidation is in flight on the tree, and a split or fold is refused (or backs out) while a resize is in flight, while its undo is pending or running, and through the soft-delete window until the old physical tree stops mirroring into the destination (#4452)."
         source: "docs/lattice/tree-sizing.md"
       - sequence:
           - "call ResizeAsync while a resize is in progress"

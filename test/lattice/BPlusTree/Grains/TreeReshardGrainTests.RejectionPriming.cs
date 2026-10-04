@@ -29,12 +29,12 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// any of the three.
 /// </para>
 /// <para>
-/// <b>Why the prime sits where it does.</b> All five rejection sites are inside
+/// <b>Why the prime sits where it does.</b> All six rejection sites are inside
 /// <c>ReshardAsync</c>, each behind its own early return or throw. A prime below
 /// any one of them is unreachable on exactly the path whose absence it exists to
-/// make readable, so it goes above all five. It sits deliberately BELOW the
+/// make readable, so it goes above all six. It sits deliberately BELOW the
 /// internal-origin gate: a call refused for a non-internal origin never reaches
-/// any of the five and is not a reshard rejection in this taxonomy, so the
+/// any of the six and is not a reshard rejection in this taxonomy, so the
 /// population primed is exactly the population that can arm the counter.
 /// </para>
 /// </summary>
@@ -55,6 +55,7 @@ public partial class TreeReshardGrainTests
         "argument_out_of_range_max",
         "already_in_progress",
         "resize_in_flight",
+        "resize_undoable",
         "state_write_failed",
     ];
 

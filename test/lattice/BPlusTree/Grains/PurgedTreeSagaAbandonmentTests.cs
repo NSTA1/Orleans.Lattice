@@ -119,6 +119,7 @@ public sealed partial class PurgedTreeSagaAbandonmentTests
         state.State.OperationId = "split-op";
         state.State.PhysicalTreeId = boundPhysicalTreeId;
 
+        w.Factory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             w.Context, w.Factory, w.Reminders, w.Options, w.Resolver,
             new LoggerFactory().CreateLogger<TreeShardSplitGrain>(), state);
@@ -138,6 +139,7 @@ public sealed partial class PurgedTreeSagaAbandonmentTests
         state.State.OperationId = "consolidation-op";
         state.State.PhysicalTreeId = boundPhysicalTreeId;
 
+        w.Factory.StubResizeIdle();
         var grain = new TreeShardConsolidationGrain(
             w.Context, w.Factory, w.Reminders, w.Options, w.Resolver,
             new LoggerFactory().CreateLogger<TreeShardConsolidationGrain>(), state);

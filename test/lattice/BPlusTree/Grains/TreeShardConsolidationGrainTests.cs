@@ -184,6 +184,7 @@ public partial class TreeShardConsolidationGrainTests
 
         var clock = new FakeTimeProvider();
         var state = existingState ?? new FakePersistentState<TreeShardConsolidationState>();
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardConsolidationGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeShardConsolidationGrain>(), state)

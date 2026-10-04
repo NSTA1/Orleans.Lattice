@@ -131,6 +131,7 @@ public partial class TreeShardSplitGrainTests
         }
 
         var state = new FakePersistentState<TreeShardSplitState>();
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeShardSplitGrain>(), state);

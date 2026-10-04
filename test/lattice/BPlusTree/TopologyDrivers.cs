@@ -43,13 +43,26 @@ internal static class TopologyDrivers
         };
     }
 
-    /// <summary>Returns a step that drives an online resize of <paramref name="treeId"/> to completion.</summary>
+    /// <summary>
+    /// Returns a step that drives an online resize of <paramref name="treeId"/> to
+    /// completion, then releases the completed resize's hold on shard migrations
+    /// through <see cref="ResizeMigrationHoldSeam"/>, so a later phase of the
+    /// fixture can reshard the tree without waiting out the soft-delete window.
+    /// </summary>
     public static Func<CancellationToken, Task<bool>> ResizeStep(IGrainFactory grainFactory, string treeId)
     {
         var resize = grainFactory.GetGrain<ITreeResizeGrain>(treeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        var copies = new List<string>();
         return async _ =>
         {
-            if (await resize.IsIdleAsync()) return true;
+            if (await resize.IsIdleAsync())
+            {
+                await ResizeMigrationHoldSeam.ReleaseAsync(grainFactory, treeId, copies);
+                return true;
+            }
+
+            copies.Add(await registry.ResolveAsync(treeId));
             await resize.RunResizePassAsync();
             return false;
         };

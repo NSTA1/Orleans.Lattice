@@ -84,7 +84,7 @@ internal sealed class TreeReshardGrain(
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId));
         var tenantTag = LatticeTenantLabel.ForTree(TreeId);
 
-        // Zero-prime every member of the rejection taxonomy before any of the five
+        // Zero-prime every member of the rejection taxonomy before any of the six
         // sites below can arm one (issue #2918). The counter carries a bounded
         // `reason` domain, and before this only the reason that had already fired
         // existed as a series - so "no reshard was ever rejected for
@@ -93,11 +93,11 @@ internal sealed class TreeReshardGrain(
         // counter is not wired at all". Adding zero to a counter is the identity,
         // so the arms below read exactly as they did.
         //
-        // Placed above all five rejection sites, which is the whole point: a prime
+        // Placed above all six rejection sites, which is the whole point: a prime
         // below any one of them is unreachable on precisely the path whose absence
         // it exists to make readable. It sits BELOW the origin gate deliberately -
         // a call refused for a non-internal origin is not a reshard rejection in
-        // this taxonomy and never reaches any of the five, so the population this
+        // this taxonomy and never reaches any of the six, so the population this
         // primes is exactly the population that can arm it.
         //
         // The issue filed this as unprimable because LatticeMetrics is a static
@@ -105,7 +105,7 @@ internal sealed class TreeReshardGrain(
         // instrument is EMITTED from a grain, and the emitting grain's own entry
         // point is a lifecycle seam with all the reachability the prime needs.
         //
-        // The five are written out rather than looped because the enrolment gate
+        // The six are written out rather than looped because the enrolment gate
         // in test/lattice/Hygiene reads zero-primed values by matching literal
         // `new KeyValuePair<string, object?>(...)` arguments on a zero-valued Add;
         // a foreach over a collection of tags is invisible to it, so a loop would
@@ -117,6 +117,7 @@ internal sealed class TreeReshardGrain(
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "argument_out_of_range_max"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "already_in_progress"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"), tenantTag);
+        LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "resize_undoable"), tenantTag);
         LatticeMetrics.ShardRootReshardRejected.Add(0, treeTag, new KeyValuePair<string, object?>("reason", "state_write_failed"), tenantTag);
 
         LatticeMetrics.ShardRootReshardInFlight.Record(state.State.InProgress ? 1L : 0L, treeTag, tenantTag);
@@ -198,6 +199,16 @@ internal sealed class TreeReshardGrain(
             LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_in_flight"), tenantTag);
             throw new InvalidOperationException(
                 $"A resize is already in progress for tree '{TreeId}'; reshard refused until resize completes.");
+        }
+
+        // A completed resize still holds the splits and folds a reshard is made
+        // of for as long as it can be undone and the previous copy mirrors into
+        // the resized one, shard for shard (issue #4452): refuse now, with the
+        // remedy, rather than start a reshard whose every migration is refused.
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        {
+            LatticeMetrics.ShardRootReshardRejected.Add(1, treeTag, new KeyValuePair<string, object?>("reason", "resize_undoable"), tenantTag);
+            throw new InvalidOperationException(ResizeHoldsMigrationsMessage);
         }
 
         // Snapshot every field the mutation set touches so a failing
@@ -382,6 +393,18 @@ internal sealed class TreeReshardGrain(
     /// </summary>
     internal async Task MigrateAsync()
     {
+        // A reshard is refused up front while a resize holds shard migrations,
+        // and a resize cannot start while a reshard runs, so this should never
+        // fire; if it does, pause loudly rather than dispatch splits or folds
+        // that will each be refused and logged only at debug (issue #4452).
+        if (await ShardMigrationResizeInterlock.ReadResizeHoldAsync(grainFactory, TreeId))
+        {
+            Logger.LogWarning(
+                "Reshard of tree {TreeId} is paused (reason {Reason}): {Message}",
+                TreeId, "resize_undoable", ResizeHoldsMigrationsMessage);
+            return;
+        }
+
         if (state.State.Shrinking)
         {
             await ConsolidateAsync();
@@ -874,6 +897,16 @@ internal sealed class TreeReshardGrain(
         var registry = grainFactory.GetLatticeRegistry();
         return await registry.ResolveAsync(TreeId);
     }
+
+    /// <summary>
+    /// What a reshard refused, or paused, by a resize's hold on shard migrations
+    /// (issue #4452) tells the operator: why, how long it lasts, and the remedy.
+    /// </summary>
+    private string ResizeHoldsMigrationsMessage =>
+        $"The most recent resize of tree '{TreeId}' can still be undone, and the tree's previous physical copy still " +
+        "mirrors into the resized copy shard for shard, so the tree's shards cannot be split or folded until that ends. " +
+        "Undo the resize, or wait until the previous copy is purged (LatticeOptions.SoftDeleteDuration after the resize " +
+        "completed), then reshard.";
 
     /// <summary>
     /// Re-pins the registry's structural shard count to the target, clears
