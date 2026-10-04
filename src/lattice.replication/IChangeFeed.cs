@@ -79,6 +79,9 @@ public interface IChangeFeed
     /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>)
     /// are the exception: they follow every other entry of the call, so a
     /// terminal is never emitted ahead of a prepare it resolves.
+    /// A call that cannot read a partition up to the tail it captured (an
+    /// append below it stays un-durable) throws <see cref="TimeoutException"/>;
+    /// re-subscribe from the same cursor.
     /// <para>
     /// The enumeration takes a snapshot of the WAL at call time and
     /// completes once that snapshot is exhausted. To pick up entries

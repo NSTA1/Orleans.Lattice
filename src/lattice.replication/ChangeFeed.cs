@@ -44,6 +44,15 @@ internal sealed class ChangeFeed(
 {
     private const int PageSize = 256;
 
+    /// <summary>
+    /// How long one call waits for a partition's durable read to reach the
+    /// tail the call captured (#4511) before failing. Settable for tests.
+    /// </summary>
+    internal TimeSpan TailCatchUpLimit { get; init; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>Delay between catch-up reads while a partition holds a transient hole.</summary>
+    internal TimeSpan TailCatchUpPollInterval { get; init; } = TimeSpan.FromMilliseconds(10);
+
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
     private readonly ILatticeMergeModeResolver _modeResolver = modeResolver ?? throw new ArgumentNullException(nameof(modeResolver));
@@ -156,8 +165,9 @@ internal sealed class ChangeFeed(
         // could reach a consumer ahead of that prepare, and a bridge applying
         // the feed to a peer would commit the saga split. Two rules close it:
         // after the first pass the call captures every partition's tail and
-        // catches each partition up to it, so the call yields exactly the
-        // offsets below those tails - and a saga's prepares are appended
+        // reads each partition up to it, waiting out a transient hole below
+        // an in-flight flush (see CatchUpPartitionAsync), so the call yields
+        // exactly the offsets below those tails - and a saga's prepares are appended
         // before it decides, which precedes every terminal append, so a
         // terminal below the tails has every prepare it resolves below them
         // too. Terminals are then emitted after every other record of the
@@ -191,12 +201,9 @@ internal sealed class ChangeFeed(
         var tails = await Task.WhenAll(tailTasks).ConfigureAwait(false);
         for (var partition = 0; partition < partitions; partition++)
         {
-            if (resume[partition] < tails[partition])
-            {
-                await DrainPartitionAsync(
-                    shards[partition], resume[partition], tails[partition],
-                    includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
-            }
+            await CatchUpPartitionAsync(
+                shards[partition], resume[partition], tails[partition],
+                includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
         }
 
         collected.Sort(static (a, b) => a.Timestamp.CompareTo(b.Timestamp));
@@ -207,6 +214,56 @@ internal sealed class ChangeFeed(
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return collected[i];
+        }
+    }
+
+    // Reads one partition up to the tail the call captured. The next
+    // sequence counts appends whose flush is still in flight, and a read
+    // stops below the oldest one, so a durable prepare can sit above a
+    // transient hole; stopping there would miss it while its terminal on
+    // another partition is emitted. The catch-up therefore waits the hole
+    // out, and fails the call rather than yield an incomplete prefix. A
+    // failed flush rewinds the next sequence below the captured tail; the
+    // offsets it rewound past never became durable, so the catch-up then
+    // stops at the rewound sequence.
+    private async Task CatchUpPartitionAsync(
+        IWalShardGrain grain,
+        long fromSequence,
+        long tail,
+        bool includeLocalOrigin,
+        string? localClusterId,
+        LatticeMergeMode resolvedMode,
+        List<WalRecord> collected,
+        List<WalRecord> terminals,
+        CancellationToken cancellationToken)
+    {
+        var reached = fromSequence;
+        var bound = tail;
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (reached < bound)
+        {
+            reached = await DrainPartitionAsync(
+                grain, reached, bound,
+                includeLocalOrigin, localClusterId, resolvedMode, collected, terminals, cancellationToken).ConfigureAwait(false);
+            if (reached >= bound)
+            {
+                return;
+            }
+
+            bound = Math.Min(bound, await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false));
+            if (reached >= bound)
+            {
+                return;
+            }
+
+            if (System.Diagnostics.Stopwatch.GetElapsedTime(started) >= TailCatchUpLimit)
+            {
+                throw new TimeoutException(
+                    $"The change feed could not read a WAL partition up to sequence {bound} (stopped at {reached}) within {TailCatchUpLimit}; "
+                    + "an append below it has not become durable. Re-subscribe from the same cursor.");
+            }
+
+            await Task.Delay(TailCatchUpPollInterval, cancellationToken).ConfigureAwait(false);
         }
     }
 
