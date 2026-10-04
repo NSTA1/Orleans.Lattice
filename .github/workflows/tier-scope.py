@@ -34,15 +34,21 @@ introduced by a member therefore still blocks the merge to `main`; what it loses
 is per-member attribution, because it surfaces on the bucket with every other
 member's changes beside it. That is the accepted cost of this rule.
 
-TLC IS KEPT, DELIBERATELY
--------------------------
+TLC RUNS WHEN ITS INPUTS CHANGE
+-------------------------------
 The `Tlc` category is also exploration-dominated - TLC model-checks every
-specification module and a mutant of each definition - but it is NOT skipped. It
-rides the deterministic tier, it is deterministic (the same state space yields
-the same verdict every run, so there is nothing for a re-run on the bucket to
-discover that the member run would not), and a specification change is the
-very change it judges: skipping it would move a spec defect off the pull
-request that wrote it, which is the attribution this rule otherwise preserves.
+specification module and a mutant of each definition, about 40 runner-minutes
+per run - and it is deterministic: the same specification, harness and toolchain
+yield the same verdict every run. So a member pull request runs the TLC shards
+(test-shards.json `"tlc": true`) exactly when its diff touches a TLC input
+(`TLC_INPUTS`: the `.tla`, `.cfg`, manifest and mutation files under spec/, the
+Formal harness, the CI workflows and the build files the harness compiles
+against; not the refinement notes and READMEs, which TLC never reads), and
+skips them otherwise. Such a
+member cannot change any TLC verdict, so the skip loses nothing - not even
+attribution, because a specification change is precisely a TLC input and still
+runs TLC on the pull request that wrote it. A missing or empty changed-file list
+runs TLC (fail towards "run more"). Fully gated runs never skip it.
 
 LEG CAP
 -------
@@ -55,10 +61,11 @@ minutes of one member's makespan for runner slots the other members are
 waiting on.
 
 Usage:
-  tier-scope.py --event EVENT [--base-ref REF]
+  tier-scope.py --event EVENT [--base-ref REF] [--changed-files FILE]
                 [--github-output FILE] [--summary-file FILE]
 
-Prints `key=value` lines (scope, skipped_tiers, max_legs, reason) to stdout,
+Prints `key=value` lines (scope, skipped_tiers, max_legs, reason,
+skip_tlc_reason) to stdout,
 and appends them to --github-output when given.
 """
 
@@ -71,6 +78,30 @@ import sys
 # The tiers a member pull request does not run, in plan-test-matrix.py's TIERS
 # order. Changing this list changes what every member pull request verifies.
 MEMBER_SKIPPED_TIERS: list[str] = ["coyote", "chaos"]
+
+# Paths whose change can alter a TLC verdict. A member pull request that
+# touches none of them skips the "tlc" shards; see TLC RUNS WHEN ITS INPUTS
+# CHANGE. Patterns are fnmatch globs over repository-relative paths, where `*`
+# also crosses `/`.
+TLC_INPUTS: list[str] = [
+    "spec/*",
+    "test/lattice/Formal/*",
+    "test/lattice/*.csproj",
+    ".github/workflows/*",
+    "tools/tla*",
+    "Directory.Build.*",
+    "Directory.Packages.props",
+    "global.json",
+    "NuGet.config",
+    "nuget.config",
+]
+
+# Matches of TLC_INPUTS that TLC never reads: the refinement notes and READMEs
+# beside the specifications. The non-TLC Formal gates that do read them run on
+# every member pull request regardless.
+TLC_INPUT_EXCLUSIONS: list[str] = [
+    "spec/*.md",
+]
 
 FULL_MAX_LEGS = 10
 MEMBER_MAX_LEGS = 6
@@ -86,9 +117,20 @@ def is_fully_gated_base(ref: str) -> bool:
     return ref == "main" or fnmatch.fnmatchcase(ref, "release/*")
 
 
-def decide(event: str, base_ref: str) -> dict[str, str]:
+def touches_tlc_input(changed: list[str] | None) -> bool:
+    """True unless a non-empty changed-file list touches no TLC input."""
+    if not changed:
+        return True
+    return any(
+        any(fnmatch.fnmatchcase(path, pattern) for pattern in TLC_INPUTS)
+        and not any(fnmatch.fnmatchcase(path, pattern) for pattern in TLC_INPUT_EXCLUSIONS)
+        for path in changed
+    )
+
+
+def decide(event: str, base_ref: str, changed: list[str] | None = None) -> dict[str, str]:
     """The tier scope for one run. Anything unrecognised is fully gated."""
-    full = {"scope": "full", "skipped_tiers": "", "max_legs": str(FULL_MAX_LEGS)}
+    full = {"scope": "full", "skipped_tiers": "", "max_legs": str(FULL_MAX_LEGS), "skip_tlc_reason": ""}
 
     if event != "pull_request":
         full["reason"] = (
@@ -109,10 +151,17 @@ def decide(event: str, base_ref: str) -> dict[str, str]:
         )
         return full
 
+    skip_tlc_reason = "" if touches_tlc_input(changed) else (
+        f"member pull request into integration branch '{base_ref}' that touches no TLC "
+        "input (specifications, Formal harness, workflows, build files), so no TLC "
+        "verdict can change; TLC runs on that branch's own push lane and on its pull "
+        "request into main"
+    )
     return {
         "scope": "member",
         "skipped_tiers": ",".join(MEMBER_SKIPPED_TIERS),
         "max_legs": str(MEMBER_MAX_LEGS),
+        "skip_tlc_reason": skip_tlc_reason,
         "reason": (
             f"member pull request into integration branch '{base_ref}': the "
             f"{' and '.join(MEMBER_SKIPPED_TIERS)} tiers are skipped here and run on that "
@@ -125,12 +174,28 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--event", required=True)
     parser.add_argument("--base-ref", default="")
+    parser.add_argument(
+        "--changed-files",
+        help="File listing the diff's changed paths, one per line. Absent, unreadable "
+             "or empty means TLC is not skipped.",
+    )
     parser.add_argument("--github-output")
     parser.add_argument("--summary-file")
     args = parser.parse_args()
 
-    decision = decide(args.event.strip(), args.base_ref.strip())
-    lines = [f"{key}={decision[key]}" for key in ("scope", "skipped_tiers", "max_legs", "reason")]
+    changed: list[str] | None = None
+    if args.changed_files:
+        try:
+            with open(args.changed_files, encoding="utf-8") as handle:
+                changed = [line.strip() for line in handle if line.strip()]
+        except OSError:
+            changed = None
+
+    decision = decide(args.event.strip(), args.base_ref.strip(), changed)
+    lines = [
+        f"{key}={decision[key]}"
+        for key in ("scope", "skipped_tiers", "max_legs", "reason", "skip_tlc_reason")
+    ]
 
     for line in lines:
         print(line)
@@ -152,6 +217,9 @@ def main() -> int:
                 )
             else:
                 handle.write(f"### Test tiers: all ({decision['reason']})\n\n")
+            if decision["skip_tlc_reason"]:
+                handle.write("### TLC shards skipped\n\n")
+                handle.write(f"Reason: {decision['skip_tlc_reason']}.\n\n")
 
     return 0
 
