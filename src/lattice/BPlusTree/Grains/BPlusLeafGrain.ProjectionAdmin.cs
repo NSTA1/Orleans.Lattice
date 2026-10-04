@@ -134,6 +134,7 @@ internal sealed partial class BPlusLeafGrain
         // terminal has not yet replayed.
         _pendingTx = null;
         _pendingTxOffsets = null;
+        _pendingTxBatches = null;
         _recentlyTerminal = null;
         _backstoppedTerminals = null;
         _terminalLandedClock = null;
