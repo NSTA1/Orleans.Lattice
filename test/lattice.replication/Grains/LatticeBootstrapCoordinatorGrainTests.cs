@@ -45,7 +45,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             string treeName = Tree,
             ILatticeMergeModeResolver? mergeResolver = null,
             LatticeReplicationOptions? replicationOptions = null,
-            IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null)
+            IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null,
+            FakeBootstrapReadFence? readFence = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
@@ -105,7 +106,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var grain = new LatticeBootstrapCoordinatorGrain(
             context, factory, provider, apply, reminders, resolver, optionsMonitor,
             walIntrospection,
-            NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState);
+            NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState,
+            readFence ?? new FakeBootstrapReadFence());
         return (grain, fakeState, factory, provider, reminders, apply, hwm, resolver);
     }
 
@@ -879,7 +881,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Failed));
-        Assert.That(fake.State.InProgress, Is.False);
+        // Issue #4526: the drain had started applying the import, so the
+        // tree stays read-fenced and the bootstrap stays in progress to be
+        // re-driven rather than stopping.
+        Assert.That(fake.State.InProgress, Is.True);
+        Assert.That(fake.State.ReadFenceArmed, Is.True);
     }
 
     [Test]
@@ -978,16 +984,18 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         await grain.ProcessNextPhaseAsync();
 
         // Expected writes:
-        //   1. drain-start (Phase=ApplyingSnapshot, cursor=Zero)
-        //   2. after entry 100 (cursor=Hlc(100))
-        //   3. after entry 200 (cursor=Hlc(200))
-        //   4. drain-end → IncrementalHandoff (cursor=Hlc(250))
-        Assert.That(fake.WriteCount, Is.EqualTo(4));
-        Assert.That(cursorAtWrite, Has.Count.EqualTo(4));
+        //   1. read fence armed (issue #4526; cursor=Zero)
+        //   2. drain-start (Phase=ApplyingSnapshot, cursor=Zero)
+        //   3. after entry 100 (cursor=Hlc(100))
+        //   4. after entry 200 (cursor=Hlc(200))
+        //   5. drain-end, fence lifted -> IncrementalHandoff (cursor=Hlc(250))
+        Assert.That(fake.WriteCount, Is.EqualTo(5));
+        Assert.That(cursorAtWrite, Has.Count.EqualTo(5));
         Assert.That(cursorAtWrite[0], Is.EqualTo(HybridLogicalClock.Zero));
-        Assert.That(cursorAtWrite[1], Is.EqualTo(Hlc(100)));
-        Assert.That(cursorAtWrite[2], Is.EqualTo(Hlc(200)));
-        Assert.That(cursorAtWrite[3], Is.EqualTo(Hlc(250)));
+        Assert.That(cursorAtWrite[1], Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(cursorAtWrite[2], Is.EqualTo(Hlc(100)));
+        Assert.That(cursorAtWrite[3], Is.EqualTo(Hlc(200)));
+        Assert.That(cursorAtWrite[4], Is.EqualTo(Hlc(250)));
     }
 
     [Test]
@@ -1061,10 +1069,12 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>());
 
-        // First write must be ApplyingSnapshot (drain start), then
-        // the catch handler persists Failed.
-        Assert.That(phaseAtWrite, Has.Count.GreaterThanOrEqualTo(2));
-        Assert.That(phaseAtWrite[0], Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
+        // The first write arms the read fence (issue #4526) before the
+        // export is opened; the next must be ApplyingSnapshot (drain
+        // start), then the catch handler persists Failed.
+        Assert.That(phaseAtWrite, Has.Count.GreaterThanOrEqualTo(3));
+        Assert.That(phaseAtWrite[0], Is.EqualTo(LatticeBootstrapState.RequestingSnapshot));
+        Assert.That(phaseAtWrite[1], Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
         Assert.That(phaseAtWrite[^1], Is.EqualTo(LatticeBootstrapState.Failed));
     }
 
@@ -1282,6 +1292,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("decorator boom"));
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Failed));
-        Assert.That(fake.State.InProgress, Is.False);
+        // Issue #4526: a failure part-way through an import keeps the fence
+        // and the bootstrap in progress for its automatic re-drive.
+        Assert.That(fake.State.InProgress, Is.True);
+        Assert.That(fake.State.ReadFenceArmed, Is.True);
     }
 }

@@ -120,7 +120,10 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             metadata.AsOfHlc);
 
         var entries = DrainAsync(treeName, sourceClusterId, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, metadata.AsOfHlc, metadata.CausalStableFrontier, entries);
+        return new SnapshotStream(treeName, metadata.AsOfHlc, metadata.CausalStableFrontier, entries)
+        {
+            ExportEpoch = metadata.ExportEpoch,
+        };
     }
 
     private async IAsyncEnumerable<SnapshotEntry> DrainAsync(

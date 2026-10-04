@@ -73,7 +73,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             .GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, resolver, optionsMonitor, walIntrospection, logger, fakeState);
+            context, factory, provider, apply, reminders, resolver, optionsMonitor, walIntrospection, logger, fakeState,
+            new Orleans.Lattice.Replication.Tests.Fakes.FakeBootstrapReadFence());
         return (grain, fakeState, provider, apply, hwm, logger);
     }
 
