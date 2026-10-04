@@ -212,9 +212,10 @@ public partial class BPlusLeafGrainTests
         int attempts,
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         int maxLeafReplayEntries = LatticeOptions.DefaultMaxLeafReplayEntries,
-        bool recordUnresolvedPreparesBeyondCap = true)
+        bool recordUnresolvedPreparesBeyondCap = true,
+        LeafSnapshotBlob? initialSnapshot = null)
     {
-        var store = new InMemorySnapshotStore();
+        var store = new InMemorySnapshotStore(initialSnapshot);
         var observed = new List<long>();
 
         for (var attempt = 0; attempt < attempts; attempt++)
@@ -1235,6 +1236,23 @@ public partial class BPlusLeafGrainTests
         // faithful shape, not a convenience.
         state.State.ProjectionCheckpointOffsetsByPartition = [0L, 0L];
 
+        // ...and both must be COVERED by a snapshot, for the same reason. A leaf
+        // with real checkpoints and no snapshot activates cold, and a capture
+        // taken part-way through a cold rebuild may claim only what the rebuild
+        // has re-read (issue #4451): partition 1, never reached, is claimed at
+        // the -1 sentinel, the next activation's rehydrate resets it there, and
+        // the sentinel-first sweep order then hands partition 0 the drain slot
+        // this scenario exists to deny it. Seeding an empty snapshot covering
+        // both checkpoints makes every activation warm, as a production leaf
+        // with real checkpoints is.
+        var coveringBothCheckpoints = new LeafSnapshotBlob
+        {
+            SnapshotOffset = 0L,
+            Rows = [],
+            CapturedAtTicks = 1L,
+            SnapshotOffsetsByPartition = [0L, 0L],
+        };
+
         return await RunInterruptedReplaysAsync(
             state,
             cts =>
@@ -1269,7 +1287,8 @@ public partial class BPlusLeafGrainTests
                     [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
             ],
             attempts: 12,
-            maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork);
+            maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork,
+            initialSnapshot: coveringBothCheckpoints);
     }
 
     [Test]
