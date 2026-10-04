@@ -2126,6 +2126,67 @@ internal sealed partial class ShardRootGrain(
     }
 
     /// <inheritdoc />
+    public Task<ShardRangeClockPage> GetRangeClockBoundedAsync(string startInclusive, string endExclusive)
+    {
+        var scan = BeginScanPage(nameof(GetRangeClockBoundedAsync));
+        return GuardScanPageAsync(scan, GetRangeClockBoundedCoreAsync(startInclusive, endExclusive, scan));
+    }
+
+    private async Task<ShardRangeClockPage> GetRangeClockBoundedCoreAsync(
+        string startInclusive,
+        string endExclusive,
+        ScanPageWalk scan)
+    {
+        EnsureInternalOrigin(LatticeOperation.RangeDelete);
+        if (!await PrepareForReadAsync()) return new ShardRangeClockPage();
+
+        // The same descent and chain walk as DeleteRangeBoundedCoreAsync, so the
+        // probe covers every leaf the delete can tombstone (issue #4530). It may
+        // visit one leaf more - a leaf that declares no high bound is followed to
+        // its sibling - which only raises the maximum.
+        scan.Phase = ScanPagePhase.Descent;
+        GrainId leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(startInclusive);
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, startInclusive);
+        }
+
+        scan.Phase = ScanPagePhase.LeafWalk;
+        var max = HybridLogicalClock.Zero;
+        string? resumeFrom = null;
+        while (true)
+        {
+            StandDownIfCeilingFired(scan, leafId);
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var clock = await leafGrain.GetClockAsync();
+            if (clock > max) max = clock;
+            scan.Budget.RecordLeafVisited();
+
+            var bounds = await leafGrain.GetKeyRangeAsync();
+            if (bounds.HighKeyExclusive is { } high)
+            {
+                if (string.CompareOrdinal(high, endExclusive) >= 0)
+                    break;
+                if (scan.Budget.ShouldYield() && string.CompareOrdinal(high, startInclusive) > 0)
+                {
+                    resumeFrom = high;
+                    break;
+                }
+            }
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                break;
+
+            leafId = nextSibling.Value;
+        }
+
+        return new ShardRangeClockPage { MaxClock = max, ResumeFromInclusive = resumeFrom };
+    }
+
+    /// <inheritdoc />
     public async Task<int> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
         // Retained for wire compatibility with a caller from an older build
