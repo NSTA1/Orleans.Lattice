@@ -426,13 +426,16 @@ public class LatticeReplicationOptions
     /// per-origin FIFO and atomic-batch boundaries without reordering.
     /// </para>
     /// <para>
-    /// Correctness is preserved across the elision path: a manifest entry
-    /// whose content the receiver already holds but whose
-    /// <see cref="HybridLogicalClock"/> is newer (the idempotent re-set of
-    /// an identical value) advances the receiver's per-origin
-    /// high-water-mark via a metadata-only apply during the exchange, so
-    /// the high-water-mark still advances even though the payload is never
-    /// re-shipped. Range deletes, saga terminal marks, prepared
+    /// Correctness is preserved across the elision path (#4585): the
+    /// receiver elides an entry only when it already merged exactly that
+    /// write - the same content hash, origin and source
+    /// <see cref="HybridLogicalClock"/> - and its leaf still holds the key at
+    /// that version or a newer one. Equal bytes at another version or from
+    /// another origin always ship, because last-writer-wins orders writes by
+    /// version, not by content. An elided write above the receiver's
+    /// per-origin high-water-mark (one it merged without moving the mark,
+    /// such as a bootstrap row) advances the mark via a metadata-only update
+    /// during the exchange. Range deletes, saga terminal marks, prepared
     /// atomic-batch entries, and zero-HLC entries are never placed in the
     /// manifest and are always shipped verbatim. The per-elided-entry win
     /// is surfaced on the

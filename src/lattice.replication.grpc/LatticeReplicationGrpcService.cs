@@ -154,6 +154,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
     private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
     private readonly ILatticeReplicationContext? _replicationContext;
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? _options;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -193,7 +194,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ReceiverAppliedContentIndex appliedContentIndex,
         ILogger<LatticeReplicationGrpcService> logger,
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
-        ILatticeReplicationContext? replicationContext = null)
+        ILatticeReplicationContext? replicationContext = null,
+        Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -211,6 +213,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _logger = logger;
         _dictionaryProvider = dictionaryProvider;
         _replicationContext = replicationContext;
+        _options = options;
     }
 
     /// <summary>
@@ -395,6 +398,26 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // origin and poison that stream's cursor.
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
 
+        // A sender that lost records to a WAL trim before shipping them asks
+        // this receiver to re-seed past an export epoch (#4534). The origin was
+        // just verified against the caller, so the bootstrap source is the
+        // authenticated sender. The answer is echoed on whichever ack follows.
+        long? bootstrapEpoch = null;
+        if (long.TryParse(
+                ReadHeader(context, LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var reseedAfter))
+        {
+            bootstrapEpoch = await ReplicationReseedResponder.RespondAsync(
+                _grainFactory,
+                request.TreeName,
+                request.OriginClusterId,
+                reseedAfter,
+                _options?.Get(request.TreeName).AutoBootstrapOnFallOffLog ?? true,
+                _logger).ConfigureAwait(false);
+        }
+
         var entries = request.Entries;
 
         // Time the apply call so the flow-control policy can shape
@@ -546,6 +569,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     HighestAppliedHlc = result.HighWaterMark,
                     BlockedAtHlc = blockedAtHlc,
                     PauseForMs = ReceiveFenceDeferPauseMs,
+                    BootstrapEpoch = bootstrapEpoch,
                     SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
                     AdvertisedDictionaryIds = advertisedDictionaryIds,
                     AdvertisedDictionaries = CompressionDictionaryAdvertisement.Build(_dictionaryProvider),
@@ -562,6 +586,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 BlockedAtHlc = blockedAtHlc,
                 SuggestedBatchSize = hint.SuggestedBatchSize,
                 PauseForMs = hint.PauseForMs,
+                BootstrapEpoch = bootstrapEpoch,
                 // Advertise the maximum framing wire version this
                 // receiver can decode so a sender that has opted into
                 // wire-version negotiation can observe this peer's
@@ -670,43 +695,24 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
         var entries = request.Entries ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
 
-        // Resolve the durable per-origin high-water-mark so the
-        // identical-content-newer-clock decision is taken against the
-        // receiver's authoritative recorded clock rather than the
-        // best-effort applied-content index. The index answers only
-        // "do I hold byte-identical content for this key?"; the clock
-        // comparison that drives the metadata-only advance is anchored
-        // on the high-water-mark grain.
+        // The receiver's per-origin high-water mark anchors only the
+        // metadata-only advance below; it says nothing about whether a given
+        // key holds a given write.
         var hwmGrain = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(request.TreeName);
         var hwm = await hwmGrain
             .GetAsync(request.OriginClusterId, context.CancellationToken)
             .ConfigureAwait(false);
 
-        // Project the applied-content index onto the manifest's keys. A
-        // key absent from the index (cold / never-applied / evicted) is
-        // simply omitted, so the planner reports it as missing and the
-        // sender ships it - always safe. The held clock is stamped at
-        // the durable high-water-mark so the planner's advance is the
-        // max manifest clock strictly newer than the recorded
-        // high-water-mark among content-matching entries.
-        Dictionary<string, (ulong ContentHash, HybridLogicalClock Hlc)>? held = null;
-        for (var i = 0; i < entries.Count; i++)
-        {
-            var key = entries[i].Key ?? string.Empty;
-            if (_appliedContentIndex.TryGetContentHash(request.TreeName, key, out var contentHash))
-            {
-                (held ??= new Dictionary<string, (ulong, HybridLogicalClock)>(StringComparer.Ordinal))[key] =
-                    (contentHash, hwm);
-            }
-        }
+        var held = await ResolveHeldContentAsync(request, entries, context.CancellationToken).ConfigureAwait(false);
 
         var response = ContentManifestPlanner.ComputeMissingSet(
             in request,
-            held ?? (IReadOnlyDictionary<string, (ulong, HybridLogicalClock)>)EmptyHeld);
+            held ?? (IReadOnlyDictionary<string, ReceiverHeldContent>)EmptyHeld,
+            hwm);
 
-        // Durably advance the per-origin high-water-mark for the
-        // identical-content entries the receiver elided whose clock was
-        // newer than its recorded clock (the idempotent re-set). The
+        // Durably advance the per-origin high-water-mark to the highest elided
+        // write above it - a write the receiver already merged without moving
+        // its mark, for example during a bootstrap drain. The
         // advance is metadata-only - no payload travelled - and is
         // strictly-greater-only inside the grain, so re-running the
         // exchange is idempotent. Surface the candidate clock on the
@@ -889,7 +895,74 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// keys are all absent from the applied-content index. Avoids
     /// allocating a per-call empty dictionary on the cold-index path.
     /// </summary>
-    private static readonly IReadOnlyDictionary<string, (ulong ContentHash, HybridLogicalClock Hlc)> EmptyHeld =
-        new Dictionary<string, (ulong, HybridLogicalClock)>(StringComparer.Ordinal);
+    private static readonly IReadOnlyDictionary<string, ReceiverHeldContent> EmptyHeld =
+        new Dictionary<string, ReceiverHeldContent>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Projects the applied-content index onto the manifest's keys and keeps
+    /// only the writes the receiver provably still reflects (#4585). A key is
+    /// held when the index recorded exactly the manifested write - its digest,
+    /// the requesting origin, and its source HLC - and the leaf still holds the
+    /// key at that version or a newer one: newer, so the manifested write would
+    /// lose its merge; or equal with the same bytes. The leaf read is what makes a
+    /// stale record harmless, whatever left it stale: a restore or its revert, a
+    /// purge and recreate, an alias rebind, or a clearing bootstrap lowers the
+    /// leaf without passing through the applier. A key the index does not
+    /// record, or whose leaf reads absent or tombstoned, is omitted, so the
+    /// planner reports it missing and the sender ships it - always safe.
+    /// Returns <see langword="null"/> when nothing is held.
+    /// </summary>
+    private async Task<Dictionary<string, ReceiverHeldContent>?> ResolveHeldContentAsync(
+        ContentManifestRequest request,
+        IReadOnlyList<ContentManifestEntry> entries,
+        CancellationToken cancellationToken)
+    {
+        List<(ContentManifestEntry Entry, ReceiverHeldContent Recorded)>? candidates = null;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var key = entry.Key ?? string.Empty;
+            if (_appliedContentIndex.TryGetContent(request.TreeName, key, out var recorded)
+                && recorded.ContentHash == entry.ContentHash
+                && recorded.Hlc == entry.Hlc
+                && string.Equals(recorded.OriginClusterId, request.OriginClusterId, StringComparison.Ordinal))
+            {
+                (candidates ??= new List<(ContentManifestEntry, ReceiverHeldContent)>()).Add((entry, recorded));
+            }
+        }
+
+        if (candidates is null)
+        {
+            return null;
+        }
+
+        var lattice = _grainFactory.GetGrain<ILattice>(request.TreeName);
+        var reads = new Task<VersionedValue>[candidates.Count];
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            reads[i] = ReplicationSystemOriginValueReader.ReadAsync(
+                lattice, candidates[i].Entry.Key ?? string.Empty, cancellationToken);
+        }
+
+        var current = await Task.WhenAll(reads).ConfigureAwait(false);
+
+        Dictionary<string, ReceiverHeldContent>? held = null;
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            var (entry, recorded) = candidates[i];
+            var leaf = current[i];
+            var order = leaf.Version.CompareTo(entry.Hlc);
+            var reflects = leaf.Value is not null
+                && (order > 0
+                    || (order == 0
+                        && ReplicationContentHash.Compute(MutationKind.Set, entry.Key, null, leaf.Value) == entry.ContentHash));
+            if (reflects)
+            {
+                (held ??= new Dictionary<string, ReceiverHeldContent>(StringComparer.Ordinal))[entry.Key ?? string.Empty] = recorded;
+            }
+        }
+
+        return held;
+    }
 }
 

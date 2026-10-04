@@ -588,6 +588,13 @@ public sealed class LatticeWalGc(
         var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeName);
         var tenantTag = LatticeTenantLabel.ForTree(treeName);
 
+        // The read positions of the consumers that read this log by offset
+        // (issue #4579). Read once per pass, after the early return above, so a
+        // tree with nothing to trim never asks.
+        var consumerOffsetFloors = await ReadOffsetConsumerFloorsAsync(treeName, partitions, cancellationToken).ConfigureAwait(false);
+        long? ConsumerOffsetFloor(int partition)
+            => consumerOffsetFloors is { } floors && floors[partition] != long.MaxValue ? floors[partition] : null;
+
         // Durability hold budget (issue #3300), decided once per pass against
         // the pre-trim footprint sampled above, exactly as the byte-pressure
         // trigger is.
@@ -694,7 +701,7 @@ public sealed class LatticeWalGc(
                     tenantTag);
             }
 
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
@@ -2626,6 +2633,7 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? blockedFloor,
         long? offsetFloor,
         WalGcOffsetAdmission? offsetAdmission,
+        long? consumerOffsetFloor,
         bool durabilityHold,
         CancellationToken cancellationToken)
     {
@@ -2697,7 +2705,7 @@ public sealed class LatticeWalGc(
                 }
 
                 var eligibility = ClassifyEligibility(
-                    walEntry.Mutation, walEntry.Offset, minCursor, ttlCeiling, causalStable, blockedFloor, offsetAdmission);
+                    walEntry.Mutation, walEntry.Offset, minCursor, ttlCeiling, causalStable, blockedFloor, offsetAdmission, consumerOffsetFloor);
                 if (eligibility == WalGcTrimEligibility.Eligible)
                 {
                     lastEligibleOffset = walEntry.Offset;
@@ -3016,7 +3024,8 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor,
-        WalGcOffsetAdmission? offsetAdmission)
+        WalGcOffsetAdmission? offsetAdmission,
+        long? consumerOffsetFloor)
         => WalGcTrimCore.ClassifyEntry(
             entry.Timestamp,
             entry.VectorClock,
@@ -3025,5 +3034,80 @@ public sealed class LatticeWalGc(
             ttlCeiling,
             causalStable,
             blockedFloor,
-            offsetAdmission);
+            offsetAdmission,
+            consumerOffsetFloor);
+
+    /// <summary>
+    /// Reads the durable read position of every offset-reading consumer
+    /// registered for <paramref name="treeName"/>'s WAL (issue #4579) and folds
+    /// them into one floor per partition: the lowest offset any of them has not
+    /// durably consumed. <see cref="long.MaxValue"/> marks a partition no
+    /// registered consumer reads.
+    /// </summary>
+    /// <returns>
+    /// <see langword="null"/> when no consumer is registered, or when the grain
+    /// runtime is unavailable (a bare-<see cref="IServiceProvider"/>
+    /// construction). When the set or any member cannot be read the floors are
+    /// all zero, so the pass fails closed and only the retention ceiling trims:
+    /// an unknown read position must never be treated as a consumed one.
+    /// </returns>
+    private async Task<long[]?> ReadOffsetConsumerFloorsAsync(
+        string treeName,
+        int partitions,
+        CancellationToken cancellationToken)
+    {
+        if (GrainFactory is not { } factory)
+        {
+            return null;
+        }
+
+        try
+        {
+            var consumers = await factory.GetGrain<IWalOffsetConsumerRegistryGrain>(treeName)
+                .GetConsumersAsync()
+                .WaitAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (consumers.Count == 0)
+            {
+                return null;
+            }
+
+            var floors = new long[partitions];
+            Array.Fill(floors, long.MaxValue);
+            foreach (var consumer in consumers)
+            {
+                var positions = await factory.GetGrain(consumer)
+                    .AsReference<IWalOffsetConsumer>()
+                    .GetDurableReadPositionsAsync(treeName)
+                    .WaitAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (positions is null)
+                {
+                    // The consumer no longer reads this log. It unregisters
+                    // itself when it rebinds; the GC never does, because a
+                    // consumer rebinding back would race the removal.
+                    continue;
+                }
+
+                // A partition past the consumer's answer is one it has not
+                // reported, not one it never reads: the partition count could
+                // have grown under it, so refuse until it reports.
+                for (var p = 0; p < partitions; p++)
+                {
+                    floors[p] = Math.Min(floors[p], p < positions.Length ? Math.Max(0, positions[p]) : 0);
+                }
+            }
+
+            return floors;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                ex,
+                "WAL GC pass for tree {Tree} could not read the read positions of its offset-reading consumers; "
+                + "the pass trims only past the retention ceiling. The next pass retries.",
+                treeName);
+            return new long[partitions];
+        }
+    }
 }

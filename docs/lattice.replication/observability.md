@@ -146,7 +146,7 @@ The measurement is **observability-only**: it never elides, reorders, or alters 
 
 ## Content-manifest payload elision
 
-These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. An identical-content entry carrying a newer HLC advances the receiver's per-origin high-water-mark through a metadata-only update during the exchange.
+These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. The receiver counts an entry as held only when it already merged exactly that write - the same content hash, origin, and source HLC - and its leaf still holds the key at that version or a newer one ([#4585](https://github.com/NSTA1/Orleans.Lattice/issues/4585)); equal bytes at another version or from another origin always ship, because last-writer-wins orders writes by version, not content. An elided write above the receiver's per-origin high-water-mark (one it merged without moving the mark, such as a bootstrap row) advances the mark through a metadata-only update during the exchange.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -285,7 +285,7 @@ Genuine causal dependencies are not enforced through this counter: an entry that
 
 ## Fall-off-the-log detection (`peer.fell_off_log` / `peer.fell_off_log_suppressed`)
 
-The fall-off detector compares a peer's per-origin high-water-mark with an oldest-available HLC for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest entry the peer authored within a bounded window at the head of each WAL partition - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)).
+The fall-off detector compares a peer's per-origin high-water-mark with the oldest retained local WAL entry this receiver still has for that peer and treats a high-water-mark strictly below it as a gap incremental replication cannot bridge. The per-tree maintenance grain supplies that HLC from the local write-ahead log - the oldest entry the peer authored within a bounded window at the head of each WAL partition - once per `MaintenanceFallOffCheckInterval` (see [Replication Drivers](replication-drivers.md#independent-cadences)). This metric is not the source-side WAL trim detector; a sender that trims past its shipper cursor requests a re-seed in-band and, if the transport does not carry that request, remains stalled while saga records are withheld.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
@@ -304,6 +304,7 @@ The receiver-side bootstrap coordinator emits the following instruments tracking
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` (`By`) | `tree`, `origin` | Incremented by `entry.Value.Length` per applied entry. Mirrors the lifecycle of `entries_received`. |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is `live` or `failed`; `timed_out` is published as a constant but not emitted today (see below). |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `tree`, `origin` | Incremented by 1 each time the bootstrap drain catches a classified-transient transport fault and consumes one slot of the configured `LatticeReplicationOptions.BootstrapTransientRetry` budget. A bootstrap that completes on its first drain attempt records zero on this counter; a bootstrap that exhausts the budget and pivots to `Failed` records `MaxAttempts - 1` (one per consumed retry slot). |
+| `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `tree` | Incremented by 1 each time an operator force-lifts the read fence a failed bootstrap left over a partial import, through `ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync` (see [Read fence during the drain](snapshot-bootstrap.md#read-fence-during-the-drain)). Each increment opens a window in which reads may observe a partial import, so any non-zero value is an alert. Recorded only when a lift happens. |
 
 The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(treeName, sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
 
@@ -418,6 +419,7 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.bootstrap.bytes_received` | `Counter<long>` | `By` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | `tree`, `origin`, `outcome` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `{lift}` | `tree` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.digest_probe.compared` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer`, `outcome` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.digest_probe.mismatch` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.merkle_walk.localised` | `Counter<long>` | `{leaf}` | `tree`, `depth` | [Merkle walk](anti-entropy-merkle-walk.md#observability) |

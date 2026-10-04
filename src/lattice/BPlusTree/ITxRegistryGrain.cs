@@ -645,6 +645,20 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(Guid token, IReadOnlyList<Guid> txids);
 
     /// <summary>
+    /// The transactions the capture under <paramref name="token"/> resolved through
+    /// <see cref="GetCaptureGateStatusManyAsync"/> as <see cref="TxStatus.InFlight"/>:
+    /// the sagas pending in the capture that it held pre-saga. An incremental backup
+    /// layered on the capture needs them, because such a saga can be decided later
+    /// with none of its records inside the increment's delta window (issue #4589).
+    /// Throws <see cref="TxDecisionGateRefusedException"/> with
+    /// <see cref="TxDecisionGateRefusal.GateLapsed"/> when the gate is not live.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>The transactions resolved as undecided under the gate.</returns>
+    [AlwaysInterleave]
+    Task<IReadOnlyList<Guid>> GetCaptureGateUndecidedAsync(Guid token);
+
+    /// <summary>
     /// The status read for a caller about to APPLY a terminal on the strength of
     /// the answer: the leaf self-terminalise sweep and the shard split's
     /// retroactive sweep (issue #4485). A terminal verdict is returned only when

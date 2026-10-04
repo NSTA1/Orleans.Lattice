@@ -2002,6 +2002,22 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<Dictionary<string, HybridLogicalClock?>> GetOriginalPrepareStampsAsync(Guid transactionId, bool exhaustive);
 
     /// <summary>
+    /// Arms or lifts this shard's receiver bootstrap read fence (issue #4526),
+    /// durably. While armed, every read of the shard - the method set
+    /// <c>ShardRootGrain.IsBootstrapFencedMethod</c> names - is refused with
+    /// <see cref="LatticeTreeBootstrappingException"/>, and the shard refuses to
+    /// open a split or consolidation. Writes are unaffected. Idempotent.
+    /// </summary>
+    /// <param name="fenced"><see langword="true"/> to arm the fence, <see langword="false"/> to lift it.</param>
+    Task SetBootstrapReadFenceAsync(bool fenced);
+
+    /// <summary>
+    /// Reports whether this shard's receiver bootstrap read fence is armed
+    /// (issue #4526).
+    /// </summary>
+    Task<bool> IsBootstrapReadFencedAsync();
+
+    /// <summary>
     /// Test-only seam: requests that the grain runtime collect this
     /// activation by calling <c>DeactivateOnIdle</c> from inside the
     /// grain. Integration tests use this to exercise the post-restart

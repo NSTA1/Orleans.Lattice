@@ -235,4 +235,18 @@ public readonly record struct LatticeSnapshotCoordinate
     /// </para>
     /// </summary>
     [Id(6)] public string? PhysicalTreeId { get; init; }
+
+    /// <summary>
+    /// The atomic writes (saga transaction ids) the snapshot found pending and
+    /// resolved as undecided against its decision gate (issue #4485), and so holds
+    /// pre-saga. An incremental backup layered on a capture of this snapshot looks
+    /// each one up again: such a saga can commit later with none of its records
+    /// inside the increment's delta window, and the increment must not miss it
+    /// (issue #4589).
+    /// <para>
+    /// <see langword="null"/> on coordinates persisted before this slot was
+    /// introduced; empty when no pending saga was undecided.
+    /// </para>
+    /// </summary>
+    [Id(7)] public IReadOnlyList<Guid>? UndecidedSagaIds { get; init; }
 }

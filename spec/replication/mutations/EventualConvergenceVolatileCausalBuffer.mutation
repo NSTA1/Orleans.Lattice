@@ -7,6 +7,7 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: a restart empties the causal buffer, losing parked entries that were already acknowledged
 PERTURBS: Restart
+BOUNDS: MaxHlc = 1
 
 --- FIND
     /\ wake' = [wake EXCEPT ![x] = buf[x] # {}]

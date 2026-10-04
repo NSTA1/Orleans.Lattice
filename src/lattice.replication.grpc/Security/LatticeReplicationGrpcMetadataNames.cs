@@ -29,4 +29,11 @@ internal static class LatticeReplicationGrpcMetadataNames
     /// secret to match the one configured for the stamped origin.
     /// </summary>
     public const string OriginClusterIdHeader = "x-lattice-replication-origin";
+
+    /// <summary>
+    /// Header that carries <see cref="ReplicationBatch.ReseedAfterEpoch"/> on a
+    /// live push (issue #4534): present only while the sender has taken the
+    /// receiver off the log and waits for it to re-seed.
+    /// </summary>
+    public const string ReseedAfterEpochHeader = "x-lattice-replication-reseed-after";
 }

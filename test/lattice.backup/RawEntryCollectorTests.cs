@@ -242,7 +242,9 @@ public sealed class RawEntryCollectorTests
             endExclusive: null,
             mergeMode: BackupKeyMergeMode.LastWriterWins,
             baseBackupId: "base-id",
-            batchSize: 100);
+            batchSize: 100,
+            resolveDecisions: (_, _) => Task.FromResult<IReadOnlyDictionary<Guid, Orleans.Lattice.BPlusTree.TxStatus>>(
+                new Dictionary<Guid, Orleans.Lattice.BPlusTree.TxStatus>()));
 
         incremental.OnEntry(new Orleans.Lattice.Wal.WalSubscriptionEntry(0, 1L, new LatticeMutation
         {

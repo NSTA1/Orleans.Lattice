@@ -126,6 +126,8 @@ The shipper's outbound path is unconditionally framing-only. Every batch the shi
 
 Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (for example a host-supplied HTTP-framed transport) encode `EncodedEnvelope` with `IReplicationBatchEncoder.EncodeFraming` and forward the bytes as-is, as the gRPC transport's marshaller does; the default no-op transport discards the batch.
 
+A transport must also preserve the source-trim re-seed handshake. When `ReplicationBatch.ReseedAfterEpoch` is set, the receiver should run the same responder as the gRPC service and echo its completed export epoch in `ReplicationAck.BootstrapEpoch`. A transport that drops the request fails closed: the source keeps saga records withheld and peer health remains stalled until a bootstrap from a later export is observed.
+
 ## Caveats
 
 - **Transports do not interpret the payload.** A transport that needs to make a routing decision based on payload contents (e.g. shed-load on oversize batches) must do so via batch metadata that the framing seam exposes on the call site, not by parsing `Payload` itself. Cross-cutting concerns belong on the call envelope; the wire bytes stay opaque.

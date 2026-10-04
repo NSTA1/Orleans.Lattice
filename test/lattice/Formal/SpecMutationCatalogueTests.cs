@@ -194,14 +194,7 @@ public sealed class SpecMutationCatalogueTests
         var where = module.Describe(module.VariantConfigPath(variant));
         var assignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadVariantConfig(variant));
         var baseAssignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadConfig());
-        var specifications = module.ReadSiblingSpecifications().Values.Select(SpecActions.StripComments).ToArray();
-
-        bool Defined(string name) => specifications.Any(text =>
-            Regex.IsMatch(text, $@"^{Regex.Escape(name)}(\([^)]*\))?\s*==", RegexOptions.Multiline));
-
-        bool Declared(string name) => specifications.Any(text =>
-            Regex.Matches(text, @"^\s*CONSTANTS?\b(?<names>[^\n]*(\n[ \t]+[^\n]*)*)", RegexOptions.Multiline)
-                .Any(m => Regex.IsMatch(m.Groups["names"].Value, $@"\b{Regex.Escape(name)}\b")));
+        var (declared, defined) = SpecificationNames(module);
 
         Assert.Multiple(() =>
         {
@@ -215,7 +208,7 @@ public sealed class SpecMutationCatalogueTests
             foreach (var assignment in assignments)
             {
                 Assert.That(
-                    Declared(assignment.Name) || Defined(assignment.Name),
+                    declared(assignment.Name) || defined(assignment.Name),
                     Is.True,
                     $"{where} assigns '{assignment.Name}', which {module.Name} neither declares as a CONSTANT nor "
                     + "defines. TLC would accept the value assignment and silently check the unchanged model.");
@@ -223,7 +216,7 @@ public sealed class SpecMutationCatalogueTests
                 if (assignment.IsOverride)
                 {
                     Assert.That(
-                        Defined(assignment.Value),
+                        defined(assignment.Value),
                         Is.True,
                         $"{where} overrides '{assignment.Name}' with '{assignment.Value}', which {module.Name} does not define.");
                 }
@@ -587,6 +580,135 @@ public sealed class SpecMutationCatalogueTests
                 Throws.InvalidOperationException.With.Message.Contains("SPECIFICATION"),
                 "a cfg naming no behaviour was carried into generated cfgs that TLC could not run.");
         });
+    }
+
+    /// <summary>
+    /// Every bound a mutation's <c>BOUNDS:</c> header assigns is a name the
+    /// specification declares or defines. TLC accepts a value assignment to a
+    /// name the specification does not have and silently checks the unchanged
+    /// model, so a misspelt bound would run the mutant at full size - harmless
+    /// to the verdict, but the cost the header exists to cut would come back
+    /// unannounced. Checked without a toolchain, naming the culprit.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_bound_a_mutation_assigns_belongs_to_the_specification(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var (declared, defined) = SpecificationNames(module);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in module.LoadMutations())
+            {
+                foreach (var bound in mutation.Bounds)
+                {
+                    Assert.That(
+                        declared(bound.Name) || defined(bound.Name),
+                        Is.True,
+                        $"mutation '{mutation.Name}' bounds '{bound.Name}', which {module.Name} neither declares as a "
+                        + "CONSTANT nor defines. TLC would accept the assignment and run the mutant at full size.");
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// The control arm never carries a mutation's bounds and the mutant arm
+    /// always does. This is the half of the BOUNDS design the experiment's
+    /// meaning rests on: the control decides that the target holds on the base,
+    /// and it must decide that over the module's own instance. It is pinned
+    /// without a JVM for every mutation in every module; the synthetic control
+    /// in <see cref="TlcModelCheckTests"/> proves it again with TLC, using a
+    /// bound under which the base itself would fail.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Only_the_mutant_arm_carries_a_mutations_bounds(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var baseConfig = module.ReadConfig();
+        var baseAssignments = SpecMutationCatalogue.ReadConstantAssignments(baseConfig);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in module.LoadMutations())
+            {
+                var control = SpecMutationCatalogue.ReadConstantAssignments(mutation.BuildConfig(baseConfig));
+                var mutant = SpecMutationCatalogue.ReadConstantAssignments(mutation.BuildMutantConfig(baseConfig));
+
+                Assert.That(
+                    control,
+                    Is.EqualTo(baseAssignments),
+                    $"the control-arm cfg for mutation '{mutation.Name}' assigns something the base cfg does not, so "
+                    + "the control would not check the module's own instance.");
+                Assert.That(
+                    mutant,
+                    Is.EqualTo(baseAssignments.Concat(mutation.Bounds)),
+                    $"the mutant-arm cfg for mutation '{mutation.Name}' does not carry exactly its declared bounds.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The vacuity floor for the two gates above, across every module: some
+    /// mutation declares bounds, so they check something.
+    /// </summary>
+    [Test]
+    public void Some_mutation_declares_bounds()
+    {
+        Assert.That(
+            SpecModuleCatalogue.Repository().SelectMany(m => m.LoadMutations()).Where(m => m.Bounds.Count > 0),
+            Is.Not.Empty,
+            "no mutation in any module declares BOUNDS, so the bounds gates check nothing. If that is now "
+            + "intended, delete this test together with the header's support.");
+    }
+
+    /// <summary>
+    /// The header's parse rules: comma-separated <c>Name = value</c> entries
+    /// with an integer or identifier value. A definition override, an empty
+    /// entry, a repeated name or a malformed value is refused rather than
+    /// passed to TLC, which would ignore what it could not resolve.
+    /// </summary>
+    [Test]
+    public void A_bounds_header_holds_value_assignments_and_nothing_else()
+    {
+        static SpecMutation ParseWith(string header) => SpecMutationCatalogue.Parse(
+            "BoundsHeaderControl",
+            "MODULE: BoundsHeaderControl\nTARGET: Termination\nCLASS: Temporal\nSUMMARY: control\n"
+            + header
+            + "\n--- FIND\nx\n--- REPLACE\ny\n--- END\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ParseWith(string.Empty).Bounds, Is.Empty);
+            Assert.That(
+                ParseWith("BOUNDS: MaxWrites = 1, MaxFaults=0\n").Bounds,
+                Is.EqualTo(new[] { new CfgAssignment("MaxWrites", false, "1"), new CfgAssignment("MaxFaults", false, "0") }));
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites <- One\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1,\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1, MaxWrites = 0\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1 + 1\n"), Throws.InvalidOperationException);
+        });
+    }
+
+    /// <summary>
+    /// The names a module's specification (and its siblings) declares as a
+    /// <c>CONSTANT</c> and defines, for the gates that refuse a cfg assignment
+    /// TLC would silently ignore.
+    /// </summary>
+    private static (Func<string, bool> Declared, Func<string, bool> Defined) SpecificationNames(SpecModule module)
+    {
+        var specifications = module.ReadSiblingSpecifications().Values.Select(SpecActions.StripComments).ToArray();
+
+        bool Defined(string name) => specifications.Any(text =>
+            Regex.IsMatch(text, $@"^{Regex.Escape(name)}(\([^)]*\))?\s*==", RegexOptions.Multiline));
+
+        bool Declared(string name) => specifications.Any(text =>
+            Regex.Matches(text, @"^\s*CONSTANTS?\b(?<names>[^\n]*(\n[ \t]+[^\n]*)*)", RegexOptions.Multiline)
+                .Any(m => Regex.IsMatch(m.Groups["names"].Value, $@"\b{Regex.Escape(name)}\b")));
+
+        return (Declared, Defined);
     }
 
     private static IEnumerable<string> TemporalTargets(SpecModule module) =>

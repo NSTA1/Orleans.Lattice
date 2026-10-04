@@ -353,6 +353,42 @@ public sealed class AtomicWriteBackstopOriginalStampIntegrationTests
     }
 
     [Test]
+    public async Task A_backstop_value_stored_at_the_carried_stamp_yields_to_a_later_split_import()
+    {
+        // Composition with #4564 (#4600): a value a terminal stores at a carried
+        // prepare stamp is stored as migrated, so a later cross-shard migration
+        // import stamped above P - a split's shadow-forward of a write
+        // acknowledged after the prepare - competes by last-writer-wins and
+        // wins. The coordinator's backstop is a carried-stamp delivery, so the
+        // value it installs on the sibling must yield the same way.
+        var (_, router, shard) = await CreateTreeAsync("backstop-import", maxLeafKeys: 4);
+        var write = await StartHeldAtomicBatchAsync(router, ["m", "z"]);
+        HybridLogicalClock prepareM;
+        try
+        {
+            prepareM = (await PendingAsync(shard)).Single(p => p.Key == "m").Timestamp;
+            for (var i = 0; i < 12; i++)
+                await router.SetAsync($"a-{i:D2}", Encoding.UTF8.GetBytes("filler")).WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            CoordinatorHold.Release();
+        }
+
+        await write.WaitAsync(TimeSpan.FromSeconds(60));
+        Assert.That(await ReadAsync(router, "m"), Is.EqualTo("saga-m"), "PRECONDITION: the saga committed m");
+
+        var later = new HybridLogicalClock { WallClockTicks = prepareM.WallClockTicks, Counter = prepareM.Counter + 1 };
+        await shard.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["m"] = LwwValue<byte[]>.Create(Encoding.UTF8.GetBytes("later"), later),
+        }, isCrossShardMigration: true);
+
+        Assert.That(await ReadAsync(router, "m"), Is.EqualTo("later"),
+            "a migration import stamped above the saga's prepare stamp must win over the value stored at that stamp");
+    }
+
+    [Test]
     public async Task A_saga_whose_read_back_keeps_failing_aborts_atomically()
     {
         // No fallback to a dominating stamp: a read-back that never succeeds

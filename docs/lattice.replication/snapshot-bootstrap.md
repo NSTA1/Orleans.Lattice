@@ -59,8 +59,8 @@ before calling `AddLatticeReplication`.
   clear, stamped with the tombstone's own HLC, and the bootstrap drain
   applies it as a delete. Without it a receiver that bootstraps in place
   over an existing copy - a peer that fell off the log and is
-  re-bootstrapped by the fall-off detector, or an operator re-seed over
-  existing data - kept the old value of every key the source deleted
+  re-bootstrapped by either the receiver-side local detector or the
+  sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key the source deleted
   while it was behind, permanently, because the delete's WAL record is
   behind the source's trim point and the incremental stream never
   delivers it (#4504). Last-writer-wins resolves a tombstone row against
@@ -429,18 +429,19 @@ The bootstrap state machine that drains an `ISnapshotProvider` export
 on the receiver, applies every entry through the local apply seam
 preserving the source HLC, and merges the snapshot's causal-stable
 frontier into the per-tree high-water-mark grain ships as the public
-`ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
+`ILatticeBootstrapCoordinator` seam. Triggered by the receiver-side local fall-off
 detector (when the per-tree maintenance pass finds a peer's per-origin
 high-water mark behind the oldest entry that peer authored in the head
-window of the local WAL partitions - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
-re-seed flows.
+window of the local WAL partitions), by the source shipper's sequence-gap
+re-seed request after a sender WAL trim, and by operator-driven re-seed flows.
+See [Auto-Bootstrap](auto-bootstrap.md).
 
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
-| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` | Observable status snapshot returned by `GetStatusAsync`; carries the phase plus the in-flight source cluster id (or `null` when no bootstrap is in flight). |
+| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` plus `ReadFenced`, `EntriesApplied` and `RedriveAttempts` | Observable status snapshot returned by `GetStatusAsync`; carries the phase, the in-flight source cluster id (or `null` when no bootstrap is in flight), whether the tree's reads are fenced, how many snapshot entries the current drain attempt has applied, and how many times a failed bootstrap has been re-driven (see [Read fence during the drain](#read-fence-during-the-drain)). Answered while a drain runs. |
 | `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
-| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
+| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, `LatticeTreeBootstrappingException` (the source tree is itself mid-bootstrap), Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
@@ -452,6 +453,9 @@ Idle
            -> LiveIncremental (terminal - incremental replication is live)
 
 Any state -> Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
+
+Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
+                              through an import; the tree stays read-fenced)
 ```
 
 ### Semantics
@@ -500,9 +504,12 @@ Any state -> Failed         (any thrown exception; restart is a fresh BootstrapA
   fresh `BootstrapAsync` kickoff resets the cursor
   to `Zero`.
 - **`Failed` is restartable.** On any thrown exception inside the
-  phase pump the state transitions to `Failed` (persisted) and
-  the pump tears down. A subsequent `BootstrapAsync` call
-  restarts the cycle from `RequestingSnapshot`.
+  phase pump the state transitions to `Failed` (persisted). A drain
+  that failed before applying any snapshot entry tears the pump down,
+  and a subsequent `BootstrapAsync` call restarts the cycle from
+  `RequestingSnapshot`. A drain that failed part-way through an import
+  keeps the tree read-fenced and is re-driven automatically instead
+  (see [Read fence during the drain](#read-fence-during-the-drain)).
 - **Bounded retry on transient transport faults.** When the
   snapshot drain throws an exception classified as transient by
   `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`
@@ -595,8 +602,8 @@ Any state -> Failed         (any thrown exception; restart is a fresh BootstrapA
   high-water-mark store *after* every snapshot entry has been
   applied, first sealing the source cluster's own coordinate at or
   above the highest HLC the drain applied and the oldest
-  source-authored entry the local WAL still retains, so the fall-off
-  detector cannot read the retained baselines as a trim gap. The
+  source-authored entry the local WAL still retains, so the receiver-side
+  fall-off detector cannot read the retained baselines as a local trim gap. The
   merge takes the pointwise maximum with the vector already held,
   clears any legacy pinned floor (the `AsOfHlc` passed alongside it is
   currently ignored), and drains the durable causal-apply buffer. The
@@ -629,6 +636,117 @@ Any state -> Failed         (any thrown exception; restart is a fresh BootstrapA
   the resolver is on the hot path's allocation budget but is
   invariant for the lifetime of a single drain.
 
+### Read fence during the drain
+
+The drain applies the export one row at a time. A committed atomic batch
+arrives as independent committed rows: once its terminal has drained at
+the source, nothing in the export identifies the rows as one saga. A reader
+part-way through the drain could therefore see some of a batch's keys
+post-batch and the rest pre-batch, or absent (issue #4526). To prevent that,
+the coordinator **fences the tree's reads for the whole drain**:
+
+1. Before it applies the first entry, it arms a durable read fence on every
+   shard of the copy the tree routes to.
+2. While the fence is up, every read of the tree is refused with
+   `LatticeTreeBootstrappingException`. Readers are therefore either refused
+   or see the whole import, never part of it.
+3. After the last entry is applied, it lifts the fence on every shard, and
+   the import becomes visible at once.
+
+**What is refused.**
+
+- Point and multi-key reads, existence checks, counts, and key and entry
+  scans.
+- The read-modify-write verbs whose outcome depends on the current value:
+  `GetOrSetAsync`, version-conditional writes, and predicate writes.
+- The snapshot baseline capture that backups and snapshot cursors are built
+  from.
+
+**What still applies.** Plain writes, deletes, range deletes, replication
+applies (the drain itself, and live incremental replication from any
+peer), saga prepares and terminals, and maintenance. Live replication
+interleaved with the drain becomes visible at the lift, with the import.
+
+`LatticeTreeBootstrappingException` derives directly from `Exception`
+and carries the refused `TreeId`. It is **transient**: back off and retry.
+The gRPC data and state APIs map it to `StatusCode.Unavailable`.
+
+**How long it lasts.** The fence lasts for the duration of the drain,
+which is roughly proportional to the size of the tree. On a fresh receiver
+the tree holds nothing worth reading yet. On an **in-place re-bootstrap**,
+where a receiver that fell off the log re-bootstraps over its existing
+copy, a tree that was readable becomes **unreadable for the whole drain**.
+That trade-off is deliberate: a correct, retryable refusal is better than
+a torn read. A bootstrap into a shadow copy that keeps the receiver
+readable is tracked as #4567.
+
+**Watching a drain.** `ILatticeBootstrapCoordinator.GetStatusAsync`
+answers while a drain runs. Its `ReadFenced` field reports the fence,
+`EntriesApplied` reports the current attempt's progress, and
+`RedriveAttempts` counts automatic re-drives.
+
+**Migrations, resizes and undos are held.** The fence covers the shards
+that existed when it was armed, so nothing may move the tree off them
+while it is up:
+
+- A fenced shard refuses to open a split or consolidation, so a reshard
+  made of them is refused too.
+- A resize of a fenced tree is refused, and so is an undo of a completed
+  resize.
+- If the coordinator finds a migration, resize or undo already in
+  progress, it waits for it before draining, re-checking every tick. While
+  it waits, it lifts a fence that hides no partial import.
+
+Each side publishes its own state before reading the other's: the fence
+first, or the migration record or resize intent first. Whichever of two
+racing starts reads second therefore sees the first. A probe that cannot
+answer counts as a hold.
+
+**A failed drain keeps the fence.** A drain that fails after applying part
+of an import leaves the tree holding that partial import, so the fence stays
+up. The bootstrap stays in progress, reports `Failed`, and is **re-driven
+automatically**: it re-exports and re-drains the whole snapshot, with a
+backoff that starts at 5 seconds and doubles to a 5-minute cap. The fence
+lifts when a drain completes. A bootstrap from a different source cluster
+may take over a failed, fenced one. A drain that fails before applying any
+entry lifts the fence and fails as before. If that lift itself fails, the
+fence is kept and the bootstrap re-driven instead, so a fence is never left
+up with no coordinator to lift it.
+
+**Operator override.**
+`ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync(treeName, reason)`
+lifts the fence a failed bootstrap left up and stops its automatic re-drive.
+It is an **alarmed** override, never a recovery path, and works as follows:
+
+- **Consequence.** Reads may then observe the partial import - a committed
+  batch with some keys present and others missing or stale - until a later
+  bootstrap completes.
+- **When it is refused.** While a drain is running.
+- **Failure.** It fails closed: a shard that cannot be lifted leaves the
+  fence up and the call throws.
+- **Audit.** It requires a reason. Every call is audit-logged at `Warning`
+  before it is dispatched, and every lift increments
+  `orleans.lattice.replication.bootstrap.read_fence_force_lifted`.
+- **Exposure.** Like the re-seed verbs on the same seam, it is available
+  to host code only and is not exposed by any network API.
+
+```csharp verify
+ILatticeReplicationAdmin admin = client.ServiceProvider
+    .GetRequiredService<ILatticeReplicationAdmin>();
+
+BootstrapCoordinatorStatus status = await client.ServiceProvider
+    .GetRequiredService<ILatticeBootstrapCoordinator>()
+    .GetStatusAsync("orders", cancellationToken);
+
+if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
+{
+    // Exposes the partial import to readers until a later bootstrap completes.
+    bool lifted = await admin.ForceLiftBootstrapReadFenceAsync(
+        "orders", reason: "source cluster decommissioned; re-seeding from site-b", cancellationToken);
+    _ = lifted;
+}
+```
+
 ### Sample usage
 
 ```csharp verify
@@ -644,7 +762,7 @@ _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
 
 ## Operator-driven re-seed
 
-Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the auto-bootstrap path, so every re-seed - operator-driven or detector-driven - flows through one state machine.
+Beyond the receiver-side local auto-bootstrap path (`ILatticeFallOffLogDetector`) and the sender-side trim-gap request path, the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the automatic paths, so every re-seed - operator-driven, detector-driven, or sender-requested - flows through one state machine.
 
 | Type | Shape | Purpose |
 |------|-------|---------|
@@ -890,11 +1008,18 @@ purged cannot be exported. A pre-cut prepare of such a saga, retained
 in the source's log past its decision retention with its terminal's
 partition trimmed, can still strand on a bootstrapped receiver (#4508).
 
-**Visibility while the drain runs.** Atomic visibility on the
-receiver is guaranteed from `LiveIncremental` onward. While the
-bootstrap is in `ApplyingSnapshot`, the receiver keeps serving reads
-and the drain installs committed rows one at a time, so a reader can
-observe some of a saga's keys before the rest. The decision rows and
-the settle above keep their outcome atomic once the import completes;
-they do not make the import itself atomic.
+**Visibility while the drain runs.** The drain installs committed rows
+one at a time, so the import is made atomic for readers by the
+[read fence](#read-fence-during-the-drain): every read of the tree is
+refused until the drain has applied its last entry, and the whole
+import becomes visible at once when the fence lifts. The decision rows
+and the settle above keep each saga's outcome atomic across the import
+itself. In particular, a prepared row the drain imports after the
+saga's terminal has already reached the receiver through the live
+stream is settled as a committed write, rather than refused as a late
+prepare and left pre-saga beside its siblings (issue #4526).
+Modelled in `AtomicCommitCrossCluster`: the real drain, with
+incremental replication interleaved and the fence, is clean on every
+property, and lifting the fence early or on failure fires
+`RAllOrNothing`.
 

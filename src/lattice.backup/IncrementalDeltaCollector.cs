@@ -32,6 +32,18 @@ namespace Orleans.Lattice.Backup;
 /// <see cref="RequiresFullFallback"/> and the caller captures a fresh full backup
 /// instead of emitting a delta that a chain restore could not fold correctly.
 /// </para>
+/// <para>
+/// An atomic write's prepared writes are never copied as ordinary data (issue
+/// #4589). They are staged by transaction through
+/// <see cref="IncrementalSagaStaging{TEntry}"/> and resolved against the capture's
+/// decision snapshot - the same #4485 decision gate a full capture resolves its
+/// pending buckets against - which the caller supplies as a lookup: a committed
+/// batch is emitted whole, an aborted or undecided one is left out, and an
+/// undecided one holds the recorded frontier back so the next increment reads it
+/// again (<see cref="NewPartitionOffsets"/>, <see cref="BlockedFloor"/>). A
+/// committed batch the window does not hold whole raises
+/// <see cref="RequiresSagaFallback"/>.
+/// </para>
 /// </summary>
 internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 {
@@ -45,6 +57,8 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     private readonly string? _endExclusive;
     private readonly BackupKeyMergeMode _mergeMode;
     private readonly int _batchSize;
+    private readonly Func<IReadOnlyList<Guid>, CancellationToken, Task<IReadOnlyDictionary<Guid, TxStatus>>> _resolveDecisions;
+    private readonly IncrementalSagaStaging<CapturedWrite> _staging = new();
 
     private readonly IncrementalHash _hasher;
     private readonly string _baseBackupId;
@@ -71,8 +85,12 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         string? endExclusive,
         BackupKeyMergeMode mergeMode,
         string baseBackupId,
-        int batchSize)
+        int batchSize,
+        Func<IReadOnlyList<Guid>, CancellationToken, Task<IReadOnlyDictionary<Guid, TxStatus>>> resolveDecisions,
+        IReadOnlyList<Guid>? baseUndecided = null)
     {
+        ArgumentNullException.ThrowIfNull(resolveDecisions);
+        _staging.TrackBaseUndecided(baseUndecided);
         _serializer = serializer;
         _subscriber = subscriber;
         _treeId = treeId;
@@ -84,6 +102,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
         _mergeMode = mergeMode;
         _batchSize = batchSize;
         _baseBackupId = baseBackupId;
+        _resolveDecisions = resolveDecisions;
 
         // The content digest hashes only the streamed artifact bytes, so the restore
         // integrity gate (which re-hashes the artifact alone) reproduces it exactly.
@@ -121,6 +140,31 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     public bool RequiresFullFallback { get; private set; }
 
     /// <summary>
+    /// <see langword="true"/> when the window holds a committed atomic write whose
+    /// prepared writes it does not cover - some precede the base's frontier - so a
+    /// delta cannot hold the batch whole and the caller falls back to a fresh full
+    /// backup (issue #4589).
+    /// </summary>
+    public bool RequiresSagaFallback { get; private set; }
+
+    /// <summary>
+    /// The lowest timestamp of an atomic write the increment held back (undecided,
+    /// or committed with shard terminals still to come), which the caller reports
+    /// as the WAL blocked floor so the held entries stay readable by the next
+    /// increment; <see langword="null"/> when nothing is held. Available after
+    /// <see cref="StreamAsync"/> has been fully enumerated.
+    /// </summary>
+    public HybridLogicalClock? BlockedFloor => _staging.BlockedFloor;
+
+    /// <summary>
+    /// The atomic writes the base held as undecided that are still undecided at this
+    /// increment's decision snapshot, which the increment's manifest hands on to the
+    /// next increment (issue #4589). Available after <see cref="StreamAsync"/> has
+    /// been fully enumerated.
+    /// </summary>
+    public IReadOnlyList<Guid> CarriedUndecided => _staging.CarriedUndecided;
+
+    /// <summary>
     /// The lowercase hexadecimal SHA-256 content address of the streamed delta bytes
     /// alone. This is what the restore integrity gate re-hashes, so it is recorded on
     /// the content descriptor. Available only after <see cref="StreamAsync"/> has been
@@ -146,11 +190,18 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
     {
         var mutation = entry.Mutation;
 
-        // Keep only restorable user data. Saga terminal marks (TxCommit / TxAbort)
-        // and tombstone-reap compaction marks carry no key-value to restore; the
+        // Tombstone-reap compaction marks carry no key-value to restore; the
         // subscriber already skips maintenance-category entries.
-        if (mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort or MutationKind.Tombstone)
+        if (mutation.Kind == MutationKind.Tombstone)
         {
+            return;
+        }
+
+        // Saga terminal marks carry no key-value either, but they settle the
+        // transaction's staged prepares.
+        if (mutation.Kind is MutationKind.TxCommit or MutationKind.TxAbort)
+        {
+            _staging.TryStage(mutation, entry.Partition, entry.Offset, emitted: null);
             return;
         }
 
@@ -169,6 +220,8 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 
         if (!KeyInScope(mutation.Key))
         {
+            // An out-of-scope prepare still counts towards its batch's completeness.
+            _staging.TryStage(mutation, entry.Partition, entry.Offset, emitted: null);
             return;
         }
 
@@ -184,7 +237,7 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             ? (LatticeMergeMode?)mutation.Mode
             : null;
 
-        _pending.Add(new LwwEntry
+        var lww = new LwwEntry
         {
             Key = mutation.Key,
             Value = mutation.Kind == MutationKind.Delete ? null : mutation.Value,
@@ -194,34 +247,78 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
             OriginClusterId = origin,
             VectorClock = mutation.VectorClock,
             MergeMode = perKeyMode,
-        });
+        };
+        var write = new CapturedWrite(lww, perKeyMode is not null ? BackupKeyMergeMode.Crdt : _mergeMode, origin);
 
-        if (!string.IsNullOrEmpty(mutation.Key))
+        // A saga's prepared write is staged until its transaction is resolved
+        // against the decision snapshot; only an ordinary write is emitted now.
+        if (_staging.TryStage(mutation, entry.Partition, entry.Offset, write))
         {
-            var descriptorMode = perKeyMode is not null ? BackupKeyMergeMode.Crdt : _mergeMode;
-            _keyDescriptors.Add(new BackupKeyDescriptor(mutation.Key, descriptorMode, origin));
+            return;
         }
 
-        if (origin is { } originId)
+        Emit(write);
+    }
+
+    private void Emit(CapturedWrite write)
+    {
+        _pending.Add(write.Entry);
+
+        if (!string.IsNullOrEmpty(write.Entry.Key))
         {
-            BackupChainFrontier.Observe(_perOriginHighWater, originId, mutation.Timestamp.WallClockTicks);
+            _keyDescriptors.Add(new BackupKeyDescriptor(write.Entry.Key, write.DescriptorMode, write.Origin));
+        }
+
+        if (write.Origin is { } originId)
+        {
+            BackupChainFrontier.Observe(_perOriginHighWater, originId, write.Entry.Timestamp.WallClockTicks);
+        }
+    }
+
+    /// <summary>
+    /// Looks the newly staged transactions up in the decision snapshot and emits
+    /// every committed batch the window now holds whole.
+    /// </summary>
+    private async Task ResolveStagedAsync(CancellationToken cancellationToken)
+    {
+        var txIds = _staging.TakeUnresolved();
+        if (txIds.Count > 0)
+        {
+            var decisions = await _resolveDecisions(txIds, cancellationToken).ConfigureAwait(false);
+            _staging.ApplyDecisions(txIds, decisions);
+        }
+
+        var committed = new List<CapturedWrite>();
+        _staging.DrainCommitted(committed);
+        foreach (var write in committed)
+        {
+            Emit(write);
         }
     }
 
     /// <summary>
     /// The new per-partition next-offset (head) frontier reached by the drain,
     /// keyed by partition index. Partitions that surfaced no new entries carry the
-    /// base offset forward so the next increment resumes cleanly. Available after
-    /// <see cref="StreamAsync"/> has been fully enumerated.
+    /// base offset forward so the next increment resumes cleanly. A partition that
+    /// holds an entry of an atomic write the increment held back (issue #4589) resumes
+    /// at that entry instead, so the next increment reads the batch again. Available
+    /// after <see cref="StreamAsync"/> has been fully enumerated.
     /// </summary>
     public IReadOnlyDictionary<int, long> NewPartitionOffsets()
     {
+        var held = _staging.HeldOffsets;
         var offsets = new Dictionary<int, long>(_partitions);
         for (var partition = 0; partition < _partitions; partition++)
         {
-            offsets[partition] = _maxAdvanced.TryGetValue(partition, out var advanced)
+            var next = _maxAdvanced.TryGetValue(partition, out var advanced)
                 ? advanced + 1
                 : _baseOffsets.GetValueOrDefault(partition, 0L);
+            if (held.TryGetValue(partition, out var heldAt) && heldAt < next)
+            {
+                next = heldAt;
+            }
+
+            offsets[partition] = next;
         }
 
         return offsets;
@@ -283,6 +380,8 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
                 }
             }
 
+            await ResolveStagedAsync(cancellationToken).ConfigureAwait(false);
+
             if (_pending.Count > 0)
             {
                 var page = _pending.ToArray();
@@ -302,6 +401,10 @@ internal sealed class IncrementalDeltaCollector : IWalSubscriptionHandler
 
             if (result.EntriesRead == 0)
             {
+                // Caught up: settle the staged transactions. A committed batch the
+                // window does not hold whole abandons the delta for a full backup.
+                _staging.Finish();
+                RequiresSagaFallback = _staging.RequiresFullFallback;
                 break;
             }
         }
