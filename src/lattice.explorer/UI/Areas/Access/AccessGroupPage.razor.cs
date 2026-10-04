@@ -16,8 +16,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// administration is delegated to the caller, one of the tenant's own groups,
 /// by tenant-local name; any other tenant-rooted address names no group.
 /// </summary>
-public partial class AccessGroupPage
+public partial class AccessGroupPage : IDisposable
 {
+    private readonly ComponentLifetime _load = new();
     private ExplorerAddress? _loaded;
     private AuthGroup? _group;
     private List<string>? _members;
@@ -58,6 +59,9 @@ public partial class AccessGroupPage
         .WithQuery(AccessRoutes.ViewQuery, AccessRoutes.PermissionsView)).ToHref();
 
     /// <inheritdoc />
+    public void Dispose() => _load.Leave();
+
+    /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
         if (Equals(_loaded, Address))
@@ -66,6 +70,10 @@ public partial class AccessGroupPage
         }
 
         _loaded = Address;
+
+        // Cancels the previous address's load: whatever it reads after this belongs
+        // to a group the page no longer shows.
+        var load = _load.Renew();
         if (await _gate.ResolveAsync(TenantAccess, Address.Tenant).ConfigureAwait(true))
         {
             // One of the tenant's own groups: its view reads it.
@@ -73,10 +81,15 @@ public partial class AccessGroupPage
         }
 
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        await LoadAsync().ConfigureAwait(true);
+        if (!load.IsCancellationRequested)
+        {
+            await LoadAsync(load).ConfigureAwait(true);
+        }
     }
 
-    private async Task LoadAsync()
+    private Task RetryAsync() => LoadAsync(_load.Renew());
+
+    private async Task LoadAsync(CancellationToken load)
     {
         _failure = null;
         _group = null;
@@ -91,17 +104,26 @@ public partial class AccessGroupPage
 
         try
         {
-            var group = await Catalog.Admin.GetGroupAsync(groupId).ConfigureAwait(true);
+            var group = await Catalog.Admin.GetGroupAsync(groupId, load).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
+
             if (group is null)
             {
                 Navigation.NotFound();
                 return;
             }
 
-            var members = await Catalog.Admin.ListGroupMembersAsync(groupId).ConfigureAwait(true);
-            var parents = await Catalog.Admin.ListSubjectGroupsAsync(groupId).ConfigureAwait(true);
-            var permissions = await Catalog.Admin.EffectivePermissionsAsync(groupId, LatticeSubjectSelectorKind.Group).ConfigureAwait(true);
+            var members = await Catalog.Admin.ListGroupMembersAsync(groupId, load).ConfigureAwait(true);
+            var parents = await Catalog.Admin.ListSubjectGroupsAsync(groupId, load).ConfigureAwait(true);
+            var permissions = await Catalog.Admin.EffectivePermissionsAsync(groupId, LatticeSubjectSelectorKind.Group, load).ConfigureAwait(true);
             var known = await Catalog.GetGroupsAsync(CancellationToken.None).ConfigureAwait(true);
+            if (load.IsCancellationRequested)
+            {
+                return;
+            }
 
             _group = group;
             _displayName = group.DisplayName ?? string.Empty;
@@ -109,6 +131,10 @@ public partial class AccessGroupPage
             _parents = parents;
             _rules = AccessRuleFormat.InPrecedenceOrder(permissions.Rules);
             _knownGroups = known.Select(entry => entry.GroupId).ToHashSet(StringComparer.Ordinal);
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
+            // Superseded by the next address's load, or the page was left.
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {

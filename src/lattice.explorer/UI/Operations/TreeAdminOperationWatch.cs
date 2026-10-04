@@ -69,6 +69,7 @@ internal sealed class TreeAdminOperationWatch : IDisposable
     /// <param name="candidates">The kinds and targets the page shows.</param>
     /// <param name="cancellationToken">Cancels the search and the first read.</param>
     /// <returns><see langword="true"/> when a running operation was found.</returns>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled, even if the search had already answered.</exception>
     public async Task<bool> ResumeAsync(
         ILatticeTreeAdminOperations operations,
         IReadOnlyCollection<(string Kind, string Target)> candidates,
@@ -92,6 +93,10 @@ internal sealed class TreeAdminOperationWatch : IDisposable
         {
             return false;
         }
+
+        // A listing that answered after its search was cancelled belongs to a page
+        // that has moved on: following what it found would follow another target's operation.
+        cancellationToken.ThrowIfCancellationRequested();
 
         if (page?.Operations is not { Count: > 0 } listed)
         {
