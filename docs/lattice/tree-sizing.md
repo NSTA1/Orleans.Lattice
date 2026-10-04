@@ -103,6 +103,8 @@ The unwind is phase-aware:
 
 Once the soft-delete window expires and the old tree is purged, the resize can no longer be undone.
 
+A **replicated** tree cannot be undone after its alias swap. Once the resized copy has served the tree, the replication shipper has been tailing that copy's log, so writes it took may already be on a peer, and cross-cluster shipping is last-writer-wins and never retracts them: the undo would discard them on this cluster only ([#4518](https://github.com/NSTA1/Orleans.Lattice/issues/4518)). The unwind refuses before any compensation runs, so the tree stays on the resized copy and the waiting `UndoResizeAsync` throws `InvalidOperationException` with the reason; resize the tree again instead. An undo before the swap, or of a resize whose swap the alias never took, is unaffected. A tree counts as replicated when the host's `ILatticeReplicationContext` reports a merge mode for it. The check is made once per resize, before the resized copy is armed, so an unwind that has started always finishes.
+
 Either way the destination is discarded rather than merely deleted: its shards are marked deleted and purged after the soft-delete window like any retired copy, but its write-ahead-log retention - every leaf materialiser pin held against it, and its log - is released at once, and it can never be recovered. See [Discarding an undone resize's copy](tree-deletion.md#discarding-an-undone-resizes-copy).
 
 ### Important considerations
