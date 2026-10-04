@@ -62,15 +62,17 @@ public partial class AtomicWriteGrainTests
         private readonly Lock _gate = new();
         private readonly List<bool> _broadcastVerdicts = [];
         private readonly List<Guid> _broadcastTxIds = [];
+        private readonly List<int?> _broadcastShardCounts = [];
         private readonly List<Guid> _committedDecisions = [];
         private readonly List<Guid> _abortedDecisions = [];
 
-        public void RecordBroadcast(Guid txid, bool committed)
+        public void RecordBroadcast(Guid txid, bool committed, int? shardCount)
         {
             lock (_gate)
             {
                 _broadcastTxIds.Add(txid);
                 _broadcastVerdicts.Add(committed);
+                _broadcastShardCounts.Add(shardCount);
             }
         }
 
@@ -92,6 +94,16 @@ public partial class AtomicWriteGrainTests
         public IReadOnlyList<Guid> BroadcastTxIds
         {
             get { lock (_gate) { return [.. _broadcastTxIds]; } }
+        }
+
+        /// <summary>
+        /// The touched-shard count ambient each terminal was appended under
+        /// (<see cref="LatticeAtomicShardCountContext"/>), which is what the
+        /// shard stamps on the replicated terminal record.
+        /// </summary>
+        public IReadOnlyList<int?> BroadcastShardCounts
+        {
+            get { lock (_gate) { return [.. _broadcastShardCounts]; } }
         }
 
         public IReadOnlyList<Guid> CommittedDecisions
@@ -147,7 +159,7 @@ public partial class AtomicWriteGrainTests
                 Arg.Any<bool>())
             .Returns(call =>
             {
-                log.RecordBroadcast(call.Arg<Guid>(), (bool)call[1]);
+                log.RecordBroadcast(call.Arg<Guid>(), (bool)call[1], LatticeAtomicShardCountContext.Current);
                 return Task.FromResult<WalRecord?>(null);
             });
 

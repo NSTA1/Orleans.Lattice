@@ -1,0 +1,18 @@
+# Pairs with RNoStrandedPrepare. A receiver leaf stages a prepare that arrives
+# after it has already applied the saga's terminal - a duplicate redelivered
+# because its ack was lost - instead of refusing it as
+# BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync does. Each saga issues one
+# terminal per source shard and the leaf has already consumed it, so the bucket
+# is never drained.
+MODULE: RNoStrandedPrepareLatePrepareStaged
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: a receiver leaf stages a duplicate prepare that trails the saga's terminal
+PERTURBS: DeliverPrepare
+
+--- FIND
+    /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+--- REPLACE
+\* MUTATION: no late-prepare refusal.
+    /\ rpend' = [rpend EXCEPT ![m.key] = "pending"]
+--- END

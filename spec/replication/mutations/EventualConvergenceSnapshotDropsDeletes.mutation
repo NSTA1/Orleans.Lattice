@@ -1,4 +1,4 @@
-# Pairs with EventualConvergence. Reproduces current production (#4504): the
+# Pairs with EventualConvergence. Reproduces production before #4544 (#4504): the
 # snapshot export skips every key whose value is a tombstone, and the drain
 # does not clear the receiver's copy. When the source deletes a key the target
 # already holds and then trims its log past the target's cursor, the bootstrap

@@ -1,0 +1,25 @@
+# Pairs with NoKeyLost. Reproduces the resize snapshot after #4506 and #4566,
+# which #4522's second fix closes: the snapshot's sweep resolves a bucket of a
+# decided saga at the destination with the committed-values backstop at a fresh
+# dominating stamp (carryOriginalStamps: false), instead of carrying it. A later
+# write the snapshot already copied to R is overwritten.
+MODULE: NoKeyLostSnapshotResolvesAtFreshStamp
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the snapshot resolves a decided saga's bucket on R at a fresh stamp, overwriting a later write already copied
+PERTURBS: SnapCopy
+
+--- FIND
+                 THEN LWW(row[R][s][k], row[T][s][k]) ELSE row[x][s][k]]]]
+--- REPLACE
+\* MUTATION: a decided saga's bucket is resolved on R at a fresh stamp.
+                 THEN IF dec = "committed" /\ pend[T][s][k] # "none" THEN FreshV
+                      ELSE LWW(row[R][s][k], row[T][s][k])
+                 ELSE row[x][s][k]]]]
+--- END
+
+--- FIND
+                 IF x = R /\ s \in rzShards /\ pend[R][s][k] = "none"
+--- REPLACE
+                 IF x = R /\ s \in rzShards /\ pend[R][s][k] = "none" /\ dec # "committed"
+--- END

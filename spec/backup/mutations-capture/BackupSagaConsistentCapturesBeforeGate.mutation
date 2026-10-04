@@ -1,0 +1,17 @@
+# Pairs with BackupSagaConsistent. A shard is captured before every member's
+# gate is held, resolving against a snapshot that does not yet exist, while
+# the saga it captures is still free to decide and broadcast.
+MODULE: BackupSagaConsistentCapturesBeforeGate
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a shard is captured before the gate is acquired
+PERTURBS: CaptureShard
+
+--- FIND
+    /\ phase = "capture"
+    /\ sh \in MemberShards
+--- REPLACE
+    \* MUTATION: capture may start while the gates are still being taken.
+    /\ phase \in {"gating", "capture"}
+    /\ sh \in MemberShards
+--- END

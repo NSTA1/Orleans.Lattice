@@ -21,12 +21,17 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// rate on its own target population was total.
 /// </para>
 /// <para>
-/// The fix is a <c>content-gates</c> job carrying no condition at all. This
-/// fixture guards the three ways that fix can quietly rot:
+/// The fix is a <c>content-gates</c> job carrying no condition a pull request
+/// can trip. Its single condition reads the member-push flag of the push-only
+/// <c>classify</c> job, which is skipped - and so publishes an empty flag - on
+/// every pull request; it exists so a push to a MEMBER branch costs one small
+/// job rather than a full solution build (#4430). This fixture guards the three
+/// ways that fix can quietly rot:
 /// </para>
 /// <list type="number">
-/// <item>A condition (<c>if:</c> or <c>needs:</c>) gets added to the job, so it
-/// can be SKIPPED. Actions treats a skipped dependency as non-blocking, so the
+/// <item>Any other condition (<c>if:</c> or <c>needs:</c>) gets added to the
+/// job, or the classifier stops being push-only, so the job can be SKIPPED on a
+/// pull request. Actions treats a skipped dependency as non-blocking, so the
 /// required check would go green having run nothing - the original defect,
 /// reintroduced one level up.</item>
 /// <item>The required check stops depending on it, or starts accepting
@@ -80,8 +85,20 @@ public sealed class CiContentGateWiringTests
         @"\[Category\(""(?<name>[^""]+)""\)\]",
         RegexOptions.Compiled);
 
+    /// <summary>The push-only job that publishes the member-push flag.</summary>
+    private const string ClassifierJob = "classify";
+
+    /// <summary>
+    /// The only condition <c>content-gates</c> may carry. Every term is
+    /// load-bearing: <c>!cancelled()</c> stops the classifier's pull-request
+    /// skip from propagating, and the comparison is false only on a push the
+    /// classifier identified as a member branch.
+    /// </summary>
+    private const string PermittedCondition =
+        "${{ !cancelled() && needs." + ClassifierJob + ".outputs.push_is_member != 'true' }}";
+
     [Test]
-    public void The_content_gate_job_carries_no_condition_of_any_kind()
+    public void The_content_gate_job_cannot_be_skipped_on_a_pull_request()
     {
         var job = JobBlock(ContentGateJob);
 
@@ -89,20 +106,42 @@ public sealed class CiContentGateWiringTests
         // fine and is used by the artifact upload, so the indent is part of the
         // assertion rather than an accident of it.
         var conditions = Regex
-            .Matches(job, @"^    (?<key>if|needs):.*$", RegexOptions.Multiline)
-            .Select(match => match.Value.Trim())
+            .Matches(job, @"^    (?<key>if|needs):[ \t]*(?<value>.*?)[ \t]*\r?$", RegexOptions.Multiline)
+            .Select(match => (Key: match.Groups["key"].Value, Value: match.Groups["value"].Value))
             .ToArray();
+
+        var permitted = new[] { ("needs", ClassifierJob), ("if", PermittedCondition) };
 
         Assert.That(
             conditions,
-            Is.Empty,
+            Is.EquivalentTo(permitted),
             $"the '{ContentGateJob}' job in {WorkflowPath} must run on every pull request without "
-            + "exception. A job with an 'if:' or a 'needs:' can be SKIPPED - by its own condition, or "
-            + "because an upstream job failed or was skipped - and Actions does not treat a skipped "
-            + "dependency as blocking. That is precisely the defect this job exists to close: a required "
-            + "check reporting green because the gates that would have failed never ran."
+            + $"exception. Its only permitted keys are 'needs: {ClassifierJob}' and 'if: {PermittedCondition}', "
+            + "which skip it on a member-branch push and nowhere else. Any other 'if:' or 'needs:' can SKIP "
+            + "it on a pull request - by its own condition, or because an upstream job failed or was skipped - "
+            + "and Actions does not treat a skipped dependency as blocking. That is precisely the defect this "
+            + "job exists to close: a required check reporting green because the gates that would have failed "
+            + "never ran."
             + Environment.NewLine
-            + string.Join(Environment.NewLine, conditions));
+            + string.Join(Environment.NewLine, conditions.Select(c => c.Key + ": " + c.Value)));
+
+        // The permitted condition is safe ONLY because the classifier is
+        // skipped on a pull request, which empties the flag. A classifier that
+        // ran on pull requests could publish 'true' there.
+        var classifier = JobBlock(ClassifierJob);
+
+        Assert.That(
+            Regex.IsMatch(classifier, @"^    if:[ \t]*github\.event_name == 'push'[ \t]*\r?$", RegexOptions.Multiline),
+            Is.True,
+            $"the '{ClassifierJob}' job must be conditioned exactly on github.event_name == 'push' at the job "
+            + $"level. '{ContentGateJob}' reads its flag, and that is safe only while a pull request cannot "
+            + "run the classifier.");
+
+        Assert.That(
+            Regex.IsMatch(classifier, @"^    needs:", RegexOptions.Multiline),
+            Is.False,
+            $"the '{ClassifierJob}' job must need nothing: a dependency could skip or fail it on a push and "
+            + "change what the flag means.");
     }
 
     [Test]

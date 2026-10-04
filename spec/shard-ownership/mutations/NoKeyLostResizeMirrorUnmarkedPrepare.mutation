@@ -1,0 +1,28 @@
+# Pairs with NoKeyLost. Reproduces the resize path after #4566 (#4522's first
+# fix), which #4522's second fix closes: the resize mirror forwards a prepare
+# as a plain write that R re-mints at its own clock, so a saga bound to T that
+# prepares after the flip leaves buckets on R stamped below P and R's leaf
+# clocks never see P. Once R splits, a later write on the split destination is
+# stamped above the re-minted value but below P, and the terminal's
+# committed-values backstop, carried at P, overwrites it. A clock merge at the
+# flip does not help, because the saga prepared after it. The edits lie in
+# BVal and KnowsP, the operators the read gate, the drain and the later write's
+# stamp use, so the mutation declares no PERTURBS.
+MODULE: NoKeyLostResizeMirrorUnmarkedPrepare
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the resize mirror re-mints a prepare at R's clock, so a later write on R is stamped below P and the backstop overwrites it
+
+--- FIND
+BVal(c) == SagaV
+--- REPLACE
+\* MUTATION: a bucket the mirror forwards to R is re-minted at R's own clock.
+BVal(c) == IF c = R /\ bound # R THEN SagaUV ELSE SagaV
+--- END
+
+--- FIND
+KnowsP(c, s) == \E k \in Keys : Stamp(row[c][s][k]) >= Stamp(SagaV) \/ pend[c][s][k] # "none"
+--- REPLACE
+\* MUTATION: such a bucket does not raise R's leaf clock to P.
+KnowsP(c, s) == \E k \in Keys : Stamp(row[c][s][k]) >= Stamp(SagaV) \/ ((c = T \/ bound = R) /\ pend[c][s][k] # "none")
+--- END

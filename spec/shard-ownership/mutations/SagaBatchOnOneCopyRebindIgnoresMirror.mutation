@@ -1,4 +1,4 @@
-# Pairs with SagaBatchOnOneCopy. Reproduces current production (#4454): when
+# Pairs with SagaBatchOnOneCopy. Reproduces production before #4454 was fixed (#4521): when
 # the routing tier refuses part of a dispatch because the tree moved,
 # TryRebindToResolvedCopyAsync re-binds even though the bound copy mirrors into
 # the new one, leaving the prepares already taken on T behind.
