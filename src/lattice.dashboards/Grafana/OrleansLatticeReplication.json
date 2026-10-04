@@ -289,7 +289,7 @@
     {
       "id": 6,
       "title": "Dead-letter queue churn (ops/s)",
-      "description": "Dead-letter enqueue/removal rate. Only emits when permanent transport or apply failures occur. Flat-zero is the healthy steady state.",
+      "description": "Dead-letter enqueue/removal rate. Only emits when permanent transport or apply failures occur. Flat-zero is the healthy steady state. saga poisoned counts sagas a shipper withholds from a peer because one of their prepares was dead-lettered (outcome=poisoned: the peer serves the saga as never written until it is re-bootstrapped; outcome=refused: the poison list is full and the shipper stalls rather than ship a torn saga). It is recorded only when that happens, so it carries no 'or vector(0)' zero-fill: an empty result is the healthy reading (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -317,6 +317,11 @@
           "refId": "R",
           "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_removed_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)",
           "legendFormat": "removed {{reason}}"
+        },
+        {
+          "refId": "P",
+          "expr": "sum by (outcome) (rate(orleans_lattice_replication_shipper_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "saga poisoned {{outcome}}"
         }
       ]
     },
