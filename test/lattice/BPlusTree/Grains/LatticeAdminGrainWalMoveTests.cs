@@ -445,6 +445,27 @@ public sealed partial class LatticeAdminGrainWalMoveTests
                 moves => moves.Count == 1 && moves.First().Partition == 0 && moves.First().ProviderKey == SecondaryKey));
     }
 
+    /// <summary>
+    /// The single-partition overload - the one <c>LatticeTreeAdmin</c>, gRPC, MCP
+    /// and the tracked move call - flips through its own registry call, so the
+    /// batch test above does not detect a flip there that names the wrong provider
+    /// (issue #4433).
+    /// </summary>
+    [Test]
+    public async Task A_single_partition_move_flips_the_placement_of_its_partition_to_the_target()
+    {
+        var harness = CreateHarness();
+        harness.Source.Seed(0, 1, 2);
+        harness.QuiesceScript.Add(() => Quiesced(highest: 2));
+        harness.Registry.UpdateWalPlacementAsync(TreeId, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<string>())
+            .Returns(ci => Task.FromResult(WalPlacementPin.Create().WithPartition((int)ci[2], (string)ci[3], (long)ci[1] + 1)));
+
+        var receipt = await Admin(harness).ExecuteWalMoveAsync(TreeId, 0, SecondaryKey);
+
+        Assert.That(receipt.Outcome, Is.EqualTo(WalMoveOutcome.Moved));
+        await harness.Registry.Received(1).UpdateWalPlacementAsync(TreeId, Arg.Any<long>(), 0, SecondaryKey);
+    }
+
     [Test]
     public void A_move_aborts_when_the_placement_changes_during_convergence()
     {
