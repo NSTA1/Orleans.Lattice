@@ -36,6 +36,8 @@ public sealed class RepoContextMemoryArchiveServiceTests
 {
     private const string RepoId = "acme";
 
+    private static readonly TimeSpan RestoreBarrierBound = TimeSpan.FromMinutes(2);
+
     private string scratch = string.Empty;
 
     private static CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
@@ -270,6 +272,13 @@ public sealed class RepoContextMemoryArchiveServiceTests
     /// land arbitrarily late; a bounded poll then failed a run whose restore had in
     /// fact happened (issue #4529). Waiting on the signal admits any interleaving.
     /// </para>
+    /// <para>
+    /// The wait is still bounded, by <see cref="RestoreBarrierBound"/>, because the
+    /// fixture's cancellation token never fires without a <c>[CancelAfter]</c>: an
+    /// unbounded wait would turn a real regression into a hang rather than a failure.
+    /// The bound is a hang guard far above the ten-second window that flaked, not a
+    /// timing assertion.
+    /// </para>
     /// </summary>
     private static async Task StartAndRestoreAsync(Rig rig)
     {
@@ -278,9 +287,9 @@ public sealed class RepoContextMemoryArchiveServiceTests
 
         try
         {
-            await rig.RestoreRecorded.Task.WaitAsync(Ct);
+            await rig.RestoreRecorded.Task.WaitAsync(RestoreBarrierBound, Ct);
         }
-        catch (OperationCanceledException)
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
             var seen = string.Join(
                 Environment.NewLine,
