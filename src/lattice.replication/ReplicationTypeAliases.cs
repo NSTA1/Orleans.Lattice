@@ -279,4 +279,10 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusCursor"/>.</summary>
     internal const string ReplicationPeerStatusCursor = "olr.pc";
 
+    // Snapshot export epoch (#4534): a per-tree counter advanced by every full
+    // export at its registry snap0, so a shipper can tell a peer's re-seed
+    // happened after it took the peer off the log.
+    internal const string IReplicationExportEpochGrain = "olr.xg";
+    internal const string ReplicationExportEpochState = "olr.xs";
+
 }

@@ -123,4 +123,71 @@ public class ShardMigrationResizeInterlockTests
         Assert.That(await ShardMigrationResizeInterlock.FindMigratingShardAsync(factory, "p", [0, 3, 5]), Is.EqualTo(3));
         Assert.That(await ShardMigrationResizeInterlock.FindMigratingShardAsync(factory, "p", [0]), Is.Null);
     }
+
+    private static ITreeResizeGrain SplitHold(IGrainFactory factory, string treeId, bool holdsSplits)
+    {
+        var resize = Substitute.For<ITreeResizeGrain>();
+        resize.HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
+        resize.HoldsShardSplitsAsync().Returns(Task.FromResult(holdsSplits));
+        factory.GetGrain<ITreeResizeGrain>(treeId, Arg.Any<string?>()).Returns(resize);
+        return resize;
+    }
+
+    [Test]
+    public async Task A_split_is_not_held_by_a_completed_resize_that_still_holds_other_migrations()
+    {
+        // Issue #4478: the mirror follows a split of the resized copy, so only
+        // consolidations and reshards wait for the replaced copy's purge.
+        var (factory, _) = CreateFactory();
+        SplitHold(factory, "t", holdsSplits: false);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(factory, "t"), Is.False);
+            Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t"), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task A_split_is_held_while_the_trees_coordinator_holds_splits()
+    {
+        var (factory, registry) = CreateFactory();
+        SplitHold(factory, "t", holdsSplits: true);
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(factory, "t"), Is.True);
+        await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task A_split_of_a_resized_copy_is_held_by_the_tree_it_was_derived_from()
+    {
+        var (factory, registry) = CreateFactory();
+        SplitHold(factory, "t/resized/op", holdsSplits: false);
+        SplitHold(factory, "t", holdsSplits: true);
+        registry.GetEntryAsync("t/resized/op").Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry { DerivedFrom = "t" }));
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(factory, "t/resized/op"), Is.True);
+    }
+
+    [Test]
+    public async Task A_coordinator_that_cannot_answer_holds_splits()
+    {
+        // Fail closed, including on a silo that predates the method.
+        var (factory, _) = CreateFactory();
+        SplitHold(factory, "t", holdsSplits: false).HoldsShardSplitsAsync()
+            .ThrowsAsync(new NotImplementedException("older silo"));
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(factory, "t"), Is.True);
+    }
+
+    [Test]
+    public async Task A_registry_that_cannot_answer_holds_splits()
+    {
+        var (factory, registry) = CreateFactory();
+        SplitHold(factory, "t", holdsSplits: false);
+        registry.GetEntryAsync("t").ThrowsAsync(new TimeoutException());
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(factory, "t"), Is.True);
+    }
 }

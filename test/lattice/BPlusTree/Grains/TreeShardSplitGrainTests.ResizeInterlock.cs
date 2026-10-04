@@ -10,34 +10,37 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// start while a resize of the tree is in flight, and one that opened its
 /// source record after a resize started must back out. A split that commits
 /// during a resize routes its moved slots to a target the resize never copies
-/// or fences (the shard-ownership spec's UniqueOwnerSplitDuringResize).
+/// or fences (the shard-ownership spec's UniqueOwnerSplitDuringResize). Once the
+/// resize has completed a split may run although the replaced copy still
+/// mirrors, because the mirror follows it (issue #4478).
 /// </summary>
 public partial class TreeShardSplitGrainTests
 {
     [Test]
-    public async Task SplitAsync_refuses_while_a_completed_resize_still_has_the_replaced_copy_mirroring()
+    public async Task SplitAsync_proceeds_while_a_completed_resize_still_has_the_replaced_copy_mirroring()
     {
-        // The soft-delete window: the resize coordinator is idle (the resize
-        // completed), but the copy it replaced still mirrors into the resized
-        // copy until the purge, so a split there moves keys that mirror cannot
-        // follow and loses an acknowledged write (shard-ownership spec,
-        // NoKeyLost under the relaxed interlock).
-        var (grain, state, grainFactory, registry, source, _) = CreateGrain();
+        // The soft-delete window: the resize completed and the copy it replaced
+        // still mirrors into the resized copy, which keeps consolidations and
+        // reshards held. A split is not: the mirror follows a refusal by the
+        // split to the shard that owns the slot now, and a bound saga's terminal
+        // reaches every shard the split moved slots to (issue #4478).
+        var (grain, state, grainFactory, _, source, _) = CreateGrain();
         var resize = grainFactory.StubResizeIdle();
         resize.HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => grain.SplitAsync(0));
+        await grain.InitiateSplitStateAsync(0);
 
-        await registry.DidNotReceiveWithAnyArgs().AllocateNextShardIndexAsync(default!, default);
-        await source.DidNotReceiveWithAnyArgs().BeginSplitAsync(default, default!, default);
-        Assert.That(state.State.InProgress, Is.False);
+        await source.ReceivedWithAnyArgs(1).BeginSplitAsync(default, default!, default);
+        await source.DidNotReceive().AbortSplitAsync();
+        Assert.That(state.State.InProgress, Is.True);
+        await resize.DidNotReceive().HoldsShardMigrationsAsync();
     }
 
     [Test]
     public async Task SplitAsync_refuses_while_a_resize_of_the_tree_is_in_flight()
     {
         var (grain, state, grainFactory, registry, source, _) = CreateGrain();
-        grainFactory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
+        grainFactory.StubResizeIdle().HoldsShardSplitsAsync().Returns(Task.FromResult(true));
 
         var ex = Assert.ThrowsAsync<InvalidOperationException>(() => grain.SplitAsync(0));
 
@@ -54,7 +57,7 @@ public partial class TreeShardSplitGrainTests
         // migration records before this split opened its record, so only the
         // read after opening it can see the resize.
         var (grain, state, grainFactory, _, source, _) = CreateGrain();
-        grainFactory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
+        grainFactory.StubResizeIdle().HoldsShardSplitsAsync().Returns(Task.FromResult(true));
 
         Assert.ThrowsAsync<InvalidOperationException>(() => grain.InitiateSplitStateAsync(0));
 
@@ -89,7 +92,7 @@ public partial class TreeShardSplitGrainTests
                     PhysicalTreeId = TreeId,
                 },
             });
-        grainFactory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
+        grainFactory.StubResizeIdle().HoldsShardSplitsAsync().Returns(Task.FromResult(true));
 
         await grain.RunSplitPassAsync();
 

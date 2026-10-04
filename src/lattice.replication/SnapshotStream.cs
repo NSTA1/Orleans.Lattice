@@ -88,6 +88,14 @@ public sealed class SnapshotStream
     public IAsyncEnumerable<SnapshotEntry> Entries { get; }
 
     /// <summary>
+    /// The source's snapshot export epoch this export took (issue #4534), or
+    /// <c>0</c> when the producer does not number its exports. A receiver that
+    /// completes a full bootstrap from the export echoes it back so a sender
+    /// that took it off the log knows it has been re-seeded.
+    /// </summary>
+    internal long ExportEpoch { get; init; }
+
+    /// <summary>
     /// Constructs a new <see cref="SnapshotStream"/>. The constructor
     /// takes ownership of the supplied
     /// <paramref name="causalStableFrontier"/> reference; callers

@@ -88,4 +88,20 @@ internal sealed class BootstrapCoordinatorState
     /// is never <see langword="null"/> at pin time.
     /// </summary>
     [Id(6)] public VersionVector CausalStableFrontier { get; set; } = new();
+
+    /// <summary>
+    /// The source's export epoch of the snapshot the current (or last) run
+    /// drained (issue #4534); <c>0</c> from a source that does not number
+    /// its exports. Legacy state decodes to <c>0</c>.
+    /// </summary>
+    [Id(7)] public long SnapshotExportEpoch { get; set; }
+
+    /// <summary>
+    /// Per source cluster, the export epoch of the last full bootstrap that
+    /// reached <see cref="LatticeBootstrapState.LiveIncremental"/> (issue
+    /// #4534). Echoed on replication acknowledgements so a sender that took
+    /// this receiver off the log knows it has been re-seeded. Legacy state
+    /// decodes to an empty map.
+    /// </summary>
+    [Id(8)] public Dictionary<string, long> CompletedExportEpochs { get; set; } = new(StringComparer.Ordinal);
 }

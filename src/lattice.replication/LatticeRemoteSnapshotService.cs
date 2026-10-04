@@ -207,6 +207,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
             SourceClusterId = sourceClusterId,
             AsOfHlc = stream.AsOfHlc,
             CausalStableFrontier = stream.CausalStableFrontier,
+            ExportEpoch = stream.ExportEpoch,
         };
     }
 

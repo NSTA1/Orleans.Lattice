@@ -34,9 +34,13 @@ internal sealed partial class ShardRootGrain
     /// (the common single-silo case).
     /// </para>
     /// </summary>
-    private Task TrackShadowForward<TState>(TState state, Func<IShardRootGrain, TState, Task> forwardAction)
+    private Task TrackShadowForward<TState>(
+        TState state,
+        Func<IShardRootGrain, TState, Task> forwardAction,
+        Func<TState, IReadOnlyList<TState>>? splitPerKey = null,
+        Func<TState, TState>? closureState = null)
     {
-        var task = ForwardShadowAsync(state, forwardAction);
+        var task = ForwardShadowAsync(state, forwardAction, splitPerKey, closureState);
         // Fast path: forwarding inactive (target is null) or already completed
         // synchronously - no observation needed.
         if (task.IsCompleted) { _ = task.Exception; return task; }
