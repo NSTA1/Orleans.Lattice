@@ -78,6 +78,20 @@ internal readonly record struct MembershipCacheKey
     internal string? MetadataDigest { get; }
 
     /// <summary>
+    /// A description that never carries the token. Deliberately overrides the
+    /// compiler-generated record <see cref="object.ToString"/>, which prints
+    /// every property and would therefore put the caller's raw credential token
+    /// into the first log line, exception message or diagnostic dump that
+    /// formats a cache key. The redaction is a fixed token rather than a run of
+    /// stars sized to the secret, so it does not disclose the token's length
+    /// either; only its presence, which is what makes a key readable at all.
+    /// </summary>
+    /// <returns>The redacted description.</returns>
+    public override string ToString() =>
+        $"MembershipCacheKey {{ Token = {(Token is null ? "null" : "[redacted]")}, Scheme = {Scheme}, "
+        + $"PrincipalId = {PrincipalId}, MetadataDigest = {MetadataDigest} }}";
+
+    /// <summary>
     /// Builds the key for a credential that carries nothing but
     /// <paramref name="token"/>. Callers holding a real
     /// <see cref="LatticeCredential"/> must use <see cref="For"/> instead, so

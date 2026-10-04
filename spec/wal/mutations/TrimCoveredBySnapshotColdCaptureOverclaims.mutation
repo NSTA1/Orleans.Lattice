@@ -1,0 +1,30 @@
+# Pairs with TrimCoveredBySnapshot, and reproduces the coverage stamp production
+# had until issue #4451 was fixed (#4489, BuildUnanchoredCoverage).
+# BuildCheckpointCoverage claims GetCurrentCheckpointForPartition - the higher of
+# the persisted and pending checkpoints - as the snapshot's coverage. During a
+# cold rebuild the persisted slot still holds the previous activation's
+# checkpoint while the projection holds only what has been re-read so far, and
+# CaptureSnapshotAsync deliberately does not wait for the replay barrier (#2871).
+# A capture there writes a blob whose rows do not cover its claim, the pin
+# resolves min(persisted, covered) above the rows, and the GC trims writes that
+# exist nowhere else. The base stamps the read position instead, which is what
+# the projection actually holds. See the abstraction gaps in Refinement.md.
+MODULE: TrimCoveredBySnapshotColdCaptureOverclaims
+TARGET: TrimCoveredBySnapshot
+CLASS: Invariant
+SUMMARY: a capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection
+PERTURBS: Capture
+
+--- FIND
+    /\ rp[l] >= 0
+    /\ rp[l] >= snapCov[l]
+    /\ snapCov' = [snapCov EXCEPT ![l] = rp[l]]
+    /\ snapRows' = [snapRows EXCEPT ![l] = cache[l]]
+    /\ cov' = [cov EXCEPT ![l] = rp[l]]
+--- REPLACE
+\* MUTATION: the claim is the current checkpoint, not what was re-read.
+    /\ Cur(l) >= snapCov[l]
+    /\ snapCov' = [snapCov EXCEPT ![l] = Cur(l)]
+    /\ snapRows' = [snapRows EXCEPT ![l] = cache[l]]
+    /\ cov' = [cov EXCEPT ![l] = Cur(l)]
+--- END

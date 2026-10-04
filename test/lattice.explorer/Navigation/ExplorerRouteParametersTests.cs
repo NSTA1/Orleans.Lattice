@@ -66,6 +66,36 @@ public sealed class ExplorerRouteParametersTests
     }
 
     [Test]
+    [TestCase(ExplorerRouteSegments.TenantQueryKey)]
+    [TestCase(ExplorerRouteSegments.AllTenantsQueryKey)]
+    public void Parameter_TenantScopeKey_Throws(string key)
+    {
+        Assert.That(() => new ExplorerRouteParameter(key, "x"), Throws.ArgumentException);
+    }
+
+    [Test]
+    [TestCase(ExplorerRouteSegments.TenantQueryKey, "x")]
+    [TestCase(ExplorerRouteSegments.AllTenantsQueryKey, "true")]
+    [TestCase(ExplorerRouteSegments.TenantQueryKey, null)]
+    [TestCase(ExplorerRouteSegments.AllTenantsQueryKey, "")]
+    public void With_TenantScopeKey_Throws_WhateverTheValue(string key, string? value)
+    {
+        Assert.That(
+            () => ExplorerRouteParameters.Empty.With(key, value),
+            Throws.ArgumentException.With.Property("ParamName").EqualTo("key"));
+    }
+
+    [Test]
+    public void Parameter_KeyThatOnlyStartsLikeATenantScopeKey_IsAccepted()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(new ExplorerRouteParameter("tenants", "x").Key, Is.EqualTo("tenants"));
+            Assert.That(ExplorerRouteParameters.Empty.With("all-tenants-view", "x").Count, Is.EqualTo(1));
+        });
+    }
+
+    [Test]
     public void Parameter_NullValue_BecomesEmpty()
     {
         Assert.That(new ExplorerRouteParameter("page", null!).Value, Is.EqualTo(string.Empty));

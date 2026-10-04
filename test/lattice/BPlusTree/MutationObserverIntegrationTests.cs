@@ -37,8 +37,8 @@ public sealed partial class MutationObserverIntegrationTests
         Func<LatticeMutation, bool> predicate,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(5)).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             foreach (var m in MutationObserverClusterFixture.Captured)
             {
@@ -76,13 +76,13 @@ public sealed partial class MutationObserverIntegrationTests
         int atLeast,
         TimeSpan? timeout = null)
     {
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(5)).TotalMilliseconds;
         List<LatticeMutation> matched;
         while (true)
         {
             matched = Matching(predicate);
             if (matched.Count >= atLeast) return matched;
-            if (DateTime.UtcNow >= deadline) break;
+            if (Environment.TickCount64 >= deadline) break;
             await Task.Delay(25);
         }
 
@@ -117,8 +117,8 @@ public sealed partial class MutationObserverIntegrationTests
         // window is never narrower than before - only adaptive.
         var quietPolls = 10;
         var stable = 0;
-        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
-        while (stable < quietPolls && DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(5)).TotalMilliseconds;
+        while (stable < quietPolls && Environment.TickCount64 < deadline)
         {
             await Task.Delay(25);
             var next = Matching(predicate);

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 
@@ -55,10 +56,11 @@ internal sealed record AppConsentDrift(ImmutableArray<string> Findings)
         {
             foreach (var scope in role.Scopes)
             {
+                // Coverage is judged by extent as well as tree, by the rule the cluster's role
+                // compiler applies: a key or prefix approval does not cover a wider request.
                 if (scope.App is { } app
-                    && !string.Equals(app, installed.Slug, StringComparison.Ordinal)
-                    && !scopes.Any(approved => string.Equals(approved.App, app, StringComparison.Ordinal)
-                        && string.Equals(approved.Tree, scope.Tree, StringComparison.Ordinal)))
+                    && AppConsentAnalysis.IsOutsideNamespace(scope, installed.Slug)
+                    && !AppConsentAnalysis.Covers(scopes, new AppExceptionScope { Kind = scope.Kind, App = app, Tree = scope.Tree, KeyOrPrefix = scope.KeyOrPrefix }))
                 {
                     findings.Add($"The role {role.Name} reaches a/{app}/{scope.Tree}, outside the app's namespace, without an approved exception scope.");
                 }

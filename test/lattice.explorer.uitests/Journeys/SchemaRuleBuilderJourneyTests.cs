@@ -35,7 +35,7 @@ public sealed class SchemaRuleBuilderJourneyTests : UiTestBase
         await Expect(RuleSentences(page).First).ToContainTextAsync("total must be a number of at least 0");
 
         await AddRuleAsync(page, "email", arrowsToKind: 5);
-        await Expect(content.Locator(".lt-schema-regex__pattern")).ToHaveTextAsync("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$");
+        await Expect(content.Locator(".lt-schema-regex__pattern")).ToHaveTextAsync("^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}\\z");
         await PressAsync(content.GetByRole(AriaRole.Button, new() { Name = "Add rule", Exact = true }), "Enter");
         await Expect(RuleSentences(page)).ToHaveCountAsync(2);
         await Expect(RuleSentences(page).Nth(1)).ToContainTextAsync("email must be an email address");

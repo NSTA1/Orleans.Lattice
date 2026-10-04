@@ -63,6 +63,40 @@
       "source": "src/lattice.api.schema.grpc/Security/LatticeSchemaApiGrpcAuthInterceptor.cs#LatticeSchemaApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeSchemaApi",
+        "package": "Orleans.Lattice.Api.Schema",
+        "provides": [
+          "ILatticeSchemaControl"
+        ],
+        "source": "src/lattice.api.schema/LatticeApiSchemaServiceCollectionExtensions.cs#LatticeApiSchemaServiceCollectionExtensions.AddLatticeSchemaApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeSchemaEnforcement",
+        "kind": "registration",
+        "reason": "The schema facade drives the schema admin surface and fails fast when AddLatticeSchemaEnforcement has not registered it.",
+        "source": "src/lattice.api.schema/LatticeApiSchemaServiceCollectionExtensions.cs#LatticeApiSchemaServiceCollectionExtensions.AddLatticeSchemaApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeSchemaApiGrpc",
+        "package": "Orleans.Lattice.Api.Schema.Grpc",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaApiGrpcServiceCollectionExtensions.cs#LatticeSchemaApiGrpcServiceCollectionExtensions.AddLatticeSchemaApiGrpc"
+      },
+      {
+        "registration": "MapLatticeSchemaApiGrpc",
+        "package": "Orleans.Lattice.Api.Schema.Grpc",
+        "source": "src/lattice.api.schema.grpc/LatticeSchemaApiGrpcServiceCollectionExtensions.cs#LatticeSchemaApiGrpcServiceCollectionExtensions.MapLatticeSchemaApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AdvanceVersionRequest": {
       "kind": "record",

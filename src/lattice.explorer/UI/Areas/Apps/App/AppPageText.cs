@@ -133,6 +133,10 @@ internal static class AppPageText
     /// <summary>A retention period in plain words, or "host default".</summary>
     /// <param name="value">The declared retention.</param>
     /// <returns>Text such as "30 days", "12 hours" or "host default".</returns>
+    /// <remarks>
+    /// A fraction of a minute is rounded up first and the unit chosen on the
+    /// rounded figure, so 59.5 minutes reads "1 hour" rather than "60 minutes".
+    /// </remarks>
     public static string Retention(TimeSpan? value)
     {
         if (value is not { } span)
@@ -140,17 +144,18 @@ internal static class AppPageText
             return "host default";
         }
 
-        if (span.TotalDays >= 1 && span.TotalDays == Math.Floor(span.TotalDays))
+        var minutes = (long)Math.Ceiling(span.TotalMinutes);
+        if (minutes > 0 && minutes % 1_440 == 0)
         {
-            return Count((long)span.TotalDays, "day");
+            return Count(minutes / 1_440, "day");
         }
 
-        if (span.TotalHours >= 1 && span.TotalHours == Math.Floor(span.TotalHours))
+        if (minutes > 0 && minutes % 60 == 0)
         {
-            return Count((long)span.TotalHours, "hour");
+            return Count(minutes / 60, "hour");
         }
 
-        return Count((long)Math.Ceiling(span.TotalMinutes), "minute");
+        return Count(minutes, "minute");
     }
 
     /// <summary>A lifecycle state's label.</summary>

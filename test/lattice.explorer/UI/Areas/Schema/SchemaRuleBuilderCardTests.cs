@@ -165,7 +165,7 @@ public sealed class SchemaRuleBuilderCardTests : SchemaRuleBuilderTestBase
         Choose(cut, "Format", nameof(SchemaTextFormat.CurrencyCode));
         Click(cut, "Edit as regex");
 
-        cut.WaitUntil(() => Assert.That(Field(cut, "Pattern (a regular expression)").GetAttribute("value"), Is.EqualTo("^[A-Z]{3}$")));
+        cut.WaitUntil(() => Assert.That(Field(cut, "Pattern (a regular expression)").GetAttribute("value"), Is.EqualTo("^[A-Z]{3}\\z")));
         Type(cut, "Pattern (a regular expression)", "^[A-Z]{3}-[0-9]$");
         Commit(cut);
         Save(cut);

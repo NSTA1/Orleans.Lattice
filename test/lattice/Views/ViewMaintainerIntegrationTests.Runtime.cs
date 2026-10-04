@@ -150,10 +150,10 @@ public partial class ViewMaintainerIntegrationTests
         Assert.That(view.ViewName, Is.EqualTo(viewName));
         var registry = _fixture.SiloServices.GetRequiredService<IGrainFactory>()
             .GetGrain<IViewRegistryGrain>(IViewRegistryGrain.SingletonKey);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(10).TotalMilliseconds;
         while (!(await registry.ListAsync()).Any(record => record.ViewName == viewName))
         {
-            Assert.That(DateTime.UtcNow, Is.LessThan(deadline), "runtime registration was not persisted");
+            Assert.That(Environment.TickCount64, Is.LessThan(deadline), "runtime registration was not persisted");
             await Task.Delay(20);
         }
 
@@ -327,10 +327,10 @@ public partial class ViewMaintainerIntegrationTests
             services.GetRequiredService<IGrainFactory>(),
             NullLogger<ViewActivationService>.Instance);
         await activation.StartAsync(CancellationToken.None);
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(10).TotalMilliseconds;
         while (catalog.TryGet(viewName) is null)
         {
-            Assert.That(DateTime.UtcNow, Is.LessThan(deadline), "runtime view was not rehydrated");
+            Assert.That(Environment.TickCount64, Is.LessThan(deadline), "runtime view was not rehydrated");
             await Task.Delay(20);
         }
 

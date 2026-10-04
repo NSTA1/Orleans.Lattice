@@ -54,12 +54,20 @@ public partial class ClusterWalReclamation : IDisposable
         _unserved = false;
         var token = _lifetime.Renew();
 
+        // Every outcome is checked against this read's own token, which the next
+        // tree's read cancels: an answer or fault that arrives after the tree has
+        // changed belongs to the previous tree and must not be shown for this one.
         try
         {
-            _report = await reclamation.GetWalReclamationAsync(TreeId, token);
+            var report = await reclamation.GetWalReclamationAsync(TreeId, token);
+            if (!token.IsCancellationRequested)
+            {
+                _report = report;
+            }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception) when (token.IsCancellationRequested)
         {
+            // Superseded by the next tree's read, or the section was left.
         }
         catch (NotSupportedException)
         {

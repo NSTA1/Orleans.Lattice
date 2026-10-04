@@ -12,6 +12,10 @@ Every page on the site also has a markdown alternate at the same address ending 
 - [llms-full.txt](https://nsta1.github.io/Orleans.Lattice/llms-full.txt): Every documentation page's markdown in one file. Each package's documentation is also in one file of its own, `docs/<package>/llms-full.txt` on the site, which the index lists with the package.
 - [sitemap.xml](https://nsta1.github.io/Orleans.Lattice/sitemap.xml): Every rendered page of the site.
 
+## Operating Orleans.Lattice
+
+- [docs/agents/index.json](docs/agents/index.json): The machine-readable specifications for agents operating an Orleans.Lattice deployment - operational invariants, capability envelopes with guarantees and non-guarantees, procedures with preconditions, postconditions, failure modes and rollback, per-operation API contracts with error taxonomy, retry, idempotency and concurrency, governance decision trees, and the JSON Schemas that define every file's format. They describe every surface Lattice ships; a given host exposes only the packages it registers, so read each surface's `availability` before relying on it. The published copies are listed under Agent specifications in the site's llms.txt.
+
 ## Start here
 
 - [README](README.md): What the platform is, why it exists, the Local/Team/Global deployment journey, the seam-oriented architecture, and quick start.

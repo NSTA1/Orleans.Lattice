@@ -1,4 +1,5 @@
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 /// <summary>
@@ -156,6 +157,17 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task ForwardWithDeadlineAsync(Func<Task> forwardCall)
     {
+        // A forwarded saga prepare can be delivered after the saga decided (an
+        // abandoned forward is still in flight, or a duplicate), so mark it for
+        // the destination leaf, which then checks the saga's decision before
+        // bucketing it (issue #4445). The marker names the logical tree the
+        // saga records its decision under: the facade's routed stamp, else this
+        // shard's own tree. Scoped to this async method, so the caller's
+        // concurrent local write never sees the marker.
+        using var forwardedPrepare = LatticeForwardedPrepareContext.BeginScopeIfPrepared(
+            RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) is string { Length: > 0 } routedLogical
+                ? routedLogical
+                : TreeId);
         var timeout = (await GetOptionsAsync()).ShardForwardTimeout;
         if (timeout == Timeout.InfiniteTimeSpan)
         {

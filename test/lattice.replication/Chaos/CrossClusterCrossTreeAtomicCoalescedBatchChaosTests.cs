@@ -180,8 +180,8 @@ public class CrossClusterCrossTreeAtomicCoalescedBatchChaosTests
     private static async Task AssertPeerConvergesAtomicallyAsync(
         MultiSiteClusterFixture fixture, string[][] keysA, string[][] keysB, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var violation = await FindStableCrossTreeViolationAsync(fixture, keysA, keysB);
             Assert.That(violation, Is.Null, $"Cross-tree barrier violation on the receiver: {violation}");
