@@ -4928,9 +4928,14 @@ internal sealed partial class LatticeGrain(
     /// that catch a domain exception <i>by its own type</i> are unaffected and
     /// remain the correct way to handle one deliberately.
     /// </para>
+    /// <para>
+    /// <see cref="LatticeTreePurgedException"/> is the one domain fault these
+    /// clauses still absorb: it means a call reached a purged physical copy, and
+    /// refreshing the cached alias is exactly the remedy (issue #4503).
+    /// </para>
     /// </summary>
     private bool TryInvalidateStaleAlias(Exception fault) =>
-        fault is not ILatticeDomainFault && TryInvalidateStaleAlias();
+        (fault is not ILatticeDomainFault || fault is LatticeTreePurgedException) && TryInvalidateStaleAlias();
 
     /// <summary>
     /// Invalidates the cached <see cref="ShardMap"/> so the next routing call

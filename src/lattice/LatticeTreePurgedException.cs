@@ -18,12 +18,17 @@ namespace Orleans.Lattice;
 /// <para>
 /// Derives from <see cref="InvalidOperationException"/> because that is how a
 /// purged tree already refuses an operation (<c>PurgedTreeRegistrationGuard</c>),
-/// so existing catch sites keep working.
+/// so existing catch sites keep working. It implements
+/// <see cref="ILatticeDomainFault"/>, so a broad
+/// <c>catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)</c>
+/// written for a genuine misuse declines it; the routing tier's stale-alias
+/// clauses still treat it as a stale alias, since refreshing the alias is the
+/// remedy for a call that reached a purged copy.
 /// </para>
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeTreePurged)]
-internal sealed class LatticeTreePurgedException : InvalidOperationException
+internal sealed class LatticeTreePurgedException : InvalidOperationException, ILatticeDomainFault
 {
     /// <summary>The purged physical tree id the call addressed.</summary>
     [Id(0)] public string PhysicalTreeId { get; set; } = "";

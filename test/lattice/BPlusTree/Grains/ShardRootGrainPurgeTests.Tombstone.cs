@@ -95,6 +95,8 @@ public sealed partial class ShardRootGrainPurgeTests
 
         Assert.That(refusal!.PhysicalTreeId, Is.EqualTo(PurgedTreeId));
         Assert.That(refusal, Is.InstanceOf<InvalidOperationException>());
+        Assert.That(refusal, Is.InstanceOf<ILatticeDomainFault>(),
+            "a broad InvalidOperationException clause written for a misuse must be able to decline it");
         Assert.That(harness.State.State.RootNodeId, Is.Null);
     }
 
