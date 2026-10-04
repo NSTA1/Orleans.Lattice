@@ -194,6 +194,7 @@ fails if a property is added without a mutation, and
 | `RevisionMonotonicRollback` | `RevisionMonotonic` | Action | - | a stale registry write replays over a newer one |
 | `TerminationNoFairness` | `Termination` | Temporal | - | no fairness, so a saga may stall forever |
 | `TerminationCompletionOverAllKeys` | `Termination` | Temporal (`DEADLOCK: off`) | `BroadcastStep` | completion is tested over the whole keyspace, so a fully told saga is never declared done |
+| `EveryCommittedKeyReadableIndeterminateFirst` | `EveryCommittedKeyReadable` | Temporal | - | the gate tests its Indeterminate arm ahead of the orphan guard, so a late orphan hides a committed key for as long as the registry is masked (#4428) |
 | `EveryCommittedKeyReadableCommitFanOutStops` | `EveryCommittedKeyReadable` | Temporal | `BroadcastStep` | the commit fan-out stops after its first participant, so a committed key is never materialised |
 | `NoStrandedPrepareCompensationSkipsNacked` | `NoStrandedPrepare` | Temporal | `BroadcastStep` | the compensation fan-out skips participants whose prepare failed, stranding their buckets |
 

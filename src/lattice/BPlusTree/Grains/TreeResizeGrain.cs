@@ -1551,6 +1551,39 @@ internal sealed class TreeResizeGrain(
     // resize state, so the persisted state alone cannot show it is under way.
     private int _undoRunning;
 
+    /// <summary>
+    /// Whether a resize is in flight, an undo is pending or running, or the
+    /// running turn holds resize state it has not yet persisted - every state in
+    /// which <see cref="HoldsShardMigrationsAsync"/> and
+    /// <see cref="HoldsShardSplitsAsync"/> hold without probing anything. A
+    /// resize turn sets the in-memory state before it persists it, so a turn
+    /// that has started, completed or begun to unwind a resize shows as a
+    /// difference between the two until it has settled.
+    /// </summary>
+    private bool ResizeUnsettled()
+    {
+        var durable = DurableResizeState;
+        var live = state.State;
+        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
+        {
+            return true;
+        }
+
+        return durable.Complete != live.Complete
+            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
+            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
+            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Interleaving is safe for the reason given on
+    /// <see cref="HoldsShardMigrationsAsync"/>: only a resize whose persisted and
+    /// in-memory state agree, with no undo pending or running, is answered
+    /// <see langword="false"/>.
+    /// </remarks>
+    public Task<bool> HoldsShardSplitsAsync() => Task.FromResult(ResizeUnsettled());
+
     /// <inheritdoc />
     /// <remarks>
     /// Interleaving is safe because every answer that is not established from
@@ -1566,21 +1599,9 @@ internal sealed class TreeResizeGrain(
     /// </remarks>
     public async Task<bool> HoldsShardMigrationsAsync()
     {
+        if (ResizeUnsettled()) return true;
+
         var durable = DurableResizeState;
-        var live = state.State;
-        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
-        {
-            return true;
-        }
-
-        if (durable.Complete != live.Complete
-            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
-            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
-            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal))
-        {
-            return true;
-        }
-
         if (!durable.Complete) return false;
 
         // A completed resize that names no copies never mirrored. Shadow-

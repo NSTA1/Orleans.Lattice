@@ -2646,7 +2646,7 @@ capabilities:
       - sequence:
           - "an adaptive split or online consolidation is in flight on the tree"
           - "start a resize"
-        hazard: "Resize and shard-migration interlock; ResizeAsync throws InvalidOperationException while a split or consolidation is in flight on the tree, and a split or fold is refused (or backs out) while a resize is in flight, while its undo is pending or running, and through the soft-delete window until the old physical tree stops mirroring into the destination (#4452)."
+        hazard: "Resize and shard-migration interlock; ResizeAsync throws InvalidOperationException while a split or consolidation is in flight on the tree, and a split or fold is refused (or backs out) while a resize is in flight or its undo is pending or running; a fold (and a reshard) also through the soft-delete window until the old physical tree stops mirroring into the destination (#4452), while an adaptive split may run in that window because the mirror follows it (#4478)."
         source: "docs/lattice/tree-sizing.md"
       - sequence:
           - "call ResizeAsync while a resize is in progress"

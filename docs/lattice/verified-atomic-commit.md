@@ -235,8 +235,10 @@ Liveness and temporal properties:
 - **Termination** - every saga reaches a terminal decision under a bounded fault
   budget.
 - **EveryCommittedKeyReadable** - every committed saga's keys are eventually all
-  materialised at their post-saga value on their own leaves, so they stay
-  readable once the registry forgets the decision.
+  materialised at their post-saga value on their own leaves, and from then on
+  every reader is served that value: they stay readable once the registry
+  forgets the decision, and while it declines to report it, because a leaf that
+  has applied the terminal defers to its projection (issue #4428).
 - **NoStrandedPrepare** - every participant of a decided saga eventually applies
   the saga's terminal, so no prepared bucket is stranded.
 
