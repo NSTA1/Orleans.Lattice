@@ -83,10 +83,11 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     /// The latch needs a capture at exactly offset 1 and a persist at 2, with no
     /// recapture or stop in between (<see cref="WalFallOffCore.IsPrefixLost"/>
     /// exempts a checkpoint of 0). The measured per-run detection rate is
-    /// p ~ 2.3e-3 (Coyote at fault budget 1, cross-checked by a uniform-random
-    /// simulation of the variant), so the default 1000 runs would miss it ~ 10%
-    /// of the time; 10000 runs miss it with probability ~ e^-23. Exploration stops
-    /// at the first violation, so the expected cost is ~ 1/p ~ 450 runs.
+    /// p ~ 2.0e-3 (40 Coyote explorations, 20409 paths, every one reported by
+    /// [RecoveryNeverFallsOffLog]; a uniform-random simulation of the variant
+    /// predicted 2.3e-3), so the default 1000 runs would miss it ~ 13% of the
+    /// time; 10000 runs miss it with probability ~ e^-20. Exploration stops at
+    /// the first violation, so the expected cost is ~ 1/p ~ 500 runs.
     /// </remarks>
     [Test]
     public void Removing_the_never_written_release_bound_is_caught_by_the_fall_off_assertion()
