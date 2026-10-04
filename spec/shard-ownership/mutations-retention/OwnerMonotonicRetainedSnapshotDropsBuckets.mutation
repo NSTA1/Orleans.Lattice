@@ -1,4 +1,4 @@
-# Pairs with OwnerMonotonic. Reproduces current production (#4455): the online
+# Pairs with OwnerMonotonic. Reproduces production before #4455 was fixed (#4506): the online
 # snapshot copies committed entries only, so a batch prepared on the old copy
 # before the snapshot has no bucket on the resized copy, and a commit decided
 # before the flip reverts there.

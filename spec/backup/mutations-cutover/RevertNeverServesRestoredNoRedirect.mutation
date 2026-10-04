@@ -1,0 +1,16 @@
+# Pairs with RevertNeverServesRestored. The revert that leaves the restored
+# copy serving: it moves the alias back and clears the previous copy's
+# redirect, but never arms the shadow to forward, so a routing activation that
+# cached the restored alias keeps serving - and writing - the restored copy.
+MODULE: RevertNeverServesRestoredNoRedirect
+TARGET: RevertNeverServesRestored
+CLASS: Invariant
+SUMMARY: the revert arms no redirect on the restored copy
+PERTURBS: RevertRedirect
+
+--- FIND
+    /\ redir' = [redir EXCEPT !["prev"] = "none", !["shadow"] = "prev"]
+--- REPLACE
+    \* MUTATION: the shadow is not armed.
+    /\ redir' = [redir EXCEPT !["prev"] = "none"]
+--- END

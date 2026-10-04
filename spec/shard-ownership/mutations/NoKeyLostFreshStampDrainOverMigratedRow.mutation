@@ -1,0 +1,21 @@
+# Pairs with NoKeyLost. Reproduces current production (#4522): the terminal
+# drains a prepared bucket by skipping a key whose row is newer than the
+# bucket and not migrated, and otherwise installs the saga's value at a fresh
+# dominating stamp. A later write the split's shadow-forward imported onto the
+# destination is a migrated row, so a bucket the sweep replayed there drains
+# over it and the acknowledged write is lost. The intended design (#4566's
+# Fix-M) drains a marked bucket last-writer-wins at its prepare stamp whatever
+# the row's migrated flag says. The edit lies in TermRow, the operator the
+# terminal broadcast applies, so the mutation declares no PERTURBS.
+MODULE: NoKeyLostFreshStampDrainOverMigratedRow
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the drain skips only a newer non-migrated row and otherwise installs at a fresh stamp, overwriting a migrated later write
+
+--- FIND
+    ELSE IF pend[c][s][k] = "old" THEN LWW(row[c][s][k], BVal(c))
+--- REPLACE
+\* MUTATION: skip only a newer, non-migrated row; otherwise install at a fresh stamp.
+    ELSE IF pend[c][s][k] = "old"
+    THEN IF Stamp(row[c][s][k]) > Stamp(BVal(c)) /\ ~mig[c][s][k] THEN row[c][s][k] ELSE FreshV
+--- END

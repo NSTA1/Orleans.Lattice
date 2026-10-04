@@ -1,0 +1,18 @@
+# Pairs with BackupSagaConsistent (the requested GateLapse). The gate lease
+# lapses mid-capture and the release does not validate that its token was
+# held throughout, so a decision recorded after the lapse - and the terminal
+# it licenses - lands in a capture whose other shards resolved the saga
+# against the snapshot taken before it.
+MODULE: BackupSagaConsistentGateLapse
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: the capture is accepted without validating that the gate was held throughout
+PERTURBS: Validate
+
+--- FIND
+    /\ IF /\ \A T \in Members : held[T]
+          /\ kind = "set" => \A T \in Members : epoch[T] = before[T]
+--- REPLACE
+    \* MUTATION: the lease is not validated.
+    /\ IF /\ kind = "set" => \A T \in Members : epoch[T] = before[T]
+--- END

@@ -117,11 +117,19 @@ public sealed partial class CiIntegrationBranchTriggerTests
     private const int MinimumWorkflowCount = 5;
 
     /// <summary>
-    /// The plan output a push-lane job reads to tell a member push from an
-    /// integration-branch push. Named once so the gate and the workflow cannot
-    /// drift apart silently.
+    /// The expression a push-lane job reads to tell a member push from an
+    /// integration-branch push: the <c>push_is_member</c> output of whichever job
+    /// carries the classifier step (<c>plan</c> in the advisory lanes,
+    /// <c>classify</c> in <c>ci.yml</c>). Derived per workflow rather than named,
+    /// so a classifier moved to another job cannot leave this gate checking a
+    /// flag nothing publishes.
     /// </summary>
-    private const string MemberPushFlag = "needs.plan.outputs.push_is_member";
+    private static string MemberPushFlag(string workflowText) =>
+        Jobs(workflowText)
+            .Where(job => ClassifierStep(job.Block) is not null)
+            .Select(job => "needs." + job.Id + ".outputs." + ClassifierOutput)
+            .FirstOrDefault()
+        ?? "needs.<no classifier job>.outputs." + ClassifierOutput;
 
     [Test]
     public void Every_workflow_gating_integration_branch_pull_requests_also_runs_on_push()
@@ -347,12 +355,10 @@ public sealed partial class CiIntegrationBranchTriggerTests
     /// <para>
     /// Scope, stated against interest: this arm grades the reporting shape it
     /// can decide statically. A job that is NOT conditioned on <c>always()</c>
-    /// but still concludes green on a member push - because it has no
-    /// dependencies to skip, as <c>content-gates</c> does - is outside the
-    /// population and is not graded. That is deliberate rather than overlooked:
-    /// such a job reports on work it genuinely performed, so its green is
-    /// accurate, and widening the predicate to redden it would push authors
-    /// toward removing honest jobs from the push lane.
+    /// is outside this population; whether it runs on a member push at all is
+    /// graded by <see cref="Every_job_on_an_integration_push_lane_skips_on_a_member_push"/>,
+    /// which covers every job in the lane, <c>ci.yml</c>'s <c>content-gates</c>
+    /// included.
     /// </para>
     /// </summary>
     [Test]
@@ -370,6 +376,8 @@ public sealed partial class CiIntegrationBranchTriggerTests
                 continue;
             }
 
+            var flag = MemberPushFlag(text);
+
             foreach (var (id, block) in Jobs(text))
             {
                 var condition = Condition(block, 4);
@@ -381,7 +389,7 @@ public sealed partial class CiIntegrationBranchTriggerTests
 
                 scanned.Add(workflow.Name + ":" + id);
 
-                if (!condition.Contains(MemberPushFlag, StringComparison.Ordinal))
+                if (!condition.Contains(flag, StringComparison.Ordinal))
                 {
                     offenders.Add(workflow.Name + ":" + id + " -> if: " + condition.Trim());
                 }
@@ -401,7 +409,8 @@ public sealed partial class CiIntegrationBranchTriggerTests
             "these jobs run on an integration-branch push and report regardless of upstream skips, without "
                 + "excluding a member push. On a member push every test leg is skipped, so the job publishes a "
                 + "green check on the member's commit sha that asserts an outcome nothing measured. The condition "
-                + "must also require that " + MemberPushFlag + " is not true: " + string.Join("; ", offenders));
+                + "must also require that the classifier job's push_is_member output is not true: "
+                + string.Join("; ", offenders));
     }
 
     private sealed record DuplicateKey(string Key, int Line);

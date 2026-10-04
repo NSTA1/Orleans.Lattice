@@ -1,0 +1,16 @@
+# Pairs with RStrictIsolation. The receiver records every terminal as a commit,
+# whatever outcome it carries, so an aborted saga's tally completes as
+# committed and its staged buckets surface post-saga on the receiver - a saga
+# the origin aborted, made visible.
+MODULE: RStrictIsolationTerminalOutcomeIgnored
+TARGET: RStrictIsolation
+CLASS: Invariant
+SUMMARY: the receiver records every terminal as a commit, so an aborted saga surfaces
+PERTURBS: DeliverTerminal
+
+--- FIND
+           o == Outcome(m.commit)
+--- REPLACE
+\* MUTATION: the terminal's outcome is ignored.
+           o == "committed"
+--- END
