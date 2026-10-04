@@ -1481,7 +1481,15 @@ internal sealed class TreeResizeGrain(
         }
 
         if (!durable.Complete) return false;
-        if (!durable.HasUndoTargets) return true;
+
+        // A completed resize that names no copies never mirrored. Shadow-
+        // forwarding starts only in the snapshot InitiateResizeStateAsync launches
+        // after it persisted both ids in the same write as InProgress, and both
+        // are cleared together only by ResetResizeState, after an undo has
+        // cleared the mirror. The state is reached by the empty-tree fast path,
+        // which re-pins the registry in place and records Complete with no copy;
+        // holding there would block every split of a tree sized that way for good.
+        if (!durable.HasUndoTargets) return false;
 
         var oldPhysical = durable.OldPhysicalTreeId!;
         var resized = durable.SnapshotTreeId!;

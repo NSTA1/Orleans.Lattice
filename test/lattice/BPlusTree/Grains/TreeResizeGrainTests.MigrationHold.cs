@@ -44,6 +44,21 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
+    public async Task HoldsShardMigrations_is_false_for_a_completed_resize_that_names_no_copy()
+    {
+        // The empty-tree fast path re-pins the registry in place and records
+        // Complete with no copy: nothing ever mirrored, so nothing is held.
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        state.State.Complete = true;
+        state.State.OperationId = null;
+        state.State.OldPhysicalTreeId = null;
+        state.State.SnapshotTreeId = null;
+
+        Assert.That(await grain.HoldsShardMigrationsAsync(), Is.False);
+        await grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0").DidNotReceive().GetMirrorDestinationAsync();
+    }
+
+    [Test]
     public async Task HoldsShardMigrations_is_true_while_a_resize_is_in_flight()
     {
         var (grain, state, _, _, _) = CreateGrain();
