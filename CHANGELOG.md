@@ -309,7 +309,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - A schema predicate's text constant reads unambiguously.** A rule shown as an expression now escapes backslashes and control characters as well as quotes, so `C:\new` no longer reads as a line break and a value holding a line break stays on one line. ([#4487](https://github.com/NSTA1/Orleans.Lattice/issues/4487)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - WAL reclamation shows only the current tree's verdict.** On the WAL page, a late answer or fault for the tree shown before no longer replaces the current tree's floor holder with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - The WAL page shows only the current tree's readings.** A late answer or fault for the tree shown before no longer replaces the current tree's floor holder, placement audit, move plan or move grant with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488), [#4512](https://github.com/NSTA1/Orleans.Lattice/issues/4512)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Operation progress shows only the operation followed.** A late status read for an operation the page no longer follows cannot replace the current one's progress, so an earlier operation that finished no longer re-enables what a running one disables. ([#4513](https://github.com/NSTA1/Orleans.Lattice/issues/4513)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Access rule and group pages show only their own address.** A late load for the rule or group shown before no longer replaces the current one or declares it not found, so Edit, Delete and member changes act on what the page shows. ([#4514](https://github.com/NSTA1/Orleans.Lattice/issues/4514)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
 
