@@ -256,9 +256,12 @@ not read as coverage of another:
   T's stamp, 123,933 states). The base has no write before the prepare, so it
   is not a standing mutation; the intended design (the mirror forwards plain
   writes at T's stamp) is stated in the intended-design table.
-- **Named exceptions to H.** A range delete stamped at its issue (#4530) and
-  an idempotent retry that reuses its issue stamp can be stamped below a
-  prepare on the same leaf; `NoKeyLostLaterWriteBelowP` shows what that costs.
+- **Named exception to H.** An idempotent retry that reuses its issue stamp
+  can be stamped below a prepare on the same leaf; `NoKeyLostLaterWriteBelowP`
+  shows what that costs. A range delete no longer is one: it is stamped above
+  the highest clock of every leaf it covers (#4530, fixed by #4568; detector
+  `DeleteRangeAfterSagaDecisionIntegrationTests.Range_delete_acknowledged_after_the_decision_survives_the_terminal_drain`,
+  red with the facade's wall-clock stamp restored).
 - **More than one of anything.** One split, one reshard, one resize, one saga
   writing two keys, one later write. A second saga contending for a key, a
   second split, and a split of the resized copy during the resize are bounded
