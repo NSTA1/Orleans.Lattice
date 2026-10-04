@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -104,6 +105,80 @@ public partial class BootstrapAtomicVisibilityTests
             Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
             Assert.That(receivedB, Is.EqualTo(new byte[] { 2 }),
                 "keyB must arrive post-saga beside keyA: the recorded verdict behind the aged-out row is a commit");
+        });
+    }
+
+    [Test]
+    public async Task Re_bootstrap_over_a_populated_receiver_deletes_a_key_a_recorded_commit_deleted()
+    {
+        // The receiver already holds older values for both keys - a peer that
+        // fell off the log re-bootstraps over its existing copy, which the
+        // bootstrap drain does not clear. The saga set keyA and deleted keyB;
+        // keyB's prepared delete is the stranded bucket. Shipping the
+        // committed delete as an absence would leave keyB's older value beside
+        // keyA's post-saga value.
+        const string receiverTree = "snap-stranded-delete-receiver";
+        const string sourceCluster = "snap-stranded-delete-origin";
+        var (keyA, keyB) = AgedKeysOnDistinctShards();
+        keyA += "-del";
+        keyB += "-del";
+        while (LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount)
+            == LatticeSharding.GetShardIndex(keyB, LatticeConstants.DefaultShardCount))
+        {
+            keyB += "x";
+        }
+
+        var txid = Guid.NewGuid();
+        var source = _cluster.Client.GetGrain<IReplicationApplyGrain>(AgedTree);
+        await source.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, Hlc(4_000), ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await source.ApplyPreparedDeleteAsync(
+            keyB, Hlc(4_000), ClusterId, sourceVectorClock: null, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        await source.ApplyTxTerminalAsync(txid, committed: true, shardIndex: shardA, Hlc(4_100), ClusterId);
+        var registry = _cluster.Client.GetGrain<ITxRegistryGrain>(AgedTree);
+        await registry.ForgetAsync(txid);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+
+        var applier = _cluster.Silos.OfType<Orleans.TestingHost.InProcessSiloHandle>().First()
+            .SiloHost.Services.GetRequiredService<IReplicationApplier>();
+        var receiver = _cluster.Client.GetGrain<ILattice>(receiverTree);
+        foreach (var (key, value) in new[] { (keyA, (byte)8), (keyB, (byte)9) })
+        {
+            await applier.ApplyAsync(new WalRecord
+            {
+                TreeId = receiverTree,
+                Op = MutationKind.Set,
+                Key = key,
+                Value = new[] { value },
+                Timestamp = Hlc(1_000),
+                OriginClusterId = sourceCluster,
+            });
+        }
+
+        Assert.That(await receiver.GetAsync(keyB), Is.EqualTo(new byte[] { 9 }), "precondition: the receiver holds keyB's older value");
+
+        var stream = await _provider.ExportAsync(AgedTree, HybridLogicalClock.Zero);
+        var entries = (await DrainAsync(stream)).Where(e => e.Key == keyA || e.Key == keyB).ToList();
+        using (LatticeBootstrapApplyContext.BeginScope())
+        {
+            foreach (var entry in entries)
+            {
+                if (Orleans.Lattice.Replication.Grains.LatticeBootstrapCoordinatorGrain.ToSnapshotWalRecord(
+                        entry, receiverTree, sourceCluster, LatticeMergeMode.LwwRegister) is { } record)
+                {
+                    await applier.ApplyAsync(record);
+                }
+            }
+        }
+
+        var receivedA = await receiver.GetAsync(keyA);
+        var receivedB = await receiver.GetAsync(keyB);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
+            Assert.That(receivedB, Is.Null, "keyB's delete must reach the receiver beside keyA's write");
         });
     }
 }

@@ -791,7 +791,12 @@ emits any of the saga's rows. Both passes then treat the saga as
 decided. A recorded commit ships as committed rows, and a recorded abort
 ships nothing. The prepared rows pass emits a recorded commit's committed
 rows itself, because the committed projection pass need not enumerate a
-key held only in a pending bucket. Shipping such a saga as prepared rows split it on the
+key held only in a pending bucket. A delete the saga committed ships as a
+committed tombstone row, which the bootstrap drain applies as a delete,
+rather than as an absence: a bootstrap can land on a receiver copy that
+still holds the key (a peer that fell off the log re-bootstraps over its
+existing copy, which the drain does not clear), and an absence would leave
+that older value beside the saga's other keys. Shipping such a saga as prepared rows split it on the
 receiver (#4481): when its terminal had drained some keys before the
 decision aged out and left another bucket stranded, the drained keys
 arrived as committed rows and the stranded one as a prepared row. The

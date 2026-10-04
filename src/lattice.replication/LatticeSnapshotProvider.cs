@@ -399,22 +399,22 @@ internal sealed class LatticeSnapshotProvider(
                         // the committed value the source's leaf sweep will
                         // install. The committed-projection pass need not
                         // enumerate a key held only in a pending bucket, so
-                        // this pass emits it. A committed delete ships
-                        // nothing: on a bootstrapping receiver an absent key
-                        // is the deleted state, and the committed pass hides
-                        // any pre-saga row under the overridden snapshot.
-                        if (!m.IsTombstone)
+                        // this pass emits it. A committed delete ships as a
+                        // committed tombstone row, not as an absence: a
+                        // bootstrap can land on a receiver copy that still
+                        // holds the key's older value (a peer that fell off
+                        // the log re-bootstraps in place), and an absence
+                        // would leave that value beside the saga's other keys.
+                        yield return new SnapshotEntry
                         {
-                            yield return new SnapshotEntry
-                            {
-                                Key = m.Key,
-                                Value = m.Value ?? Array.Empty<byte>(),
-                                Timestamp = m.Timestamp,
-                                ExpiresAtTicks = m.ExpiresAtTicks,
-                                Delta = m.Delta,
-                                Mode = m.Mode,
-                            };
-                        }
+                            Key = m.Key,
+                            Value = m.IsTombstone ? Array.Empty<byte>() : (m.Value ?? Array.Empty<byte>()),
+                            Timestamp = m.Timestamp,
+                            IsTombstone = m.IsTombstone,
+                            ExpiresAtTicks = m.ExpiresAtTicks,
+                            Delta = m.Delta,
+                            Mode = m.Mode,
+                        };
 
                         continue;
                     }
