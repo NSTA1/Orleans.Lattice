@@ -1,4 +1,6 @@
+using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -116,5 +118,29 @@ public partial class WalShardGrainTests
             Does.Contain("is quiesced for a placement move"),
             "an extreme lease must hold the fence as an active move, not read as a lapsed one " +
             "that re-resolves placement");
+    }
+
+    /// <summary>
+    /// The release of a fence that does not depend on the move coordinator
+    /// surviving: once the quiesce lease lapses without a cutover, the next
+    /// append is still refused, and the activation asks to be deactivated so the
+    /// next one re-resolves placement and comes up unfenced.
+    /// </summary>
+    [Test]
+    public async Task An_expired_quiesce_lease_requests_deactivation_so_the_fence_does_not_hold_for_ever()
+    {
+        var (grain, context) = await CreateGrainWithContextAsync(new InMemoryWalStorageProvider(), new LatticeOptions());
+        await grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+
+        await grain.QuiesceForMoveAsync(0, TimeSpan.FromMilliseconds(1), CancellationToken.None);
+        await Task.Delay(TimeSpan.FromMilliseconds(50));
+
+        var thrown = Assert.ThrowsAsync<LatticeWalQuiescingException>(
+            async () => await grain.AppendAsync(MakeEntry("b"), CancellationToken.None));
+        Assert.That(thrown!.Message, Does.Contain("quiesce lease expired"),
+            "a lapsed lease must keep refusing appends until the activation is gone");
+        context.Received(1).Deactivate(
+            Arg.Is<DeactivationReason>(r => r.ReasonCode == DeactivationReasonCode.ApplicationRequested),
+            Arg.Any<CancellationToken>());
     }
 }
