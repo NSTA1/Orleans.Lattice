@@ -26,6 +26,19 @@ namespace Orleans.Lattice.Replication;
 /// threshold ahead of the cache (#1060, #4463).
 /// </para>
 /// <para>
+/// A reservation is <em>in flight</em> from <see cref="TryAdd(WalRecord, out bool)"/>
+/// until the delivery that took it completes (<see cref="Complete"/>) or is
+/// rolled back (<see cref="Remove"/>). A duplicate that finds an in-flight
+/// reservation must NOT be acknowledged as applied (#4465): the first delivery
+/// can still be aborted - a silo restart mid-apply, or a failure whose
+/// transport-level response the sender has already moved past - and an
+/// acknowledged duplicate would have moved the sender's cursor past an entry
+/// that is then neither applied nor dead-lettered. The applier answers such a
+/// duplicate with a deferred, not-accepted ack so the sender keeps its cursor
+/// and re-sends. A duplicate of a completed reservation is a genuine
+/// re-delivery and is acknowledged as before.
+/// </para>
+/// <para>
 /// The cache is per-applier, per-tree; the applier singleton holds a
 /// concurrent map of caches, lazily created on first observation of
 /// a tree id. Each cache instance is lock-protected for thread safety.
@@ -34,8 +47,8 @@ namespace Orleans.Lattice.Replication;
 internal sealed class RecentApplyCache
 {
     private readonly object _gate = new();
-    private readonly LinkedList<EntryKey> _order = new();
-    private readonly Dictionary<EntryKey, LinkedListNode<EntryKey>> _index;
+    private readonly LinkedList<Slot> _order = new();
+    private readonly Dictionary<EntryKey, LinkedListNode<Slot>> _index;
     private readonly int _capacity;
 
     /// <summary>
@@ -64,7 +77,7 @@ internal sealed class RecentApplyCache
         // fill phase does not pay log(capacity) resize allocations.
         // The cache is bounded - it never exceeds _capacity entries -
         // so a single up-front sizing is exact, not a guess.
-        _index = new Dictionary<EntryKey, LinkedListNode<EntryKey>>(capacity);
+        _index = new Dictionary<EntryKey, LinkedListNode<Slot>>(capacity);
     }
 
     /// <summary>The maximum number of identity tuples this cache retains.</summary>
@@ -84,11 +97,22 @@ internal sealed class RecentApplyCache
 
     /// <summary>
     /// Atomically tests whether the entry's identity tuple has been
-    /// recorded since the last eviction and, if not, records it.
-    /// Returns <see langword="true"/> when the tuple was new (i.e.
-    /// the apply path should proceed); <see langword="false"/> when
-    /// the tuple was already present (a duplicate emit). On overflow
-    /// the oldest tuple is evicted and its
+    /// recorded since the last eviction and, if not, records it as an
+    /// in-flight reservation. Equivalent to
+    /// <see cref="TryAdd(WalRecord, out bool)"/> discarding the in-flight flag.
+    /// </summary>
+    /// <param name="entry">The replog entry to dedupe.</param>
+    public bool TryAdd(WalRecord entry) => TryAdd(entry, out _);
+
+    /// <summary>
+    /// Atomically tests whether the entry's identity tuple has been
+    /// recorded since the last eviction and, if not, records it as an
+    /// <em>in-flight</em> reservation. Returns <see langword="true"/> when
+    /// the tuple was new (i.e. the apply path should proceed);
+    /// <see langword="false"/> when the tuple was already present (a
+    /// duplicate), in which case <paramref name="duplicateInFlight"/>
+    /// reports whether the delivery holding the reservation has not yet
+    /// completed. On overflow the oldest tuple is evicted and its
     /// <see cref="LinkedListNode{T}"/> is recycled to host the new
     /// tuple - steady-state miss-with-eviction is allocation-free.
     /// </summary>
@@ -96,39 +120,65 @@ internal sealed class RecentApplyCache
     /// The replog entry to dedupe. The cache key is built from
     /// <see cref="WalRecord.OriginClusterId"/>,
     /// <see cref="WalRecord.Timestamp"/>, <see cref="WalRecord.Key"/>,
-    ///
     /// and <see cref="WalRecord.Op"/>; other fields are ignored.
     /// </param>
-    public bool TryAdd(WalRecord entry)
+    /// <param name="duplicateInFlight">
+    /// <see langword="true"/> when the tuple was already present and its
+    /// reservation is still in flight; <see langword="false"/> otherwise.
+    /// </param>
+    public bool TryAdd(WalRecord entry, out bool duplicateInFlight)
     {
         var key = EntryKey.From(entry);
         lock (_gate)
         {
-            if (_index.ContainsKey(key))
+            if (_index.TryGetValue(key, out var existing))
             {
+                duplicateInFlight = !existing.Value.Completed;
                 return false;
             }
 
-            LinkedListNode<EntryKey> node;
+            LinkedListNode<Slot> node;
             if (_order.Count >= _capacity)
             {
                 // Recycle the oldest node: detach, re-purpose its
                 // Value, re-attach at the tail. This eliminates the
                 // per-eviction LinkedListNode allocation that would
                 // otherwise dominate steady-state apply-path GC churn.
+                // Evicting an in-flight reservation is safe: a later
+                // duplicate then re-applies idempotently at the leaf.
                 node = _order.First!;
-                _index.Remove(node.Value);
+                _index.Remove(node.Value.Key);
                 _order.RemoveFirst();
-                node.Value = key;
+                node.Value = new Slot(key, Completed: false);
                 _order.AddLast(node);
             }
             else
             {
-                node = _order.AddLast(key);
+                node = _order.AddLast(new Slot(key, Completed: false));
             }
             _index[key] = node;
 
+            duplicateInFlight = false;
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Marks the entry's reservation completed: the delivery that took it
+    /// has applied the entry (or durably handed it off), so a later
+    /// duplicate is a genuine re-delivery and may be acknowledged. A no-op
+    /// when the tuple is not present (for example, already evicted).
+    /// </summary>
+    /// <param name="entry">The replog entry whose reservation to complete.</param>
+    public void Complete(WalRecord entry)
+    {
+        var key = EntryKey.From(entry);
+        lock (_gate)
+        {
+            if (_index.TryGetValue(key, out var node) && !node.Value.Completed)
+            {
+                node.Value = node.Value with { Completed = true };
+            }
         }
     }
 
@@ -137,7 +187,7 @@ internal sealed class RecentApplyCache
     /// Returns <see langword="true"/> when the tuple was removed;
     /// <see langword="false"/> when the tuple was not present (the
     /// call is idempotent). Used by <see cref="ReplicationApplier"/>
-    /// to roll back a <see cref="TryAdd"/> reservation when the
+    /// to roll back a <see cref="TryAdd(WalRecord, out bool)"/> reservation when the
     /// subsequent apply fails - without rollback, a transient apply
     /// throw would leave a phantom cache entry that suppresses the
     /// transport's retry path and silently drops the entry until
@@ -161,7 +211,7 @@ internal sealed class RecentApplyCache
     /// <summary>
     /// Returns <see langword="true"/> when the entry's identity tuple
     /// is currently retained without modifying the cache. Intended
-    /// for tests; production callers use <see cref="TryAdd"/> for
+    /// for tests; production callers use <see cref="TryAdd(WalRecord, out bool)"/> for
     /// the atomic check-and-record.
     /// </summary>
     public bool Contains(WalRecord entry)
@@ -172,6 +222,21 @@ internal sealed class RecentApplyCache
             return _index.ContainsKey(key);
         }
     }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when the entry's identity tuple is
+    /// retained and its reservation is still in flight. Intended for tests.
+    /// </summary>
+    public bool IsInFlight(WalRecord entry)
+    {
+        var key = EntryKey.From(entry);
+        lock (_gate)
+        {
+            return _index.TryGetValue(key, out var node) && !node.Value.Completed;
+        }
+    }
+
+    private readonly record struct Slot(EntryKey Key, bool Completed);
 
     private readonly record struct EntryKey(
         string OriginClusterId,
