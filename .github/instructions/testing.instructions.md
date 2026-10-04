@@ -1028,13 +1028,13 @@ reported under that fix's own assertion tag, not merely some violation.
 | TLA+ property | Plain-language property | Core(s) | Encoding (model + assertion) | Guard test | Net-new vs cited |
 |----------------|-------------------------|---------|------------------------------|------------|------------------|
 | `AckedWriteDurable` | An acknowledged write is recoverable by its owner from its durable snapshot and the readable WAL. | All five | `WalDurabilityLifecycleModel` `[AckedWriteDurable]` after every step. | None of its own: every guard arm that loses a write is caught earlier by a more specific tag. | Net-new. |
-| `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
+| `TrimCoveredBySnapshot` | The GC never trims an acknowledged write its owner's snapshot does not hold. | `LeafDurablePinCore`, `WalGcTrimCore` | `[TrimCoveredBySnapshot]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(TrimFloorFromHighestPin)`. The guard perturbs model glue: the min-over-pins floor and the block-pin stop are computed in the model, while production makes them inline in `LatticeWalGc`, where the `LatticeWalGc` unit tests named in `spec/wal/Refinement.md`'s `GcTrim` row detect them. | Net-new; the single-floor form is cited from `WalGcTrimFloorModel`. |
 | `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
-| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. Its two-fault sibling #4523 (fixed) is reached only by the TLA+ `TwoFaults` variant configuration. | Net-new. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore`, `LeafDurablePinCore`, `WalGcTrimCore` | `[RecoveryNeverFallsOffLog]` after every step. The never-written arm is reached by the model's `neverWrittenLeaf` ownership variant, in which leaf 1 owns no entry. | `Removing_the_never_written_release_bound_is_caught_by_the_fall_off_assertion` (the #4456 shape; run with `[ReleaseBackedBySnapshot]` off, which would report it first). The two-fault #4523 shape (a cold-rebuild capture below a release) is reached by the TLA+ `TwoFaults` variant configuration; in Coyote it is caught at its root cause by `[ReleaseBackedBySnapshot]`. | Net-new. |
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
-| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | Not encoded in Coyote. | `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
+| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | `[ReleaseBackedBySnapshot]` after every step, in both ownerships. | `Removing_the_never_written_release_bound_is_caught_by_the_release_backing_assertion`; also `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
@@ -1044,16 +1044,15 @@ reported under that fix's own assertion tag, not merely some violation.
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
 | `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
 
-**Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
+**Gap analysis.** Four WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
 
 - `AckedWriteDurable`;
 - `ReadPositionHonest`;
-- `RecoveryNeverFallsOffLog`;
 - `EveryAckedWriteMaterialised`;
 - `ReclamationEventuallyAdvances`.
 
-`SnapshotCoverageMonotonic`, `ReleaseBackedBySnapshot`, `StreamEventuallyComplete` and
+`SnapshotCoverageMonotonic`, `StreamEventuallyComplete` and
 `FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
 every one of them with a firing mutation. The four defects the model found (#4450,
 #4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary

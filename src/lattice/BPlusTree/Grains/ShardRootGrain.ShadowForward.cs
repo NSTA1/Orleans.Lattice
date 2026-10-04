@@ -112,8 +112,33 @@ internal sealed partial class ShardRootGrain
     /// avoid per-call closure allocation. The dispatch is monomorphic at each
     /// call site after generic specialisation.
     /// </para>
+    /// <para>
+    /// The forward is addressed to the destination's shard with this shard's
+    /// index. Once a resize has completed, a split of the resized copy can move
+    /// a slot off that shard, which then refuses the forward; the refusal is
+    /// followed to the shard that owns the slot now (issue #4478), see
+    /// <see cref="ShadowForwardRefusal"/>. <paramref name="splitPerKey"/> breaks
+    /// a refused batch into one forward per entry before it is followed; a
+    /// single-key forward passes none. A forward still refused once the hops
+    /// run out fails, and so does the mirrored write.
+    /// </para>
+    /// <para>
+    /// <paramref name="closureState"/> marks a forward that is not routed by key:
+    /// an atomic-write terminal of a saga bound to this copy. While this copy is
+    /// <see cref="ShadowForwardPhase.Rejecting"/> (the resize has swapped, so the
+    /// resized copy may have split since) it is delivered to the destination's
+    /// shard with this index and to every shard reachable from it through that
+    /// copy's split and consolidation records, with the state
+    /// <paramref name="closureState"/> derives for the shards other than the
+    /// first. Before the swap no migration of the destination can run, so the
+    /// shard with this index is the whole closure.
+    /// </para>
     /// </summary>
-    private Task ForwardShadowAsync<TState>(TState state, Func<IShardRootGrain, TState, Task> forwardAction)
+    private Task ForwardShadowAsync<TState>(
+        TState forwardState,
+        Func<IShardRootGrain, TState, Task> forwardAction,
+        Func<TState, IReadOnlyList<TState>>? splitPerKey = null,
+        Func<TState, TState>? closureState = null)
     {
         var target = TryGetShadowTarget();
         // Bound the outbound forward with the per-tree ShardForwardTimeout so a
@@ -121,9 +146,116 @@ internal sealed partial class ShardRootGrain
         // reshard swap phase cannot pin the foreground write turn indefinitely.
         // The no-forward fast path stays synchronous (Task.CompletedTask) so
         // TrackShadowForward's IsCompleted check still short-circuits.
-        return target is null
-            ? Task.CompletedTask
-            : ForwardWithDeadlineAsync(() => forwardAction(target, state));
+        if (target is null) return Task.CompletedTask;
+
+        var sf = state.State.ShadowForward!;
+        var destination = sf.DestinationPhysicalTreeId;
+        if (closureState is not null && sf.Phase == ShadowForwardPhase.Rejecting)
+        {
+            return ForwardWithDeadlineAsync(
+                () => ForwardOverDestinationClosureAsync(destination, forwardState, forwardAction, closureState));
+        }
+
+        return ForwardWithDeadlineAsync(
+            () => ForwardFollowingRefusalsAsync(destination, target, forwardState, forwardAction, splitPerKey));
+    }
+
+    /// <summary>
+    /// Sends a key-routed forward to the destination's shard with this index and
+    /// follows a refusal naming the slot's current owner. See
+    /// <see cref="ForwardShadowAsync"/>.
+    /// </summary>
+    private async Task ForwardFollowingRefusalsAsync<TState>(
+        string destination,
+        IShardRootGrain first,
+        TState forwardState,
+        Func<IShardRootGrain, TState, Task> forwardAction,
+        Func<TState, IReadOnlyList<TState>>? splitPerKey)
+    {
+        StaleShardRoutingException refusal;
+        try
+        {
+            await forwardAction(first, forwardState);
+            return;
+        }
+        catch (StaleShardRoutingException ex) when (ShadowForwardRefusal.NextShard(ex, MyShardIndex, hopsTaken: 0) is not null)
+        {
+            refusal = ex;
+        }
+
+        if (splitPerKey is null)
+        {
+            await ChaseShadowForwardAsync(
+                destination, refusal.TargetShardIndex, forwardState, forwardAction, hopsTaken: 1);
+            return;
+        }
+
+        var parts = splitPerKey(forwardState);
+        var sends = new Task[parts.Count];
+        for (var i = 0; i < parts.Count; i++)
+            sends[i] = ChaseShadowForwardAsync(destination, MyShardIndex, parts[i], forwardAction, hopsTaken: 1);
+        await Task.WhenAll(sends);
+    }
+
+    /// <summary>
+    /// Sends one forward to <paramref name="shardIndex"/> of
+    /// <paramref name="destination"/>, re-sending it to the shard each refusal
+    /// names until it is taken or <see cref="ShadowForwardRefusal.MaxHops"/>
+    /// re-sends have been followed, when the last refusal surfaces.
+    /// </summary>
+    private async Task ChaseShadowForwardAsync<TState>(
+        string destination,
+        int shardIndex,
+        TState forwardState,
+        Func<IShardRootGrain, TState, Task> forwardAction,
+        int hopsTaken)
+    {
+        while (true)
+        {
+            try
+            {
+                await forwardAction(grainFactory.GetGrain<IShardRootGrain>($"{destination}/{shardIndex}"), forwardState);
+                return;
+            }
+            catch (StaleShardRoutingException ex)
+            {
+                if (ShadowForwardRefusal.NextShard(ex, shardIndex, hopsTaken) is not { } next) throw;
+                shardIndex = next;
+                hopsTaken++;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Delivers a forward that is not routed by key to the destination's shard
+    /// with this index and every shard reachable from it through the
+    /// destination's split and consolidation records. Any refusal fails the
+    /// whole forward. See <see cref="ForwardShadowAsync"/>.
+    /// </summary>
+    private async Task ForwardOverDestinationClosureAsync<TState>(
+        string destination,
+        TState forwardState,
+        Func<IShardRootGrain, TState, Task> forwardAction,
+        Func<TState, TState> closureState)
+    {
+        var closure = await TerminalFanOutResolver.ResolveTransitiveAsync(
+            grainFactory, destination, [MyShardIndex], CancellationToken.None);
+        if (closure.Count <= 1)
+        {
+            await forwardAction(grainFactory.GetGrain<IShardRootGrain>($"{destination}/{MyShardIndex}"), forwardState);
+            return;
+        }
+
+        var others = closureState(forwardState);
+        var sends = new Task[closure.Count];
+        for (var i = 0; i < closure.Count; i++)
+        {
+            var index = closure[i];
+            sends[i] = forwardAction(
+                grainFactory.GetGrain<IShardRootGrain>($"{destination}/{index}"),
+                index == MyShardIndex ? forwardState : others);
+        }
+        await Task.WhenAll(sends);
     }
 
     /// <summary>

@@ -102,6 +102,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-(tree, peer) shipper grain persistent state class.</summary>
     internal const string ReplicationShipperState = "olr.ss";
 
+    /// <summary>Alias for a saga the shipper withholds from its peer after a prepare was dead-lettered.</summary>
+    internal const string PoisonedSaga = "olr.sp";
+
     /// <summary>Alias for the per-tree maintenance grain interface.</summary>
     internal const string IReplicationMaintenanceGrain = "olr.gm";
 

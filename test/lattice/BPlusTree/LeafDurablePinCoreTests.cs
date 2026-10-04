@@ -60,6 +60,37 @@ public sealed class LeafDurablePinCoreTests
             "the release carries the PERSISTED checkpoint, never the pending one");
     }
 
+    /// <summary>
+    /// The never-written condition the grain's flush paths opt in on and the one
+    /// <see cref="LeafDurablePinCore.Resolve"/> takes its release arm on are the
+    /// same predicate (issue #4433): no live row, and a persisted checkpoint
+    /// of at least 0.
+    /// </summary>
+    [Test]
+    public void The_never_written_predicate_is_the_one_the_release_arm_takes()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LeafDurablePinCore.IsNeverWrittenScannedThrough(hasLiveData: false, persistedCheckpoint: 0), Is.True);
+            Assert.That(LeafDurablePinCore.IsNeverWrittenScannedThrough(hasLiveData: false, persistedCheckpoint: 5), Is.True);
+            Assert.That(LeafDurablePinCore.IsNeverWrittenScannedThrough(hasLiveData: false, persistedCheckpoint: -1), Is.False);
+            Assert.That(LeafDurablePinCore.IsNeverWrittenScannedThrough(hasLiveData: true, persistedCheckpoint: 5), Is.False);
+        });
+
+        for (var persisted = -1L; persisted <= 3; persisted++)
+        {
+            foreach (var liveData in new[] { false, true })
+            {
+                var released = Resolve(current: 3, persisted: persisted, covered: 3, liveData: liveData, releaseNeverWritten: true).Kind
+                    == LeafDurablePinKind.ReleaseNeverWritten;
+                Assert.That(
+                    released,
+                    Is.EqualTo(LeafDurablePinCore.IsNeverWrittenScannedThrough(liveData, persisted)),
+                    $"persisted {persisted}, live data {liveData}: the release arm and the predicate disagree");
+            }
+        }
+    }
+
     [Test]
     public void The_never_written_release_needs_the_caller_to_opt_in()
     {
