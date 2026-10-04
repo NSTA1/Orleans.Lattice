@@ -7,7 +7,7 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Public entrypoints for <b>cross-tree atomic writes</b>: an all-or-nothing
-/// batch that spans two or more distinct <see cref="ILattice"/> trees and
+/// batch that spans one or more distinct <see cref="ILattice"/> trees - typically several - and
 /// commits with the same atomic-visibility guarantee
 /// <see cref="ILattice.SetManyAtomicAsync(List{KeyValuePair{string, byte[]}}, CancellationToken)"/>
 /// gives <i>within</i> a single tree: either every targeted key across every

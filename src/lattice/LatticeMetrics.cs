@@ -10324,7 +10324,7 @@ public static class LatticeMetrics
     /// <summary>
     /// Instrument name of the observable gauge that reports the current
     /// per-tree WAL saturation state. Published with
-    /// <see cref="TagTree"/> only; the value is the ordinal
+    /// <see cref="TagTree"/> and the <c>tenant</c> label only; the value is the ordinal
     /// of the <see cref="WalSaturationState"/> enum
     /// (<c>0</c> = Healthy, <c>1</c> = Throttled, <c>2</c> = Saturated)
     /// so dashboards can plot the regime as a step function. The regime

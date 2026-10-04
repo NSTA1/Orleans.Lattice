@@ -41,8 +41,8 @@ All scripts live under `benchmark/azure-throughput/scripts/`. The single-VM scri
 (`deploy`, `update`, `run-cohort`, `ladder`, `vm`) accept `-NamePrefix` to target a named
 environment and `-ParametersFile` to point at an explicit parameters file; the Layer 3 ACA
 scripts (`deploy-aca`, `run-cohort-aca`) take a mandatory `-NamePrefix` and read no
-parameters file. The folder also holds two dot-sourced helper modules (`_run-cohort-helpers.ps1`,
-`aca-common.ps1`) and four parameterless self-tests of the grading logic, run with `pwsh -File`
+parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-helpers.ps1`,
+`aca-common.ps1`) and parameterless self-tests of the grading logic, run with `pwsh -File`
 (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`, `Test-Layer3UnseededRetry.ps1`,
 `Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
 `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
@@ -53,7 +53,7 @@ Layer 1 or Layer 2 run takes `-ReuseVm`'s prefix or mints a fresh one, and a Lay
 `-ReuseAca`'s rig or provisions one under a fresh prefix. The report
 lower-cases the prefix it is given, strips its hyphens and refuses more than nine characters, so use
 three to nine lowercase letters and digits (`deploy-aca.ps1` also refuses fewer than three
-alphanumerics). Two further shapes:
+alphanumerics). Common shapes:
 
 - **Layer 3 on a rig you provisioned.** Run `./scripts/deploy-aca.ps1 -NamePrefix <prefix>`, then
   `benchmark/performance-report.ps1 -Layer 3 -ReuseAca <prefix>`. It parks the silos at zero when it
@@ -276,7 +276,7 @@ every Layer 2 `get-point` and `get-many` cohort it runs reads keys that were nev
 silo log carries no `[silo] preseed` line), and a `HEALTHY` one is aggregated into the published
 table like any other: a miss-path number, not the read ceiling.
 
-The four atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
+Atomic modes dispatch each saga as its own flush unit (`BenchWorkloadDispatcher.SliceIntoFlushUnits`):
 one `BENCH_FLUSH_CONCURRENCY` slot, one retry ladder and one `ops`/`failed` booking per saga, so
 `inFlight` counts sagas. Before #3581 a producer batch (often 1,000+ sagas) was one unit run as a
 sequential chain: ops stayed at 0 until the chain's last saga returned, a saturation retry
@@ -285,7 +285,7 @@ An atomic cohort that reads `ops=0` with a busy cluster on an older checkout is 
 
 > The `set-point-mv` workload and the multi-account knobs below are on `main`. Only an
 > older checkout that predates the materialised-views work lacks them; there, use the
-> other eight modes and the single-account path.
+> other modes and the single-account path.
 
 ---
 
@@ -372,7 +372,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 
 | Var | Default | Effect |
 |-----|---------|--------|
-| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op; the silo maps `0` to `Timeout.InfiniteTimeSpan`, the library's "disabled" value). On ACA pass it with `run-cohort-aca.ps1 -ExtraSiloEnv 'BENCH_SATURATION_SAMPLE_MS=0'`. The silo applies this row and the four below it as **global** `LatticeOptions`, because the library's WAL saturation sampler reads only the unnamed options; applied per tree, as the rig did before #3348, they were silently ignored. |
+| `BENCH_SATURATION_SAMPLE_MS` | `LatticeOptions.DefaultWalSaturationSampleInterval` (200) | WAL saturation sampler tick (ms). `0` disables the sampler (signal pins to Healthy; TCP-read gating becomes a no-op; the silo maps `0` to `Timeout.InfiniteTimeSpan`, the library's "disabled" value). On ACA pass it with `run-cohort-aca.ps1 -ExtraSiloEnv 'BENCH_SATURATION_SAMPLE_MS=0'`. The silo applies the saturation-signal rows as **global** `LatticeOptions`, because the library's WAL saturation sampler reads only the unnamed options; applied per tree, as the rig did before #3348, they were silently ignored. |
 | `BENCH_SATURATION_THROTTLED_RATIO` | `LatticeOptions.DefaultWalSaturationThrottledRatio` (0.75) | Admission-depth ratio at/above which the tree raises Throttled. Range [0.0, 1.0]; lower = earlier throttle. |
 | `BENCH_SATURATION_DISPATCH_TIMEOUT_THRESHOLD` | `LatticeOptions.DefaultWalSaturationDispatchTimeoutThreshold` (1) | Min dispatch-timeout trips per window that raise Saturated regardless of depth. |
 | `BENCH_WAL_SATURATION_ACUTE_ONLY` | `1` (matches the library default `LatticeOptions.DefaultWalSaturationAcuteOnly`) | Sets `WalSaturationAcuteOnly` (#3348): an admission semaphore at its cap classifies Throttled instead of Saturated, and a gate-parked append resumes once its partition leaves Saturated. `0` measures the historical classification. `run-cohort-aca.ps1 -WalSaturationAcuteOnly 0|1`. |
@@ -583,8 +583,8 @@ until the resource group is deleted.
   index (the index in its first four bytes, fixed constants in the other twelve), so a run with the
   same vehicle count reuses the same keys, and every vehicle emits once per tick. They spread
   across shards because the tree places each key by an XxHash32 hash of it, not because the keys
-  are random. The derivation is written three times and the copies must agree:
+  are random. The derivation is duplicated across producer and pre-seed code and the copies must agree:
   `Producer/Program.cs` (the TCP producer), `Producer/ChannelGenerator.cs` (the Orleans-client
   producer and `--dry-run`) and `Engine/BenchPreseed.cs` (`KeyFor`, the keys the read-mode pre-seed
-  writes). To change the key distribution, change all three together: change one alone and the
+  writes). To change the key distribution, change every copy together: change one alone and the
   producers drive different keyspaces, or the read modes read keys the pre-seed never wrote.

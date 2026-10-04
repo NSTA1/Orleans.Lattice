@@ -1019,8 +1019,8 @@ public interface ILattice : IGrainWithStringKey
     /// without re-implementing alias resolution and shard-map fetching.
     /// <para>
     /// The snapshot is cached per activation and is not invalidated when a
-    /// reshard, split or fold changes the map, or when a resize, snapshot or
-    /// restore swaps the alias: a routed operation corrects it on its first
+    /// reshard, split or fold changes the map, or when a resize, resize undo,
+    /// restore, restore revert, schema remediation or set-alias operation swaps the alias: a routed operation corrects it on its first
     /// stale-routing refusal, but a read that only enumerates the shards, names a
     /// shard by index or resolves the physical tree for a non-routed read never
     /// meets one. Such a caller, or one whose correctness depends on seeing a
@@ -1050,7 +1050,7 @@ public interface ILattice : IGrainWithStringKey
     /// so an external caller cannot otherwise force the cache to refresh.
     /// Clearing the alias as well is required to escape a
     /// <see cref="StaleTreeRoutingException"/> retry loop after an online
-    /// resize / reshard swapped the alias; refreshing only the shard map
+    /// resize or other alias cutover swapped the alias; refreshing only the shard map
     /// would re-resolve to the same stale physical tree id.
     /// </summary>
     [System.ComponentModel.EditorBrowsable(System.ComponentModel.EditorBrowsableState.Never)]

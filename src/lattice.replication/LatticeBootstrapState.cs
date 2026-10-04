@@ -38,7 +38,7 @@ public enum LatticeBootstrapState
     /// snapshot's <see cref="SnapshotStream.AsOfHlc"/> +
     /// <see cref="SnapshotStream.CausalStableFrontier"/> on the per-tree
     /// <see cref="Grains.IReplicationHighWaterMarkGrain"/> so the first
-    /// incremental entry runs through the per-origin HWM dedupe and
+    /// incremental entry runs through the snapshot-pinned floor gate and
     /// the causal-plus dependency check from a non-empty frontier.
     /// </summary>
     IncrementalHandoff = 3,

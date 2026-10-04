@@ -49,8 +49,8 @@ to drift. It covers:
   (`addLinks` / `removeLinks` with a small `broader` / `narrower` / `related` /
   `partOf` relation vocabulary), TTL and CRDT-merge semantics, and what is and
   is not worth capturing.
-- **The agent-operated backlog** - the two rules that bind every agent that
-  touches memory: the five relations that extend the base link vocabulary
+- **The agent-operated backlog** - the rules that bind every agent that
+  touches memory: the relations that extend the base link vocabulary
   (`blockedBy`, `anchoredTo`, `claims`, `integrates`, `informs`) must never be
   pruned, and a backlog item never carries a TTL. Everything else - the item
   schema (what is a scalar, what is an attribute tag, and what is derived rather

@@ -547,14 +547,14 @@ footprint breach that will not clear on its own.
 
 ## Store write contention
 
-Each of the three `sys-tenant-*` stores' write paths - `ITenantRegistry.PutAsync`, the
+The `sys-tenant-*` stores' write paths - `ITenantRegistry.PutAsync`, the
 usage-slot publish, and the overage accrual - is an optimistic read-merge-write:
 the store reads the tenant's record with its version, folds the change in with the
 record's CRDT join, and writes back only if the version has not moved. A write that
 loses that race re-reads (now seeing the competing write) and merges again, at once
 and with no backoff, so a concurrent change is never dropped. After a small, fixed
 number of lost races on the same tenant's record the store gives up and throws one
-of three public exceptions, each carrying the `Tenant` and the number of `Attempts`
+a public exception for that store, carrying the `Tenant` and the number of `Attempts`
 it made. The retries absorb ordinary contention; each exception signals sustained
 write contention on one tenant.
 
@@ -735,7 +735,7 @@ control-plane facade, which is reachable
 A tenant usually stands for an organisation, so this opt-in feature lets a tenant's
 own administrators decide who belongs to the tenant, which groups exist inside it,
 and who may do what on its trees, without a platform operator in the loop and without
-reaching outside the tenant. It adds three things:
+reaching outside the tenant. It adds:
 
 - **Tenant groups** - membership groups a tenant's administrators create and manage
   inside the tenant.
@@ -744,7 +744,7 @@ reaching outside the tenant. It adds three things:
 - **Tenant-tier rules** - authorization rules a tenant's administrators write on the
   tenant's own trees, evaluated beneath every operator rule.
 
-Tenant administrators manage all three through `ILatticeTenantDirectoryAdmin` and
+Tenant administrators manage these surfaces through `ILatticeTenantDirectoryAdmin` and
 `ILatticeTenantPolicyAdmin` (see
 [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)),
 in-process, over gRPC, as MCP tools, or from the Explorer's
@@ -864,7 +864,7 @@ an operator allow. See [The tenant rule layer](../lattice.auth/tenant-layer.md).
 ### Caps
 
 Tenant groups, membership edges and tenant-tier rules live in trees every tenant
-shares, so four `TenantQuotas` dimensions bound one tenant's footprint:
+shares, so `TenantQuotas` access-cap dimensions bound one tenant's footprint:
 
 | Property | Default | Bounds |
 |---|---|---|
@@ -926,7 +926,7 @@ Every instrument is an **observable gauge** on the `orleans.lattice.tenancy` met
 (`LatticeTenantMetrics.MeterName`). Each series carries a single `tenant` tag
 (`LatticeTenantMetrics.TagTenant`): the owning tenant's id on every per-tenant
 series (`default` for the reserved legacy-adoption tenant), and the reserved
-`_platform_` sentinel on the one cluster-aggregate series,
+`_platform_` sentinel on the cluster-aggregate series,
 `orleans.lattice.tenancy.tenants`. The per-tenant series cover every tenant in the
 registry. Set `PublishGauges = false` to publish none of them.
 
@@ -954,7 +954,7 @@ Each instrument name is also a public constant on `LatticeTenantMetrics`
 `OverageMemoryBytesName`, and `OverageTreesName`), and the `LatticeTenantMetrics.Meter`
 instance is public, so a listener can subscribe by reference rather than by name.
 
-The four ceiling gauges (`quota.bytes`, `quota.keys`, `quota.memory_bytes`, and
+The ceiling gauges (`quota.bytes`, `quota.keys`, `quota.memory_bytes`, and
 `quota.trees`) emit a measurement **only for a tenant whose corresponding dimension
 is bounded** - an unbounded (`null`) ceiling contributes no series at all, so "no
 series" reads as "unlimited on that dimension" rather than "zero".

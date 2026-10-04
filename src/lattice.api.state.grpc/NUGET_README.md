@@ -2,7 +2,7 @@
 
 gRPC transport binding for [`Orleans.Lattice.Api.State`](https://www.nuget.org/packages/Orleans.Lattice.Api.State) - the optional read-only cluster-state API for [Orleans.Lattice](https://github.com/NSTA1/Orleans.Lattice).
 
-It exposes the transport-agnostic state facade as seventeen unary RPCs and two server-streaming RPCs over a code-first, Orleans-serialized contract (no `.proto` / `protoc` toolchain), reusing the same versioned serialization the rest of Lattice uses:
+It exposes the transport-agnostic state facade as unary and server-streaming RPCs over a code-first, Orleans-serialized contract (no `.proto` / `protoc` toolchain), reusing the same versioned serialization the rest of Lattice uses:
 
 - `ListTrees` / `ListViews` / `ListTagIndexes` / `ListTagValues` / `ListCoveredTrees` / `ListIndexTags` / `ScanTagMembers` - paged discovery of trees, materialised views, and tag indexes.
 - `GetTreeStructure` - the bounded, depth-limited structural node graph of a tree.

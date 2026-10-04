@@ -110,10 +110,10 @@ internal sealed class ReplicationShipperGrain(
     private string _peerClusterId = "";
     private bool _keyParsed;
 
-    // The physical tree id the WAL shards are addressed by. A logical tree can
+    // The physical tree id the WAL partitions are addressed by. A logical tree can
     // be repointed to a new physical tree by a registry alias swap (shadow-
     // cutover restore, resize, schema remediation, or operator alias change);
-    // WAL shards are keyed by the physical id. Re-resolved from _treeName by
+    // WAL partitions are keyed by the physical id. Re-resolved from _treeName by
     // event notification plus a backstop so a mid-stream swap does not
     // silently orphan the ship cursor. Defaults to _treeName (logical ==
     // physical for a tree that has never been swapped) until the first resolve.
@@ -1461,9 +1461,9 @@ internal sealed class ReplicationShipperGrain(
     /// cluster are eligible to ship. Also drops entries whose
     /// <see cref="WalRecord.OriginClusterId"/> is null or empty - these
     /// are durability-only WAL appends authored by the core
-    /// <c>ICommitLogWriter</c> path on the same per-tree shard the
+    /// <c>ICommitLogWriter</c> path on the same per-tree WAL partition the
     /// replication observer ships from, and have no defined origin for
-    /// the receiver's per-origin high-water-mark dedup path. The
+    /// the receiver's per-origin high-water-mark state. The
     /// replication observer fires alongside the durability writer on
     /// every commit and stamps a non-empty origin onto its own append,
     /// so the corresponding stamped entry is what propagates to peers.
@@ -1471,7 +1471,7 @@ internal sealed class ReplicationShipperGrain(
     private bool ShouldShip(WalRecord entry, LatticeReplicationOptions options)
     {
         // Skip durability-only entries with no replication origin. The
-        // receiver's per-origin HWM dedup path requires a non-empty
+        // receiver's per-origin HWM state requires a non-empty
         // OriginClusterId; shipping them would surface as ArgumentException
         // and dead-letter every such entry on every pump tick.
         //
@@ -1512,7 +1512,7 @@ internal sealed class ReplicationShipperGrain(
 
         // Cycle-break: only ship entries authored by the *local*
         // cluster. Under the WAL-as-sole-durability-boundary contract,
-        // the per-shard WAL also captures entries installed by
+        // the partitioned WAL also captures entries installed by
         // `IReplicationApplier` on this cluster - those entries stamp
         // `OriginClusterId` with the *source* cluster id (set by
         // `LatticeOriginContext.With(originClusterId)` inside
@@ -2431,11 +2431,11 @@ internal sealed class ReplicationShipperGrain(
         //
         // Fan the per-partition shipping reads out concurrently rather
         // than awaiting them one-by-one. Each read is an independent
-        // WAL-shard grain call that writes only its own partition's
+        // WAL-partition grain call that writes only its own partition's
         // scratch slot (TryRefillPartitionAsync touches index [p]
         // alone), so N partitions prime in a single read latency
         // instead of N serialized latencies. On a multi-partition tree
-        // whose WAL shards are activated on a different silo this is the
+        // whose WAL partitions are activated on a different silo this is the
         // dominant per-pump cost under a write burst: a serial prime of
         // 8 partitions pays 8 cross-silo/durable round-trips every tick
         // - even for partitions that turn out to be idle - which stalls
@@ -4079,7 +4079,7 @@ internal sealed class ReplicationShipperGrain(
 
     /// <summary>
     /// Resolves the shipper's logical source tree id to its current physical
-    /// tree id via the registry alias. WAL shards are keyed by the physical id,
+    /// tree id via the registry alias. WAL partitions are keyed by the physical id,
     /// so the ship path must address them by the resolved value rather than the
     /// logical grain key. Returns the logical id unchanged when resolution
     /// yields nothing (the direct-construction unit-test path, where no registry

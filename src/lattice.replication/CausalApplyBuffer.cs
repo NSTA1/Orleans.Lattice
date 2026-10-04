@@ -250,8 +250,8 @@ internal sealed class CausalApplyBuffer
     /// <paramref name="entry"/>'s vector-clock frontier is
     /// dominated-or-equal by the corresponding component on
     /// <paramref name="localVc"/>. The entry's own origin diagonal
-    /// is excluded - the per-origin high-water-mark table is the
-    /// authoritative dedup key for that component, and including it
+    /// is excluded - the apply path handles that component through its
+    /// own duplicate and idempotency checks, and including it
     /// here would deadlock the diagonal.
     /// <para>
     /// A dependency on <paramref name="localClusterId"/> (the receiver's

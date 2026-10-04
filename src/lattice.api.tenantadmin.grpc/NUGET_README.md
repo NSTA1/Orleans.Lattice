@@ -12,7 +12,10 @@ plus **set quotas** and the **quota-usage** read, the per-tenant region-residenc
 operations (**authorize allowed regions**, **set residency**, and **get region
 status**), the tenant-admin subject operations (**list**, **add**, and **remove**),
 and the cross-tenant grant operations (**list**, **offer**, **approve**,
-**reject**, and **revoke**), alongside the unauthenticated auth-scheme discovery RPC. A read-only
+**reject**, and **revoke**), plus delegated tenant access administration for
+tenant groups, group members, the member set, tenant rules, explanations,
+effective permissions, and posture, alongside the unauthenticated auth-scheme
+discovery RPC. A read-only
 `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted self-service reads -
 **current tenant**, **list accessible tenants**, and **get tenant** - which any
 caller, including an anonymous one, may invoke and which the facade scopes
@@ -30,7 +33,7 @@ The binding is **default-deny**: until the host registers a permissive
 `ILatticeTenantAdminApiAuthorizer` (or turns enforcement off behind an outer
 authentication boundary), every administrative call is rejected. The
 unauthenticated `GetAuthScheme` discovery RPC is exempt, so a client can learn how
-to sign in before it holds a credential, and so are the three read-only
+to sign in before it holds a credential, and so are the read-only
 self-service RPCs, which the facade scopes fail-closed to the caller instead. The facade itself re-derives and
 authorizes the caller server-side, so the surface fails closed for an
 unauthenticated caller even when the transport gate is disabled.

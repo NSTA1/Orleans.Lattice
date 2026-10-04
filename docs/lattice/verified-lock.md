@@ -88,7 +88,7 @@ fixture proves the model can fail. `LockAdmissionModel` takes a
 `useBrokenTokenCheck` flag: when set, `Release` frees the lock **without**
 checking the presented token matches the current holder (and, for parity, `Renew`
 extends whichever holder is current). `LockAdmissionCoyoteTests`
-has two tests:
+has tests for both arms:
 
 - `Stale_token_never_dislodges_current_holder_on_any_order` runs the proven core
   and calls `CoyoteModelHarness.AssertNoViolationInAnyExploredRun(...)` - no explored

@@ -255,11 +255,10 @@ The spec lives outside the compiled solution under [`spec/`](../../spec/):
 | `README.md` | How to run TLC and the last-checked result. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
-overlapping write sets and a bounded reshard orphan step, and checks all seven
-invariants (the type invariant `TypeOK` plus the six safety invariants of the
-catalogue above) and all six temporal properties. A clean run enumerates a few
-tens of thousands of distinct states with no invariant, temporal-property, or
-deadlock violation. The spec's invariant names are the same names used by the property
+overlapping write sets and a bounded reshard orphan step, and checks the type
+invariant `TypeOK`, the safety invariants of the catalogue above, and the
+temporal properties. A clean run enumerates a few tens of thousands of distinct
+states with no invariant, temporal-property, or deadlock violation. The spec's invariant names are the same names used by the property
 catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
 between the two levers. It maps every property the cfg checks to the core or
 production seam that plays its protocol role, with the test that would detect a
@@ -271,10 +270,10 @@ neither mapped nor excluded.
 TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
 `[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
 and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
-fixture checks that the base specification holds and that each of the thirteen
-checked properties fires under its paired mutations in `spec/mutations/` while
-staying clean against the unmutated specification, so a property weakened until it
-can no longer fail breaks the build instead of passing vacuously. Locally the
+fixture checks that the base specification holds and that each checked property
+fires under its paired mutations in `spec/mutations/` while staying clean against
+the unmutated specification, so a property weakened until it can no longer fail
+breaks the build instead of passing vacuously. Locally the
 fixture skips when the toolchain is absent; under CI a missing toolchain fails it.
 Run TLC by hand when iterating on the protocol design; the procedure and the CI
 decision are in [`spec/README.md`](../../spec/README.md).

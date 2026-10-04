@@ -183,13 +183,14 @@ or case-insensitive mode, and two consequences follow directly:
   current culture. Neither matches the tree's order. Sort with
   `StringComparer.Ordinal` or `string.CompareOrdinal`.
 
-The append-based paths resolve the tree's current physical routing for each
-chunk and graft that chunk onto the right edge of the routed shards, which is why
-they require ascending input rather than merely sorted-per-chunk input. The
-tree-administration facade validates this and throws `BulkLoadOrderException`,
-carrying the tree id, the chunk index, the offending key, and the key that
-preceded it, before any grain call is made, so no partial data is grafted. The
-limits on that check are worth internalising:
+The append-based paths graft each chunk onto the right edge of the routed shards,
+which is why they require ascending input rather than merely sorted-per-chunk
+input. The streaming extension resolves routing once at the start of the load;
+the tree-administration chunk path force-refreshes routing on each chunk call.
+The tree-administration facade validates chunk order and throws
+`BulkLoadOrderException`, carrying the tree id, the chunk index, the offending
+key, and the key that preceded it, before any grain call is made, so no partial
+data is grafted. The limits on that check are worth internalising:
 
 - It rejects an equal key as well as a descending one, so **de-duplicate in the
   source enumeration**.

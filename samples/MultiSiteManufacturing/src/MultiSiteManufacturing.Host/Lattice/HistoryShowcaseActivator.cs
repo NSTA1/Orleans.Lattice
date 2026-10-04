@@ -6,9 +6,9 @@ namespace MultiSiteManufacturing.Host.Lattice;
 
 /// <summary>
 /// Enables a durable per-key change-history view, with a value-retaining
-/// retention mode, on the two CRDT trees the sample showcases - the operator
-/// last-writer-wins register (<see cref="PartCrdtStore.OperatorTreeId"/>) and the
-/// process-label OR-Set (<see cref="PartCrdtStore.LabelsTreeId"/>).
+/// retention mode, on the two showcase trees: the operator last-writer-wins
+/// register (<see cref="PartCrdtStore.OperatorTreeId"/>) and the process-label
+/// OR-Set (<see cref="PartCrdtStore.LabelsTreeId"/>).
 /// <para>
 /// Without an enabled history view a tree retains no durable change history: the
 /// timeline is served only from the bounded retained write-ahead-log window and
@@ -53,7 +53,7 @@ public sealed class HistoryShowcaseActivator(
 
     /// <summary>
     /// Idempotently enables the durable history view plus value-retaining
-    /// retention on both showcase CRDT trees. Safe to call on every silo start:
+    /// retention on both showcase trees. Safe to call on every silo start:
     /// setting the retention mode overwrites the same registry value and the view
     /// is created only when it does not already exist. Public so a test can invoke
     /// it directly against a deployed cluster.

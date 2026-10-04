@@ -92,7 +92,7 @@ When a fold commits, the retired donor's storage is released: every leaf and int
 
 A donor that the live map still routes a slot to, or that refuses retirement because another migration or an online resize holds it, keeps its storage, and the fold completes as a routing-only retirement.
 
-Five rules keep a retired shard from ever being read or reused while something still depends on it:
+These rules keep a retired shard from ever being read or reused while something still depends on it:
 
 - **A fold waits out a snapshot or merge before it releases anything.** Its final step, and with it the release of the donor's storage, is held while a snapshot of, or merge into, the tree runs, because those read the shards they recorded when they started. A shrink also starts no new fold while one runs. A resize is not waited for; a donor an online resize is forwarding refuses retirement and keeps its storage instead.
 - **A merge notices a source shard that retired under it.** Before a merge completes it checks that every source shard it recorded is still in the source's routing map. If a fold retired one while the merge ran, it re-drains the source's current shards; every entry carries its original timestamp, so re-merging is harmless.
@@ -135,7 +135,7 @@ Splits halve the source shard's virtual-slot ownership. Starting from `ShardCoun
 
 ## Telemetry
 
-Four instruments on the `orleans.lattice` meter track reshards, each tagged `tree` and `tenant`: `orleans.lattice.shard_root.reshard.initiated` and `orleans.lattice.shard_root.reshard.completed` count reshards that started and finished (the empty-tree fast path counts on both), `orleans.lattice.shard_root.reshard.rejected` counts requests refused before a coordinator started, with a `reason` tag (`argument_out_of_range_min`, `argument_out_of_range_max`, `already_in_progress`, `resize_in_flight`, `state_write_failed`), and the `orleans.lattice.shard_root.reshard.in_flight` histogram records `0` or `1` at every `ReshardAsync` entry. Each fold a shrink commits also counts on `orleans.lattice.shard.consolidations_committed`, tagged with the retired donor's `shard` - the counter automatic healing's folds share - and a reshard that ran a coordinator counts its completion on `orleans.lattice.coordinator.completed` with `kind=reshard`. See [Metrics](metrics.md) for the full schema.
+The `orleans.lattice` meter tracks reshards with instruments tagged `tree` and `tenant`: `orleans.lattice.shard_root.reshard.initiated` and `orleans.lattice.shard_root.reshard.completed` count reshards that started and finished (the empty-tree fast path counts on both), `orleans.lattice.shard_root.reshard.rejected` counts requests refused before a coordinator started, with a `reason` tag (`argument_out_of_range_min`, `argument_out_of_range_max`, `already_in_progress`, `resize_in_flight`, `state_write_failed`), and the `orleans.lattice.shard_root.reshard.in_flight` histogram records `0` or `1` at every `ReshardAsync` entry. Each fold a shrink commits also counts on `orleans.lattice.shard.consolidations_committed`, tagged with the retired donor's `shard` - the counter automatic healing's folds share - and a reshard that ran a coordinator counts its completion on `orleans.lattice.coordinator.completed` with `kind=reshard`. See [Metrics](metrics.md) for the full schema.
 
 ## Limitations and future work
 
