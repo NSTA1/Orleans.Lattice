@@ -616,6 +616,20 @@ internal sealed partial class ReplicationApplier(
                 outcome = LatticeReplicationMetrics.OutcomeSuccess;
                 return new ApplyResult { Applied = true, HighWaterMark = newHwm };
             }
+            catch (TxDecisionGateRefusedException ex) when (ex.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
+            {
+                // Issue #4485: a snapshot capture holds this tree's saga decision
+                // gate (or a backup set holds its fence), so the receiver may not
+                // record the replicated saga's decision or register its
+                // cross-tree delegation yet. Defer exactly as the receive fence
+                // does: a not-accepted, cursor-preserving ack, so the sender
+                // re-ships the entry once the capture has released the registry.
+                // The terminal tally the call recorded first is idempotent per
+                // source shard, so the re-delivery re-evaluates it unchanged.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
             catch
             {
                 cache.Remove(entry);
