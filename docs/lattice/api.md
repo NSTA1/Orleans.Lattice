@@ -1315,7 +1315,7 @@ catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
 
 The marker does **not** mean "never handle this". Catching a domain fault *by its own type* remains the correct way to handle it and is unaffected - `catch (LatticeSaturatedException)` behaves exactly as documented below, and an internal retry loop that catches `ShardActivationTimeoutException` by name still absorbs and retries it. The marker constrains only a broad catch of the **base** type.
 
-A reflection gate in the core test suite enumerates the assembly at run time and fails if a public exception with a foreign base does not implement the marker, so the set cannot drift as exceptions are added.
+A reflection gate enumerates each enrolled package's assembly at run time and fails if a public exception with a foreign base does not implement the marker, so the set cannot drift as exceptions are added. The gate is the shared `DomainFaultMarkerContractTestsBase` in the testing library, enrolled today for `Orleans.Lattice` and `Orleans.Lattice.Replication`; it fails loudly if a scan examines no public exceptions, so a broken enumeration cannot pass as a clean one.
 
 ## Shutdown back-pressure - `LatticeShuttingDownException`
 

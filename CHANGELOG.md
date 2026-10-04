@@ -319,14 +319,33 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **WAL - Purging a tree trims its write-ahead log.** An ordinary purge unregistered the tree without trimming its log, and WAL collection only visits registered trees, so the log leaked for good. Purge completion now trims the log first, as a resize discard already did. ([#3936](https://github.com/NSTA1/Orleans.Lattice/issues/3936)) (`Orleans.Lattice`)
 
+- **WAL - Floor-holder repair skips released pins and keeps its backoff.** WAL GC drove a released floor pin as uncovered, and any leaf heal cut its give-up backoff to the 15-minute floor. A released pin now counts as covered, as the floor already treats it, and the backoff escalates as documented. ([#3605](https://github.com/NSTA1/Orleans.Lattice/issues/3605)) (`Orleans.Lattice`)
+
+- **WAL - Silo stop flushes coalesced materialiser pins.** A durable pin advance coalesced into a debounce, shed by the queue or failed in a write was lost at graceful shutdown, so the trim floor stayed behind the leaf. Silo stop now writes every pending pin within a deadline. ([#3509](https://github.com/NSTA1/Orleans.Lattice/issues/3509)) (`Orleans.Lattice`)
+
 - **Leaf - A cleared leaf no longer writes an unreclaimable stub row.** A stray splice, setter or checkpoint flush on a cleared or never-seeded leaf persisted a row with no tree id that nothing reclaims. An empty unbound leaf now skips that write; a split sibling or a leaf holding data still persists. ([#4419](https://github.com/NSTA1/Orleans.Lattice/issues/4419)) (`Orleans.Lattice`)
+
+- **Leaf - Replay stops at the newest WAL entry.** Each materialiser replay pass bounded its read by the exclusive WAL head, which is the next sequence, so every pass made one extra empty read past the newest entry. Reads are now bounded by the newest entry. ([#3489](https://github.com/NSTA1/Orleans.Lattice/issues/3489)) (`Orleans.Lattice`)
 
 - **Retrieval - A persistently unavailable ANN record no longer defers the index forever.** The approximate index load retried an unavailable record without limit, so the index never opened. After eight consecutive deferrals it now faults as `unloadable_record` and keeps the durable index. ([#4092](https://github.com/NSTA1/Orleans.Lattice/issues/4092)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
 - **Tests - Vacuous and load-dependent fixtures.** WAL GC pin-retirement fixtures now use a partition-suffixed consumer id that reaches the path under test, a cold-start-storm fixture drops a 300ms deadline, and a registry fan-in fixture counts deferred admissions instead of timing them. ([#4258](https://github.com/NSTA1/Orleans.Lattice/issues/4258), [#4133](https://github.com/NSTA1/Orleans.Lattice/issues/4133), [#3939](https://github.com/NSTA1/Orleans.Lattice/issues/3939)) (`Orleans.Lattice`)
 
 - **Tests - A starved test host no longer reads as a torn atomic batch.** The shadow-cutover atomic-visibility fixtures report a read timeout as a separate liveness failure with its timing, so host starvation is not called a tear; a genuinely torn batch still fails the atomicity assertion. ([#4407](https://github.com/NSTA1/Orleans.Lattice/issues/4407)) (`repository-wide`)
+
+- **Tests - A loaded host no longer fails the cancelled-shutdown export test.** The repository-context archive fixture waited for the startup restore with a 10-second real-time poll, which a busy CI host could miss. It now waits on the restore signal itself. ([#4529](https://github.com/NSTA1/Orleans.Lattice/issues/4529)) (`repository-wide`)
+
 - **Gates - Two gates now see what they claim to.** The instrument priming enrolment gate compares each generator-owned row whole, so a stale row fails it, and the bucket closing-list guard counts soft references such as `Relates to #N` as claims. ([#4257](https://github.com/NSTA1/Orleans.Lattice/issues/4257), [#4121](https://github.com/NSTA1/Orleans.Lattice/issues/4121)) (`repository-wide`)
+
+- **Gates - The domain-fault marker guard reaches beyond core.** The `ILatticeDomainFault` guard moved to a shared base that each package enrols in. `Orleans.Lattice.Replication` is now scanned alongside core; the remaining packages are tracked separately. ([#3375](https://github.com/NSTA1/Orleans.Lattice/issues/3375)) (`repository-wide`)
+
+- **Observability - The coverage-repair panel describes all seven arms.** The commit-path dashboard said the coverage-repair counter had five arms. It now names all seven, and states that the six terminal arms sum to the invocation count while `rearmed` co-occurs with one. ([#3221](https://github.com/NSTA1/Orleans.Lattice/issues/3221)) (`Orleans.Lattice.Dashboards`)
+
+- **Observability - WAL compaction reclaimed bytes carry a trigger.** `orleans.lattice.wal.compaction.reclaimed_bytes` now carries the same `trigger` tag as `orleans.lattice.wal.compactions`, and is primed per arm, so freed bytes are attributed to the ratio, ceiling or reconcile arm. ([#3226](https://github.com/NSTA1/Orleans.Lattice/issues/3226)) (`Orleans.Lattice.Storage.File`)
+
+- **Docs - Two stale remarks on leaf and tree-deletion grains.** `TreeDeletionGrain` said a read re-registers a purged tree id; only a create, a write or an alias does. The `MaybeRunPeriodicSnapshotRecheckAsync` remarks counted its callers; they now name each one by symbol. ([#4294](https://github.com/NSTA1/Orleans.Lattice/issues/4294), [#3222](https://github.com/NSTA1/Orleans.Lattice/issues/3222)) (`Orleans.Lattice`)
+
+- **Performance - Benchmark cohorts no longer overlap a draining revision.** The Azure Container Apps rig took a silo-count change as done once the latest revision was ready, so a superseded revision drained into the next cohort. Scaling and parking now wait until every superseded revision has retired. ([#3588](https://github.com/NSTA1/Orleans.Lattice/issues/3588)) (`repository-wide`)
 
 ### Security
 

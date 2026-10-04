@@ -46,6 +46,9 @@ parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-
 (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`, `Test-Layer3UnseededRetry.ps1`,
 `Test-ProducerBoundReport.ps1`). The Layer 3 sweep itself is driven by
 `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
+Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
+silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot
+overlap the next cohort's warm-up; expect roughly 30-60 s per silo-count transition (#3588).
 
 **`performance-report.ps1` run prefix.** `-NamePrefix <prefix>` forces the prefix every resource
 name derives from, except that on Layer 3 a `-ReuseAca` rig takes precedence over it; without it a
