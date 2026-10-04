@@ -674,6 +674,19 @@ equal `LatticeOptions.WalPartitions` so the shipper reads every
 partition the commit-log writer fans across (see
 [`ReplogPartitions`](configuration.md#replogpartitions)).
 
+### Forced gap: a peer taken off the log
+
+A `WalRetention` ceiling trims the write-ahead log past a lagging consumer by design, so it can remove records the shipper has not yet delivered to its peer. Skipping the trimmed prefix is harmless for plain writes, but not for a saga: if the trimmed record was one of a saga's prepares and its terminal is still retained, the terminal reaches the peer without it, the receiver commits the saga and drains its other keys, and the lost key is missing - a torn saga ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A shipper cannot even name the transactions it lost.
+
+The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** (offsets are dense, and only a trim removes them). On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
+
+- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible;
+- **asks the peer to re-seed** on every push and liveness probe. The gRPC transport sends the recorded epoch in the `x-lattice-replication-reseed-after` call header. The receiver, having verified the caller's origin, starts a full bootstrap from that sender when it has not completed one from an export with a greater epoch and none is running (governed by `AutoBootstrapOnFallOffLog`), and echoes the epoch of its last completed one in `ReplicationAck.BootstrapEpoch`.
+
+Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. The shipper then clears the marker, rewinds every partition to its lowest retained entry, and resumes: the export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them. A range-scoped re-replay never advances the echoed epoch.
+
+A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
+
 ### Deferred cursor persistence
 
 Cursor advances are amortised across `ShipCursorWriteInterval`

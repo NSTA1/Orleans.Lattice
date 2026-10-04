@@ -127,6 +127,14 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<long?> GetCompletedExportEpochAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        return Task.FromResult<long?>(
+            state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var epoch) ? epoch : null);
+    }
+
+    /// <inheritdoc />
     public async Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
@@ -516,6 +524,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // exact-identity dedupe and per-key LWW merge make any overlap safe.
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
+        state.State.SnapshotExportEpoch = snapshot.ExportEpoch;
         var pivotedToApplying = false;
         if (state.State.Phase != LatticeBootstrapState.ApplyingSnapshot)
         {
@@ -746,6 +755,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
         state.State.InProgress = false;
+        // Record the completed full re-seed for the sender's ack echo (#4534).
+        if (state.State.SnapshotExportEpoch > 0 && !string.IsNullOrEmpty(state.State.SourceClusterId))
+        {
+            var source = state.State.SourceClusterId;
+            if (!state.State.CompletedExportEpochs.TryGetValue(source, out var previous)
+                || previous < state.State.SnapshotExportEpoch)
+            {
+                state.State.CompletedExportEpochs[source] = state.State.SnapshotExportEpoch;
+            }
+        }
         await state.WriteStateAsync().ConfigureAwait(true);
 
         // Terminal duration recording: outcome=live. Reset the anchor
