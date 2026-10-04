@@ -77,4 +77,57 @@ public partial class AtomicWriteGrainTests
 
         Assert.That(ex!.Message, Does.Contain("purged"));
     }
+    [Test]
+    public async Task MarkOneShardAsync_redelivers_on_a_tombstoned_copy_refusal_without_reading_its_deletion_record()
+    {
+        var purged = false;
+        var resizedShard = Substitute.For<IShardRootGrain>();
+        resizedShard.GetSplitForwardTargetsAsync().Returns(Task.FromResult(new List<int>()));
+        var deletion = Substitute.For<ITreeDeletionGrain>();
+        var (grain, _, _, lattice, shard) = CreateGrain(configureFactory: f =>
+        {
+            f.GetGrain<ITreeDeletionGrain>(TreeId).Returns(deletion);
+            f.GetGrain<IShardRootGrain>(Arg.Is<string>(k => k.StartsWith(ResizedCopyId + "/", StringComparison.Ordinal)))
+                .Returns(resizedShard);
+        });
+        var map = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount);
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(new RoutingInfo(purged ? ResizedCopyId : TreeId, map)));
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
+            .Returns<Task<WalRecord?>>(_ =>
+            {
+                purged = true;
+                throw new LatticeTreePurgedException(TreeId);
+            });
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1])));
+
+        await resizedShard.Received().AppendTxTerminalAsync(
+            Arg.Any<Guid>(), true, null, Arg.Any<CancellationToken>(), Arg.Any<bool>());
+        await deletion.DidNotReceive().HoldsCompletedPurgeAsync();
+    }
+
+    [Test]
+    public void MarkOneShardAsync_surfaces_a_redelivery_the_resized_copy_also_refuses_as_purged()
+    {
+        var purged = false;
+        var resizedShard = Substitute.For<IShardRootGrain>();
+        resizedShard.GetSplitForwardTargetsAsync().Returns(Task.FromResult(new List<int>()));
+        resizedShard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
+            .Returns<Task<WalRecord?>>(_ => throw new LatticeTreePurgedException(ResizedCopyId));
+        var (grain, _, _, lattice, shard) = CreateGrain(configureFactory: f =>
+            f.GetGrain<IShardRootGrain>(Arg.Is<string>(k => k.StartsWith(ResizedCopyId + "/", StringComparison.Ordinal)))
+                .Returns(resizedShard));
+        var map = ShardMap.CreateDefault(LatticeConstants.DefaultVirtualShardCount, LatticeConstants.DefaultShardCount);
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(new RoutingInfo(purged ? ResizedCopyId : TreeId, map)));
+        shard.AppendTxTerminalAsync(Arg.Any<Guid>(), Arg.Any<bool>(), Arg.Any<IReadOnlyDictionary<string, byte[]>?>(), Arg.Any<CancellationToken>(), Arg.Any<bool>())
+            .Returns<Task<WalRecord?>>(_ =>
+            {
+                purged = true;
+                throw new LatticeTreePurgedException(TreeId);
+            });
+
+        Assert.ThrowsAsync<LatticeTreePurgedException>(() => grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]))));
+    }
 }
