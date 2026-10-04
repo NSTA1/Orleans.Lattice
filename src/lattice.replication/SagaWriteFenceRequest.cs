@@ -43,4 +43,16 @@ internal readonly record struct SagaWriteFenceRequest
     /// </summary>
     [Id(3)]
     public int FenceWindowSeconds { get; init; }
+
+    /// <summary>
+    /// The restored copies this engage closes for inbound replication before
+    /// their alias swap makes them routable (issue #4593): each restored
+    /// physical copy id, mapped to the tree in <see cref="Trees"/> it restores.
+    /// Each copy is closed with the receive-fence epoch of that tree's pause as
+    /// its minimum admission epoch. The fence opens them again on every path
+    /// that resumes receiving: the terminal lift and the observed-global-
+    /// completion lift. Null or empty closes nothing.
+    /// </summary>
+    [Id(4)]
+    public Dictionary<string, string>? ReceiveClosedCopies { get; init; }
 }

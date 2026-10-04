@@ -1,0 +1,18 @@
+# Pairs with RestoreConverges, under the fairness Spec asserts. A refusal that
+# acknowledges the delivery advances the sender past it, so a post-cutover write
+# admitted under a stale cached epoch, or while the copy was closed, is never
+# re-shipped and the clusters never converge. The refusal must defer.
+MODULE: RestoreConvergesRefusalAcked
+TARGET: RestoreConverges
+CLASS: Temporal
+SUMMARY: a refused delivery is acknowledged instead of deferred
+PERTURBS: Land
+DEADLOCK: off
+
+--- FIND
+         THEN UNCHANGED <<data, sent>>
+--- REPLACE
+         \* MUTATION: the refusal acks.
+         THEN /\ sent' = [sent EXCEPT ![r.from] = @ \cup {r.w}]
+              /\ UNCHANGED data
+--- END

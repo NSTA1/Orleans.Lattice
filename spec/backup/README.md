@@ -18,7 +18,7 @@ CI timeout:
 |--------|----------------|----------|
 | [`BackupCapture`](BackupCapture.tla) | A capture racing in-flight sagas: the per-tree capture under the #4485 decision gate, and a cross-tree set's fence, drain gate, gated re-check and validation, with a lease lapse or a fault at any step. | Two trees, three shards, a single-tree and a cross-tree saga, a standalone or a set capture, two attempts. |
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
-| [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it. | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes. |
+| [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
 
 Capture and restore share no state the other needs: a restore installs an image
@@ -74,7 +74,16 @@ refinement note's rows:
   `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces production before
   it, and its code analogue turns the fix's regression test red.
 
-Both fixes have landed, so the reproducing mutations now stand as regression
+- **#4593** (`BackupRestore`, fixed): a write a stale cached receive gate
+  admitted before a coordinated restore paused receiving reached the tree after
+  the alias swap, or after the lift, and landed on the restored copy; so did an
+  entry parked in the causal-apply buffer before the pause. The module checks
+  the fix: the restored copy is born closed with the pause's epoch as its
+  floor, the seam refuses a closed copy or a stale admission, a park re-reads
+  the fence, and the drain discards an entry parked before the pause.
+  `RestoredCutNotReAdvancedCopyFenceDropped` reproduces production before it,
+  and its code analogue turns the fix's regression tests red.
+ fixes have landed, so the reproducing mutations now stand as regression
 checks: each must keep firing, and each has a code analogue that turns the
 fix's regression tests red.
 
@@ -117,5 +126,5 @@ notes and TLC's own state counts.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `BackupCapture` | 5 | 1 | 17 | 17 | 21 | 41,423 |
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
-| `BackupRestore` | 5 | 1 | 10 | 10 | 14 | 707 |
+| `BackupRestore` | 5 | 1 | 14 | 18 | 18 | 21,890 |
 | `BackupCutover` | 5 | 1 | 9 | 10 | 14 | 31 |

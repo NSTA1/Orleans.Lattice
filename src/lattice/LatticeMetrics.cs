@@ -11191,4 +11191,27 @@ public static class LatticeMetrics
     public static readonly Histogram<double> GrainCallDuration =
         Meter.CreateHistogram<double>("orleans.lattice.grain.call.duration", unit: "ms",
             description: "End-to-end outgoing grain call duration observed by the caller, by grain type and outcome.");
+
+    /// <summary>
+    /// Name of the observable gauge reporting how long each closed restored copy
+    /// has been closed (issue #4593). Published by <c>CopyReceiveFenceCensus</c>.
+    /// </summary>
+    public const string CopyReceiveClosedAgeGaugeName = "orleans.lattice.restore.copy_receive_closed_age";
+
+    /// <summary>
+    /// Counter of replication applies refused because they routed to a restored
+    /// physical copy a coordinated restore has fenced against it (issue #4593).
+    /// Tagged with <see cref="TagTree"/> (the logical tree the apply addressed),
+    /// <see cref="TagReason"/> - <c>closed</c> (the copy is still closed) or
+    /// <c>pre_cutover</c> (the copy is open but the apply was admitted before the
+    /// restore paused receiving) - and the tenant. A coordinated restore closes its restored copy before the alias
+    /// swap and opens it when the saga's fence lifts, so a short burst during a
+    /// restore is expected: the replication applier defers each refused entry
+    /// and the sender re-ships it. A rate that never returns to zero means a copy
+    /// is stuck closed; read <see cref="CopyReceiveClosedAgeGaugeName"/> to find
+    /// it.
+    /// </summary>
+    public static readonly Counter<long> CopyReceiveFencedApplies =
+        Meter.CreateCounter<long>("orleans.lattice.restore.copy_receive_fenced", unit: "{apply}",
+            description: "Replication applies refused because they routed to a restored copy a coordinated restore has fenced: still closed, or admitted before the restore paused receiving.");
 }

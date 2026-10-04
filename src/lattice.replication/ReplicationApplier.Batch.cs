@@ -320,16 +320,25 @@ internal sealed partial class ReplicationApplier
         // ack that makes the sender re-ship the run after the fence lifts. A run
         // is a single (treeId, originClusterId) segment, so one gate check covers
         // it.
-        if (_receiveGate is not null
-            && await _receiveGate.IsReceivePausedAsync(entries[startInclusive].TreeId, cancellationToken)
-                .ConfigureAwait(false))
+        //
+        // The answer carries the fence's epoch and the run is stamped with it
+        // (issue #4593), so a restored copy refuses a run admitted under an
+        // epoch older than its restore's pause.
+        if (_receiveGate is not null)
         {
-            return new ApplyResult
+            var observed = await _receiveGate.ObserveAsync(entries[startInclusive].TreeId, cancellationToken)
+                .ConfigureAwait(false);
+            if (observed.Paused)
             {
-                Applied = false,
-                HighWaterMark = HybridLogicalClock.Zero,
-                Deferred = true,
-            };
+                return new ApplyResult
+                {
+                    Applied = false,
+                    HighWaterMark = HybridLogicalClock.Zero,
+                    Deferred = true,
+                };
+            }
+
+            ReplicationAdmissionEpoch.Stamp(entries[startInclusive].TreeId, observed.Epoch);
         }
 
         try
@@ -348,6 +357,19 @@ internal sealed partial class ReplicationApplier
             // the receive fence does; the sender re-ships it, entries this run
             // already applied are acknowledged as re-deliveries, and the refused
             // terminal is re-applied once the capture releases the registry.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
+        catch (CopyReceiveFencedException)
+        {
+            // Issue #4593: the run routed to a restored copy whose receive fence a
+            // coordinated restore still holds closed. Defer the run exactly as the
+            // receive fence does; the sender re-ships it once the copy opens.
             RecordInboundContact(entries[startInclusive], success: true);
             return new ApplyResult
             {

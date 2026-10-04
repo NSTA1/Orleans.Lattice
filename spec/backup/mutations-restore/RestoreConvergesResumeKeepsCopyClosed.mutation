@@ -1,0 +1,16 @@
+# Pairs with RestoreConverges, under the fairness Spec asserts. A lift that leaves
+# the restored copy closed refuses every delivery to it and blocks its drain for
+# good, so a post-restore write never reaches the peer.
+MODULE: RestoreConvergesResumeKeepsCopyClosed
+TARGET: RestoreConverges
+CLASS: Temporal
+SUMMARY: the lift never opens the restored copy
+PERTURBS: Resume
+DEADLOCK: off
+
+--- FIND
+    /\ closed' = [closed EXCEPT ![c] = {}]
+--- REPLACE
+    \* MUTATION: the copy stays closed.
+    /\ UNCHANGED closed
+--- END

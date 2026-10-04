@@ -1,0 +1,15 @@
+# Pairs with RestoredCutNotReAdvanced. The park does not re-read the fence: a
+# pre-cutover delivery a stale cached gate admitted is parked under the current
+# epoch, and drains onto the restored copy after the lift.
+MODULE: RestoredCutNotReAdvancedParkWhilePaused
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: a park trusts the cached admission and stamps the current epoch
+PERTURBS: Park
+
+--- FIND
+       IN IF ~recvOn[d] \/ r.ep < epoch[d]
+--- REPLACE
+       IN \* MUTATION: no uncached re-read at park.
+          IF FALSE
+--- END
