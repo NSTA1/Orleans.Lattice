@@ -151,6 +151,9 @@ public partial class TreeDeletionIntegrationTests
             {
                 () => registry.UpdateWalPlacementAsync(treeName, 0, 0, "dedicated"),
                 () => registry.UpdateWalPlacementAsync(treeName, 0, [(0, "dedicated")]),
+                () => registry.RaiseWalMoveFencesAsync(treeName, 0, [0], "move-a", TimeSpan.FromMinutes(1), renew: false),
+                () => registry.ReleaseWalMoveFenceAsync(treeName, 0, "move-a", onlyIfExpired: false),
+                () => registry.FlipFencedWalPlacementAsync(treeName, 0, [(0, "dedicated")], "move-a"),
             },
             _ => throw new ArgumentOutOfRangeException(nameof(family)),
         };

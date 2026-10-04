@@ -98,6 +98,9 @@ public sealed class LatticeRegistryInterleaveContractTests
         nameof(ILatticeRegistry.SetWalMaxRetainedBytesAsync),
         nameof(ILatticeRegistry.LatchProjectionDigestPermanentlyDisabledAsync),
         nameof(ILatticeRegistry.UpdateWalPlacementAsync),
+        nameof(ILatticeRegistry.RaiseWalMoveFencesAsync),
+        nameof(ILatticeRegistry.ReleaseWalMoveFenceAsync),
+        nameof(ILatticeRegistry.FlipFencedWalPlacementAsync),
     ];
 
     /// <summary>

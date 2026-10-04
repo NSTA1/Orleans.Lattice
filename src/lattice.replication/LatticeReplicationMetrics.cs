@@ -1283,6 +1283,24 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string BootstrapTransientRetriesName = "orleans.lattice.replication.bootstrap.transient_retries";
 
+    /// <summary>
+    /// Counter incremented each time an operator force-lifts the read fence a
+    /// failed snapshot bootstrap left up over a partial import (issue #4526),
+    /// through <see cref="ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync"/>.
+    /// Tagged by <see cref="TagTree"/>. Every increment marks a window in which
+    /// reads of the tree may observe a partial import - a committed atomic batch
+    /// with some keys present and others not - until a later bootstrap
+    /// completes, so any non-zero value is an alert, not a trend.
+    /// </summary>
+    public static readonly Counter<long> BootstrapReadFenceForceLifted =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.read_fence_force_lifted", unit: "{lift}",
+            description: "Operator force-lifts of the read fence a failed snapshot bootstrap left over a partial import, tagged by tree. Each one exposes the partial import to readers.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapReadFenceForceLifted"/> counter.
+    /// </summary>
+    public const string BootstrapReadFenceForceLiftedName = "orleans.lattice.replication.bootstrap.read_fence_force_lifted";
+
     // --- Anti-entropy peer digest probe (detect stage) --------------------------
 
     /// <summary>

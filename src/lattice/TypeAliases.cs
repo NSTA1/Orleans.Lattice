@@ -244,6 +244,12 @@ internal static class TypeAliases
     // lifts (terminal saga decision or the bounded cutover deadline).
     internal const string LatticeWriteFenced = "ol.wfx";
 
+    // Receiver bootstrap read fence (issue #4526). Thrown by a shard root's read
+    // surface while a snapshot bootstrap drains into the tree, so no reader can
+    // observe a partial import. Retryable: the fence lifts once the drain has
+    // applied every snapshot entry.
+    internal const string LatticeTreeBootstrapping = "ol.tbf";
+
     // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
     // write surface when a write would violate the declared replication mode
     // for a tree (a CRDT accessor whose mode differs from the declared mode,
@@ -662,6 +668,8 @@ internal static class TypeAliases
     internal const string WalMoveOptions = "ol.wmo";
     internal const string WalMoveOutcome = "ol.wmc";
     internal const string WalMoveQuiesceResult = "ol.wqr";
+    // Durable WAL move fence held in the placement pin (issue #4525).
+    internal const string WalMoveFence = "ol.wmf";
     internal const string LatticeWalProviderMissing = "ol.wpm";
     internal const string LatticeWalQuiescing = "ol.wqx";
 
@@ -794,5 +802,16 @@ internal static class TypeAliases
 
     // Grain-storage fencing probe
     internal const string GrainStorageFencingProbeState = "ol.gfp";
+
+    // Offset-reading WAL consumers (issue #4579)
+
+    /// <summary>Alias for the offset-reading WAL consumer grain interface.</summary>
+    internal const string IWalOffsetConsumer = "ol.wci";
+
+    /// <summary>Alias for the per-tree offset-reading WAL consumer registry grain interface.</summary>
+    internal const string IWalOffsetConsumerRegistryGrain = "ol.wcg";
+
+    /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
+    internal const string WalOffsetConsumerRegistryState = "ol.wcs";
 }
 

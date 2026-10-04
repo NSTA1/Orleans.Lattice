@@ -76,16 +76,22 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var fake = new FakePersistentState<BootstrapCoordinatorState>();
         Seed(fake, phase: LatticeBootstrapState.ApplyingSnapshot);
         var (grain, _, _, provider, reminders, _, _, _) = Create(fake);
-        // ExportAsync throws so DrainSnapshotAsync throws *before* any
-        // state.WriteStateAsync call - control reaches the L174 catch
-        // without first consuming the one-shot ThrowOnWrite.
+        // ExportAsync throws so DrainSnapshotAsync throws after only the
+        // read-fence write - control reaches the catch with the one-shot
+        // ThrowOnWrite armed for the Failed pivot's persist.
         provider.ExportAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("export boom"));
         // Make the catch-handler's L189 persist throw - the one site where a
         // failed write at L189 silently breaks the L207 "leave keepalive
         // armed for retry" path because dirty in-memory `InProgress=false`
         // short-circuits L148 on every retry tick.
-        fake.ThrowOnWrite = new InvalidOperationException("write boom");
+        // The first write arms the read fence (issue #4526) and must succeed;
+        // the one after it - the catch handler's Failed pivot - throws.
+        fake.OnAfterWrite = _ =>
+        {
+            if (fake.WriteCount == 1)
+                fake.ThrowOnWrite = new InvalidOperationException("write boom");
+        };
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
 
