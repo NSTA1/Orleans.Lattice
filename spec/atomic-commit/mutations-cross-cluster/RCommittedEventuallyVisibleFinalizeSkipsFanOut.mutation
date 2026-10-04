@@ -1,0 +1,17 @@
+# Pairs with RCommittedEventuallyVisible. A cross-tree receiver tree marks its
+# registry with the barrier's verdict but never fans the terminal out to its
+# leaves. Every read is still consistent - the registry's committed answer
+# surfaces the pending buckets - so no safety property notices; only the
+# liveness property does, because the committed write is never materialised.
+MODULE: RCommittedEventuallyVisibleFinalizeSkipsFanOut
+TARGET: RCommittedEventuallyVisible
+CLASS: Temporal
+SUMMARY: a finalised cross-tree receiver tree marks its registry but owes its leaves nothing
+PERTURBS: ReceiverFinalize
+
+--- FIND
+    /\ rtodo' = rtodo \cup KeysOf(tr)
+--- REPLACE
+\* MUTATION: the finalise owes no fan-out.
+    /\ rtodo' = rtodo
+--- END
