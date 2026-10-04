@@ -394,7 +394,11 @@ public sealed class AcaRevisionOverlapScriptTests
                     Assert.Fail($"{shell} did not exit within 120 s.");
                 }
 
-                process.WaitForExit();
+                if (!Task.WaitAll([stdout, stderr], 30_000))
+                {
+                    Assert.Fail($"{shell} exited but its output streams did not close within 30 s.");
+                }
+
                 return (process.ExitCode, stdout.Result + stderr.Result);
             }
         }
