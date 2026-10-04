@@ -23,8 +23,7 @@ public readonly record struct ReplicationAck
     /// its cursor past the batch's start.
     /// <para>
     /// Note that <see cref="Accepted"/> is <see langword="true"/> even
-    /// when every entry in the batch was de-duplicated - dropped at or
-    /// below the snapshot-pinned floor, matched in the recent
+    /// when every entry in the batch was de-duplicated - matched in the recent
     /// exact-identity cache, or re-applied idempotently at the leaf -
     /// because dedup is a successful idempotent apply, not a
     /// rejection. In that case <see cref="HighestAppliedHlc"/> still

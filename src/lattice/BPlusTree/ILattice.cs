@@ -993,7 +993,12 @@ public interface ILattice : IGrainWithStringKey
     /// An observably empty tree is instead re-pinned directly to any count in
     /// range, smaller or larger, without running a migration; its shard map is
     /// rebuilt over the same virtual slot count. Throws
-    /// <see cref="InvalidOperationException"/> when a resize is in flight.
+    /// <see cref="InvalidOperationException"/> when a resize is in flight, and
+    /// after a resize completes for as long as it can still be undone and the
+    /// tree's previous physical copy still mirrors into the resized one - until
+    /// that copy is purged, <see cref="LatticeOptions.SoftDeleteDuration"/> after
+    /// the resize - because that shard-for-shard mirror cannot follow the splits
+    /// and folds a reshard is made of.
     /// </para>
     /// <para>
     /// Idempotent: a call with the same <paramref name="newShardCount"/>
@@ -1252,7 +1257,7 @@ public interface ILattice : IGrainWithStringKey
     /// re-materialises the projection through the ordinary
     /// activation-time path. That path first reloads the leaf's
     /// captured snapshot where a usable one exists - the rebuild neither
-    /// clears nor bypasses it - and then replays the write-ahead log
+    /// clears nor bypasses a readable one - and then replays the write-ahead log
     /// after it: each partition the snapshot covers replays only the
     /// entries after the snapshot's captured offset, and a partition no
     /// snapshot covers replays from its oldest readable entry.
@@ -1273,6 +1278,17 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is not a reason to
     /// rebuild: that budget is advisory, and an over-budget leaf replays
     /// anyway.
+    /// </para>
+    /// <para>
+    /// It is also how a leaf whose snapshot is permanently unreadable is brought
+    /// back. Such a leaf fails every replay closed, because under coverage-gated
+    /// write-ahead-log trimming the snapshot may be the only durable copy of the
+    /// prefix it covers. The rebuild clears a snapshot that is present but proven
+    /// unreadable (an unreadable row payload, or a missing or unreadable segment),
+    /// logging a warning that names the accepted loss, so the next activation
+    /// rebuilds from the log that survives. A readable or absent snapshot is left
+    /// alone, and a snapshot load that throws fails the rebuild rather than
+    /// discarding a snapshot that may merely have been unreachable.
     /// </para>
     /// <para>
     /// The operator surface deliberately does not expose "edit the

@@ -516,13 +516,15 @@ public class BPlusLeafGrainColdActivationAdmissionTests
     }
 
     [Test]
-    public async Task An_ordinary_storage_fault_still_falls_through_to_the_WAL_replay()
+    public void An_ordinary_storage_fault_fails_closed_as_unavailable_not_as_unaffordable()
     {
-        // The control, and it is what keeps the clause above honest. Only the
-        // MEMORY arm is self-defeating: when the store is merely unreachable
-        // there is nothing wrong with replaying the WAL, and it may well
-        // succeed. A change that made every load failure fatal would pass the
-        // test above and fail this one.
+        // The control, and it is what keeps the clause above honest: the two
+        // arms must stay distinct. Only the MEMORY arm is self-defeating and
+        // banks a tightened admission estimate. An ordinary storage fault used
+        // to fall through to the cold WAL replay; since issue #4450 it fails the
+        // replay closed too - under coverage-gated trim the snapshot may be the
+        // only durable copy of the prefix it covers - but as a retryable
+        // LeafSnapshotUnavailableException, with no memory verdict attached.
         var admission = new LeafSnapshotHydrationAdmission(budgetBytes: 1024L * 1024);
         var (grain, state, _, coord) = CreateGatedGrain(
             admission,
@@ -531,10 +533,16 @@ public class BPlusLeafGrainColdActivationAdmissionTests
 
         state.State.ProjectionCheckpointOffset = 5L;
 
-        await LeafActivationHarness.ActivateAsync(grain, ClaimDeadline().Token);
+        var thrown = Assert.ThrowsAsync<LeafSnapshotUnavailableException>(
+            async () => await LeafActivationHarness.ActivateAsync(grain, ClaimDeadline().Token));
 
-        await coord.Received().ReadSliceAsync(
-            -1L,
+        Assert.Multiple(() =>
+        {
+            Assert.That(thrown!.InnerException?.Message, Is.EqualTo("storage unreachable"));
+            Assert.That(admission.InFlightBytes, Is.Zero);
+        });
+        coord.DidNotReceive().ReadSliceAsync(
+            Arg.Any<long>(),
             Arg.Any<long>(),
             Arg.Any<int>(),
             Arg.Any<CancellationToken>());

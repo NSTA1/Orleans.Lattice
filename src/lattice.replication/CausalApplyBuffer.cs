@@ -7,15 +7,18 @@ namespace Orleans.Lattice.Replication;
 /// Per-tree bounded FIFO buffer holding <see cref="WalRecord"/>
 /// records the receiver-side <see cref="ReplicationApplier"/> could
 /// not apply because their declared causal dependencies were not yet
-/// satisfied by the local vector clock. Drained on every successful
-/// apply that advances the local vector clock; entries whose deps
+/// satisfied by the local vector clock. Drained by its owning
+/// <see cref="Grains.CausalApplyBufferGrain"/> after every park, whenever a
+/// high-water-mark advance or the bootstrap pin asks for it, and on every
+/// replication maintenance tick; entries whose deps
 /// remain unsatisfied stay parked. Overflows route the oldest entry
 /// to the per-tree dead-letter queue with reason
 /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>.
 /// <para>
-/// The buffer is a single per-tree instance owned by the applier
-/// singleton; concurrent receiver-side calls into the same applier
-/// serialize through the buffer's private lock. There is no
+/// One instance is the in-memory mirror inside each tree's durable
+/// <see cref="Grains.CausalApplyBufferGrain"/> (#4464), which serializes every
+/// park and drain for the tree and persists every change; the lock below keeps
+/// the type safe for direct use as well. There is no
 /// cross-tree coordination - each tree's buffer is independent. Each
 /// instance carries its own pre-built tag arrays (tagged
 /// <see cref="LatticeReplicationMetrics.TagTree"/> and
@@ -176,6 +179,75 @@ internal sealed class CausalApplyBuffer
         }
 
         return outcome;
+    }
+
+    /// <summary>
+    /// Re-inserts an entry restored from the durable buffer state on
+    /// activation, at the tail of the FIFO, keeping its original park time.
+    /// Updates the buffered-entry and buffer-byte gauges like a park, but does
+    /// not count a new causal violation (the violation was counted when the
+    /// entry was first parked). A duplicate identity is ignored.
+    /// </summary>
+    public void Restore(WalRecord entry, long parkedAtTicks)
+    {
+        var size = EstimateSize(entry);
+        var key = EntryKey.From(entry);
+        lock (_gate)
+        {
+            if (_index.ContainsKey(key))
+            {
+                return;
+            }
+
+            _index[key] = _entries.AddLast(new BufferedEntry(entry, size, parkedAtTicks));
+            _totalBytes += size;
+        }
+
+        LatticeReplicationMetrics.ApplyBufferedEntries.Add(1, _treeShardTags);
+        LatticeReplicationMetrics.ApplyBufferBytes.Add(size, _treeShardTags);
+    }
+
+    /// <summary>
+    /// Returns the parked entries, oldest first, with their original park
+    /// times - the shape the durable buffer state persists.
+    /// </summary>
+    public List<(WalRecord Entry, long ParkedAtTicks)> Snapshot()
+    {
+        lock (_gate)
+        {
+            var snapshot = new List<(WalRecord, long)>(_entries.Count);
+            foreach (var buffered in _entries)
+            {
+                snapshot.Add((buffered.Entry, buffered.ParkedAtTicks));
+            }
+            return snapshot;
+        }
+    }
+
+    /// <summary>
+    /// Empties the buffer and withdraws its contribution from the
+    /// buffered-entry and buffer-byte gauges. Called when the owning
+    /// activation discards this in-memory copy (deactivation, or a rebuild
+    /// from durable state after a failed write) so the gauges do not drift.
+    /// </summary>
+    public void Release()
+    {
+        int count;
+        long bytes;
+        lock (_gate)
+        {
+            count = _entries.Count;
+            bytes = _totalBytes;
+            _entries.Clear();
+            _index.Clear();
+            _totalBytes = 0;
+        }
+
+        if (count > 0)
+        {
+            LatticeReplicationMetrics.ApplyBufferedEntries.Add(-count, _treeShardTags);
+            LatticeReplicationMetrics.ApplyBufferBytes.Add(-bytes, _treeShardTags);
+        }
     }
 
     /// <summary>

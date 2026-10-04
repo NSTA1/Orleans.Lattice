@@ -163,7 +163,7 @@ public partial class ReplicationShipperGrainTests
     /// stash index so the test fixture does not need to spin up the
     /// real Orleans serializer for shipper-grain unit tests.
     /// </summary>
-    private sealed class StubWalRecordEncoder : IWalRecordEncoder
+    internal sealed class StubWalRecordEncoder : IWalRecordEncoder
     {
         private readonly List<WalRecord> _stash = new();
 
@@ -207,7 +207,7 @@ public partial class ReplicationShipperGrainTests
     /// tick.
     /// </para>
     /// </summary>
-    private sealed class StubReplogShardGrain(StubWalRecordEncoder? encoder = null) : IWalShardGrain
+    internal sealed class StubReplogShardGrain(StubWalRecordEncoder? encoder = null) : IWalShardGrain
     {
         private readonly StubWalRecordEncoder _encoder = encoder ?? new StubWalRecordEncoder();
         public List<WalRecord> Entries { get; } = new();

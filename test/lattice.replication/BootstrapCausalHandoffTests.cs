@@ -121,6 +121,7 @@ public partial class BootstrapCausalHandoffTests
     private sealed class HandoffHarness
     {
         public required ReplicationApplier Applier { get; init; }
+        public required Fakes.FakePersistentState<CausalApplyBufferState> BufferState { get; init; }
         public required IGrainFactory Factory { get; init; }
         public required IOptionsMonitor<LatticeReplicationOptions> Monitor { get; init; }
         public required IReplicationApplyGrain Apply { get; init; }
@@ -134,7 +135,6 @@ public partial class BootstrapCausalHandoffTests
     private static HandoffHarness CreateHarness(LatticeReplicationOptions? options = null)
     {
         var rows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
-        var pinnedFloor = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
         var localVc = new VersionVector();
         var parked = new List<(WalRecord, string)>();
 
@@ -152,17 +152,6 @@ public partial class BootstrapCausalHandoffTests
             {
                 var origin = (string)call[0];
                 return Task.FromResult(rows.TryGetValue(origin, out var v) ? v : HybridLogicalClock.Zero);
-            });
-
-        // The snapshot-pinned floor is written only by PinSnapshotAsync
-        // (never advanced by TryAdvanceAsync) - the receiver's sole
-        // point-write drop threshold. Mirrors the real grain's
-        // PinnedFloor state.
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(call =>
-            {
-                var origin = (string)call[0];
-                return Task.FromResult(pinnedFloor.TryGetValue(origin, out var v) ? v : HybridLogicalClock.Zero);
             });
 
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
@@ -197,7 +186,7 @@ public partial class BootstrapCausalHandoffTests
         // PinSnapshotAsync overwrites both the per-origin diagonal rows
         // and the local vector clock - exactly the persistence behaviour
         // IReplicationHighWaterMarkGrain.PinSnapshotAsync exhibits
-        // against real grain state.
+        // against real grain state. It installs no drop floor (#4463).
         hwm.PinSnapshotAsync(
                 Arg.Any<HybridLogicalClock>(),
                 Arg.Any<VersionVector>(),
@@ -206,12 +195,10 @@ public partial class BootstrapCausalHandoffTests
             {
                 var frontier = (VersionVector)call[1];
                 rows.Clear();
-                pinnedFloor.Clear();
                 localVc.Entries.Clear();
                 foreach (var (origin, clock) in frontier.Entries)
                 {
                     rows[origin] = clock;
-                    pinnedFloor[origin] = clock;
                     localVc.Entries[origin] = clock;
                 }
                 return Task.CompletedTask;
@@ -234,9 +221,13 @@ public partial class BootstrapCausalHandoffTests
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
 
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new OverridesReplicationContext());
+        var (_, bufferState) = CausalBufferTestWiring.Wire(factory, applier, monitor, Tree);
+
         return new HandoffHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, replicationContext: new OverridesReplicationContext()),
+            Applier = applier,
+            BufferState = bufferState,
             Factory = factory,
             Monitor = monitor,
             Apply = apply,
@@ -249,16 +240,16 @@ public partial class BootstrapCausalHandoffTests
     }
 
     /// <summary>
-    /// Behaviour 1 (spec): incremental entries whose
-    /// <see cref="WalRecord.VectorClock"/> is dominated by the
-    /// pinned frontier are HWM-deduplicated as
-    /// already-applied-via-snapshot - no buffering, no re-merge. Pins
-    /// the cross-origin VC-dominated case routes through the same fast
-    /// path the per-origin HWM check already provides for the
-    /// diagonal.
+    /// Behaviour 1 (spec, revised by #4463): an incremental entry whose
+    /// source HLC and <see cref="WalRecord.VectorClock"/> are at or below
+    /// the pinned frontier is NOT dropped. No single HLC per origin is
+    /// downward-closed over what a snapshot holds, so the pin installs no
+    /// drop floor; the entry applies through the idempotent leaf merge
+    /// (a no-op if the snapshot already holds it) without buffering, and
+    /// the pinned diagonal does not regress.
     /// </summary>
     [Test]
-    public async Task After_pin_incremental_entry_below_frontier_is_dedup_via_hwm_without_buffering()
+    public async Task After_pin_incremental_entry_below_frontier_applies_idempotently_without_buffering()
     {
         var h = CreateHarness();
         var frontier = Vector((OriginA, Hlc(100)), (OriginB, Hlc(200)));
@@ -267,23 +258,20 @@ public partial class BootstrapCausalHandoffTests
 
         // Entry from origin-A at HLC 50 (below the pinned diagonal of
         // 100) carrying a VC slot at or below the frontier on every
-        // origin - i.e. the snapshot already covers it.
+        // origin. The snapshot may or may not hold it.
         var entry = SetEntry("k1", Hlc(50), OriginA, Vector((OriginA, Hlc(50)), (OriginB, Hlc(150))));
 
         var result = await h.Applier.ApplyAsync(entry);
 
         Assert.Multiple(() =>
         {
-            Assert.That(result.Applied, Is.False, "Entry below pinned frontier must not re-apply.");
+            Assert.That(result.Applied, Is.True, "A below-frontier entry must apply; the pin is not a drop floor.");
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(100)),
-                "HWM dedup must report the pinned diagonal as the HWM, not the entry's own HLC.");
-            Assert.That(h.Parked, Is.Empty, "HWM-dedup must not park the entry.");
+                "The pinned diagonal must not regress to the entry's own HLC.");
+            Assert.That(h.Parked, Is.Empty, "A satisfied below-frontier entry must not park.");
         });
 
-        // The applier must short-circuit before reaching the apply
-        // grain - otherwise the cross-origin VC-dominated path would
-        // re-merge work the snapshot already covered.
-        await h.Apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+        await h.Apply.Received(1).ApplySetAsync("k1", Arg.Any<byte[]>(), Hlc(50), OriginA, null, 0);
     }
 
     /// <summary>

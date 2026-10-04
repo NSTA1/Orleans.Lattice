@@ -82,7 +82,7 @@ internal sealed class ReplicationHighWaterMarkGrain(
         // the supplied frontier do not bleed into grain state.
         var replacement = frontier.Clone();
         if (VectorsEqual(state.State.Vector, replacement)
-            && VectorsEqual(state.State.PinnedFloor, replacement))
+            && state.State.PinnedFloor.Entries.Count == 0)
         {
             return;
         }
@@ -90,12 +90,13 @@ internal sealed class ReplicationHighWaterMarkGrain(
         var previous = state.State.Vector;
         var previousFloor = state.State.PinnedFloor;
         state.State.Vector = replacement;
-        // The pinned floor records the snapshot's causal cut and is the
-        // sole per-origin drop threshold the receiver honours. A second
-        // clone keeps the floor and the diagonal independently mutable
-        // (TryAdvanceAsync raises the diagonal but must never move the
-        // floor).
-        state.State.PinnedFloor = replacement.Clone();
+        // A pin installs NO drop floor (#4463): no single HLC per origin
+        // is downward-closed over what a snapshot holds, so dropping at or
+        // below a pinned coordinate silently lost writes the snapshot never
+        // contained. Any floor persisted by an earlier build is cleared
+        // here, so a silo still on that build (which reads the floor as a
+        // drop threshold) stops dropping once this pin lands.
+        state.State.PinnedFloor = new VersionVector();
         try
         {
             await state.WriteStateAsync();
@@ -106,6 +107,48 @@ internal sealed class ReplicationHighWaterMarkGrain(
             state.State.PinnedFloor = previousFloor;
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(frontier);
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = asOfHlc; // Reserved for future bootstrap-protocol extensions.
+
+        var merged = state.State.Vector.Clone();
+        var raised = false;
+        foreach (var (origin, clock) in frontier.Entries)
+        {
+            if (clock > merged.GetClock(origin))
+            {
+                merged.Entries[origin] = clock;
+                raised = true;
+            }
+        }
+
+        if (!raised && state.State.PinnedFloor.Entries.Count == 0)
+        {
+            return false;
+        }
+
+        var previous = state.State.Vector;
+        var previousFloor = state.State.PinnedFloor;
+        state.State.Vector = merged;
+        // No drop floor (#4463); clear any floor an earlier build persisted.
+        state.State.PinnedFloor = new VersionVector();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Vector = previous;
+            state.State.PinnedFloor = previousFloor;
+            throw;
+        }
+
+        return raised;
     }
 
     private static bool VectorsEqual(VersionVector left, VersionVector right)

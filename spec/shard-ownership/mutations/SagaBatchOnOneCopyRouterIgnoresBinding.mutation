@@ -1,0 +1,33 @@
+# Pairs with SagaBatchOnOneCopy. Reproduces #4358 in the setting it arose in:
+# the routing tier places a saga's prepares on whichever copy its cached pair
+# names, ignoring the binding, and (as before #4362) the flip does not wait for
+# the fence, so a saga bound to R leaves a prepare on T. Either edit alone is
+# caught by the other guard: the fence admits only a batch bound to its copy.
+MODULE: SagaBatchOnOneCopyRouterIgnoresBinding
+TARGET: SagaBatchOnOneCopy
+CLASS: Invariant
+SUMMARY: stale routers place a bound saga's prepares on the old copy, which nothing fences
+PERTURBS: SagaPrepare, ResizeFlip
+
+--- FIND
+    /\ LET c == IF p[1] = bound \/ alias = bound \/ BoundMirrors THEN bound ELSE alias
+           m == IF p[1] = bound THEN p[2] ELSE CopyMap(bound)
+           s == MapOf(m, k)
+       IN /\ c = bound
+--- REPLACE
+\* MUTATION: the routing tier ignores the binding.
+    /\ LET c == p[1]
+           m == p[2]
+           s == MapOf(m, k)
+       IN /\ TRUE
+--- END
+
+--- FIND
+ResizeFlip ==
+    /\ rz = "copied"
+    /\ fence = rzShards
+--- REPLACE
+ResizeFlip ==
+    /\ rz = "copied"
+\* MUTATION: the flip does not wait for the fence.
+--- END

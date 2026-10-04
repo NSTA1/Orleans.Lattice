@@ -551,6 +551,86 @@ then zero-HLC range deletes and prepared atomic-batch entries are never
 dropped. The receiver's shadow-forward identity cache and per-key
 last-writer-wins guard make any re-shipped duplicate a no-op.
 
+### Saga terminal hold
+
+A saga writes its prepares to the partitions their keys hash to, decides,
+and then writes one terminal (`TxCommit` / `TxAbort`) per touched shard to
+the partition its shard index hashes to. The receiver commits a saga once
+every shard's terminal has arrived. A receiver leaf that applies a terminal
+with no pending bucket for the saga records the terminal, and then refuses
+any prepare that arrives after it. So a terminal that reaches the peer ahead
+of one of its prepares leaves the saga split on the receiver for good: one
+key post-saga, the other never written (issue #4480).
+
+The HLC merge cannot prevent that. A partition is not HLC-ordered in append
+order, because leaf clocks are independent and skew across silos. So an
+unrelated entry with a higher HLC can sit ahead of a prepare and sort after
+the terminal. A partition read empty early in a tick is not read again that
+tick. And with `ShipMaxInFlight` above one, a failed batch is re-shipped
+after a later batch has applied.
+
+So whenever the shipper reads more than one partition, or pipelines, it
+pulls every terminal it reaches out of the merge into an in-memory hold.
+The terminal's partition keeps draining behind it. A held terminal is
+shipped, at the head of a later batch, only once the peer has acknowledged
+every prepare of its saga. The shipper knows that in one of two ways:
+
+- **A complete tally.** The shipper counts the prepared records it reads
+  for each transaction: every `AtomicBatchIndex` up to the transaction's
+  `AtomicBatchSize`, and the highest sequence it read in each partition.
+  Once every index has been read, the terminal ships when each partition's
+  acknowledged frontier has passed the saga's last prepare in it. The tally
+  is saga-wide: it never consults the terminal's shard count, so the split
+  coordinator's unstamped (count 0) sweep terminal is held exactly like any
+  other.
+- **A tail barrier**, when no complete tally exists. That happens when the
+  prepares were acknowledged before the shipper restarted, when they are
+  unsized legacy prepares, or when the tally was evicted (at most 1,024
+  tallies are kept). The shipper reads each partition's tail after it has
+  read the terminal, and ships the terminal once the acknowledged frontier
+  reaches that tail in every partition. This is sound because a prepare's
+  append completes before the saga decides, and the decision precedes every
+  terminal append.
+
+Release is gated on acknowledgements, not on reads, so a failed batch that
+carries a prepare cannot be overtaken by its terminal. A batch carrying a
+released terminal that is not accepted, for example one the receiver
+defers, re-arms the hold for the next tick.
+
+While a terminal is held, its partition's durable cursor stops at the
+terminal's sequence, and the HLC cursor reported to the WAL GC stays below
+the terminal's clock. So a restart re-reads the terminal and the GC cannot
+trim it. The in-memory resume point is not capped, so the entries after a
+held terminal are not re-shipped on every tick. After a restart, a held
+terminal whose prepares were acknowledged earlier releases on the tail
+barrier.
+
+A held terminal is never stranded:
+
+- A prepare trimmed before it shipped (a peer that fell off the log) is
+  passed by the acknowledged frontier like any other sequence.
+- The tail barrier needs only acknowledgements of entries that exist.
+- A rebind to a new source log (an alias swap) stops reading the retired
+  log. A hold whose prepares are already acknowledged ships. Any other hold
+  is dropped with a warning: its unshipped prepares are abandoned with the
+  retired log, so releasing it would commit the saga on the peer without
+  them.
+
+Two cases release without the guarantee:
+
+- A prepare routed to the dead-letter queue (an encode failure) counts as
+  acknowledged. Its terminal is still released, with a warning naming the
+  transaction, and the peer serves the saga without that key until the
+  entry is replayed.
+- The hold assumes every key of the saga is replicated. A `KeyFilter` or
+  `KeyPrefixes` that drops some of a saga's prepares yields an
+  all-or-nothing view over the replicated subset only. That is the filter's
+  semantics.
+
+With one partition and a window of one, the stream already delivers each
+partition in append order and applies each batch before the next ships,
+so no hold is taken.
+
 Wire-compat is additive: the new `[Id(2)]` partition-cursor slot on
 the shipper's persisted state decodes as the empty dictionary for legacy
 persisted state, which the cold-start path treats identically to a
@@ -584,11 +664,11 @@ checkpoints within the time bound. (A graceful deactivation also
 flushes - see below.)
 
 Re-shipping is safe because the receiver absorbs repeats without relying
-on its per-origin high-water mark, which drops nothing: an entry at or
-below the snapshot-pinned causal floor is dropped, a recently applied
-`(origin, HLC, key, op)` identity is suppressed by the shadow-forward
-identity cache, and anything else re-applies idempotently under per-key
-last-writer-wins. A silo crash inside the deferred-persist window
+on its per-origin high-water mark or any snapshot floor, neither of
+which drops point writes: a recently applied `(origin, HLC, key, op)`
+identity is suppressed by the shadow-forward identity cache, and
+anything else re-applies idempotently under per-key last-writer-wins. A
+silo crash inside the deferred-persist window
 therefore costs at most `ShipCursorWriteInterval x ShipBatchSize`
 entries of wasteful re-shipping and no data is lost. Lowering
 `ShipCursorWriteMaxDelay` only ever makes the durable cursor fresher; it

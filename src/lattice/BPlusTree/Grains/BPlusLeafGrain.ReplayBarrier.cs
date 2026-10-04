@@ -112,6 +112,42 @@ internal sealed partial class BPlusLeafGrain
     private bool _replayBarrierArmed;
 
     /// <summary>
+    /// <see langword="true"/> while this activation's cache does not provably hold
+    /// every row through its projection checkpoint, so the checkpoint is not an
+    /// honest snapshot-coverage claim (issue #4451). Set when a replay is armed;
+    /// cleared once the replay's start decision anchors the cache on a snapshot
+    /// rehydrate or a pre-populated cache, or once a cold rebuild converges.
+    /// </summary>
+    /// <remarks>
+    /// While it is set, an ordinary capture is routed through cold-progress
+    /// banking (<see cref="TryBankColdReplayProgressAsync"/>), whose claim is the
+    /// re-read frontier - what the cache actually holds - and is declined when
+    /// there is nothing honest to bank. Stamping the checkpoint instead is what
+    /// let a capture mid cold rebuild claim coverage over rows it did not carry,
+    /// licensing the WAL GC to trim the only copy of them.
+    /// </remarks>
+    private bool _cacheUnanchored;
+
+    /// <summary>
+    /// <see langword="true"/> from the moment this activation's replay chooses a
+    /// cold rebuild until that rebuild converges (issue #4467). A cold rebuild that
+    /// faults part-way leaves a partial cache behind, and a non-empty cache would
+    /// otherwise pass for an anchor: the re-armed replay would resume warm from the
+    /// persisted checkpoint and never rebuild the rows between its re-read frontier
+    /// and that checkpoint. While this is set the replay stays cold.
+    /// </summary>
+    private bool _coldRebuildPending;
+
+    /// <summary>
+    /// Each partition's persisted checkpoint at the moment this activation's
+    /// replay first chose a cold rebuild, or <see langword="null"/> when no cold
+    /// rebuild is pending. Read by <see cref="BuildUnanchoredCoverage"/>: a
+    /// checkpoint at or below this value is one the rebuild has not yet re-read
+    /// through, so it is not an honest coverage claim (issue #4451).
+    /// </summary>
+    private long[]? _coldRebuildEntryCheckpoints;
+
+    /// <summary>
     /// Test seam: <see langword="true"/> while a replay is armed and has not yet
     /// completed. Exists so a test asserting that a metadata getter answers
     /// "while a replay is pending" can establish that the replay really <i>is</i>
@@ -156,6 +192,13 @@ internal sealed partial class BPlusLeafGrain
 
         var cts = new CancellationTokenSource();
         _replayBarrierCts = cts;
+
+        // Until this replay's start decision anchors the cache - a snapshot
+        // rehydrate, a pre-populated cache, or a converged cold rebuild - the
+        // checkpoint says nothing about what the cache holds (issue #4451).
+        // Set synchronously, before the replay's first turn, so no capture can
+        // slip into the window between arming and deciding.
+        _cacheUnanchored = true;
 
         LatticeMetrics.PrimeReplayBarrierOutcomes(state.State.TreeId);
 
@@ -377,6 +420,13 @@ internal sealed partial class BPlusLeafGrain
             throw new InvalidOperationException("Cannot reset a leaf while its warm stale-cache rescue is persisting.");
         _replayBarrierRetired = true;
         _replayBarrier = null;
+
+        // The state any cold rebuild was re-reading has been discarded, so its
+        // progress claims nothing about the cache any more (issue #4451).
+        _coldRebuildPending = false;
+        _coldRebuildEntryCheckpoints = null;
+        _coldReplayFrontierByPartition = null;
+        _cacheRebuiltFromWalStartThisActivation = false;
         CancelReplayBarrier();
     }
 

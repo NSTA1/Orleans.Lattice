@@ -113,6 +113,26 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     Task<bool> IsIdleAsync();
 
     /// <summary>
+    /// Reports whether this tree's resize still forbids the shard migrations that
+    /// move virtual slots between shards (adaptive split, online consolidation;
+    /// issue #4452): <see langword="true"/> while a resize is in flight, while an
+    /// undo is pending or running, and - once a resize completed - for as long as
+    /// any shard of the copy it replaced still mirrors into the resized copy,
+    /// which it does through the soft-delete window until the purge (or an undo)
+    /// clears its shadow-forward state. A migration on the resized copy in that
+    /// window would change a layout the replaced copy's index-addressed mirror,
+    /// and a saga bound to that copy, cannot follow.
+    /// <para>
+    /// Fails closed: an answer it cannot establish - a shard probe that throws or
+    /// times out, a state change not yet persisted - is <see langword="true"/>.
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a
+    /// migration's check is not held behind a resize phase or snapshot slice.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HoldsShardMigrationsAsync();
+
+    /// <summary>
     /// Reports whether this tree's resize state still names
     /// <paramref name="physicalTreeId"/> - as the old physical tree an undo would
     /// recover, or as the destination an in-flight or completed resize built. A

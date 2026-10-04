@@ -1,0 +1,18 @@
+# Pairs with NoResurrection. The alias flips without waiting for the old copy
+# to be fenced (#4362), so a router that cached the old copy keeps reading it
+# after a newer write landed on the resized copy.
+MODULE: NoResurrectionRetainedFlipUnfenced
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: the alias flips before the old copy is fenced, so a reader still on it is served a value the new copy has superseded
+PERTURBS: ResizeFlip
+
+--- FIND
+    /\ rz = "copied"
+    /\ fence = rzShards
+    /\ alias' = R
+--- REPLACE
+    /\ rz = "copied"
+\* MUTATION: the flip does not wait for the fence.
+    /\ alias' = R
+--- END

@@ -73,6 +73,7 @@ public partial class TreeShardSplitGrainTests
         sourceShard.GetLeftmostLeafIdAsync().Returns(Task.FromResult<GrainId?>(null));
 
         var state = existingState ?? new FakePersistentState<TreeShardSplitState>();
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeShardSplitGrain>(), state);

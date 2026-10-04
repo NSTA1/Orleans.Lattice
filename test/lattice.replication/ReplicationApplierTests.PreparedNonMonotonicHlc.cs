@@ -126,22 +126,24 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_still_dedups_non_prepared_entry_with_hlc_at_or_below_hwm()
+    public async Task ApplyAsync_still_dedups_non_prepared_exact_redelivery()
     {
         // Counter-check: the bypass is gated on
         // (IsPrepared && AtomicBatchSize > 0). A plain (non-prepared)
-        // entry at or below a pinned snapshot floor must still be
-        // dedup'd - otherwise the bypass would silently disable the
-        // below-floor dedup for every entry.
+        // entry's exact re-delivery must still be dedup'd by the
+        // shadow-forward identity cache - the bypass must not disable
+        // identity dedup for every entry. (There is no HLC drop
+        // threshold to bypass: #1060, #4463.)
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
 
+        var first = await applier.ApplyAsync(SetEntry("k", Hlc(50, 1)));
         var result = await applier.ApplyAsync(SetEntry("k", Hlc(50, 1)));
 
+        Assert.That(first.Applied, Is.True);
         Assert.That(result.Applied, Is.False,
-            "Non-prepared entry at or below a pinned snapshot floor must still be dedup'd; the D1c bypass applies only to IsPrepared+AtomicBatchSize>0.");
-        await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(default!, default!, default, default!, default, default);
+            "A non-prepared exact re-delivery must still be dedup'd; the D1c bypass applies only to IsPrepared+AtomicBatchSize>0.");
+        await apply.Received(1).ApplySetAsync("k", Arg.Any<byte[]>(), Hlc(50, 1), RemoteCluster, null, Arg.Any<long>());
     }
 
     [Test]
@@ -152,13 +154,14 @@ public partial class ReplicationApplierTests
         // is a malformed-wire shape (prepared writes always come from
         // a saga and carry the batch size), but pin the conjunction
         // here so a future caller cannot accidentally widen the
-        // bypass by stamping IsPrepared on a non-atomic entry.
+        // bypass by stamping IsPrepared on a non-atomic entry: its exact
+        // re-delivery is still identity-deduped.
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50, 1));
         var txid = Guid.NewGuid();
         var entry = PreparedSetEntry("k", Hlc(20), txid, atomicBatchSize: 0, atomicBatchIndex: 0);
 
+        await applier.ApplyAsync(entry);
         var result = await applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.False);

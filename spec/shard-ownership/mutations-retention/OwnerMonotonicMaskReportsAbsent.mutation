@@ -1,0 +1,24 @@
+# Pairs with OwnerMonotonic. The registry reports a row it declines to answer
+# for as absent rather than as Indeterminate, as production did before the read
+# gate's Indeterminate arm: a masked committed saga reads as InFlight, so a
+# bucket it has not yet drained reads its pre-saga value.
+MODULE: OwnerMonotonicMaskReportsAbsent
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: a masked registry row reads as absent, so an undrained committed key reverts
+PERTURBS: RegistryMask
+
+--- FIND
+RegistryMask ==
+    /\ dec # "none"
+    /\ ~forgotten
+    /\ masked' = ~masked
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, forgotten, late, wDone, reacted, ackOn>>
+--- REPLACE
+RegistryMask ==
+    /\ dec # "none"
+    /\ ~forgotten
+\* MUTATION: the masked row is reported as absent.
+    /\ forgotten' = TRUE
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, late, wDone, reacted, ackOn>>
+--- END

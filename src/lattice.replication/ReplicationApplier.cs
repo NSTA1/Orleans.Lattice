@@ -123,14 +123,15 @@ internal sealed partial class ReplicationApplier(
     private readonly ReplicationPeerStats? _peerStats = peerStats;
 
     /// <summary>
-    /// Per-tree causal-apply buffers, lazily created on first park.
-    /// Each tree's buffer is independent - there is no cross-tree
-    /// coordination. The map itself is concurrent because Orleans
-    /// grain calls into a singleton applier may interleave across
-    /// trees; per-buffer concurrency is enforced by the buffer's
-    /// internal lock.
+    /// Per-tree hint: whether this silo last observed the tree's durable
+    /// causal-apply buffer (<see cref="ICausalApplyBufferGrain"/>) holding
+    /// entries. Absent means this silo has not touched the tree's buffer since
+    /// it started, which triggers a first-touch drain (re-arming entries a
+    /// previous process parked). It only gates the drain call on the hot
+    /// path; liveness does not depend on it being current (see
+    /// <see cref="DrainBufferAsync"/>).
     /// </summary>
-    private readonly ConcurrentDictionary<string, CausalApplyBuffer> _buffers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool> _bufferMayHoldEntries = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per-tree shadow-forward dedupe caches, lazily created on first
@@ -141,8 +142,8 @@ internal sealed partial class ReplicationApplier(
     /// rejects the duplicate-emit pair a structural rewrite (shard split /
     /// merge) generates when it shadow-forwards a user write into a
     /// different shard, and any other recent re-delivery, without a leaf
-    /// hop. The per-origin high-water-mark is not a drop threshold for
-    /// incremental writes (only the snapshot-pinned causal floor is), so a
+    /// hop. There is no per-origin HLC drop threshold for point writes
+    /// (#1060, #4463), so a
     /// re-delivery evicted from the bounded cache under sustained churn falls
     /// through to the idempotent leaf-level last-writer-wins apply, which is
     /// a no-op for identical bytes.
@@ -430,8 +431,9 @@ internal sealed partial class ReplicationApplier(
             var hwmGrain = GetHwmGrain(entry.TreeId);
             var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-            // Point-write dedup gate: the SNAPSHOT-PINNED CAUSAL FLOOR,
-            // not the incrementally-advanced per-origin diagonal.
+            // There is NO per-origin HLC drop threshold for point writes -
+            // neither the incrementally-advanced diagonal nor a
+            // snapshot-pinned floor.
             //
             // The source HLC is stamped per leaf (BPlusLeafGrain's own
             // clock) and WAL/replog partitions are keyed by
@@ -444,53 +446,34 @@ internal sealed partial class ReplicationApplier(
             // the incremental diagonal (`entry.Timestamp <= hwm`) treated
             // every such entry as a duplicate and silently discarded it -
             // the receiver half of the #1060 replication-gap (US
-            // shipped == EU applied == 1041 of 3967). Correctness for the
-            // incremental stream is instead upheld by the shadow-forward
-            // identity cache below (exact (origin, hlc, key, op) tuple)
-            // plus the leaf-level per-key LWW guard (re-applying an
-            // already-present (key, source-HLC) is a no-op). A below-
-            // diagonal entry that survives both is a new write; its
+            // shipped == EU applied == 1041 of 3967).
+            //
+            // A snapshot-pinned floor is not a valid threshold either, for
+            // the same reason (#4463): no single HLC per origin is
+            // downward-closed over what a snapshot holds. The bootstrap
+            // pin seals the source coordinate at the maximum HLC anywhere
+            // in the snapshot, so a later source write on a leaf whose
+            // clock is at or below it is not in the snapshot; and a third
+            // origin's coordinate is the source's maximum applied HLC,
+            // which is non-monotonic in delivery order. Dropping at or
+            // below either silently lost writes the snapshot never held.
+            //
+            // Correctness for every point write is instead upheld by the
+            // shadow-forward identity cache below (exact (origin, hlc, key,
+            // op) tuple) plus the leaf-level per-key LWW guard
+            // (re-applying an already-present (key, source-HLC) is a
+            // no-op), exactly as for steady-state replication since #1060.
+            // A below-diagonal entry that survives both is a new write; its
             // out-of-order arrival is surfaced (observability-only) by the
             // FIFO-violation counter in RecordFifoState.
-            //
-            // The pinned floor IS a valid drop threshold: it is written
-            // only by PinSnapshotAsync (bootstrap-snapshot handoff or
-            // operator rollback re-pin), never by incremental
-            // TryAdvanceAsync, so every origin entry at or below it is
-            // provably contained in the pinned snapshot. Dropping those is
-            // the exactly-once optimisation for the snapshot -> incremental
-            // handoff: the peer may re-deliver a large below-snapshot
-            // backlog that is already captured by the restore, and the
-            // floor short-circuits it without a leaf round-trip. When no
-            // snapshot has been pinned the floor is HybridLogicalClock.Zero
-            // for every origin, so nothing is dropped.
-            //
-            // Bypasses (unchanged): bootstrap-drain delivery runs before
-            // the post-drain pin, so its floor is still Zero and the
-            // bypass is belt-and-braces; saga prepare-phase entries
-            // (IsPrepared && AtomicBatchSize > 0) carry non-monotonic
-            // per-leaf HLCs across the saga's touched leaves and are
-            // deduped by the per-leaf AddPreparedMutation LWW merge + the
-            // per-tx terminal-mark idempotency instead.
             var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
             var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
-            if (!isBootstrapDrain && !isPreparedAtomicBatch)
-            {
-                var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(entry.OriginClusterId!, cancellationToken);
-                if (entry.Timestamp <= pinnedFloor)
-                {
-                    outcome = LatticeReplicationMetrics.OutcomeDedup;
-                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
-                }
-            }
-
             // Shadow-forward dedupe cache: a structural rewrite (shard
             // split / merge) that shadow-forwards a
             // user write into a different shard generates a duplicate
             // emit pair with identical (origin, hlc, key, op). This cache
-            // is the primary exact-identity dedup for incremental point
-            // writes (the pinned-floor gate above only covers entries
-            // provably inside a snapshot); it catches recent re-deliveries
+            // is the exact-identity dedup for point writes (there is no
+            // HLC drop threshold above); it catches recent re-deliveries
             // without a leaf hop, and any re-delivery evicted from the
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it
@@ -499,8 +482,25 @@ internal sealed partial class ReplicationApplier(
                 entry.TreeId,
                 static (_, capacity) => new RecentApplyCache(capacity),
                 resolved.ShadowForwardDedupeCacheSize);
-            if (!cache.TryAdd(entry))
+            if (!cache.TryAdd(entry, out var duplicateInFlight))
             {
+                if (duplicateInFlight)
+                {
+                    // IN-FLIGHT DUPLICATE (#4465). The delivery holding this
+                    // identity's reservation has not completed its apply or
+                    // park yet, and it can still be aborted (a restart
+                    // mid-call, or a failure whose transport-level response
+                    // the sender has already moved past). Acknowledging this
+                    // duplicate as applied would move the sender's cursor
+                    // past an entry that may then be neither applied nor
+                    // dead-lettered. Defer it instead, exactly as the receive
+                    // fence does: a not-accepted, cursor-preserving ack, so
+                    // the sender re-sends and the re-delivery is classified
+                    // once the first delivery has completed or rolled back.
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                }
+
                 outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
@@ -514,12 +514,12 @@ internal sealed partial class ReplicationApplier(
             // dead-letter decorator's retry-counter contract would clear
             // the failure counter on what looks like a filtered call -,
             // silently dropping the entry until FIFO eviction admits a
-            // future retry. The park branch returns normally inside the
-            // try, so its cache reservation is correctly retained: the
-            // drained entry routes through ApplyPointAsync directly,
-            // bypassing the cache, and the retained reservation
-            // continues to suppress duplicate-emit pairs of the parked
-            // entry that arrive while it is buffered.
+            // future retry. The reservation is in flight until the apply
+            // completes, and is then marked completed so a later duplicate is
+            // acknowledged as a genuine re-delivery (#4465). The park branch
+            // releases the reservation once the durable buffer holds the
+            // entry: the buffer then dedups the parked entry's re-deliveries
+            // itself (#4464).
             try
             {
                 // Causal-plus dependency check. Skip the fetch entirely
@@ -547,13 +547,20 @@ internal sealed partial class ReplicationApplier(
                     var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
                     {
-                        await ParkAsync(entry, resolved, cancellationToken);
+                        await ParkAsync(entry, cancellationToken);
+                        // The durable buffer now holds the entry and dedups its
+                        // re-deliveries itself, so release the shadow-forward
+                        // reservation: this per-silo cache must not outlive the
+                        // park, or a re-delivery after the drain - or a
+                        // dead-letter replay on this silo - would be suppressed.
+                        cache.Remove(entry);
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         return new ApplyResult { Applied = false, HighWaterMark = hwm };
                     }
                 }
 
                 await ApplyPointAsync(entry);
+                cache.Complete(entry);
                 RecordApplyLag(entry);
                 RecordAppliedContentForIndex(in entry, resolved);
 
@@ -575,7 +582,7 @@ internal sealed partial class ReplicationApplier(
                 // transport-side FIFO-regression signal, which is
                 // expressly not what bootstrap delivery is). The
                 // post-drain
-                // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+                // <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
                 // call installs the per-origin HWM at the snapshot
                 // cut atomically; the first live-incremental entry
                 // delivered after the pin seeds
@@ -603,7 +610,7 @@ internal sealed partial class ReplicationApplier(
                 // before each pass.
                 if (advanced)
                 {
-                    await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+                    await DrainBufferAsync(entry.TreeId, cancellationToken);
                 }
 
                 outcome = LatticeReplicationMetrics.OutcomeSuccess;
@@ -723,129 +730,67 @@ internal sealed partial class ReplicationApplier(
         _appliedContentIndex.InvalidateTree(entry.TreeId!);
     }
 
-    private async Task ParkAsync(
-        WalRecord entry,
-        LatticeReplicationOptions resolved,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Durably parks <paramref name="entry"/> in the per-tree
+    /// <see cref="ICausalApplyBufferGrain"/> (#4464). The grain writes the
+    /// entry before returning - so the caller may acknowledge it - and then
+    /// re-checks the vector and drains, which closes the lost wakeup between
+    /// this call's dependency check and the insert. Overflow evicts the
+    /// oldest parked entry to the dead-letter queue inside the grain.
+    /// </summary>
+    private async Task ParkAsync(WalRecord entry, CancellationToken cancellationToken)
     {
-        var buffer = _buffers.GetOrAdd(entry.TreeId, static treeId => new CausalApplyBuffer(treeId));
-        var outcome = buffer.TryAdd(
-            entry,
-            resolved.CausalBufferMaxEntries,
-            resolved.CausalBufferMaxBytes,
-            out var evicted);
-
-        if (outcome == AddOutcome.AddedWithEviction && evicted.Count > 0)
-        {
-            // A displaced entry was never applied, yet the shadow-forward cache
-            // still holds the reservation taken when it was parked. Release each
-            // one (as the drain-failure path does) before handing the entries to
-            // the dead-letter queue, so a dead-letter replay or a peer re-delivery
-            // is applied instead of being classified as a shadow-forward duplicate
-            // and dropped - including when an enqueue below faults part-way.
-            if (_dedupeCaches.TryGetValue(entry.TreeId, out var cache))
-            {
-                foreach (var displaced in evicted)
-                {
-                    cache.Remove(displaced);
-                }
-            }
-
-            var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-            foreach (var displaced in evicted)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await dlq.EnqueueAsync(
-                    displaced,
-                    failureReason: "Causal-apply buffer full; evicted blocked entry to make room.",
-                    retryCount: 0,
-                    reasonTag: LatticeReplicationMetrics.ReasonHlcSkew,
-                    cancellationToken).ConfigureAwait(false);
-            }
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry).ConfigureAwait(false);
+        _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
 
-    private async Task DrainBufferAsync(
-        string treeId,
-        IReplicationHighWaterMarkGrain hwmGrain,
-        LatticeReplicationOptions resolved,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Asks the per-tree <see cref="ICausalApplyBufferGrain"/> to drain after
+    /// a high-water-mark advance. The grain call is skipped on the hot path
+    /// unless this silo has not yet touched the tree since it started (the
+    /// first-touch re-arm after a restart) or last observed the tree's buffer
+    /// non-empty. An entry parked through another silo while this silo's
+    /// observation is stale is still drained by that silo's next advance, and
+    /// in any case by the per-tree replication maintenance tick
+    /// (<see cref="ReplicationMaintenanceGrain"/>), which drains every phase
+    /// tick.
+    /// </summary>
+    private async Task DrainBufferAsync(string treeId, CancellationToken cancellationToken)
     {
-        if (!_buffers.TryGetValue(treeId, out var buffer) || buffer.Count == 0)
+        if (_bufferMayHoldEntries.TryGetValue(treeId, out var mayHoldEntries) && !mayHoldEntries)
         {
             return;
         }
 
-        // Iterate to a fixed point: each drained apply may advance the
-        // local vector clock and unblock further entries on the next
-        // pass. Bounded by the buffer's current size + any retried
-        // entries that fail and re-park; in practice convergence is
-        // O(n) where n is the gap between received and applied.
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-            var ready = buffer.DrainSatisfied(localVc, resolved.ClusterId);
-            if (ready.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var ent in ready)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    await ApplyPointAsync(ent);
-                    RecordApplyLag(ent);
-                    RecordFifoState(ent);
-                    RecordAppliedContentForIndex(in ent, resolved);
-                    await hwmGrain
-                        .TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // A drained apply has no transport-level retry
-                    // path: the original delivery was already ack'd
-                    // when ApplyAsync returned for the entry that
-                    // unblocked this one. Route the failed drained
-                    // entry to the dead-letter queue rather than
-                    // dropping it silently. ArgumentException /
-                    // InvalidOperationException are schema-shaped
-                    // faults; everything else is unknown.
-                    var reasonTag = ex is ArgumentException or InvalidOperationException
-                        ? LatticeReplicationMetrics.ReasonSchema
-                        : LatticeReplicationMetrics.ReasonUnknown;
-                    var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(ent.TreeId);
-                    await dlq.EnqueueAsync(
-                        ent,
-                        failureReason: ex.Message ?? "<no message>",
-                        retryCount: 0,
-                        reasonTag: reasonTag,
-                        cancellationToken).ConfigureAwait(false);
-
-                    // Roll back the shadow-forward cache reservation
-                    // that was made when ApplyAsync originally parked
-                    // this entry. Without rollback, an operator-driven
-                    // retry from the DLQ would observe TryAdd=false on
-                    // the cache and be classified as Applied=false
-                    // (shadow-forward-dedup); the dead-letter
-                    // decorator's "Applied=false clears the counter"
-                    // contract would then silently drop the entry
-                    // until FIFO eviction. The HWM was never advanced
-                    // for this entry (apply threw before TryAdvance),
-                    // so HWM dedupe will not suppress the retry - the
-                    // cache rollback is the only step required.
-                    if (_dedupeCaches.TryGetValue(ent.TreeId, out var cache))
-                    {
-                        cache.Remove(ent);
-                    }
-                }
-            }
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var remaining = await GetBufferGrain(treeId).DrainAsync().ConfigureAwait(false);
+        _bufferMayHoldEntries[treeId] = remaining > 0;
     }
 
+    /// <summary>
+    /// Applies one entry the <see cref="CausalApplyBufferGrain"/> drained
+    /// because its causal dependencies are now satisfied: the point apply,
+    /// the per-entry observability, and the high-water-mark advance a direct
+    /// apply performs. Runs under the system-origin access scope, as
+    /// <see cref="ApplyAsync"/> does. Throws on failure; the grain dead-letters
+    /// the entry.
+    /// </summary>
+    internal async Task ApplyDrainedEntryAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+        var resolved = options.Get(entry.TreeId);
+        await ApplyPointAsync(entry).ConfigureAwait(false);
+        RecordApplyLag(entry);
+        RecordFifoState(entry);
+        RecordAppliedContentForIndex(in entry, resolved);
+        await GetHwmGrain(entry.TreeId)
+            .TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private ICausalApplyBufferGrain GetBufferGrain(string treeId) =>
+        grainFactory.GetGrain<ICausalApplyBufferGrain>(treeId);
     private Task ApplyPointAsync(WalRecord entry)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);

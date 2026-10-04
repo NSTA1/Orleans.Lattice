@@ -5423,6 +5423,14 @@ public static class LatticeMetrics
     /// WAL replay covers such a leaf completely - but a sustained rate names the
     /// population whose retained WAL cannot shrink until it checkpoints.
     /// </para>
+    /// <para>
+    /// The same reason also counts a capture taken while a leaf's cache is not yet
+    /// anchored - before its activation replay has decided where to start, or
+    /// during a cold rebuild that has not converged - when the rebuild has
+    /// re-read nothing it could honestly claim (issue #4451). Claiming the
+    /// checkpoint there would assert coverage over rows the cache does not hold.
+    /// It is transient: the leaf captures normally once its replay converges.
+    /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> SnapshotDeclineNoCoverageClaim =
         new(TagReason, "no_coverage_claim");
@@ -9911,7 +9919,7 @@ public static class LatticeMetrics
     /// before starting a coordinator. Tagged with <see cref="TagTree"/> and a
     /// <c>reason</c> tag enumerating the rejection cause (e.g.
     /// <c>argument_out_of_range_min</c>, <c>argument_out_of_range_max</c>,
-    /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
+    /// <c>resize_in_flight</c>, <c>resize_undoable</c>, <c>state_write_failed</c>).
     /// <para>
     /// Excludes Orleans-side message-routing rejections, which the
     /// Orleans runtime logs as "Forwarding failed" but does not surface

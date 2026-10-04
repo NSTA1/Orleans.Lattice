@@ -60,11 +60,12 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain coordinator,
         long persistedCheckpoint = -1L,
         ILatticeFallOffLogDetector? detector = null,
-        bool failSnapshotCapture = false)
+        bool failSnapshotCapture = false,
+        LeafSnapshotBlob? snapshot = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+            .Returns(Task.FromResult(snapshot));
         if (failSnapshotCapture)
         {
             // Every capture path faults, so no partition can gain durable
@@ -431,5 +432,76 @@ public partial class BPlusLeafGrainTests
                 BuildCommittedSet(key, Encoding.UTF8.GetBytes($"v-{key}"), hlcPhysical: 100 + offset, treeId: NeverWrittenTreeId)));
             _head = offset + 1;
         }
+    }
+
+    /// <summary>
+    /// Issue #4456. A never-written leaf that HOLDS a snapshot must bound its
+    /// #3453 release by that snapshot's coverage. Its next activation rehydrates
+    /// the snapshot, which lowers the checkpoint to the coverage, so a release at
+    /// the higher persisted checkpoint licenses a trim past <c>coverage + 1</c>
+    /// and the fall-off detector then latches the leaf stale over a prefix it
+    /// never owned. Found by the WAL durability TLA+ model
+    /// (<c>RecoveryNeverFallsOffLog</c>).
+    /// </summary>
+    [Test]
+    public async Task Never_written_leaf_holding_a_snapshot_releases_no_further_than_its_coverage()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(1);
+        var (grain, state, published) = CreateNeverWrittenLeafWithPinCapture(
+            wal.Coordinator,
+            persistedCheckpoint: 1L,
+            // Captures fail, so the snapshot's coverage cannot move past 1 and the
+            // release has nothing but the persisted checkpoint to grow into.
+            failSnapshotCapture: true,
+            snapshot: new LeafSnapshotBlob
+            {
+                SnapshotOffset = 1L,
+                Rows = [],
+                CapturedAtTicks = 1L,
+                SnapshotOffsetsByPartition = [1L],
+            });
+
+        await ActivateAsync(grain);
+
+        // Other leaves' writes accrue; the drive scans through and persists them.
+        wal.GrowTo(3);
+        published.Clear();
+        await grain.DriveStarvedCheckpointAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Clock, Is.EqualTo(HybridLogicalClock.Zero), "precondition: never-written.");
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
+                "precondition: the drive persisted the scanned-through checkpoint above the coverage.");
+            Assert.That(published, Is.Not.Empty, "precondition: the drive republished the pin.");
+            Assert.That(published.Select(p => p.PublishedOffset), Is.All.LessThanOrEqualTo(1L),
+                "THE assertion: the release may not pass the snapshot's coverage (1). The next "
+                    + "activation rehydrates that snapshot and lowers the checkpoint to 1, so a "
+                    + "release at the persisted 3 lets the GC trim to tail 4 and latches the leaf "
+                    + "stale. Published: " + string.Join(", ", published.Select(p => p.PublishedOffset)));
+        });
+    }
+
+    /// <summary>
+    /// The other half of #4456: with no snapshot the #3453 release is unchanged,
+    /// because a cold activation replays under the <c>-1</c> sentinel, which the
+    /// fall-off detector exempts.
+    /// </summary>
+    [Test]
+    public async Task Never_written_leaf_without_a_snapshot_still_releases_at_its_persisted_checkpoint()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(1);
+        var (grain, _, published) = CreateNeverWrittenLeafWithPinCapture(
+            wal.Coordinator, persistedCheckpoint: 1L, failSnapshotCapture: true);
+
+        await ActivateAsync(grain);
+        wal.GrowTo(3);
+        published.Clear();
+        await grain.DriveStarvedCheckpointAsync();
+
+        Assert.That(published.Select(p => (p.Frontier, p.PublishedOffset)),
+            Is.All.EqualTo((HybridLogicalClock.Zero, 3L)));
     }
 }

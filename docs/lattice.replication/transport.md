@@ -67,7 +67,7 @@ Three concerns the transport composes for every call:
 
 ### 1. Idempotency at the batch boundary
 
-Receivers de-duplicate re-deliveries by record identity - an exact `(origin, hlc, key, op)` match in a bounded recent-apply cache, backed by an idempotent leaf-level apply for a repeat that has aged out of the cache - so a transport that retries a batch on transient failure does not cause double-apply. (The per-origin high-water mark is not the drop threshold; only a snapshot-pinned floor from a bootstrap drops entries outright, because everything at or below it is already in the snapshot.) Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
+Receivers de-duplicate re-deliveries by record identity - an exact `(origin, hlc, key, op)` match in a bounded recent-apply cache, backed by an idempotent leaf-level apply for a repeat that has aged out of the cache - so a transport that retries a batch on transient failure does not cause double-apply. The per-origin high-water mark and legacy snapshot floor are not drop thresholds for point writes. Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
 
 ### 2. Advance-cursor-on-ack
 

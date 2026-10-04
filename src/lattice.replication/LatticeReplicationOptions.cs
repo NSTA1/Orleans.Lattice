@@ -194,6 +194,14 @@ public class LatticeReplicationOptions
     /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>. Defaults
     /// to <see cref="DefaultCausalBufferMaxEntries"/>. Must be at
     /// least <c>1</c>.
+    /// <para>
+    /// The buffer is durable (#4464): a parked entry is persisted before it
+    /// is acknowledged to its sender, so eviction is a deliberate bound on
+    /// acknowledged entries, not a silent loss - the evicted entry is written
+    /// to the dead-letter queue before its removal is persisted, for operator
+    /// replay. Every park and drain rewrites the tree's buffer state, so a
+    /// larger cap also means a larger write per park.
+    /// </para>
     /// </summary>
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
 
@@ -635,8 +643,7 @@ public class LatticeReplicationOptions
     /// of a bounded re-ship window after a silo crash.
     /// <para>
     /// <strong>Crash safety.</strong> Receiver-side apply maintains a
-    /// per-origin high-water mark for status and pinned-snapshot
-    /// floors, drops entries at or below that pinned floor, and suppresses recent
+    /// per-origin high-water mark for status and causal dependencies, and suppresses recent
     /// exact duplicates by <c>(originClusterId, timestamp, key, op)</c>. Other
     /// replays inside the window are applied again and converge idempotently under
     /// the tree's merge semantics. No data is lost.
@@ -683,7 +690,6 @@ public class LatticeReplicationOptions
     /// crash-replay window beyond the
     /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
     /// bound the batch-count rule already guarantees. Receiver-side apply
-    /// drops entries at or below the receiver's snapshot-pinned floor and
     /// suppresses recent exact duplicates by <c>(originClusterId, timestamp, key,
     /// op)</c>. Other entries re-shipped inside the window re-apply idempotently
     /// under the tree's merge semantics, so no data is lost.

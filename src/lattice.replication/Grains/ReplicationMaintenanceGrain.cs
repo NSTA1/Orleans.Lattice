@@ -116,6 +116,24 @@ internal sealed class ReplicationMaintenanceGrain(
         var options = _optionsMonitor.Get(TreeName);
         var nowTicks = DateTime.UtcNow.Ticks;
 
+        // Causal-apply buffer re-arm (#4464): drain every phase tick. A parked
+        // entry whose dependencies are met must not wait for a further
+        // high-water-mark advance that may never come - after a receiver
+        // restart, under quiescence, or when the satisfying apply happened on
+        // a silo that did not know the buffer held entries. The keepalive
+        // reminder keeps this tick running across restarts; the drain is a
+        // cheap no-op when the buffer is empty.
+        try
+        {
+            await _grainFactory.GetGrain<ICausalApplyBufferGrain>(TreeName).DrainAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Causal-apply buffer drain failed for {Context}; will retry on next phase tick",
+                LogContext);
+        }
+
         // GC pass - independent cadence. The cadence stamp advances
         // only on a successful pass so a thrown GC retries on the
         // next phase tick rather than waiting a full cadence; the
