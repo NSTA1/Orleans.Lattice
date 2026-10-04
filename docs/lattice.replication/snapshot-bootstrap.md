@@ -28,10 +28,11 @@ before calling `AddLatticeReplication`.
   cursor yet.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
   HLC is strictly greater than `asOfHlc`. After the drain the
-  receiver's snapshot pin replaces its per-origin high-water-mark
-  vector with the snapshot's causal-stable frontier (the source
-  cluster's own coordinate sealed at or above every entry the drain
-  applied) and clears any legacy pinned floor. `IReplicationApplier`
+  receiver's bootstrap handoff merges the snapshot's causal-stable
+  frontier into its per-origin high-water-mark vector by pointwise
+  maximum (the source cluster's own coordinate sealed at or above every
+  entry the drain applied), clears any legacy pinned floor, and drains
+  the durable causal-apply buffer. `IReplicationApplier`
   does not drop live incremental point writes at or below that
   frontier; duplicates across the boundary are absorbed by exact
   identity dedup and idempotent per-key merge. See "Bootstrap drain
@@ -47,9 +48,9 @@ before calling `AddLatticeReplication`.
   the per-tree high-water-mark store's current vector - a strict superset
   of the meet that is safe as a snapshot cut-point. The receiver
   records this `(asOfHlc, frontier)` cut-point when the export opens
-  and pins the frontier on the per-tree high-water-mark store only
+  and merges the frontier into the per-tree high-water-mark store only
   after every snapshot entry has been applied, so the causal
-  dependency check on the first incremental entry after the pin runs
+  dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
 - **Tombstoned and expired keys are not emitted.** Only live entries
   reach the receiver through the committed projection; the tombstone
@@ -400,17 +401,18 @@ _ = (frontier, asOf);
 
 In a host the `ISnapshotProvider` is resolved from DI on the sender
 side; the default snapshot provider is shown above for illustration. The
-receiver pins the snapshot's `CausalStableFrontier` on its per-tree
-high-water-mark store after draining the entry stream, so the causal
-dependency check on the first incremental entry after the pin runs
-from a non-empty frontier.
+receiver merges the snapshot's `CausalStableFrontier` into its
+per-tree high-water-mark store after draining the entry stream, then
+drains the durable causal-apply buffer, so the causal dependency check
+on the first incremental entry after the handoff runs from a non-empty
+frontier.
 
 ## Receiver-side bootstrap state machine
 
 The bootstrap state machine that drains an `ISnapshotProvider` export
 on the receiver, applies every entry through the local apply seam
-preserving the source HLC, and pins the snapshot's causal-stable
-frontier on the per-tree high-water-mark grain ships as the public
+preserving the source HLC, and merges the snapshot's causal-stable
+frontier into the per-tree high-water-mark grain ships as the public
 `ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
 detector (when the per-tree maintenance pass finds a peer's per-origin
 high-water mark behind the oldest entry that peer authored in the head
@@ -421,19 +423,19 @@ re-seed flows.
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
 | `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` | Observable status snapshot returned by `GetStatusAsync`; carries the phase plus the in-flight source cluster id (or `null` when no bootstrap is in flight). |
-| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
+| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
 | `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
 ```text
 Idle
-  └─► RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
-        └─► ApplyingSnapshot (snapshot stream open; draining Entries)
-              └─► IncrementalHandoff (entries drained; pinning AsOfHlc + CausalStableFrontier)
-                    └─► LiveIncremental (terminal - incremental replication is live)
+  -> RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
+     -> ApplyingSnapshot    (snapshot stream open; draining Entries)
+        -> IncrementalHandoff (entries drained; merging CausalStableFrontier)
+           -> LiveIncremental (terminal - incremental replication is live)
 
-Any state ──► Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
+Any state -> Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
 ```
 
 ### Semantics
@@ -557,9 +559,10 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     late redelivery records the verdict afresh. The safe redelivery
     window is `LatticeOptions.TxDecisionRetention`, not "forever".
 
-  The post-drain snapshot pin atomically replaces the per-origin
-  high-water-mark vector with the snapshot's causal-stable frontier
-  and clears any legacy pinned floor. The bootstrap-to-incremental
+  The post-drain bootstrap handoff atomically raises the per-origin
+  high-water-mark vector by pointwise maximum with the snapshot's
+  causal-stable frontier, clears any legacy pinned floor, and drains
+  the durable causal-apply buffer. The bootstrap-to-incremental
   handoff remains idempotent on the live tail because exact identity
   dedup and per-key merge absorb duplicates, while point writes at or
   below one pinned coordinate still apply when they are not duplicates.
@@ -572,14 +575,15 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   through the shadow-forward identity cache, and an entry whose cache
   tuple has aged out re-applies idempotently under the leaf-level merge.
 - **Snapshot/incremental handoff is idempotent.** The coordinator
-  pins the snapshot's causal-stable frontier on the per-tree
+  merges the snapshot's causal-stable frontier into the per-tree
   high-water-mark store *after* every snapshot entry has been
   applied, first sealing the source cluster's own coordinate at or
   above the highest HLC the drain applied and the oldest
   source-authored entry the local WAL still retains, so the fall-off
   detector cannot read the retained baselines as a trim gap. The
-  pin replaces the high-water-mark vector and clears any legacy pinned
-  floor (the `AsOfHlc` passed alongside it is currently ignored). The
+  merge takes the pointwise maximum with the vector already held,
+  clears any legacy pinned floor (the `AsOfHlc` passed alongside it is
+  currently ignored), and drains the durable causal-apply buffer. The
   applier has no HLC floor gate; exact identity dedup and idempotent
   per-key merge make the snapshot/incremental boundary safe regardless of
   overlap.
@@ -627,7 +631,7 @@ Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), t
 
 | Type | Shape | Purpose |
 |------|-------|---------|
-| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
+| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
 | `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> ForceRequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Opt-in bypass that skips the rate-limit check entirely. Intended for disaster-recovery and scheduled re-seed scenarios where a real cross-cluster drain may exceed the configured window. Every call is audit-logged at `Information`. |
 | `OperatorReseedDecision` | `readonly record struct` with `Triggered`, `LastRequestedAt`, `RetryAfter` | Diagnostic return value indicating whether the call invoked the coordinator and, when denied, how long the operator should wait before retrying. Both overloads share this return shape. |
 

@@ -656,7 +656,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // consumption coordinate at the snapshot's causal-stable cut (the
         // maximum frontier coordinate) even though the source authored
         // nothing of its own, so HWM[source] is no longer left at zero.
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(99)),
             Arg.Any<CancellationToken>());
@@ -690,7 +690,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(70)
@@ -720,7 +720,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -757,7 +757,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -801,7 +801,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -835,7 +835,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -890,7 +890,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         fake.State.SnapshotAsOfHlc = Hlc(2);
         fake.State.CausalStableFrontier = new VersionVector();
         var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
-        hwm.PinSnapshotAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>())
+        hwm.MergeBootstrapFrontierAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("pin boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -1116,7 +1116,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // HWM[source] covers the retained source-origin baselines rather than
         // being left at zero, which would re-arm the fall-off detector into a
         // perpetual re-bootstrap loop.
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(50)),
             Arg.Any<CancellationToken>());
@@ -1145,7 +1145,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         await provider.DidNotReceiveWithAnyArgs().ExportAsync(default(string)!, default(string)!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().PinSnapshotAsync(default, default!, default);
+        await hwm.DidNotReceiveWithAnyArgs().MergeBootstrapFrontierAsync(default, default!, default);
     }
 
     [Test]

@@ -876,7 +876,7 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "Repeated records are suppressed by exact origin, HLC, key, and operation identity."
         source: "docs/lattice.replication/README.md"
-      - statement: "Entries whose causal dependencies are missing wait in the receiver causal-apply buffer."
+      - statement: "Entries whose causal dependencies are missing wait in the receiver's durable per-tree causal-apply buffer."
         source: "docs/lattice.replication/README.md"
       - statement: "Dead-letter quarantine isolates poison entries per tree while replication continues past them."
         source: "docs/lattice.replication/README.md"

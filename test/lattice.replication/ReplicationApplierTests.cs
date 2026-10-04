@@ -61,7 +61,9 @@ public partial class ReplicationApplierTests
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
-        var applier = new ReplicationApplier(factory, Monitor(), replicationContext: new AnyTreeLwwContext());
+        var monitor = Monitor();
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
+        CausalBufferTestWiring.Wire(factory, applier, monitor, treeId);
         return (applier, factory, apply, hwm);
     }
 

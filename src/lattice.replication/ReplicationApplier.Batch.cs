@@ -672,7 +672,7 @@ internal sealed partial class ReplicationApplier
         // saga key with a strictly-earlier source HLC and break
         // per-saga all-or-nothing visibility on the bootstrapped peer.
         // The post-drain
-        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
         // installs the HWM at the snapshot's AsOfHlc atomically. The
         // current bootstrap coordinator routes through the per-entry
         // path, so this branch is defence-in-depth for any future
@@ -693,6 +693,14 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var advancedAtAll = false;
         var highestApplied = hwm;
+
+        // Set when an entry in this run duplicates an identity whose
+        // reservation another, still-running delivery holds (#4465). The
+        // run then reports Deferred so the transport returns a
+        // not-accepted, cursor-preserving ack and the sender re-sends the
+        // batch; every other entry in the run is still processed, and the
+        // re-send re-classifies them idempotently.
+        var deferInFlightDuplicate = false;
 
         // Lazy local vector clock: only the first causal-dep entry
         // pays the GetVectorAsync round trip; later entries reuse it
@@ -776,6 +784,7 @@ internal sealed partial class ReplicationApplier
             {
                 var (deferredIdx, deferredStartTs) = dispatchApplies[p];
                 var deferredEntry = entries[deferredIdx];
+                dedupeCache.Complete(deferredEntry);
                 RecordApplyLag(deferredEntry);
                 RecordAppliedContentForIndex(in deferredEntry, resolved);
                 if (!bootstrapMode)
@@ -843,6 +852,7 @@ internal sealed partial class ReplicationApplier
             {
                 var (deferredIdx, deferredStartTs) = dispatchApplies[p];
                 var deferredEntry = entries[deferredIdx];
+                dedupeCache.Complete(deferredEntry);
                 RecordApplyLag(deferredEntry);
                 RecordAppliedContentForIndex(in deferredEntry, resolved);
                 if (!bootstrapMode)
@@ -947,8 +957,25 @@ internal sealed partial class ReplicationApplier
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. There is no HLC drop threshold
                 // ahead of it (#1060, #4463).
-                if (!dedupeCache.TryAdd(entry))
+                if (!dedupeCache.TryAdd(entry, out var duplicateInFlight))
                 {
+                    // IN-FLIGHT DUPLICATE (#4465): see ApplyAsync. A
+                    // duplicate whose reservation is held by an entry this
+                    // same run deferred into a pending batch is an ordinary
+                    // duplicate - this run's own outcome (a successful flush,
+                    // or a throw that fails the whole batch) settles both.
+                    // Any other in-flight holder belongs to a concurrent
+                    // delivery that may still abort, so the run must not be
+                    // acknowledged: defer it.
+                    if (duplicateInFlight
+                        && !PendingHolds(pendingApplies, entries, in entry)
+                        && !PendingHolds(pendingCrdtApplies, entries, in entry))
+                    {
+                        deferInFlightDuplicate = true;
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        continue;
+                    }
+
                     outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
                     continue;
                 }
@@ -983,17 +1010,15 @@ internal sealed partial class ReplicationApplier
                     }
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc, resolved.ClusterId))
                     {
-                        await ParkAsync(entry, resolved, cancellationToken).ConfigureAwait(false);
-                        // Park retains the cache reservation (mirroring
-                        // ApplyAsync's park branch): the parked entry,
-                        // when drained, routes via ApplyPointAsync
-                        // directly and bypasses the cache, so the
-                        // retained reservation continues to suppress
-                        // duplicate-emit pairs of the parked entry that
-                        // arrive while it is buffered. Release local
-                        // rollback responsibility so the catch below
-                        // does not undo the intentional retention.
+                        await ParkAsync(entry, cancellationToken).ConfigureAwait(false);
+                        // Mirror ApplyAsync's park branch: the durable buffer
+                        // now holds the entry and dedups its re-deliveries,
+                        // so release the shadow-forward reservation (#4464).
+                        // The park may also have drained entries and advanced
+                        // the local vector clock, so re-fetch it next time.
+                        dedupeCache.Remove(entry);
                         cacheReservedForCurrent = false;
+                        localVcDirty = true;
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         continue;
                     }
@@ -1054,6 +1079,7 @@ internal sealed partial class ReplicationApplier
                     await FlushPendingAsync().ConfigureAwait(false);
                     await FlushPendingCrdtAsync().ConfigureAwait(false);
                     await ApplyPointAsync(entry).ConfigureAwait(false);
+                    dedupeCache.Complete(entry);
                     // Successful apply: clear local rollback
                     // responsibility. The cache reservation is retained
                     // in the steady-state cache (it is the desired
@@ -1217,20 +1243,52 @@ internal sealed partial class ReplicationApplier
 
             if (advanced)
             {
-                await DrainBufferAsync(treeId, hwmGrain, resolved, cancellationToken).ConfigureAwait(false);
+                await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
 
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate };
         }
 
         // Bootstrap mode: the per-origin HWM is pinned atomically at
         // the snapshot's AsOfHlc by
-        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
         // after the drain completes; advancing it mid-drain would
         // suppress still-pending saga keys with strictly-earlier source
         // HLCs. Surface the pre-drain HWM so callers observe the
         // canonical pre-pin frontier.
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate };
+    }
+
+    /// <summary>
+    /// Returns <see langword="true"/> when one of the run's not-yet-flushed
+    /// deferred entries carries <paramref name="entry"/>'s identity tuple
+    /// <c>(origin, timestamp, key, op)</c>, i.e. the in-flight cache
+    /// reservation the entry collided with is owned by this same run. Cold
+    /// path: reached only on a duplicate whose reservation is in flight.
+    /// </summary>
+    private static bool PendingHolds(
+        List<(int EntryIndex, long StartTs)>? pending,
+        IReadOnlyList<WalRecord> entries,
+        in WalRecord entry)
+    {
+        if (pending is null)
+        {
+            return false;
+        }
+
+        foreach (var (index, _) in pending)
+        {
+            var held = entries[index];
+            if (held.Op == entry.Op
+                && held.Timestamp.Equals(entry.Timestamp)
+                && string.Equals(held.Key, entry.Key, StringComparison.Ordinal)
+                && string.Equals(held.OriginClusterId, entry.OriginClusterId, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1246,6 +1304,7 @@ internal sealed partial class ReplicationApplier
         CancellationToken cancellationToken)
     {
         var anyApplied = false;
+        var anyDeferred = false;
         var highest = HybridLogicalClock.Zero;
         for (var k = startInclusive; k < endExclusive; k++)
         {
@@ -1255,12 +1314,16 @@ internal sealed partial class ReplicationApplier
             {
                 anyApplied = true;
             }
+            if (r.Deferred)
+            {
+                anyDeferred = true;
+            }
             if (r.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = r.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
     }
 
     /// <summary>

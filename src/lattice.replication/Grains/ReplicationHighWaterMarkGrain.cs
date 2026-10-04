@@ -109,6 +109,48 @@ internal sealed class ReplicationHighWaterMarkGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(frontier);
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = asOfHlc; // Reserved for future bootstrap-protocol extensions.
+
+        var merged = state.State.Vector.Clone();
+        var raised = false;
+        foreach (var (origin, clock) in frontier.Entries)
+        {
+            if (clock > merged.GetClock(origin))
+            {
+                merged.Entries[origin] = clock;
+                raised = true;
+            }
+        }
+
+        if (!raised && state.State.PinnedFloor.Entries.Count == 0)
+        {
+            return false;
+        }
+
+        var previous = state.State.Vector;
+        var previousFloor = state.State.PinnedFloor;
+        state.State.Vector = merged;
+        // No drop floor (#4463); clear any floor an earlier build persisted.
+        state.State.PinnedFloor = new VersionVector();
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Vector = previous;
+            state.State.PinnedFloor = previousFloor;
+            throw;
+        }
+
+        return raised;
+    }
+
     private static bool VectorsEqual(VersionVector left, VersionVector right)
     {
         if (left.Entries.Count != right.Entries.Count)
