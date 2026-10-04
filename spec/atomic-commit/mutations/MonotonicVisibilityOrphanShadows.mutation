@@ -12,7 +12,8 @@ SUMMARY: lets a late reshard orphan bucket shadow the committed projection, so a
 --- FIND
 Observed(t, k) ==
     IF pend[t][k] = "pending"
-    THEN IF RegistryView(t) = "indeterminate" THEN "hidden"
+    THEN IF AlreadyTerminal(t, k) THEN Projected(t, k)
+         ELSE IF RegistryView(t) = "indeterminate" THEN "hidden"
          ELSE IF SurfaceViaGate(t, k) THEN "post"
          ELSE Projected(t, k)
     ELSE Projected(t, k)
