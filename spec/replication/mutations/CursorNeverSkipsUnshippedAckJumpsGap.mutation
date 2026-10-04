@@ -1,0 +1,15 @@
+# Pairs with CursorNeverSkipsUnshipped. The shipper advances its cursor to
+# any acknowledged entry rather than only to the very next one, so an ack for
+# a later pipelined batch skips an earlier one that was never delivered.
+MODULE: CursorNeverSkipsUnshippedAckJumpsGap
+TARGET: CursorNeverSkipsUnshipped
+CLASS: Invariant
+SUMMARY: an out-of-order ack moves the cursor past an earlier entry that was never delivered
+PERTURBS: Deliver
+
+--- FIND
+        acked == IF i = cursor[e] + 1 THEN [cursor EXCEPT ![e] = i] ELSE cursor
+--- REPLACE
+\* MUTATION: any ack above the cursor moves it.
+        acked == IF i > cursor[e] THEN [cursor EXCEPT ![e] = i] ELSE cursor
+--- END
