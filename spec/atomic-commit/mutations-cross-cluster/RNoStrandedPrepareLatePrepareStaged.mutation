@@ -1,7 +1,7 @@
 # Pairs with RNoStrandedPrepare. A receiver leaf stages a prepare that arrives
 # after it has already applied the saga's terminal - a duplicate redelivered
 # because its ack was lost - instead of refusing it as
-# BPlusLeafGrain.IsLatePrepareForTerminalTransaction does. Each saga issues one
+# BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync does. Each saga issues one
 # terminal per source shard and the leaf has already consumed it, so the bucket
 # is never drained.
 MODULE: RNoStrandedPrepareLatePrepareStaged

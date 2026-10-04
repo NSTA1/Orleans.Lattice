@@ -301,7 +301,7 @@ OriginForget ==
 \* A prepare reaches its receiver leaf (ReplicationApplier ->
 \* IReplicationApplyGrain.ApplyPreparedSetAsync) and is staged in a pending
 \* bucket. A prepare arriving at a leaf that has already applied the saga's
-\* terminal is refused (BPlusLeafGrain.IsLatePrepareForTerminalTransaction),
+\* terminal is refused (BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync),
 \* so a duplicate trailing its terminal cannot install an orphan.
 DeliverPrepare(m) ==
     /\ rconn

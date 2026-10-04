@@ -169,7 +169,7 @@ internal sealed class CrossClusterReceiverTallyModel(
                     prepareDelivered[record.Shard] = true;
 
                     // A prepare trailing the terminal is refused
-                    // (BPlusLeafGrain.IsLatePrepareForTerminalTransaction).
+                    // (BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync).
                     if (!terminalApplied[record.Shard] || guard == CrossClusterTallyGuard.LatePrepareStaged)
                     {
                         pending[record.Shard] = true;
