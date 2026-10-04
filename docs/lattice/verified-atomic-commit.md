@@ -37,10 +37,15 @@ claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
 barrier, a transport that can reorder, lose and duplicate) and its failure modes
 are its own. The cross-cluster check is also narrower than its name: it assumes a
 source shard's terminal reaches the receiver after that shard's prepares, which
-the shipper's terminal hold provides (issue #4480), and it reaches no stranded
-origin prepare at a bootstrap (issue #4481) and no re-shipped pre-cut record
-(issue #4482), nor one whose saga's decision the origin has purged (issue #4508).
-Those departures are recorded as defects with a standing mutation each, not covered. The receiver's integration tests and the cross-cluster chaos suites
+the shipper's terminal hold provides (issue #4480), and that its transport
+never loses a record, which production still does on a dead-lettered batch
+(issue #4494) and on a WAL trim past a peer that has not read the entry (issues
+#4534 and #4579). Those departures are recorded as defects, not covered. The
+bootstrap is modelled as production now ships it: the export carries the
+recorded verdict of every saga the origin stores (issue #4481, fixed by #4501),
+retained pre-cut records are shipped again and settled against it (issue #4482,
+fixed by #4510), and the origin keeps that verdict while a prepare can still be
+re-shipped (issue #4508, fixed by #4553). The receiver's integration tests and the cross-cluster chaos suites
 in `test/lattice.replication/` remain the evidence for the deployed system
 (issue #2324).
 
@@ -159,8 +164,9 @@ delivery order, the late-prepare refusal, the whole-wait-set barrier, the
 register-before-notify order, and the Indeterminate answer for an undiallable
 delegation - and each must report a violation of one named property, checked by
 its tag in Coyote's bug report rather than accepted as any violation. Two of
-those guards reproduce production defects (issue #4480 as it stood before the shipper's terminal hold, and issue #4448), which is
-why they are guards rather than fixed-design tests.
+those guards reproduce production as it stood before a fix (issue #4480 before the
+shipper's terminal hold, and issue #4448 before #4461), which is why they are
+guards rather than fixed-design tests; they now stand as regression checks.
 
 ### Every model ships a non-vacuous guard test
 

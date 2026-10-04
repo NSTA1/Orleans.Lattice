@@ -298,11 +298,22 @@ OriginForget ==
 (* hold.                                                                   *)
 (***************************************************************************)
 
-\* A prepare reaches its receiver leaf (ReplicationApplier ->
-\* IReplicationApplyGrain.ApplyPreparedSetAsync) and is staged in a pending
-\* bucket. A prepare arriving at a leaf that has already applied the saga's
-\* terminal is refused (BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync),
-\* so a duplicate trailing its terminal cannot install an orphan.
+\* What the receiver's prepare seam reads before it stages
+\* (LatticeGrain.TrySettleReplicatedPrepareAsync): the registry's status,
+\* read through to the recorded decision when it answers Indeterminate.
+SettleView(k) ==
+    IF RView(TreeOf(k)) = "indeterminate" THEN rdec[TreeOf(k)] ELSE RView(TreeOf(k))
+
+\* A prepare reaches the receiver (ReplicationApplier ->
+\* IReplicationApplyGrain.ApplyPreparedSetAsync). The seam first settles it
+\* against the receiver registry (issue #4482's fix): under a recorded commit
+\* it is applied as a committed write, under an abort it is dropped, and only
+\* an undecided saga's prepare is staged in a pending bucket. A prepare
+\* arriving at a leaf that has already applied the saga's terminal is refused
+\* (BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync), so a duplicate
+\* trailing its terminal cannot install an orphan. The receiver registry never
+\* forgets here, so that refusal sits behind the settle: a leaf has a
+\* terminal only once its registry has decided.
 DeliverPrepare(m) ==
     /\ rconn
     /\ m \in outbox
@@ -310,8 +321,10 @@ DeliverPrepare(m) ==
     /\ dlv' = dlv \cup {m}
     /\ \/ outbox' = outbox \ {m}
        \/ outbox' = outbox
-    /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars>>
+    /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
+                THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars>>
 
 \* A source-shard terminal reaches the receiver: IReplicationApplyGrain.
 \* ApplyTxTerminalAsync records it against the tree's registry tally
@@ -453,39 +466,36 @@ ForeignOriginClaim(tr) ==
 (* (LatticeSnapshotProvider), taken atomically here: the export freezes    *)
 (* the origin registry's view of the saga (snap0) and ships                *)
 (*   - for a saga snap0 has decided: the committed projection, so every    *)
-(*     key post-saga on a commit and pre-saga on an abort;                 *)
-(*   - for a saga snap0 has as InFlight, Indeterminate or absent: each     *)
-(*     origin bucket as a prepared row, and each drained key's projection. *)
-(* A retired row exports as Indeterminate while its tombstone is stored    *)
-(* but aged out, and as absent once it is purged; both are possible once   *)
-(* the origin has forgotten the saga (issue #2328's vocabulary). Under     *)
-(* AtomicCommit's ordered forget every participant has drained by then,   *)
-(* so the vocabulary changes nothing a receiver is sent; it matters only   *)
-(* for a bucket the fan-out never drained, which this module, like        *)
-(* AtomicCommit's base, does not reach. Issue #4481 records what a         *)
-(* receiver is sent in that state, and                                     *)
-(* RAllOrNothingExportOverStrandedPrepare reproduces it.                   *)
+(*     key post-saga on a commit and pre-saga on an abort, a bucket still   *)
+(*     resident included, and a decision row the drain records in the      *)
+(*     receiver registry (LatticeBootstrapCoordinatorGrain.                *)
+(*     ApplySettledDecisionAsync, which never forgets it);                 *)
+(*   - for a saga snap0 has as InFlight or absent: each origin bucket as a *)
+(*     prepared row, and each drained key's projection.                    *)
+(* A forgotten saga whose row is still stored is exported by its recorded  *)
+(* verdict, aged out or not (issue #4481's fix). Its row is purged only    *)
+(* once the origin WAL can no longer re-ship a prepare of the saga (issue  *)
+(* #4508's fix), so the absent answer is possible only when no retained    *)
+(* record is a prepare of the saga.                                        *)
 (*                                                                         *)
-(* The handoff to the incremental stream is exactly-once, which is the     *)
-(* design's stated intent (docs/lattice.replication/snapshot-bootstrap.md):*)
-(* a record the origin wrote before the cut is covered by the snapshot and *)
-(* is not applied again, so the stream resumes with nothing outstanding.   *)
-(* Nothing in production dedupes a pre-cut saga record against what the    *)
-(* snapshot already settled: a re-shipped prepared record or terminal is   *)
-(* applied like any other. Issue #4482 records the consequence, and        *)
-(* RNoStrandedPrepareBootstrapReshipsPreCut reproduces it.                *)
-(* RNoStrandedPrepareDedupeOverPurgedDecision applies #4482's intended    *)
-(* txid dedupe and reproduces what it leaves (issue #4508): a saga whose  *)
-(* decision the origin has purged exports no verdict to dedupe against.   *)
-(* No floor of any kind is modelled, for non-saga records or saga       *)
-(* records: the receiver reads none (#4476), and this module ships only  *)
-(* saga records.                                                          *)
+(* The handoff to the incremental stream is at-least-once: the shipper     *)
+(* resumes from its own cursors, so any subset of the records the origin   *)
+(* WAL still retains from before the cut is shipped again (kept). A        *)
+(* re-shipped prepare is settled against the decision row by               *)
+(* DeliverPrepare, which is what keeps it from being stranded (issue       *)
+(* #4482's fix). RNoStrandedPrepareBootstrapReshipsPreCut,                 *)
+(* RNoStrandedPrepareDedupeOverPurgedDecision and                          *)
+(* RAllOrNothingExportOverStrandedPrepare restore what production did      *)
+(* before each of those fixes, and stand as their regression checks. No    *)
+(* floor of any kind is modelled, for non-saga records or saga records:    *)
+(* the receiver reads none (#4476), and this module ships only saga        *)
+(* records.                                                                *)
 (*                                                                         *)
 (* Modelled for the single-tree shape only: the cross-tree barrier adds    *)
 (* nothing a bootstrap changes, and the state space is kept for it.        *)
 (***************************************************************************)
 Snap0 ==
-    IF forgotten[T] THEN {"indeterminate", "inflight"} ELSE {Origin!RegistryView(T)}
+    IF forgotten[T] THEN {decision[T], "inflight"} ELSE {Origin!RegistryView(T)}
 
 ExportRow(snap, k) ==
     IF snap = "committed" THEN "post"
@@ -498,12 +508,17 @@ ExportsPrepared(snap, k) ==
 
 Bootstrap ==
     /\ ~rconn
-    /\ \E snap \in Snap0 :
+    /\ \E kept \in SUBSET outbox :
+       \E snap \in Snap0 :
+         \* A forgotten saga's row is purged only once no retained prepare of it
+         \* remains to be shipped again (issue #4508's fix).
+         /\ (forgotten[T] /\ snap = "inflight") => ~\E p \in kept : p.type = "prep"
          /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
          /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
-    /\ outbox' = {}
+         /\ rdec' = [rdec EXCEPT !["A"] = IF snap \in {"committed", "aborted"} THEN snap ELSE @]
+         /\ outbox' = kept
     /\ rconn' = TRUE
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, registryVars, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, barrierVars>>
 
 (***************************************************************************)
 (* Quiescence: the origin saga is done, every record has been acked, and   *)

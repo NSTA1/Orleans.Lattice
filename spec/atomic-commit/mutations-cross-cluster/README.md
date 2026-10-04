@@ -27,22 +27,22 @@ transport assumption or its read view already does.
 | `RAllOrNothingMarksOnFirstTerminal` | `RAllOrNothing` | Invariant | `DeliverTerminal` | the receiver tally is final on any arrival |
 | `RAllOrNothingDecisionShipsUncountedTerminal` | `RAllOrNothing` | Invariant | `OriginDecide` | the decision step ships an unstamped terminal ahead of the broadcast |
 | `RAllOrNothingBarrierDecidesOnFirstTree` | `RAllOrNothing` | Invariant | `ReceiverNotify` | the cross-tree barrier decides on its first arrival |
-| `RAllOrNothingSettleKeyByKey` | `RAllOrNothing` | Invariant | `Bootstrap`, `DeliverPrepare` | under the #4482 receiver settle, a decided saga's undrained buckets are exported without committed rows, so re-shipped prepares settle it one key at a time |
+| `RAllOrNothingSettleKeyByKey` | `RAllOrNothing` | Invariant | - (export rows) | under the receiver settle (#4510), a decided saga's undrained buckets are exported without committed rows, so re-shipped prepares settle it one key at a time |
 | `RAllOrNothingNotifyBeforeRegister` | `RAllOrNothing` | Invariant | `DeliverTerminal`, `ReceiverRegister`, `ReceiverNotify` | the barrier is notified before the delegation is registered |
 | `RAllOrNothingDialFailureDropsDelegation` | `RAllOrNothing` | Invariant | `DialFault` | a failed dial forgets the delegation, so the tree reads InFlight |
-| `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` | `RAllOrNothing` | Invariant | - (read view) | an undiallable delegation reads InFlight, as the snapshot read paths answer it (#4448) |
+| `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` | `RAllOrNothing` | Invariant | - (read view) | an undiallable delegation reads InFlight, as the snapshot read paths answered it before #4461 (regression check for #4448) |
 | `RAllOrNothingTerminalOvertakesPrepare` | `RAllOrNothing` | Invariant | `DeliverTerminal` | a terminal is delivered before its shard's prepare, which is then refused (#4480, before the shipper's terminal hold) |
-| `RAllOrNothingExportOverStrandedPrepare` | `RAllOrNothing` | Invariant | `OriginForget` | the origin retires a row over a resident bucket and a bootstrapping receiver is exported a split saga (#4481) |
-| `RStrictIsolationTerminalOutcomeIgnored` | `RStrictIsolation` | Invariant | `DeliverTerminal` | the receiver records every terminal as a commit |
+| `RAllOrNothingExportOverStrandedPrepare` | `RAllOrNothing` | Invariant | `OriginForget` | the origin retires a row over a resident bucket and exports the aged-out row as Indeterminate, as before #4501, so a bootstrapping receiver is exported a split saga (regression check for #4481) |
+| `RStrictIsolationTerminalOutcomeIgnored` | `RStrictIsolation` | Invariant | `DeliverTerminal` | the receiver records an undecided saga's terminals as a commit |
 | `RLinearizedTerminalsFanOutAppliesCommit` | `RLinearizedTerminals` | Invariant | `ReceiverFanOut` | the fan-out tells every leaf "commit" whatever was recorded |
 | `DelegationsDisjointRegistryAdmitsForeignClaim` | `DelegationsDisjoint` | Invariant | `ForeignOriginClaim` | the registry has no coexistence check |
 | `RMonotonicVisibilityFanOutDiscardsCommittedBucket` | `RMonotonicVisibility` | Temporal | `ReceiverFanOut` | the fan-out consumes a committed bucket without materialising it |
 | `RCommittedEventuallyVisiblePrepareNotShipped` | `RCommittedEventuallyVisible` | Temporal | `OriginPrepare` | one participant's prepare is never replicated |
 | `RCommittedEventuallyVisibleFinalizeSkipsFanOut` | `RCommittedEventuallyVisible` | Temporal | `ReceiverFinalize` | a finalised tree marks its registry but never fans out |
 | `RNoStrandedPrepareShipperDropsTerminal` | `RNoStrandedPrepare` | Temporal | `OriginBroadcast` | one source shard's terminal is never replicated (the #2324 class) |
-| `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged |
-| `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | retained pre-cut saga records are shipped again after a bootstrap (#4482) |
-| `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `Bootstrap`, `DeliverPrepare` | with the #4482 dedupe in place, a pre-cut prepare re-shipped for a saga whose decision the origin purged is still staged (#4508) |
+| `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged, with neither the settle nor the late-prepare refusal in front of it |
+| `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap`, `DeliverPrepare` | re-shipped pre-cut prepares are staged with no decision row to settle them, as before #4510 (regression check for #4482) |
+| `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, so the re-shipped prepare has nothing to settle against (regression check for #4508) |
 | `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` | `RNoStrandedPrepare` | Temporal (`DEADLOCK: off`) | `OriginPrepare`, `DeliverTerminal` | a terminal waits on every prepare the saga wrote, one of which is never shipped, so it is never released |
 
 Every mutant but one is deadlock-free: run with a cfg naming only `TypeOK` and
@@ -52,6 +52,15 @@ under TLC's parallel search. `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` is
 the exception by construction - its defect is a terminal that can never be
 delivered, which leaves no enabled action - so it declares `DEADLOCK: off`, and
 the harness's third arm confirms the deadlock is real.
+
+These mutations are regression checks for defects this module found or
+reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`
+(#4480), `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` (#4448),
+`RAllOrNothingExportOverStrandedPrepare` (#4481),
+`RNoStrandedPrepareBootstrapReshipsPreCut` (#4482) and
+`RNoStrandedPrepareDedupeOverPurgedDecision` (#4508). Each restores what
+production did before the fix, and the refinement note cites the detectors that
+go red when production does it again.
 
 Every safety property is a state invariant, so TLC checks it in every
 reachable state: a receiver reader observing between any two steps - between
@@ -72,7 +81,8 @@ All three temporal properties are paired with mutations that leave `Spec`'s
 fairness untouched and change a protocol step instead (issue #2321's
 requirement): a prepare or a terminal the origin never replicates, a fan-out
 that never runs or consumes a bucket without draining it, a late prepare staged,
-and a bootstrap that re-ships pre-cut records. The transport stays fair about
+a re-shipped pre-cut prepare with nothing to settle it against, and a decision
+purged while a prepare of its saga can still be re-shipped. The transport stays fair about
 every record it is given; the defect is always in what it is given or in what
 the receiver does with it.
 
@@ -85,13 +95,13 @@ reading the code the refinement note maps.
 
 | Property | Why it holds on the base | Cells the base cannot reach |
 | --- | --- | --- |
-| `RAllOrNothing` | The tally, the barrier, the register-before-notify order and the Indeterminate dial answer; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, and a bootstrap over a stranded origin prepare. The first two are **faithfully inexpressible** now that the shipper holds every terminal until its saga's prepares are acked (#4480); the last two are **blindly inexpressible**: production reaches them (#4448, #4481), and each is kept as a standing mutation and a gap row rather than as an action of the base. |
+| `RAllOrNothing` | The tally, the barrier, the register-before-notify order and the Indeterminate dial answer; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, a bootstrap over a stranded origin prepare, and a prepare lost to a peer while its terminal ships. The first four are **faithfully inexpressible**: the shipper holds every terminal until its saga's prepares are acked (#4480), the snapshot read paths answer Indeterminate (#4448, fixed by #4461), and a stored aged-out row exports its recorded verdict (#4481, fixed by #4501); a stranded bucket whose row is already purged exports the split the origin itself serves (#2318's premise). The last is **blindly inexpressible**: the base's transport never loses a record, while production does (#4494, #4534, #4579), and `RCommittedEventuallyVisiblePrepareNotShipped` reaches that cell. |
 | `RStrictIsolation` | The receiver records the outcome its terminals carry, which is the origin's. | None. |
 | `RLinearizedTerminals` | The receiver marks before it fans out, and the fan-out carries the recorded outcome. | None. |
 | `DelegationsDisjoint` | The registry's coexistence check on the foreign claim. | None: the claim is enabled for the whole window the authoring row exists. |
-| `RMonotonicVisibility` | The fan-out drains a committed bucket into the projection. | A late orphan on a reactivated receiver leaf, which the module does not model (#4445's mechanism): **blindly inexpressible**, recorded as an abstraction gap. |
+| `RMonotonicVisibility` | The fan-out drains a committed bucket into the projection. | A late orphan on a reactivated receiver leaf, which the module does not model: **faithfully inexpressible** on the replication path, where the settle (#4510) and, since #4461, the leaf's registry-consulting late-prepare refusal (#4445's fix) both stand in front of it; recorded as an abstraction gap. |
 | `RCommittedEventuallyVisible` | At-least-once delivery, the tally, the barrier and the fan-out. | None. Stated over materialisation so that a dial fault lasting forever, which production also allows, does not make it unfalsifiable-by-construction. |
-| `RNoStrandedPrepare` | Late prepares are refused, and the handoff after a bootstrap is exactly-once. | A retained pre-cut prepare re-shipped after its terminal was trimmed: **blindly inexpressible** (#4482). The txid dedupe intended for #4482 closes it only while the origin still stores the saga's decision; once the decision is purged the same cell is reached again (#4508), kept as a standing mutation and a gap row. |
+| `RNoStrandedPrepare` | Late prepares are refused, a re-shipped pre-cut prepare is settled against the exported decision (#4510), and the origin keeps that decision while the prepare can still be re-shipped (#4553). | A retained pre-cut prepare re-shipped after its terminal was trimmed: **faithfully inexpressible** since #4510 and #4553 (#4482, #4508). A terminal lost to a peer: **blindly inexpressible**, because the base's transport never loses a record while production does (#4494, #4534); `RNoStrandedPrepareShipperDropsTerminal` reaches that cell. |
 
 **Bounded-out.** The instance has two source shards (or two trees) and one
 touched-shard count per saga, so the tally's upward merge of a raised count - a

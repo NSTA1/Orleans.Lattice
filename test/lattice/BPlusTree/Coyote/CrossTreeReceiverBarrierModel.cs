@@ -28,8 +28,8 @@ internal enum CrossTreeBarrierGuard
 
     /// <summary>
     /// A delegation whose barrier cannot be dialled reads InFlight rather than
-    /// Indeterminate, as the snapshot read paths answer it (issue #4448;
-    /// <c>RAllOrNothingSnapshotReadsUnresolvableAsInFlight</c>).
+    /// Indeterminate, as the snapshot read paths answered it before #4461 (issue
+    /// #4448; <c>RAllOrNothingSnapshotReadsUnresolvableAsInFlight</c>).
     /// </summary>
     UndialledDelegationReadsInFlight,
 }

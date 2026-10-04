@@ -1,19 +1,19 @@
-# Pairs with RAllOrNothing. The origin retires its registry row while one of
-# the saga's buckets is still resident - the stranded prepare of issue #2318,
-# which production reaches when the terminal fan-out misses a bucket (a split
-# destination its participant query passed over) and the decision's tombstone
-# then ages out. A receiver that bootstraps in that window is exported the
-# drained key's committed projection and the stranded key as a prepared row
-# with no outcome (Indeterminate, issue #2328's vocabulary). The receiver
-# registry has no row for the saga, so it answers InFlight, and the gate serves
-# the stranded key pre-saga beside the other key post-saga - a split view the
-# origin itself never serves (it hides the key under Indeterminate). Nothing
-# repairs the receiver: the terminal that drained the other key is before the
-# cut. Issue #4481 records this.
+# Pairs with RAllOrNothing. Regression check for issue #4481, fixed by #4501.
+# The origin retires its registry row while one of the saga's buckets is still
+# resident - the stranded prepare of issue #2318, which production reaches when
+# the terminal fan-out misses a bucket (a split destination its participant
+# query passed over) and the decision's tombstone then ages out. Before #4501 a
+# receiver that bootstrapped in that window was exported the drained key's
+# committed projection and the stranded key as a prepared row with no outcome
+# (Indeterminate, issue #2328's vocabulary). The receiver registry had no row
+# for the saga, so it answered InFlight, and the gate served the stranded key
+# pre-saga beside the other key post-saga, with nothing to repair it: the
+# terminal that drained the other key is before the cut. Since #4501 a stored
+# row is exported by its recorded verdict, which the base's Snap0 does.
 MODULE: RAllOrNothingExportOverStrandedPrepare
 TARGET: RAllOrNothing
 CLASS: Invariant
-SUMMARY: the origin forgets a saga over a still-resident bucket and a bootstrapping receiver is exported a split saga
+SUMMARY: the origin forgets a saga over a still-resident bucket and exports the aged-out row as Indeterminate, as it did before #4501
 PERTURBS: OriginForget
 
 --- FIND
@@ -29,4 +29,10 @@ OriginForget ==
     /\ revision' = revision + 1
     /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, masked>>
     /\ UNCHANGED xvars
+--- END
+--- FIND
+    IF forgotten[T] THEN {decision[T], "inflight"} ELSE {Origin!RegistryView(T)}
+--- REPLACE
+\* MUTATION: a stored row the registry no longer reports is exported as Indeterminate.
+    IF forgotten[T] THEN {"indeterminate", "inflight"} ELSE {Origin!RegistryView(T)}
 --- END
