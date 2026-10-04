@@ -302,6 +302,15 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// the durable pin.
     /// </para>
     /// <para>
+    /// The tail is reported only when it is stable. If the drain budget
+    /// force-faulted in-flight appends, or a flush deadline abandoned a provider
+    /// call, whose writes may still land, the call returns a non-quiesced result
+    /// with <see cref="WalMoveQuiesceResult.DrainIncomplete"/> set, and the
+    /// coordinator must not copy (issue #4525). The in-memory fence this call
+    /// raises dies with the activation; the coordinator's durable fence in the
+    /// placement pin is what fences any activation that replaces it.
+    /// </para>
+    /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the fence is raised
     /// promptly even while appends are queued against the activation.
     /// </para>

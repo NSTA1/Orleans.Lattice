@@ -121,6 +121,99 @@ public partial class WalShardGrainTests
     }
 
     /// <summary>
+    /// The drain arm of issue #4525. When the quiesce's drain budget expires, the
+    /// in-flight slots are force-faulted, but their provider writes keep running
+    /// and may still land. Before the fix the quiesce reported a stable tail
+    /// anyway, so a write landing after the coordinator read it sat above the
+    /// copied range: readable on the source and reissued by the target. The
+    /// quiesce must report the drain incomplete until that write has settled.
+    /// </summary>
+    [Test]
+    public async Task QuiesceForMoveAsync_is_not_quiesced_while_a_force_faulted_append_is_still_outstanding()
+    {
+        var gated = new GatedAppendWalStorageProvider();
+        var grain = await CreateGrainAsync(gated, new LatticeOptions
+        {
+            WalDrainBudget = TimeSpan.FromMilliseconds(50),
+            WalFlushTimeout = Timeout.InfiniteTimeSpan,
+        });
+
+        var append = grain.AppendAsync(MakeEntry("in-flight"), CancellationToken.None);
+        var first = await grain.QuiesceForMoveAsync(0, TimeSpan.FromSeconds(30), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Quiesced, Is.False, "a tail with a write still landing is not stable");
+            Assert.That(first.DrainIncomplete, Is.True);
+        });
+        Assert.That(async () => await append, Throws.InstanceOf<TimeoutException>(),
+            "the force-faulted append is never acknowledged");
+
+        gated.Release();
+        var second = await TestPollQuiescedAsync(grain);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Quiesced, Is.True, "once the write has settled the tail is stable again");
+            Assert.That(second.HighestOffsetInclusive, Is.EqualTo(0L),
+                "the reported tail includes the write that landed after the force-fault");
+        });
+    }
+
+    private static async Task<WalMoveQuiesceResult> TestPollQuiescedAsync(WalShardGrain grain)
+    {
+        WalMoveQuiesceResult result = default;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () =>
+            {
+                result = await grain.QuiesceForMoveAsync(0, TimeSpan.FromSeconds(30), CancellationToken.None);
+                return result.Quiesced;
+            },
+            "the quiesce to report a stable tail once the gated write settled",
+            TimeSpan.FromSeconds(10),
+            TimeSpan.FromMilliseconds(20));
+        return result;
+    }
+
+    /// <summary>
+    /// An in-memory WAL provider whose appends ignore cancellation and do not
+    /// complete until <see cref="Release"/> is called, then land.
+    /// </summary>
+    private sealed class GatedAppendWalStorageProvider : IWalStorageProvider
+    {
+        private readonly IWalStorageProvider _inner = new InMemoryWalStorageProvider();
+        private readonly TaskCompletionSource _gate = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _gate.TrySetResult();
+
+        public async Task AppendEncodedBatchAsync(
+            string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries,
+            ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken)
+        {
+            var copies = encodedEntries.ToArray().Select(s => new ArraySegment<byte>(s.ToArray())).ToArray();
+            var offsetCopies = offsets.ToArray();
+            await _gate.Task;
+            await _inner.AppendEncodedBatchAsync(treeId, shardIndex, copies, offsetCopies, encoder, CancellationToken.None);
+        }
+
+        public Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+            => _inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken);
+
+        public IAsyncEnumerable<WalEntry> ReadAsync(
+            string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)
+            => _inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
+
+        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => _inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => _inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
+            => _inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
+    }
+
+    /// <summary>
     /// The release of a fence that does not depend on the move coordinator
     /// surviving: once the quiesce lease lapses without a cutover, the next
     /// append is still refused, and the activation asks to be deactivated so the
