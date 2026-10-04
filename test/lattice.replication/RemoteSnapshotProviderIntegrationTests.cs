@@ -116,7 +116,7 @@ public class RemoteSnapshotProviderIntegrationTests
         // Poll for completion. The coordinator's work-pump runs on a
         // reminder/timer cadence so progress is observable through
         // GetStateAsync.
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
         LatticeBootstrapState state;
         do
         {
@@ -125,7 +125,7 @@ public class RemoteSnapshotProviderIntegrationTests
         }
         while (state != LatticeBootstrapState.LiveIncremental
             && state != LatticeBootstrapState.Failed
-            && DateTimeOffset.UtcNow < deadline);
+            && Environment.TickCount64 < deadline);
 
         Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
             "Bootstrap did not reach LiveIncremental within the timeout.");

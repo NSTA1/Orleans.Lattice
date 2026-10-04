@@ -177,7 +177,7 @@ public partial class BootstrapAtomicVisibilityTests
                 // sample is taken at a true steady state.
                 await authorTask;
 
-                var deadline = DateTime.UtcNow.AddMinutes(1);
+                var deadline = Environment.TickCount64 + (long)TimeSpan.FromMinutes(1).TotalMilliseconds;
                 LatticeBootstrapState state;
                 do
                 {
@@ -192,7 +192,7 @@ public partial class BootstrapAtomicVisibilityTests
                     }
                     await Task.Delay(100, cts.Token);
                 }
-                while (DateTime.UtcNow < deadline && !cts.IsCancellationRequested);
+                while (Environment.TickCount64 < deadline && !cts.IsCancellationRequested);
 
                 Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                     $"Bootstrap must reach LiveIncremental within the convergence window when concurrent producer sagas are in flight. Last observed state: {state}.");
@@ -311,8 +311,8 @@ public partial class BootstrapAtomicVisibilityTests
         // convergence is the per-saga all-or-nothing invariant: every
         // saga is either fully present or fully absent on the
         // receiver.
-        var deadline = DateTime.UtcNow.AddSeconds(60);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var anyPartial = false;
             for (var s = 0; s < sagaKeys.Length; s++)

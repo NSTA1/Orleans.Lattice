@@ -98,9 +98,9 @@ public class LivenessProbeAndInboundStatsChaosTests
 
         // Poll the gauge until it drops below half a probe interval, or
         // we give up after 10x the probe interval.
-        var deadline = DateTime.UtcNow + TimeSpan.FromMilliseconds(probeInterval.TotalMilliseconds * 10);
+        var deadline = Environment.TickCount64 + (long)(probeInterval.TotalMilliseconds * 10);
         double finalGauge = double.NaN;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             var snap = aStats.Snapshot()
                 .First(s => s.Direction == ReplicationContactDirection.Outbound
@@ -222,7 +222,7 @@ public class LivenessProbeAndInboundStatsChaosTests
         int toExclusive,
         string phase)
     {
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(45);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(45).TotalMilliseconds;
         bool converged;
         do
         {
@@ -232,7 +232,7 @@ public class LivenessProbeAndInboundStatsChaosTests
                 if (await bLattice.GetAsync($"k-{i:D2}") is null) { converged = false; }
             }
             if (!converged) await Task.Delay(100);
-        } while (!converged && DateTime.UtcNow < deadline);
+        } while (!converged && Environment.TickCount64 < deadline);
 
         var applier = fixture.ApplierOf(1);
         Assert.That(converged, Is.True,
@@ -274,8 +274,8 @@ public class LivenessProbeAndInboundStatsChaosTests
 
     private static async Task WaitForOutboundContactAsync(ReplicationPeerStats stats, string peerId, TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var row = stats.Snapshot()
                 .FirstOrDefault(s => s.Direction == ReplicationContactDirection.Outbound && s.Peer == peerId);
