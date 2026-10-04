@@ -6,43 +6,6 @@ using Orleans.Lattice.Testing.Coyote;
 namespace Orleans.Lattice.Tests.BPlusTree.Coyote;
 
 /// <summary>
-/// Which fix a <see cref="WalDurabilityLifecycleModel"/> run removes. Each guard
-/// removes exactly one, and its companion test requires the violation Coyote
-/// finds to be reported by the one assertion that fix protects.
-/// </summary>
-public enum WalDurabilityLifecycleGuard
-{
-    /// <summary>Every fix in place.</summary>
-    None,
-
-    /// <summary>
-    /// The pin is resolved against the CURRENT checkpoint (persisted or pending)
-    /// rather than the persisted one, as before issue #3476. Must be caught by
-    /// <c>[PublishedPinWithinPersistedBelief]</c>.
-    /// </summary>
-    PinFromPendingCheckpoint,
-
-    /// <summary>
-    /// A failed checkpoint persist is not rolled back, so the activation goes on
-    /// believing it persisted an advance storage never received, as before issue
-    /// #4017. Must be caught by <c>[PersistedBeliefHonest]</c>.
-    /// </summary>
-    NoRollbackOnFailedPersist,
-
-    /// <summary>
-    /// A reader is clamped at the allocator's next offset rather than at the
-    /// durable-contiguous watermark. Must be caught by <c>[ShippingNeverSkips]</c>.
-    /// </summary>
-    ReaderIgnoresWatermark,
-
-    /// <summary>
-    /// The GC's offset floor is the HIGHEST published pin rather than the
-    /// lowest. Must be caught by <c>[TrimCoveredBySnapshot]</c>.
-    /// </summary>
-    TrimFloorFromHighestPin,
-}
-
-/// <summary>
 /// The end-to-end Coyote model of the WAL durability lifecycle - the
 /// implementation-level companion of <c>spec/wal/WalDurability.tla</c>. One WAL
 /// partition is shared by two leaves; writes are appended, flushed out of order
@@ -59,21 +22,28 @@ public enum WalDurabilityLifecycleGuard
 /// <see cref="Orleans.Lattice.WalGcTrimCore.IsEntryEligible"/> with a
 /// <see cref="Orleans.Lattice.WalGcOffsetAdmission"/> for the trim, and
 /// <see cref="WalFallOffCore.IsPrefixLost"/> for the activation's fall-off test.
-/// The glue between them is the model's, and three pieces of it are the
-/// INTENDED design rather than production's today, each recorded as a gap in
-/// <c>spec/wal/Refinement.md</c>: a failed snapshot load fails the activation
-/// (issue #4450), a capture claims the read position as its coverage (issue
-/// #4451), and no in-activation replay re-arm is modelled (the #4451 sibling).
+/// The glue between them is the model's: the GC's min-over-pins floor and its
+/// block-pin stop are computed here, not by a production core (production makes
+/// them inline in <c>LatticeWalGc</c>), so the trim guard below perturbs model
+/// glue and the <c>LatticeWalGc</c> unit tests are what detect those decisions in
+/// production. A failed snapshot load fails the activation (issue #4450), a
+/// capture claims the read position as its coverage (issue #4451), and no
+/// in-activation replay re-arm is modelled (issue #4467); all three match
+/// production since those fixes landed.
 /// </para>
 /// <para>
-/// OUT OF SCOPE, deliberately: shard crashes and moves (the TLA+ module, and
+/// OWNERSHIP. By default the two leaves own alternate entries, so neither stays
+/// never-written. With <c>neverWrittenLeaf</c> leaf 0 owns every entry and leaf 1
+/// owns none: leaf 1 then reaches the core's never-written release (issues #3453,
+/// #4456 and #4523), and <c>[RecoveryNeverFallsOffLog]</c> is what it threatens.
+/// <c>[ReleaseBackedBySnapshot]</c>, the TLA+ module's root-cause invariant, is
+/// asserted in both ownerships and reports the same defect at the publication,
+/// before any trim or restart.
+/// </para>
+/// <para>
+/// OUT OF SCOPE, deliberately: shard crashes and moves (the TLA+ modules, and
 /// <c>WalOffsetContiguityModel</c> / <c>WalMoveQuiesceModel</c> /
-/// <c>WalMoveRedriveModel</c>, cover them). Leaving shard crashes out also means
-/// no write is ever lost before its owner applies it, so with the fixed
-/// alternating ownership no leaf stays never-written past a second foreign
-/// entry, and the never-written release the core keeps verbatim from production
-/// (issue #4456) cannot latch here. Extend the model with shard crashes once
-/// #4456 is fixed.
+/// <c>WalMoveRedriveModel</c>, cover them).
 /// </para>
 /// </summary>
 public sealed class WalDurabilityLifecycleModel : ICoyoteModel
@@ -83,10 +53,16 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
     private const int Steps = 26;
 
     /// <summary>Alternating ownership: each leaf's entries are sparse in the shared stream.</summary>
-    private static readonly int[] Owner = [0, 1, 0];
+    private static readonly int[] AlternatingOwner = [0, 1, 0];
+
+    /// <summary>Leaf 0 owns every entry; leaf 1 owns none and stays never-written.</summary>
+    private static readonly int[] OneOwner = [0, 0, 0];
 
     private readonly WalDurabilityLifecycleGuard _guard;
     private readonly int _faultBudget;
+    private readonly int[] _owner;
+    private readonly bool _neverWrittenVariant;
+    private readonly bool _checkReleaseBacking;
 
     /// <summary>Creates the model with the given guard and fault budget.</summary>
     /// <param name="guard">The fix to remove, or <see cref="WalDurabilityLifecycleGuard.None"/>.</param>
@@ -94,11 +70,29 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
     /// Leaf stops, failed persists, failed captures and failed loads together;
     /// the bound that makes the closing bounded-progress check meaningful.
     /// </param>
-    public WalDurabilityLifecycleModel(WalDurabilityLifecycleGuard guard, int faultBudget = 2)
+    /// <param name="neverWrittenLeaf">
+    /// When <see langword="true"/>, leaf 1 owns no entry and stays never-written,
+    /// so the core's never-written release is exercised.
+    /// </param>
+    /// <param name="checkReleaseBacking">
+    /// When <see langword="false"/>, <c>[ReleaseBackedBySnapshot]</c> is not
+    /// asserted. It is the root-cause form of <c>[RecoveryNeverFallsOffLog]</c>'s
+    /// never-written violation and reports it first, at the publication itself;
+    /// turning it off is how a test proves the outcome assertion catches the same
+    /// defect on its own, after the trim and the restart.
+    /// </param>
+    public WalDurabilityLifecycleModel(
+        WalDurabilityLifecycleGuard guard,
+        int faultBudget = 2,
+        bool neverWrittenLeaf = false,
+        bool checkReleaseBacking = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(faultBudget);
         _guard = guard;
         _faultBudget = faultBudget;
+        _owner = neverWrittenLeaf ? OneOwner : AlternatingOwner;
+        _neverWrittenVariant = neverWrittenLeaf;
+        _checkReleaseBacking = checkReleaseBacking;
     }
 
     /// <inheritdoc />
@@ -106,6 +100,30 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
     {
         // All per-iteration state is local: the engine reuses this instance.
         var s = new State(_faultBudget);
+
+        // The never-written variant is about the never-written leaf's lifecycle,
+        // not the append path or the data owner: every write is appended, flushed
+        // and acknowledged before any leaf acts, leaf 0 (which owns them all) is
+        // brought forward only by Settle, and a stopped leaf restarts only once the
+        // random phase is over and the GC has had a pass (see Settle). The
+        // exploration is spent on leaf 1's reads, persists, captures, pins and
+        // stop. Its only fault is a leaf stop: on a leaf that owns nothing, and
+        // with leaf 0 out of the random phase, a failed persist (rolled back), a
+        // failed capture (no coverage recorded) and a failed load (the activation
+        // fails closed) change no state but the fault budget, so offering them
+        // would only spend the budget and dilute the search. The default variant
+        // keeps every step and every fault in the random phase.
+        if (_neverWrittenVariant)
+        {
+            while (s.Next < Writes)
+            {
+                var next = s.Next;
+                var offset = WalOffsetAllocationCore.Assign(ref next);
+                s.Next = next;
+                s.Durable[offset] = true;
+                s.Acked[offset] = true;
+            }
+        }
 
         for (var step = 0; step < Steps; step++)
         {
@@ -130,8 +148,8 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
             if (s.Acked[o])
             {
                 Specification.Assert(
-                    s.Up[Owner[o]] && s.Cache[Owner[o]][o],
-                    $"[EveryAckedWriteMaterialised] acked write {o} is not materialised by leaf {Owner[o]} at quiescence.");
+                    s.Up[_owner[o]] && s.Cache[_owner[o]][o],
+                    $"[EveryAckedWriteMaterialised] acked write {o} is not materialised by leaf {_owner[o]} at quiescence.");
             }
         }
 
@@ -204,7 +222,9 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
 
         for (var l = 0; l < Leaves; l++)
         {
-            if (s.Stale[l])
+            // In the never-written variant leaf 0 is the caught-up data owner,
+            // driven only by Settle; the exploration is leaf 1's and the GC's.
+            if (s.Stale[l] || (_neverWrittenVariant && l == 0))
             {
                 continue;
             }
@@ -219,7 +239,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 if (s.Rp[l] > s.StCp[l])
                 {
                     acts.Add(new Act(Kind.Persist, l));
-                    if (s.Faults > 0)
+                    if (s.Faults > 0 && !_neverWrittenVariant)
                     {
                         acts.Add(new Act(Kind.PersistFail, l));
                     }
@@ -228,7 +248,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 if (Cur(s, l) >= 0 && s.Rp[l] >= 0 && (!s.HasSnapshot[l] || s.Rp[l] >= s.SnapCov[l]))
                 {
                     acts.Add(new Act(Kind.Capture, l));
-                    if (s.Faults > 0)
+                    if (s.Faults > 0 && !_neverWrittenVariant)
                     {
                         acts.Add(new Act(Kind.CaptureFail, l));
                     }
@@ -242,15 +262,27 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
             }
             else
             {
-                acts.Add(new Act(Kind.Activate, l));
-                if (s.HasSnapshot[l] && s.Faults > 0)
+                if (!_neverWrittenVariant)
+                {
+                    acts.Add(new Act(Kind.Activate, l));
+                }
+
+                if (s.HasSnapshot[l] && s.Faults > 0 && !_neverWrittenVariant)
                 {
                     acts.Add(new Act(Kind.LoadFail, l));
                 }
             }
         }
 
-        acts.Add(new Act(Kind.Trim, 0));
+        // In the never-written variant leaf 0 is driven only by Settle, so its
+        // seeded Zero block pin stands through the whole random phase and every
+        // trim there is a no-op (the GC's block-pin clause): offering it would
+        // only dilute the search for leaf 1's lifecycle.
+        if (!_neverWrittenVariant)
+        {
+            acts.Add(new Act(Kind.Trim, 0));
+        }
+
         return acts;
     }
 
@@ -275,7 +307,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 s.Inflight[o] = false;
                 s.Durable[o] = true;
                 s.Acked[o] = true;
-                var owner = Owner[o];
+                var owner = _owner[o];
                 if (act.Kind == Kind.FlushAckApply && s.Up[owner] && !s.Stale[owner])
                 {
                     s.Cache[owner][o] = true; // the foreground apply; no read-position advance
@@ -287,7 +319,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
             case Kind.Read:
             {
                 var o = ReadFrom(s, l);
-                if (s.Durable[o] && Owner[o] == l)
+                if (s.Durable[o] && _owner[o] == l)
                 {
                     s.Cache[l][o] = true;
                 }
@@ -373,7 +405,9 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
         var decision = LeafDurablePinCore.Resolve(
             currentCheckpoint: Cur(s, l),
             persistedCheckpoint: persisted,
-            coveredOffset: s.Cov[l],
+            coveredOffset: _guard == WalDurabilityLifecycleGuard.NeverWrittenReleaseIgnoresCoverage && releaseNeverWritten
+                ? Math.Max(s.Cov[l], s.StCp[l]) // the guard: the release ignores the coverage it holds
+                : s.Cov[l],
             hasLiveData: hasLiveData,
             // A WAL is never proven empty here: every scenario appends.
             walProvenEmpty: false,
@@ -498,24 +532,15 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
 
             for (var l = 0; l < Leaves; l++)
             {
-                if (s.Stale[l])
+                if (s.Stale[l] || !s.Up[l])
                 {
                     continue;
-                }
-
-                if (!s.Up[l])
-                {
-                    Activate(s, l);
-                    if (!s.Up[l])
-                    {
-                        continue;
-                    }
                 }
 
                 while (CanRead(s, l))
                 {
                     var o = ReadFrom(s, l);
-                    if (s.Durable[o] && Owner[o] == l)
+                    if (s.Durable[o] && _owner[o] == l)
                     {
                         s.Cache[l][o] = true;
                     }
@@ -540,7 +565,19 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 Publish(s, l);
             }
 
+            // The GC runs before a stopped leaf comes back: activation and the
+            // trim are concurrent in production, and this order is the one in
+            // which a trim through a released pin meets a lower snapshot.
             Trim(s);
+
+            // A stopped leaf comes back only after the GC has had a full pass.
+            for (var l = 0; l < Leaves && round > 0; l++)
+            {
+                if (!s.Stale[l] && !s.Up[l])
+                {
+                    Activate(s, l);
+                }
+            }
         }
     }
 
@@ -551,6 +588,17 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
             Specification.Assert(
                 !s.Stale[l],
                 $"[RecoveryNeverFallsOffLog] leaf {l} latched stale: tail {s.Tail}, snapshot {s.SnapCov[l]}, durable checkpoint {s.DurCp[l]}.");
+
+            // Every trim entitlement the pin store holds is backed by durable
+            // snapshot coverage (issue #4523): pins and coverage only grow, so a
+            // pin above the snapshot is a prefix the next activation may need
+            // and the GC may take.
+            if (_checkReleaseBacking && s.PinOff[l] >= 0)
+            {
+                Specification.Assert(
+                    s.HasSnapshot[l] && s.SnapCov[l] >= s.PinOff[l],
+                    $"[ReleaseBackedBySnapshot] leaf {l} holds pin {s.PinOff[l]} above its snapshot coverage {(s.HasSnapshot[l] ? s.SnapCov[l] : -1)}.");
+            }
 
             if (!s.Up[l])
             {
@@ -570,7 +618,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                         $"[ShippingNeverSkips] leaf {l} read to {s.Rp[l]} past in-flight offset {o}.");
                 }
 
-                if (s.Acked[o] && Owner[o] == l && o <= s.Rp[l])
+                if (s.Acked[o] && _owner[o] == l && o <= s.Rp[l])
                 {
                     Specification.Assert(
                         s.Cache[l][o],
@@ -586,7 +634,7 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 continue;
             }
 
-            var owner = Owner[o];
+            var owner = _owner[o];
             if (o < s.Tail)
             {
                 Specification.Assert(
@@ -628,9 +676,13 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
         }
 
         // WalShippingWatermark: a reader may be shown only offsets strictly below
-        // the durable-contiguous tail.
-        return WalShippingWatermark.IsOffsetExposable(
-            offset, WalShippingWatermark.DurableContiguousTail(hasInFlight, first, s.Next));
+        // the durable-contiguous tail. The bound by the allocator's head keeps a
+        // watermark that over-exposes from indexing past the assigned offsets: an
+        // over-exposure of an in-flight offset is then reported by
+        // [ShippingNeverSkips], never by an IndexOutOfRangeException.
+        return offset < s.Next
+            && WalShippingWatermark.IsOffsetExposable(
+                offset, WalShippingWatermark.DurableContiguousTail(hasInFlight, first, s.Next));
     }
 
     private static bool Any(bool[] values) => Array.IndexOf(values, true) >= 0;

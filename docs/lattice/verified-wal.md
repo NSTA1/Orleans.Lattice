@@ -110,13 +110,17 @@ asserts Coyote *finds* the resulting violation
 - `WalMoveRedriveModel` - the guard resumes every re-drive from the source floor
   instead of past what the target already holds, and Coyote finds the crash point
   after which the copy re-appends an offset the target already has (a duplicate).
-- `WalDurabilityLifecycleModel` - four guards, each removing one fix and each
+- `WalDurabilityLifecycleModel` - five guards, each removing one fix and each
   required to be caught by the assertion that fix protects, not merely by some
   violation:
   - resolving the pin against the pending checkpoint (`[PublishedPinWithinPersistedBelief]`);
   - not rolling back a failed checkpoint persist (`[PersistedBeliefHonest]`);
   - reading past the watermark (`[ShippingNeverSkips]`);
   - flooring the trim at the highest pin (`[TrimCoveredBySnapshot]`).
+  - releasing a never-written leaf's pin regardless of its snapshot coverage
+    (`[ReleaseBackedBySnapshot]` at the publication; with that assertion off and
+    one leaf owning nothing, `[RecoveryNeverFallsOffLog]` after the trim and the
+    restart).
 
 A model with a green fix test and a green guard test is proven load-bearing.
 
