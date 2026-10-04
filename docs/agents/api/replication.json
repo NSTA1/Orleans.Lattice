@@ -1590,7 +1590,7 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Receivers must call GetMetadata first and pin the cut point; retries/resumes in the bootstrap coordinator re-open the full stream and rely on per-key LWW reconciliation for overlap.",
+        "policy": "Receivers must call GetMetadata first and record the cut point; retries/resumes in the bootstrap coordinator re-open the full stream, merge the frontier after the drain, and rely on per-key LWW reconciliation for overlap.",
         "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#RequestSnapshotAsync"
       },
       "idempotency": {

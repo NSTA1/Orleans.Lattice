@@ -52,7 +52,7 @@ namespace Orleans.Lattice.Replication;
 /// </list>
 /// <para>
 /// The handoff at the end of the drain
-/// (<see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>)
+/// (<see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>)
 /// monotonically establishes the per-origin HWM at the snapshot's
 /// <c>AsOfHlc</c>, so steady-state dedup is preserved across the
 /// transition. Range deletes, terminal records, and tombstone-reap

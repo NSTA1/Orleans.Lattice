@@ -23,11 +23,10 @@ namespace Orleans.Lattice.Replication.Grains;
 /// every concurrent append. <see cref="TryAdvanceAsync"/> is the only
 /// way to grow it during steady-state apply;
 /// <see cref="PinSnapshotAsync"/> sets the entire vector
-/// unconditionally and is intended for the bootstrap-snapshot handoff
-/// (where the snapshot's <c>asOfHlc</c> is by construction the highest
-/// HLC the receiver should consider applied for the originating
-/// cluster after restore, and the <c>frontier</c> is the snapshot's
-/// causal-stable frontier).
+/// unconditionally and is the intra-cluster restore re-seed, a deliberate
+/// rollback; <see cref="MergeBootstrapFrontierAsync"/> is the cross-cluster
+/// bootstrap handoff and only ever raises coordinates (pointwise maximum
+/// with the vector already held, #4464).
 /// </para>
 /// </summary>
 [Alias(ReplicationTypeAliases.IReplicationHighWaterMarkGrain)]
@@ -97,15 +96,16 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
 
     /// <summary>
     /// Replaces the local vector clock with
-    /// <paramref name="frontier"/> unconditionally. Intended for the
-    /// bootstrap-snapshot handoff: a newly-bootstrapped peer pins the
-    /// vector to the snapshot's causal-stable frontier, then resumes
-    /// incremental replication from that pinned frontier with
-    /// idempotent apply across the snapshot / incremental
-    /// boundary. Installs no drop floor and clears any floor an earlier
-    /// build persisted (see <see cref="GetPinnedFloorAsync"/>); duplicate
-    /// deliveries across the boundary are absorbed by the receiver's
-    /// identity cache and idempotent per-key merge. The <paramref name="asOfHlc"/> argument carries the
+    /// <paramref name="frontier"/> unconditionally, so it can move
+    /// backwards. This is the intra-cluster restore re-seed
+    /// (<see cref="LatticeReplicationLocalVcSeeder"/>): a restore is a
+    /// deliberate rollback, and the vector must follow the restored
+    /// values' frontier. The cross-cluster bootstrap handoff must NOT use
+    /// it - a receiver that already applied an origin's writes above the
+    /// source's frontier would move backwards and strand parked entries
+    /// (#4464) - and uses <see cref="MergeBootstrapFrontierAsync"/>
+    /// instead. Installs no drop floor and clears any floor an earlier
+    /// build persisted (see <see cref="GetPinnedFloorAsync"/>). The <paramref name="asOfHlc"/> argument carries the
     /// snapshot's authoring HLC (the <c>as-of</c> HLC the snapshot
     /// scan was produced at) for diagnostic and protocol purposes; it
     /// is preserved in the call shape so a future bootstrap protocol
@@ -126,4 +126,27 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task PinSnapshotAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs a bootstrap snapshot's frontier by taking the
+    /// <em>pointwise maximum</em> with the vector already held, and returns
+    /// whether any coordinate rose. Used by the cross-cluster bootstrap
+    /// handoff (<see cref="LatticeBootstrapCoordinatorGrain"/>): the receiver
+    /// may already have applied an origin's writes above the source's frontier
+    /// (it receives that origin directly), and replacing the vector would move
+    /// it backwards, stranding an entry parked on a dependency those writes
+    /// already met (#4464). Like <see cref="PinSnapshotAsync"/> it installs no
+    /// drop floor and clears any floor an earlier build persisted.
+    /// <para>
+    /// Contrast <see cref="PinSnapshotAsync"/>, which <em>replaces</em> the
+    /// vector and is the intra-cluster restore re-seed
+    /// (<see cref="LatticeReplicationLocalVcSeeder"/>): a restore is a
+    /// deliberate rollback, so the vector must be able to move backwards to
+    /// the restored values' frontier.
+    /// </para>
+    /// </summary>
+    /// <param name="asOfHlc">The snapshot's authoring HLC; reserved, not consulted.</param>
+    /// <param name="frontier">The snapshot frontier to merge. Must be non-null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
 }

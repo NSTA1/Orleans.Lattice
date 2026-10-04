@@ -5,7 +5,7 @@ using Orleans.Lattice.Replication.Tests.Fakes;
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
 [TestFixture]
-public class ReplicationHighWaterMarkGrainTests
+public partial class ReplicationHighWaterMarkGrainTests
 {
     private const string OriginA = "site-a";
     private const string OriginB = "site-b";

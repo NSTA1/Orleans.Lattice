@@ -247,10 +247,12 @@ The following instruments surface the receiver-side causal-apply buffer used by 
 
 | Instrument | Kind | Tags | Recorded when |
 |---|---|---|---|
-| `orleans.lattice.replication.apply.buffered_entries` | `UpDownCounter<long>` | `tree`, `shard` | Increments by 1 on every successful park (including overflow-evicting parks); decrements by 1 per evicted entry inside the same park; decrements by the count of drained entries on each successful drain pass. |
-| `orleans.lattice.replication.apply.buffer_bytes` | `UpDownCounter<long>` | `tree`, `shard` | Tracks the same lifecycle as `buffered_entries` but in cumulative serialised bytes (key length × 2 + end-key length × 2 + value length + 128 envelope overhead). |
+| `orleans.lattice.replication.apply.buffered_entries` | `UpDownCounter<long>` | `tree`, `shard` | Increments by 1 on every successful park (including overflow-evicting parks) and on activation restore of an already parked durable entry; decrements by 1 per evicted entry inside the same park; decrements by the count of drained entries on each successful drain pass; deactivation withdraws that activation's restored contribution. |
+| `orleans.lattice.replication.apply.buffer_bytes` | `UpDownCounter<long>` | `tree`, `shard` | Tracks the same lifecycle as `buffered_entries` but in cumulative serialised bytes (key length x 2 + end-key length x 2 + value length + 128 envelope overhead). |
 | `orleans.lattice.replication.apply.dependency_wait` | `Histogram<double>` (ms) | `tree` | One sample per drained entry: `now - parked_at`, clamped non-negative. Evicted entries do not contribute - only successful waits are observed. |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | `Counter<long>` | `tree` | Incremented once per successful park. Duplicate-tuple parks do not count. An alert on `rate > 0` flags causal-skew health regardless of whether buffered entries eventually drain or evict. |
+
+Restored entries re-publish `buffered_entries` and `buffer_bytes` so the gauges remain correct across activations, but they do not re-count `apply.causal_violations_blocked`; that counter records the original park, not recovery of durable state.
 
 Operators monitor them together:
 
