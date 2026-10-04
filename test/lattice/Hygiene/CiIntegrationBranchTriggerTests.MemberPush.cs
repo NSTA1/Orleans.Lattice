@@ -22,6 +22,14 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// an advisory one; this arm pins every copy to the original so the copies
 /// cannot drift, and requires every job of a push lane to skip on a member push.
 /// </para>
+/// <para>
+/// <c>ci.yml</c> is graded by the same rule as every other lane (#4430). Its
+/// classifier used to be a step inside its <c>plan</c> job, so a member push
+/// still ran that job, and <c>content-gates</c> beside it, before anything was
+/// skipped. It is now a job of its own, so a member push costs that one small
+/// job and nothing else, and the grading below no longer needs a
+/// <c>ci.yml</c> exception.
+/// </para>
 /// </summary>
 public sealed partial class CiIntegrationBranchTriggerTests
 {
@@ -35,6 +43,15 @@ public sealed partial class CiIntegrationBranchTriggerTests
     private const string SourceOfTruthWorkflow = "ci.yml";
 
     /// <summary>
+    /// The job ids <c>ci.yml</c> must grade as skipped on a member push. A
+    /// floor, not an inventory: the grading itself is derived from the needs
+    /// graph, and this only stops a scan that silently matched fewer jobs from
+    /// reading as a pass.
+    /// </summary>
+    private static readonly string[] CiJobsSkippedOnAMemberPush =
+        ["plan", "extras", "test", "content-gates", "build-and-test"];
+
+    /// <summary>
     /// Status functions that make a job run even when a job it needs was
     /// skipped, which defeats skip propagation from a guarded upstream job.
     /// </summary>
@@ -44,10 +61,11 @@ public sealed partial class CiIntegrationBranchTriggerTests
     /// Every job of a workflow carrying the integration-branch push trigger
     /// either is the member-push classifier, conditions itself on the
     /// classifier's output, or needs a job that does (so it is skipped with
-    /// it). <c>ci.yml</c> is graded through its plan gate, whose first arm reads
-    /// the classifier, because its legs read plan outputs derived from that gate
-    /// rather than the flag itself, and its content gates are deliberately cheap
-    /// and report on work they genuinely performed.
+    /// it). A dependent counts as skipped with a guarded job either through
+    /// Actions' implicit <c>success()</c>, or - when its condition uses a status
+    /// function so that the classifier's own pull-request skip does not
+    /// propagate - by requiring that job's <c>result == 'success'</c>
+    /// explicitly.
     /// </summary>
     [Test]
     public void Every_job_on_an_integration_push_lane_skips_on_a_member_push()
@@ -99,18 +117,13 @@ public sealed partial class CiIntegrationBranchTriggerTests
                         + ": ${{ steps." + ClassifierStepId + ".outputs.member }}`");
             }
 
-            if (workflow.Name == SourceOfTruthWorkflow)
+            // The classifier job is the one job a member push runs, so it must
+            // stay small: a checkout and the classifier step, nothing else.
+            if (Steps(classifierBlock).Count() > 2)
             {
-                if (!classifierBlock.Contains(
-                        "PUSH_IS_MEMBER: ${{ steps." + ClassifierStepId + ".outputs.member }}",
-                        StringComparison.Ordinal))
-                {
-                    offenders.Add(
-                        workflow.Name + ":" + classifierId + ": the plan gate no longer reads the member-push "
-                            + "flag, so the test legs would run on a member push");
-                }
-
-                continue;
+                offenders.Add(
+                    workflow.Name + ":" + classifierId + ": the classifier job carries more than a checkout and "
+                        + "the classifier step, so a member push still pays for that work");
             }
 
             var guarded = new HashSet<string>(StringComparer.Ordinal) { classifierId };
@@ -134,8 +147,12 @@ public sealed partial class CiIntegrationBranchTriggerTests
                         && condition.Contains(memberExclusion, StringComparison.Ordinal);
                     var propagated = needs.Any(need => need != classifierId && guarded.Contains(need))
                         && !SkipBypassingFunctions.Any(f => condition.Contains(f, StringComparison.Ordinal));
+                    var explicitlyPropagated = needs.Any(need =>
+                        need != classifierId
+                        && guarded.Contains(need)
+                        && condition.Contains("needs." + need + ".result == 'success'", StringComparison.Ordinal));
 
-                    if (conditioned || propagated)
+                    if (conditioned || propagated || explicitlyPropagated)
                     {
                         guarded.Add(id);
                         progressed = true;
@@ -143,6 +160,18 @@ public sealed partial class CiIntegrationBranchTriggerTests
                 }
             }
             while (progressed);
+
+            if (workflow.Name == SourceOfTruthWorkflow)
+            {
+                var ungraded = CiJobsSkippedOnAMemberPush.Where(id => jobs.All(job => job.Id != id)).ToList();
+
+                if (ungraded.Count > 0)
+                {
+                    offenders.Add(
+                        workflow.Name + ": expected jobs " + string.Join(", ", ungraded) + " to exist and be "
+                            + "graded; the job scan has stopped matching");
+                }
+            }
 
             foreach (var (id, _) in jobs.Where(job => job.Id != classifierId))
             {

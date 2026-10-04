@@ -43,9 +43,31 @@ run-test-leg.py additionally emits a GitHub error annotation per failing item an
 records per-item results, so the aggregate report names the exact package, shard
 and tier without anyone opening a log.
 
+SKIPPING TIERS BY POLICY
+-----------------------
+`--skip-tiers coyote,chaos` plans a run that executes the deterministic tier
+only. ci.yml passes it for a MEMBER pull request into an integration branch and
+for nothing else (see tier-scope.py, which owns that decision). It does not
+drop anything silently, and that is the whole design:
+
+- A sharded package crossed with the tiers keeps its deterministic items and
+  turns each skipped-tier item into a POLICY-SKIPPED record. Those records are
+  attached to a leg after packing - so they never cost a runner or move the leg
+  count - and run-test-leg.py reports them without running them, so the
+  aggregate report lists exactly which (package, shard, tier) did not run.
+- An untiered item (an unsharded package, or a `crossTiers: false` shard) runs
+  with the skipped tiers' categories excluded from its filter, and records the
+  excluded tiers on the item. The exclusion for `coyote,chaos` together is the
+  deterministic tier's own filter, so a member pull request runs precisely the
+  surface the deterministic tier runs on a fully gated one.
+
+The deterministic tier cannot be skipped: a run with nothing left to execute is
+a green that verified nothing.
+
 Usage:
   plan-test-matrix.py --packages FILE --shards FILE --durations FILE
                       [--seeded FILE] [--max-legs N]
+                      [--skip-tiers TIER[,TIER]] [--skip-reason TEXT]
                       --output-matrix FILE [--report-file FILE]
   plan-test-matrix.py --shards FILE --emit-shard-filters PACKAGE
 
@@ -68,6 +90,16 @@ TIERS: list[tuple[str, str]] = [
     ("coyote", "TestCategory=Coyote"),
     ("chaos", "TestCategory=Chaos&TestCategory!=AzureStorageEmulator"),
 ]
+
+# The category exclusion that removes one skippable tier from an UNTIERED item.
+# Excluding both is exactly the deterministic tier's filter above, which is what
+# keeps a member pull request's untiered packages on the same surface as the
+# deterministic tier of a fully gated run. `deterministic` is deliberately not a
+# key: it is the tier that is never skipped.
+TIER_EXCLUSIONS: dict[str, str] = {
+    "coyote": "TestCategory!=Coyote",
+    "chaos": "TestCategory!=Chaos",
+}
 
 # The filter for a package that runs in ONE invocation: none at all.
 #
@@ -142,6 +174,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--durations")
     parser.add_argument("--seeded", help="Packages seeded directly by the diff.")
     parser.add_argument("--max-legs", type=int, default=10)
+    parser.add_argument(
+        "--skip-tiers",
+        default="",
+        help="Comma-separated tiers not to run (a subset of: "
+             + ", ".join(sorted(TIER_EXCLUSIONS)) + "). Empty runs every tier.",
+    )
+    parser.add_argument(
+        "--skip-reason",
+        default="skipped by policy",
+        help="Why the tiers are skipped, recorded on every policy-skipped item.",
+    )
     parser.add_argument("--output-matrix")
     parser.add_argument("--report-file")
     parser.add_argument(
@@ -163,7 +206,34 @@ def parse_args() -> argparse.Namespace:
         ]
         if missing:
             parser.error("the following arguments are required to plan a matrix: " + ", ".join(missing))
+    args.skip_tiers = parse_skip_tiers(parser, args.skip_tiers)
     return args
+
+
+def parse_skip_tiers(parser: argparse.ArgumentParser, raw: str) -> list[str]:
+    """The skipped tiers in TIERS order, refusing anything that is not skippable."""
+    requested = {name.strip() for name in raw.split(",") if name.strip()}
+    unknown = sorted(requested - set(TIER_EXCLUSIONS))
+    if unknown:
+        parser.error(
+            "--skip-tiers accepts only " + ", ".join(sorted(TIER_EXCLUSIONS))
+            + "; refusing " + ", ".join(unknown)
+            + " (the deterministic tier is never skipped)"
+        )
+    return [tier for tier, _ in TIERS if tier in requested]
+
+
+def exclusion_filter(skip_tiers: list[str]) -> str | None:
+    """The category filter that removes the skipped tiers from an untiered item."""
+    if not skip_tiers:
+        return None
+    return "&".join(TIER_EXCLUSIONS[tier] for tier in skip_tiers)
+
+
+def narrowed_tier(skip_tiers: list[str]) -> str:
+    """The tier label of an untiered item once the skipped tiers are excluded."""
+    remaining = [tier for tier, _ in TIERS if tier not in skip_tiers]
+    return remaining[0] if len(remaining) == 1 else "all"
 
 
 def read_lines(path: str) -> list[str]:
@@ -241,8 +311,35 @@ def make_items(
     shard_config: dict,
     durations: dict[tuple[str, str, str], float],
     seeded: set[str],
-) -> list[dict]:
+    skip_tiers: list[str] | None = None,
+    skip_reason: str = "skipped by policy",
+) -> tuple[list[dict], list[dict]]:
+    """Return (items to run, items skipped by policy).
+
+    With no skipped tiers the second list is empty and the first is exactly
+    the full plan. With skipped tiers, nothing disappears: a crossed item of a
+    skipped tier moves to the second list, and an untiered item stays in the
+    first with the skipped tiers' categories excluded and recorded.
+    """
+    skip_tiers = list(skip_tiers or [])
+    exclusion = exclusion_filter(skip_tiers)
+    untiered_tier = narrowed_tier(skip_tiers) if skip_tiers else "all"
+
+    def untiered(name_filter: str | None) -> str | None:
+        if exclusion is None:
+            return name_filter
+        if name_filter is None:
+            return exclusion
+        return f"({name_filter})&({exclusion})"
+
+    def mark_excluded(item: dict) -> dict:
+        if skip_tiers:
+            item["excluded_tiers"] = list(skip_tiers)
+            item["skip_reason"] = skip_reason
+        return item
+
     items: list[dict] = []
+    skipped: list[dict] = []
     for package in packages:
         config = shard_config.get(package)
         if config is None:
@@ -251,15 +348,15 @@ def make_items(
             # is equal to, and not a superset of, what ci.yml runs.
             estimate = durations.get((package, "-", "all"), DEFAULT_ESTIMATE["all"])
             items.append(
-                {
+                mark_excluded({
                     "package": package,
                     "shard": "-",
-                    "tier": "all",
-                    "filter": UNSHARDED_FILTER,
+                    "tier": untiered_tier,
+                    "filter": untiered(UNSHARDED_FILTER),
                     "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
                     "label": package,
                     "seeded": package in seeded,
-                }
+                })
             )
             continue
 
@@ -274,15 +371,15 @@ def make_items(
                     (package, shard["shard"], "all"), DEFAULT_ESTIMATE["all"]
                 )
                 items.append(
-                    {
+                    mark_excluded({
                         "package": package,
                         "shard": shard["shard"],
-                        "tier": "all",
-                        "filter": shard["filter"],
+                        "tier": untiered_tier,
+                        "filter": untiered(shard["filter"]),
                         "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
                         "label": f"{package} / {shard['shard']}",
                         "seeded": package in seeded,
-                    }
+                    })
                 )
                 continue
 
@@ -291,18 +388,45 @@ def make_items(
                 estimate = durations.get(
                     (package, shard["shard"], tier), DEFAULT_ESTIMATE[tier]
                 )
-                items.append(
-                    {
-                        "package": package,
-                        "shard": shard["shard"],
-                        "tier": tier,
-                        "filter": combined,
-                        "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
-                        "label": f"{package} / {shard['shard']} ({tier})",
-                        "seeded": package in seeded,
-                    }
-                )
-    return items
+                item = {
+                    "package": package,
+                    "shard": shard["shard"],
+                    "tier": tier,
+                    "filter": combined,
+                    "estimate": round(estimate + PER_ITEM_OVERHEAD, 3),
+                    "label": f"{package} / {shard['shard']} ({tier})",
+                    "seeded": package in seeded,
+                }
+                if tier in skip_tiers:
+                    # Recorded, not run. It costs nothing (no process start),
+                    # so it is priced at zero and never reaches the packer.
+                    item["estimate"] = 0.0
+                    item["skip"] = skip_reason
+                    skipped.append(item)
+                else:
+                    items.append(item)
+    return items, skipped
+
+
+def attach_skipped(legs: list[dict], skipped: list[dict]) -> None:
+    """Record each policy-skipped item on a leg, after packing.
+
+    They are attached rather than packed so they can neither create a leg nor
+    change the leg count: a leg made only of skipped items would cost a runner
+    to report that it did nothing. Each goes beside a sibling of the same
+    package and shard when one exists, so a leg's own summary shows a shard's
+    run and skipped tiers together; otherwise to the leg with fewest items.
+    """
+    for item in skipped:
+        home = next(
+            (leg for leg in legs
+             if any(other["package"] == item["package"] and other["shard"] == item["shard"]
+                    for other in leg["items"])),
+            None,
+        )
+        if home is None:
+            home = min(legs, key=lambda leg: (len(leg["items"]), leg["id"]))
+        home["items"].append(item)
 
 
 def pack(items: list[dict], max_legs: int) -> list[dict]:
@@ -338,7 +462,16 @@ def pack(items: list[dict], max_legs: int) -> list[dict]:
     return [leg for leg in legs if leg["items"]]
 
 
-def write_report(handle, legs: list[dict], items: list[dict], packages: list[str], seeded: set[str]) -> None:
+def write_report(
+    handle,
+    legs: list[dict],
+    items: list[dict],
+    packages: list[str],
+    seeded: set[str],
+    skipped: list[dict] | None = None,
+    skip_tiers: list[str] | None = None,
+    skip_reason: str = "",
+) -> None:
     total = sum(item["estimate"] for item in items)
     makespan = max((leg["estimate"] for leg in legs), default=0.0)
 
@@ -364,6 +497,21 @@ def write_report(handle, legs: list[dict], items: list[dict], packages: list[str
         "Estimates come from `.github/workflows/test-durations.tsv` and only decide "
         "how work is distributed. They never decide what runs.\n\n"
     )
+
+    if skip_tiers:
+        narrowed = [item for item in items if item.get("excluded_tiers")]
+        handle.write(f"### Tiers NOT run: {', '.join(skip_tiers)}\n\n")
+        handle.write(f"Reason: {skip_reason}\n\n")
+        handle.write(
+            "This is a skip, not a pass. Nothing in the tiers above was executed on this run: "
+            f"{len(skipped or [])} tiered item(s) are recorded as skipped and reported by the "
+            f"aggregate, and {len(narrowed)} untiered item(s) run with those tiers' categories "
+            "excluded from their filter.\n\n"
+        )
+        for item in sorted(skipped or [], key=lambda entry: entry["label"]):
+            handle.write(f"- `{item['label']}`\n")
+        if skipped:
+            handle.write("\n")
 
 
 def main() -> int:
@@ -391,23 +539,33 @@ def main() -> int:
     seeded = set(read_lines(args.seeded)) if args.seeded and os.path.exists(args.seeded) else set()
 
     durations = load_durations(args.durations)
-    items = make_items(packages, shard_config, durations, seeded)
+    items, skipped = make_items(
+        packages, shard_config, durations, seeded, args.skip_tiers, args.skip_reason
+    )
     legs = pack(items, args.max_legs)
 
     if not legs:
         print("::error::The planner produced no legs.", file=sys.stderr)
         return 1
 
+    attach_skipped(legs, skipped)
+
     with open(args.output_matrix, "w", encoding="utf-8") as handle:
         json.dump(legs, handle, separators=(",", ":"))
 
     if args.report_file:
         with open(args.report_file, "a", encoding="utf-8") as handle:
-            write_report(handle, legs, items, packages, seeded)
+            write_report(handle, legs, items, packages, seeded,
+                         skipped, args.skip_tiers, args.skip_reason)
     else:
-        write_report(sys.stderr, legs, items, packages, seeded)
+        write_report(sys.stderr, legs, items, packages, seeded,
+                     skipped, args.skip_tiers, args.skip_reason)
 
-    print(f"Planned {len(legs)} legs over {len(items)} work items.", file=sys.stderr)
+    print(
+        f"Planned {len(legs)} legs over {len(items)} work items"
+        + (f", {len(skipped)} skipped by policy." if skipped else "."),
+        file=sys.stderr,
+    )
     return 0
 
 

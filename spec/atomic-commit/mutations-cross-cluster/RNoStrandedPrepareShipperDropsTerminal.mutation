@@ -1,0 +1,19 @@
+# Pairs with RNoStrandedPrepare. One source shard's terminal is never written
+# for replication - the shape of issue #2324's finding that the shipper dropped
+# saga terminals the change feed carried. The receiver's tally waits for a
+# terminal that never comes, so the saga's buckets on the receiver are never
+# consumed. Fairness is untouched: the transport is fair about every record it
+# is given, and the defect is that it is not given this one.
+MODULE: RNoStrandedPrepareShipperDropsTerminal
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: one source shard's terminal is never replicated, so the receiver tally never completes
+PERTURBS: OriginBroadcast
+
+--- FIND
+    /\ outbox' = outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
+--- REPLACE
+\* MUTATION: k2's terminal is dropped before it is shipped.
+    /\ outbox' = IF k = k2 THEN outbox
+                 ELSE outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
+--- END

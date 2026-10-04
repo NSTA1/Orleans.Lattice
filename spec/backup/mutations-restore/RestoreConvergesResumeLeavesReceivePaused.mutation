@@ -1,0 +1,17 @@
+# Pairs with RestoreConverges, under the fairness Spec asserts. Global
+# completion resumes shipping but not receiving, so a post-restore write never
+# reaches the peer and the clusters stay apart for good. Every safety
+# invariant holds.
+MODULE: RestoreConvergesResumeLeavesReceivePaused
+TARGET: RestoreConverges
+CLASS: Temporal
+SUMMARY: the resume lifts the shipping pause but not the receive pause
+PERTURBS: Resume
+
+--- FIND
+    /\ recvOn' = [recvOn EXCEPT ![c] = TRUE]
+    /\ UNCHANGED <<alias, data, log, bound, sent, rphase, vote, pre, post>>
+--- REPLACE
+    \* MUTATION: receive stays paused.
+    /\ UNCHANGED <<alias, data, log, bound, sent, rphase, vote, pre, post, recvOn>>
+--- END

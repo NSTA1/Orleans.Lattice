@@ -1,0 +1,18 @@
+# Pairs with RLinearizedTerminals. The receiver's post-gate fan-out applies a
+# commit terminal to each leaf whatever its registry recorded. For an aborted
+# saga a receiver leaf then holds a commit terminal the origin never decided.
+# The buckets are still discarded (the projection is untouched on the abort
+# path), so no read changes; only the terminal the leaf remembers is wrong,
+# which is what makes this property's and RStrictIsolation's pairings distinct.
+MODULE: RLinearizedTerminalsFanOutAppliesCommit
+TARGET: RLinearizedTerminals
+CLASS: Invariant
+SUMMARY: the receiver fan-out applies a commit terminal regardless of the recorded outcome
+PERTURBS: ReceiverFanOut
+
+--- FIND
+       ELSE /\ rterm' = [rterm EXCEPT ![k] = Kind(rdec[TreeOf(k)])]
+--- REPLACE
+\* MUTATION: the leaf is always told "commit".
+       ELSE /\ rterm' = [rterm EXCEPT ![k] = "commit"]
+--- END

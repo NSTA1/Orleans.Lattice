@@ -14,7 +14,11 @@ produces:
    given is therefore an error, not a curiosity. A single tier running zero
    tests is normal - most packages have no Coyote models - so the check sums
    over a shard's tiers rather than judging one item at a time. A package with
-   no test project at all is skipped, not counted, so it is not flagged.
+   no test project at all is skipped, not counted, so it is not flagged. A
+   shard with a tier SKIPPED BY POLICY (a member pull request into an
+   integration branch; see tier-scope.py) is reported as not judged rather
+   than failed when it executed nothing, because its skipped tiers may hold
+   every test it has. Those tiers are listed as NOT RUN, never as passed.
 3. The measured DURATIONS, formatted as replacement rows for
    test-durations.tsv, so the estimates converge on reality instead of being
    re-guessed.
@@ -196,7 +200,24 @@ def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
         if item["outcome"] in ("passed", "empty", "failed"):
             per_shard[(item["package"], item["shard"])] += item["executed"]
 
-    silent = [key for key, executed in sorted(per_shard.items()) if executed == 0]
+    # A shard some of whose tiers were skipped by policy (a member pull request
+    # into an integration branch, see tier-scope.py) cannot be judged by this
+    # guard: its skipped tiers may hold every test it has, so zero executed is
+    # not evidence of a broken filter. It is reported as NOT JUDGED rather than
+    # passed, and it is judged on the integration branch's own runs, which skip
+    # nothing. A shard with no skipped tier is judged exactly as before.
+    policy_skipped = [item for item in items if item["outcome"] == "policy-skipped"]
+    narrowed = [item for item in items if item.get("excluded_tiers")]
+    partial = {(item["package"], item["shard"]) for item in policy_skipped + narrowed}
+
+    silent = [
+        key for key, executed in sorted(per_shard.items())
+        if executed == 0 and key not in partial
+    ]
+    unjudged = [
+        key for key, executed in sorted(per_shard.items())
+        if executed == 0 and key in partial
+    ]
     if silent:
         ok = False
         handle.write("### Shards that executed no tests in any tier\n\n")
@@ -208,6 +229,32 @@ def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
         for package, shard in silent:
             handle.write(f"- `{package}` / `{shard}`\n")
         handle.write("\n")
+
+    if policy_skipped or narrowed:
+        tiers = sorted({item["tier"] for item in policy_skipped}
+                       | {tier for item in narrowed for tier in item["excluded_tiers"]})
+        reasons = sorted({item.get("reason", "") for item in policy_skipped}
+                         | {item.get("skip_reason", "") for item in narrowed})
+        handle.write(f"### Tiers NOT run on this run: {', '.join(tiers)}\n\n")
+        for reason in [reason for reason in reasons if reason]:
+            handle.write(f"Reason: {reason}\n\n")
+        handle.write(
+            "This is a skip, not a pass: a green result here asserts nothing about these "
+            f"tiers. {len(policy_skipped)} tiered item(s) were not run, and {len(narrowed)} "
+            "untiered item(s) ran with these tiers' categories excluded.\n\n"
+        )
+        for item in sorted(policy_skipped, key=lambda entry: entry["label"]):
+            handle.write(f"- `{item['label']}`: not run\n")
+        if policy_skipped:
+            handle.write("\n")
+        if unjudged:
+            handle.write(
+                "Shards that executed no tests in the tiers that DID run, and so could not be "
+                "judged by the vacuity guard on this run:\n\n"
+            )
+            for package, shard in unjudged:
+                handle.write(f"- `{package}` / `{shard}`\n")
+            handle.write("\n")
 
     # -- Concurrency result ---------------------------------------------------
     serial = sum(item["duration"] for item in items)
@@ -240,6 +287,9 @@ def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
     measured = [
         item for item in items
         if item["outcome"] in ("passed", "failed") and item["duration"] >= 0.1
+        # A narrowed item's duration is not its full row's, so pasting it back
+        # would understate the item on every fully gated run.
+        and not item.get("excluded_tiers")
     ]
     if measured:
         handle.write("<details><summary>Measured durations for test-durations.tsv</summary>\n\n")
@@ -258,6 +308,8 @@ def render(handle, payloads: list[dict], expect_legs: int) -> tuple[bool, dict]:
         "superseded": len(superseded),
         "conflicts": len(conflicts),
         "silent": len(silent),
+        "policy_skipped": len(policy_skipped),
+        "unjudged": len(unjudged),
     }
     return ok, stats
 
@@ -285,6 +337,8 @@ def main() -> int:
         f"{stats['legs']} leg(s), {stats['items']} item(s), "
         f"{stats['executed']} test(s) executed, {stats['failing']} failing item(s), "
         f"{stats['silent']} silent shard(s), "
+        f"{stats['policy_skipped']} item(s) not run by tier policy, "
+        f"{stats['unjudged']} shard(s) not judged, "
         f"{stats['superseded']} superseded result(s), {stats['conflicts']} colliding result(s)."
     )
 
