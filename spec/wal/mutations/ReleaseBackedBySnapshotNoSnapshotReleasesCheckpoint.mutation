@@ -1,5 +1,5 @@
-# Pairs with ReleaseBackedBySnapshot, and reproduces production's never-written
-# release as it stands until issue #4523 is fixed: a never-written leaf that holds
+# Pairs with ReleaseBackedBySnapshot, and reproduces the never-written release
+# production had until issue #4523 was fixed (#4535): a never-written leaf that holds
 # no snapshot releases its block at its persisted checkpoint, publishing a trim
 # entitlement no durable snapshot backs. Reachable with no fault at all. The base
 # keeps the block until a capture records coverage, and bounds the release by it.

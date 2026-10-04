@@ -163,12 +163,12 @@ kept as a standing mutation until it is fixed:
 All four are fixed, and each one's mutation is now an ordinary regression check.
 
 The independent review of the specification found two more, each hidden by a bound
-or an abstraction of the first version. Both are open, and each is a standing
-mutation until its fix lands:
+or an abstraction of the first version. #4523 is fixed; #4525 is open, and is a
+standing mutation until its fix lands:
 
 | Issue | Defect |
 |-------|--------|
-| #4523 | A never-written leaf with no snapshot releases its block at its persisted checkpoint; after a cold-rebuild capture below that release and a trim, its next activation latches stale. It needs two faults. |
+| #4523 | A never-written leaf with no snapshot releases its block at its persisted checkpoint; after a cold-rebuild capture below that release and a trim, its next activation latches stale. It needs two faults. Fixed: the release fires only under durable coverage. |
 | #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing, so a source re-activated after the copy acknowledges writes the flip discards. |
 
 **What is covered:** one WAL partition shared by two leaves, with two faults per

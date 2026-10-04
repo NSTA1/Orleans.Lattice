@@ -360,8 +360,7 @@ CaptureFail(l) ==
 (* past that snapshot and the leaf latches stale on its next activation    *)
 (* (#4523). Bounded this way, every published offset is at or below the    *)
 (* leaf's durable coverage, which only grows (ReleaseBackedBySnapshot).    *)
-(* THIS IS THE INTENDED DESIGN (#4523); production releases the persisted  *)
-(* checkpoint when the leaf holds no snapshot.                             *)
+(* Production matches it since #4523 was fixed (LeafDurablePinCore).       *)
 (***************************************************************************)
 ClockLive(l) == clk[l] \/ cache[l] # {}
 

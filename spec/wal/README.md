@@ -99,12 +99,13 @@ fixed, and those mutations are ordinary regression checks:
 | #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm` |
 
 The independent review (#4433) found two more, both hidden by a bound or an
-abstraction the first version had. They are open; each has a standing mutation that
-reproduces production's behaviour and a gap row in its refinement note:
+abstraction the first version had. #4523 is fixed and its mutations are ordinary
+regression checks; #4525 is open, with a standing mutation that reproduces
+production's behaviour and gap rows in its refinement note:
 
 | Issue | Defect | Standing mutation |
 |-------|--------|-------------------|
-| #4523 | A never-written leaf that holds no snapshot releases at its persisted checkpoint; a later cold rebuild captures below that release, the GC trims past it, and the next activation latches stale. Needs two faults, which the one-fault configuration hid. | `ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint` (no fault needed) and `RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults` (the two-fault composition) |
+| #4523 | A never-written leaf that holds no snapshot released at its persisted checkpoint; a later cold rebuild captures below that release, the GC trims past it, and the next activation latches stale. Needs two faults, which the one-fault configuration hid. **Fixed by #4535**: the release fires only under durable coverage. | `ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint` (no fault needed) and `RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults` (the two-fault composition) |
 | #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing about the source, so a source re-activated after the copy acknowledges writes the flip discards. The first model reset the move on a shard crash and could not see it. | `MovedStreamKeepsAckedWritesFenceInMemoryOnly` |
 
 The model also showed that one proposed fix for #4450 - cold-starting whenever the

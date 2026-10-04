@@ -1,5 +1,5 @@
 # Pairs with RecoveryNeverFallsOffLog, and reproduces issue #4523 end to end as
-# production has it: a never-written leaf with no snapshot releases at its
+# production had it until #4535 fixed it: a never-written leaf with no snapshot releases at its
 # persisted checkpoint; a cold rebuild (the first fault, a leaf stop) captures a
 # snapshot below that release; the GC trims past it; and the next activation (the
 # second fault) rehydrates the low snapshot and latches stale. It needs two faults,

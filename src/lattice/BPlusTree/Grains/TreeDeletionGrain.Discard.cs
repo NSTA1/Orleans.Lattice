@@ -133,6 +133,9 @@ internal sealed partial class TreeDeletionGrain
         return Task.FromResult(s.Discarded ? PhysicalTreeRetention.Discarded : PhysicalTreeRetention.Deleted);
     }
 
+    /// <inheritdoc />
+    public Task<bool> IsDiscardedAsync() => Task.FromResult(state.State.Discarded);
+
     /// <summary>
     /// Trims every partition of a purge-completing tree's write-ahead log
     /// through its head: eagerly, for a discarded copy whose shards already

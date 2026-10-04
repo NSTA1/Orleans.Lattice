@@ -55,7 +55,7 @@ public sealed class LeafDurablePinCoreTests
     public void A_never_written_scanned_through_partition_releases_its_persisted_checkpoint_issue_3453()
     {
         Assert.That(
-            Resolve(current: 7, persisted: 5, covered: -1, liveData: false, releaseNeverWritten: true),
+            Resolve(current: 7, persisted: 5, covered: 6, liveData: false, releaseNeverWritten: true),
             Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 5)),
             "the release carries the PERSISTED checkpoint, never the pending one");
     }
@@ -79,8 +79,10 @@ public sealed class LeafDurablePinCoreTests
     /// <summary>
     /// Issue #4456: a never-written leaf's release is bounded by the snapshot
     /// coverage it holds, so the GC never trims past what a rehydrate of that
-    /// snapshot restarts from. With no coverage the release stays at the persisted
-    /// checkpoint (#3453).
+    /// snapshot restarts from. Issue #4523: with no coverage there is no release
+    /// at all - the partition keeps the block - because a snapshot created later
+    /// (a cold rebuild's capture or #2280 bank) can land below any release
+    /// published without one, and the pin store can never take it back.
     /// </summary>
     [Test]
     public void The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456()
@@ -96,9 +98,29 @@ public sealed class LeafDurablePinCoreTests
                 Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 2)),
                 "coverage above it leaves the persisted checkpoint as the bound");
             Assert.That(
+                Resolve(current: 2, persisted: 2, covered: 0, liveData: false, releaseNeverWritten: true),
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 0)),
+                "coverage of offset 0 is real coverage and releases through it");
+        });
+    }
+
+    /// <summary>
+    /// Issue #4523: a never-written partition with no durable snapshot coverage
+    /// keeps the block, however far its persisted checkpoint has scanned.
+    /// </summary>
+    [Test]
+    public void The_never_written_release_needs_durable_snapshot_coverage_issue_4523()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(
                 Resolve(current: 2, persisted: 2, covered: -1, liveData: false, releaseNeverWritten: true),
-                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.ReleaseNeverWritten, 2)),
-                "with no snapshot the #3453 release stays at the persisted checkpoint");
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.Block, -1)),
+                "no snapshot: a release at the persisted 2 could later stand above a cold capture's coverage");
+            Assert.That(
+                Resolve(current: 7, persisted: 5, covered: -1, liveData: false, releaseNeverWritten: true),
+                Is.EqualTo(new LeafDurablePinDecision(LeafDurablePinKind.Block, -1)),
+                "a pending advance changes nothing");
         });
     }
 
@@ -158,8 +180,8 @@ public sealed class LeafDurablePinCoreTests
     /// input in a small grid: a trim entitlement never exceeds the persisted
     /// checkpoint, a covered entitlement never exceeds the coverage either, the
     /// block carries no offset, and a release carries no positive offset unless
-    /// it is the never-written one, which is bounded by coverage when the leaf
-    /// holds any (issue #4456).
+    /// it is the never-written one, which needs durable coverage and is bounded
+    /// by it (issues #4456 and #4523).
     /// </summary>
     [Test]
     public void Every_trim_entitlement_is_bounded_by_the_persisted_checkpoint_over_the_whole_grid()
@@ -189,7 +211,8 @@ public sealed class LeafDurablePinCoreTests
                         Assert.That(d.Offset, Is.GreaterThanOrEqualTo(0).And.LessThanOrEqualTo(persisted).And.LessThanOrEqualTo(covered), label);
                         break;
                     case LeafDurablePinKind.ReleaseNeverWritten:
-                        Assert.That(d.Offset, Is.EqualTo(covered >= 0 ? Math.Min(persisted, covered) : persisted).And.GreaterThanOrEqualTo(0), label);
+                        Assert.That(covered, Is.GreaterThanOrEqualTo(0), label + ": a release needs durable coverage (#4523)");
+                        Assert.That(d.Offset, Is.EqualTo(Math.Min(persisted, covered)).And.GreaterThanOrEqualTo(0), label);
                         Assert.That(liveData || !release, Is.False, label);
                         break;
                     case LeafDurablePinKind.Block:
