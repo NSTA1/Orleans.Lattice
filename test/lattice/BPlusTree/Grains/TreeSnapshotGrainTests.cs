@@ -109,6 +109,11 @@ public partial class TreeSnapshotGrainTests
             leafMock.GetLiveRawEntriesAsync().Returns(Task.FromResult(rawPerLeaf));
             leafMock.GetLiveEntriesAsync().Returns(Task.FromResult(entriesPerLeaf[i]));
 
+            // An online snapshot sweeps each source leaf's prepared saga buckets
+            // before it copies (issue #4455); a leaf with none answers empty.
+            leafMock.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
+                .Returns(Task.FromResult(new List<PendingMutationSnapshot>()));
+
             leafMock.GetKeyRangeAsync().Returns(Task.FromResult(new LeafKeyRange
             {
                 LowKeyInclusive = SnapshotLeafResumeKey(i),
