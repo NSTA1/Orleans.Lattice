@@ -36,6 +36,8 @@ public sealed class RepoContextMemoryArchiveServiceTests
 {
     private const string RepoId = "acme";
 
+    private static readonly TimeSpan RestoreBarrierBound = TimeSpan.FromMinutes(2);
+
     private string scratch = string.Empty;
 
     private static CancellationToken Ct => TestContext.CurrentContext.CancellationToken;
@@ -86,6 +88,7 @@ public sealed class RepoContextMemoryArchiveServiceTests
         CapturingLoggerProvider Logs,
         IRepoIndexRunAuthority Authority,
         List<string> RestoreOutcomes,
+        TaskCompletionSource RestoreRecorded,
         MeterListener Listener,
         ILoggerFactory LoggerFactory,
         ILattice MemoryTree,
@@ -124,6 +127,8 @@ public sealed class RepoContextMemoryArchiveServiceTests
         options ??= Options();
 
         var outcomes = new List<string>();
+        var restoreRecorded = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         var listener = new MeterListener
         {
             InstrumentPublished = (instrument, l) =>
@@ -158,6 +163,7 @@ public sealed class RepoContextMemoryArchiveServiceTests
                     lock (outcomes)
                     {
                         outcomes.Add(outcome);
+                        restoreRecorded.TrySetResult();
                     }
                 }
             }
@@ -201,6 +207,7 @@ public sealed class RepoContextMemoryArchiveServiceTests
             logs,
             authority,
             outcomes,
+            restoreRecorded,
             listener,
             loggerFactory,
             harness.GrainFactory.GetGrain<ILattice>(RepoContextTrees.Memory),
@@ -236,11 +243,6 @@ public sealed class RepoContextMemoryArchiveServiceTests
         => RepoContextMemoryArchive.CountMemoryAsync(tree, Ct);
 
     /// <summary>
-    /// Starts the service and carries the clock past the initial delay, so the startup
-    /// restore has been triggered by the time this returns. The barrier waits on the
-    /// restore reporter, which is the service's own record that the attempt completed.
-    /// </summary>
-    /// <summary>
     /// Carries the clock past a wait the subject has actually armed.
     /// <para>
     /// Waiting for the timer first is load-bearing. A <c>BackgroundService</c> on
@@ -263,21 +265,31 @@ public sealed class RepoContextMemoryArchiveServiceTests
     /// Starts the service and carries the clock past the initial delay, so the startup
     /// restore has been triggered by the time this returns. The barrier waits on the
     /// restore reporter, which is the service's own record that the attempt completed.
+    /// <para>
+    /// The barrier is the signal the measurement callback completes when it records an
+    /// outcome, not a poll against a real-time budget. The restore runs on the
+    /// service's own task after the clock is advanced, so under load its record can
+    /// land arbitrarily late; a bounded poll then failed a run whose restore had in
+    /// fact happened (issue #4529). Waiting on the signal admits any interleaving.
+    /// </para>
+    /// <para>
+    /// The wait is still bounded, by <see cref="RestoreBarrierBound"/>, because the
+    /// fixture's cancellation token never fires without a <c>[CancelAfter]</c>: an
+    /// unbounded wait would turn a real regression into a hang rather than a failure.
+    /// The bound is a hang guard far above the ten-second window that flaked, not a
+    /// timing assertion.
+    /// </para>
     /// </summary>
     private static async Task StartAndRestoreAsync(Rig rig)
     {
         await rig.Service.StartAsync(Ct);
         await AdvanceArmedAsync(rig, TimeSpan.FromSeconds(5), "its startup delay");
 
-        var recorded = await TestPoll.TryUntilAsync(() =>
+        try
         {
-            lock (rig.RestoreOutcomes)
-            {
-                return rig.RestoreOutcomes.Count > 0;
-            }
-        });
-
-        if (!recorded)
+            await rig.RestoreRecorded.Task.WaitAsync(RestoreBarrierBound, Ct);
+        }
+        catch (Exception ex) when (ex is TimeoutException or OperationCanceledException)
         {
             var seen = string.Join(
                 Environment.NewLine,
