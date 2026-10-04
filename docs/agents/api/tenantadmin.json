@@ -43,6 +43,47 @@
       "source": "src/lattice.api.tenantadmin.grpc/Security/LatticeTenantAdminApiGrpcAuthInterceptor.cs"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeTenantAdminApi",
+        "package": "Orleans.Lattice.Api.TenantAdmin",
+        "provides": [
+          "ILatticeTenantAdmin",
+          "ILatticeTenantRegionAdmin",
+          "ILatticeTenantAccessAdmin",
+          "ILatticeTenantGrantAdmin",
+          "ILatticeTenantSelfService",
+          "ILatticeTenantQuotaUsage",
+          "ILatticeTenantDirectoryAdmin",
+          "ILatticeTenantPolicyAdmin"
+        ],
+        "source": "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs#LatticeApiTenantAdminServiceCollectionExtensions.AddLatticeTenantAdminApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeTenancy",
+        "kind": "registration",
+        "reason": "The tenant-admin facade operates on the tenancy engine tenant registry and fails fast when AddLatticeTenancy has not registered it.",
+        "source": "src/lattice.api.tenantadmin/LatticeApiTenantAdminServiceCollectionExtensions.cs#LatticeApiTenantAdminServiceCollectionExtensions.AddLatticeTenantAdminApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeTenantAdminApiGrpc",
+        "package": "Orleans.Lattice.Api.TenantAdmin.Grpc",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcServiceCollectionExtensions.cs#LatticeTenantAdminApiGrpcServiceCollectionExtensions.AddLatticeTenantAdminApiGrpc"
+      },
+      {
+        "registration": "MapLatticeTenantAdminApiGrpc",
+        "package": "Orleans.Lattice.Api.TenantAdmin.Grpc",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcServiceCollectionExtensions.cs#LatticeTenantAdminApiGrpcServiceCollectionExtensions.MapLatticeTenantAdminApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AuthSchemeAdvertisement": {
       "kind": "record",

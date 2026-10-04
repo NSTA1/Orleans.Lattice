@@ -847,6 +847,10 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "The in-memory WAL default is not restart-durable storage."
         source: "docs/lattice.replication/README.md"
+      - statement: "Replication applies deliveries for different tree and origin pairs independently, with no total order across them."
+        source: "docs/lattice.replication/replication-apply.md"
+      - statement: "A bootstrap snapshot stream is not delivered in HLC order, so the receiver skips the pinned-causal-floor check and high-water-mark advance while it drains and relies on per-key last-writer-wins for convergence."
+        source: "docs/lattice.replication/snapshot-bootstrap.md"
     unsafe_sequences:
       - sequence:
           - "enable runtime replication concurrently under divergent merge modes"

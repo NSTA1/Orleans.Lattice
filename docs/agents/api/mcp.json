@@ -88,6 +88,35 @@
       "source": "src/lattice.api.mcp/Discovery/CredentialStampingTool.cs#CredentialStampingTool.InvokeAsync"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeMcp",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "provides": [
+          "ILatticeApiMcpToolGroup"
+        ],
+        "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs#LatticeMcpServiceCollectionExtensions.AddLatticeMcp"
+      },
+      {
+        "registration": "MapLatticeMcp",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "source": "src/lattice.api.mcp/LatticeMcpServiceCollectionExtensions.cs#LatticeMcpServiceCollectionExtensions.MapLatticeMcp"
+      }
+    ],
+    "requires": [],
+    "grpc_server": [],
+    "grpc_client": [],
+    "absent": null,
+    "session_filtering": {
+      "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.BuildSessionPlanAsync",
+      "statement": "For each MCP session, LatticeApiMcpSessionConfigurator resolves the caller credential and effective permissions, adds lattice_capabilities for authenticated callers, then advertises only group/app tools whose group grant, per-tool operation minimum, topology support, and authorizer check all pass."
+    },
+    "capabilities_report": {
+      "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.BuildCapabilities",
+      "statement": "lattice_capabilities reports the caller-scoped availability and endpoint for each registered facade group plus cluster identity; app-contributed tools are intentionally omitted from that report."
+    }
+  },
   "types": {
     "McpLatticeOperation": {
       "kind": "record",
@@ -296,6 +325,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "groupId",
@@ -364,6 +406,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "subjectId",
@@ -427,6 +478,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -513,6 +573,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "groupId",
@@ -569,6 +638,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -632,6 +710,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "groupId",
@@ -688,6 +775,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -753,6 +849,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "pageSize",
@@ -816,6 +921,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -886,6 +1000,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Read"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "memberId",
@@ -942,6 +1065,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -1042,6 +1178,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "groupId",
@@ -1098,6 +1247,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -1161,6 +1323,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
       },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -1222,6 +1397,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddAuthTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableAuthAdministration",
+          "parameter": "enableAdministration",
+          "source": "src/lattice.api.mcp/Tools/Auth/LatticeMcpServiceCollectionExtensions.Auth.cs#LatticeMcpServiceCollectionExtensions.AddAuthTools"
+        },
+        "requires": [
+          "AddLatticeAuthApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Auth/AuthToolGroup.cs#AuthToolGroup"
       },
       "request": [
         {
@@ -1285,6 +1473,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateStartBackupTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -1382,6 +1583,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateStartIncrementalTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -1486,6 +1700,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateDeleteTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "backupId",
@@ -1544,6 +1771,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateDescribeTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "backupId",
@@ -1601,6 +1837,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateExportArtifactTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -1680,6 +1925,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateInventoryTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -1731,6 +1985,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateListTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -1805,6 +2068,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationCancelTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "operationId",
@@ -1862,6 +2138,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationListTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -1929,6 +2214,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateOperationStatusTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/McpBackupOperationHandle.cs#McpBackupOperationHandle"
+      },
       "request": [
         {
           "name": "operationId",
@@ -1986,6 +2280,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateRestoreAliasTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -2070,6 +2377,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateRevertRestoreTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -2176,6 +2496,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateScopeStatusTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -2247,6 +2576,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -2340,6 +2682,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartHealthCheckTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "backupId",
@@ -2405,6 +2760,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogRebuildTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "operationId",
@@ -2463,6 +2831,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartCatalogScrubTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -2529,6 +2910,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartIncrementalTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
       },
       "request": [
         {
@@ -2628,6 +3022,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartRestoreTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "backupId",
@@ -2714,6 +3121,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#CreateStartBackupSetTool"
       },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
       "request": [
         {
           "name": "name",
@@ -2799,6 +3219,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.CreateCapabilitiesTool"
       },
+      "availability": {
+        "module": "AddLatticeMcp",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator"
+      },
       "request": [],
       "response": {
         "type": "LatticeApiMcpCapabilities",
@@ -2842,6 +3269,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildDeleteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
       },
       "request": [
         {
@@ -2905,6 +3345,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildDeleteRangeTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
       },
       "request": [
         {
@@ -2974,6 +3427,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildGCounterWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3049,6 +3515,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildGCounterGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3112,6 +3587,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3174,6 +3658,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildGSetWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3244,6 +3741,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildGSetGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3307,6 +3813,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMaxRegisterGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3369,6 +3884,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMaxRegisterSetTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3439,6 +3967,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMinRegisterGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3501,6 +4038,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMinRegisterSetTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3571,6 +4121,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRegisterGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3633,6 +4192,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRegisterSetTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3708,6 +4280,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildOrFlagWriteTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3782,6 +4367,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildOrFlagGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3844,6 +4438,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMapWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -3932,6 +4539,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildMapGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -3994,6 +4610,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildSetWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4075,6 +4704,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildSetGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4137,6 +4775,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildCounterWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4218,6 +4869,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildCounterGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4280,6 +4940,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildReadRangeTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4366,6 +5035,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRwFlagWriteTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4440,6 +5122,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRwFlagGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4502,6 +5193,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRwSetWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4583,6 +5287,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildRwSetGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4645,6 +5358,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildSequenceWriteTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4733,6 +5459,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildSequenceGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4795,6 +5530,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildSetTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
       },
       "request": [
         {
@@ -4865,6 +5613,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildSetManyTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -4927,6 +5688,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildSetManyAtomicTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
       },
       "request": [
         {
@@ -5003,6 +5777,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup.BuildSetManyAtomicCrossTreeTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "batches",
@@ -5066,6 +5853,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildVersionVectorGetTool"
       },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -5128,6 +5924,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup.BuildVersionVectorTickTool"
+      },
+      "availability": {
+        "module": "AddDataTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp/LatticeMcpDataToolsServiceCollectionExtensions.cs#LatticeMcpDataToolsServiceCollectionExtensions.AddDataTools"
+        },
+        "requires": [
+          "AddLatticeDataApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Data/DataToolGroup.Crdt.cs#DataToolGroup"
       },
       "request": [
         {
@@ -5197,6 +6006,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.CreateListRegionsTool"
       },
+      "availability": {
+        "module": "AddLatticeMcp",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp/Discovery/LatticeApiMcpSessionConfigurator.cs#LatticeApiMcpSessionConfigurator.CreateListRegionsTool"
+      },
       "request": [],
       "response": {
         "type": "LatticeApiMcpRegionsToolResult",
@@ -5243,6 +6059,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup.CreateDisableTool"
+      },
+      "availability": {
+        "module": "AddReplicationTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableReplicationControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Replication/LatticeMcpReplicationServiceCollectionExtensions.cs#LatticeMcpReplicationServiceCollectionExtensions.AddReplicationTools"
+        },
+        "requires": [
+          "AddLatticeReplicationApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup"
       },
       "request": [
         {
@@ -5301,6 +6130,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup.CreateEnableTool"
+      },
+      "availability": {
+        "module": "AddReplicationTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableReplicationControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Replication/LatticeMcpReplicationServiceCollectionExtensions.cs#LatticeMcpReplicationServiceCollectionExtensions.AddReplicationTools"
+        },
+        "requires": [
+          "AddLatticeReplicationApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup"
       },
       "request": [
         {
@@ -5373,6 +6215,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup.CreateGetConfigTool"
       },
+      "availability": {
+        "module": "AddReplicationTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeReplicationApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -5424,6 +6275,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -5490,6 +6350,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -5541,6 +6410,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -5605,6 +6483,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -5698,6 +6585,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -5755,6 +6651,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -5820,6 +6725,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -5907,6 +6821,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -5971,6 +6894,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -6044,6 +6976,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "indexName",
@@ -6115,6 +7056,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -6188,6 +7138,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -6267,6 +7226,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "pageSize",
@@ -6340,6 +7308,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "pageSize",
@@ -6412,6 +7389,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
       },
       "request": [
         {
@@ -6534,6 +7520,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup.Create"
       },
+      "availability": {
+        "module": "AddStateTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeStateApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/State/StateToolGroup.cs#StateToolGroup"
+      },
       "request": [
         {
           "name": "indexName",
@@ -6612,6 +7607,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup.Create"
       },
+      "availability": {
+        "module": "AddTelemetryTools",
+        "package": "Orleans.Lattice.Api.Mcp.Telemetry",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -6672,6 +7674,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddTelemetryTools",
+        "package": "Orleans.Lattice.Api.Mcp.Telemetry",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
       },
       "request": [
         {
@@ -6740,6 +7749,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddTelemetryTools",
+        "package": "Orleans.Lattice.Api.Mcp.Telemetry",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
       },
       "request": [
         {
@@ -6814,6 +7830,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup.Create"
+      },
+      "availability": {
+        "module": "AddTelemetryTools",
+        "package": "Orleans.Lattice.Api.Mcp.Telemetry",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.telemetry/TelemetryToolGroup.cs#TelemetryToolGroup"
       },
       "request": [
         {
@@ -6900,6 +7923,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateAuthorizeRegionsTool"
       },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      },
       "request": [
         {
           "name": "tenantId",
@@ -6963,6 +7999,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateCreateTool"
+      },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
       },
       "request": [
         {
@@ -7029,6 +8078,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup.CreateCurrentTool"
       },
+      "availability": {
+        "module": "AddTenantSelfAwarenessTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -7080,6 +8138,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateDeleteTool"
+      },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
       },
       "request": [
         {
@@ -7139,6 +8210,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup.CreateGetTool"
       },
+      "availability": {
+        "module": "AddTenantSelfAwarenessTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup"
+      },
       "request": [
         {
           "name": "tenantId",
@@ -7197,6 +8277,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup.CreateListTool"
       },
+      "availability": {
+        "module": "AddTenantSelfAwarenessTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantSelfAwareness/TenantSelfAwarenessToolGroup.cs#TenantSelfAwarenessToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -7248,6 +8337,19 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateRegionStatusTool"
+      },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
       },
       "request": [
         {
@@ -7307,6 +8409,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateResumeTool"
       },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      },
       "request": [
         {
           "name": "tenantId",
@@ -7364,6 +8479,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateSetQuotasTool"
+      },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
       },
       "request": [
         {
@@ -7465,6 +8593,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateSetResidencyTool"
       },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      },
       "request": [
         {
           "name": "tenantId",
@@ -7529,6 +8670,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup.CreateSuspendTool"
       },
+      "availability": {
+        "module": "AddTenantAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTenantAdminControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/TenantAdmin/LatticeMcpTenantAdminServiceCollectionExtensions.cs#LatticeMcpTenantAdminServiceCollectionExtensions.AddTenantAdminTools"
+        },
+        "requires": [
+          "AddLatticeTenantAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TenantAdmin/TenantAdminToolGroup.cs#TenantAdminToolGroup"
+      },
       "request": [
         {
           "name": "tenantId",
@@ -7586,6 +8740,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -7664,6 +8831,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -7728,6 +8908,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -7791,6 +8984,19 @@
         "read_only": false,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Mutate"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -7858,6 +9064,19 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -7931,6 +9150,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -7996,6 +9228,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8060,6 +9301,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8117,6 +9367,19 @@
         "read_only": false,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Mutate"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -8194,6 +9457,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8269,6 +9545,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8340,6 +9629,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8403,6 +9705,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8459,6 +9774,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -8517,6 +9845,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -8574,6 +9911,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
       },
       "request": [
         {
@@ -8641,6 +9987,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#and"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8706,6 +10061,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -8764,6 +10128,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8820,6 +10193,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -8878,6 +10260,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -8934,6 +10325,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -8992,6 +10392,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9048,6 +10457,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
       },
       "request": [
         {
@@ -9118,6 +10540,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9183,6 +10618,19 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -9240,6 +10688,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateReadTools"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
       },
       "request": [
         {
@@ -9307,6 +10764,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateReadTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -9365,6 +10831,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9421,6 +10896,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
       },
       "request": [
         {
@@ -9503,6 +10991,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools.CreateControlTools"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminSchemaOperationTools.cs#TreeAdminSchemaOperationTools"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9580,6 +11081,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9643,6 +11153,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9705,6 +11228,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools",
+          "parameter": "enableSchemaControl",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeSchemaApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -9782,6 +11318,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9847,6 +11392,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9905,6 +11459,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -9962,6 +11525,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10022,6 +11594,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -10079,6 +11660,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
       },
       "request": [
         {
@@ -10146,6 +11736,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#and"
+      },
       "request": [
         {
           "name": "operationId",
@@ -10205,6 +11804,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools.Create"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminOperationTools.cs#TreeAdminOperationTools"
+      },
       "request": [
         {
           "name": "operationId",
@@ -10263,6 +11871,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -10314,6 +11931,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10379,6 +12009,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "indexName",
@@ -10436,6 +12075,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10516,6 +12168,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -10573,6 +12238,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10632,6 +12306,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -10689,6 +12372,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10748,6 +12440,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -10805,6 +12506,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10871,6 +12585,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -10928,6 +12655,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -10993,6 +12733,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11050,6 +12799,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11121,6 +12883,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11178,6 +12949,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11237,6 +13021,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11294,6 +13087,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11365,6 +13171,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11448,6 +13267,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "setId",
@@ -11505,6 +13337,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11569,6 +13414,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11695,6 +13553,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11779,6 +13650,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11837,6 +13717,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -11894,6 +13783,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -11971,6 +13873,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "viewName",
@@ -12029,6 +13944,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -12080,6 +14004,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -12145,6 +14082,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "viewName",
@@ -12209,6 +14159,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "viewName",
@@ -12266,6 +14225,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -12364,6 +14336,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -12433,6 +14414,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Write"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -12504,6 +14498,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -12562,6 +14565,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -12619,6 +14631,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup.Read"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminWalReclamationToolHandlers.cs"
       },
       "request": [
         {
@@ -12682,6 +14703,21 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name claim_status; most full repo-context_* ids are not present as one source literal."
       },
       "request": [
         {
@@ -12748,6 +14784,21 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name context; most full repo-context_* ids are not present as one source literal."
       },
       "request": [
         {
@@ -12859,6 +14910,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name health; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "repoId",
@@ -12927,6 +14993,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name index_status; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "repoId",
@@ -12993,6 +15074,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name list_topics; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "repoId",
@@ -13058,6 +15154,21 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name neighbors; most full repo-context_* ids are not present as one source literal."
       },
       "request": [
         {
@@ -13147,6 +15258,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name outline; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "repoId",
@@ -13219,6 +15345,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name recall; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "key",
@@ -13284,6 +15425,21 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name related; most full repo-context_* ids are not present as one source literal."
       },
       "request": [
         {
@@ -13356,6 +15512,21 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name scan; most full repo-context_* ids are not present as one source literal."
       },
       "request": [
         {
@@ -13457,6 +15628,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name search; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "repoId",
@@ -13536,6 +15722,21 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppToolAlias.cs#RepoContextAppToolAlias"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "registerAsApp",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [
+          "AddRepoContextTools(registerAsApp: true)",
+          "AddAppMcpTools"
+        ],
+        "source": "src/lattice.api.mcp.repocontext/App/RepoContextAppManifest.cs#RepoContextAppManifest",
+        "note": "App-local tool id is built from RepoContextAppManifest.Slug (repo-context) plus the manifest local tool name stats; most full repo-context_* ids are not present as one source literal."
+      },
       "request": [
         {
           "name": "region",
@@ -13595,6 +15796,18 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildAddRepoTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "note": "Workspace-mode repository maintenance tools also require AddRepoContextTools(workspaceMode: true); repocontext_add_repo additionally requires a non-empty workspaceRoot so the path guard is enforcing."
       },
       "request": [
         {
@@ -13693,6 +15906,18 @@
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildBootstrapTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "note": "Single-repository onboarding is contributed only outside workspace mode and only when a non-empty workspaceRoot makes the path guard enforcing."
+      },
       "request": [
         {
           "name": "repoRoot",
@@ -13789,6 +16014,18 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildChangedTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "workspaceRoot",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "note": "This path-taking read tool is withheld unless AddRepoContextTools receives a non-empty workspaceRoot so the workspace guard is enforcing."
+      },
       "request": [
         {
           "name": "repoId",
@@ -13856,6 +16093,17 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildClaimTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -13939,6 +16187,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildClaimStatusTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "key",
@@ -14000,6 +16255,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildContextTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -14107,6 +16369,17 @@
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildForgetTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "key",
@@ -14190,6 +16463,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "repoId",
@@ -14254,6 +16534,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildIndexStatusTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "repoId",
@@ -14316,6 +16603,17 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListReposTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "workspaceMode",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -14371,6 +16669,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildListTopicsTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -14433,6 +16738,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildNeighborsTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -14518,6 +16830,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildOutlineTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "repoId",
@@ -14586,6 +16905,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRecallTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "key",
@@ -14647,6 +16973,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRelatedTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -14716,6 +17049,17 @@
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildReleaseClaimTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "key",
@@ -14783,6 +17127,17 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRememberTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -14929,6 +17284,18 @@
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRemoveRepoTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "note": "Workspace-mode repository maintenance tools also require AddRepoContextTools(workspaceMode: true); repocontext_add_repo additionally requires a non-empty workspaceRoot so the path guard is enforcing."
+      },
       "request": [
         {
           "name": "repoId",
@@ -14990,6 +17357,17 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildRenewClaimTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -15066,6 +17444,18 @@
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildResetIndexTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup",
+        "note": "Workspace-mode repository maintenance tools also require AddRepoContextTools(workspaceMode: true); repocontext_add_repo additionally requires a non-empty workspaceRoot so the path guard is enforcing."
+      },
       "request": [
         {
           "name": "repoId",
@@ -15127,6 +17517,13 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildScanTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -15224,6 +17621,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildSearchTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "repoId",
@@ -15299,6 +17703,13 @@
         "destructive": false,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildStatsTool"
       },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": null,
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
+      },
       "request": [
         {
           "name": "region",
@@ -15354,6 +17765,17 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup.BuildUpdateTool"
+      },
+      "availability": {
+        "module": "AddRepoContextTools",
+        "package": "Orleans.Lattice.Api.Mcp.RepoContext",
+        "opt_in": {
+          "option": null,
+          "parameter": "enableWrites",
+          "source": "src/lattice.api.mcp.repocontext/LatticeMcpRepoContextServiceCollectionExtensions.cs#LatticeMcpRepoContextServiceCollectionExtensions.AddRepoContextTools"
+        },
+        "requires": [],
+        "source": "src/lattice.api.mcp.repocontext/RepoContextToolGroup.cs#RepoContextToolGroup"
       },
       "request": [
         {
@@ -15459,6 +17881,19 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "operationId",
@@ -15517,6 +17952,15 @@
         "read_only": true,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -15583,6 +18027,15 @@
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "operationId",
@@ -15641,6 +18094,19 @@
         "read_only": false,
         "destructive": false,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -15707,6 +18173,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "treeId",
@@ -15771,6 +18250,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {
@@ -15837,6 +18329,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "viewName",
@@ -15902,6 +18407,19 @@
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
       },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
+      },
       "request": [
         {
           "name": "viewName",
@@ -15966,6 +18484,19 @@
         "read_only": false,
         "destructive": true,
         "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#Build"
+      },
+      "availability": {
+        "module": "AddTreeAdminTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableTreeAdminLifecycleTools",
+          "parameter": "enableLifecycle",
+          "source": "src/lattice.api.mcp/Tools/TreeAdmin/LatticeMcpTreeAdminServiceCollectionExtensions.cs#LatticeMcpTreeAdminServiceCollectionExtensions.AddTreeAdminTools"
+        },
+        "requires": [
+          "AddLatticeTreeAdminApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs#TreeAdminToolGroup"
       },
       "request": [
         {

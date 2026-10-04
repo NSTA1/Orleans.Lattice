@@ -45,6 +45,41 @@
       "source": "src/lattice.api.backup.grpc/Security/LatticeBackupApiGrpcAuthInterceptor.cs#LatticeBackupApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeBackupApi",
+        "package": "Orleans.Lattice.Api.Backup",
+        "provides": [
+          "ILatticeBackupControl",
+          "ILatticeBackupOperations"
+        ],
+        "source": "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs#LatticeApiBackupServiceCollectionExtensions.AddLatticeBackupApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeBackup",
+        "kind": "registration",
+        "reason": "The backup facade drives the backup engine and fails fast when AddLatticeBackup has not registered the capture service.",
+        "source": "src/lattice.api.backup/LatticeApiBackupServiceCollectionExtensions.cs#LatticeApiBackupServiceCollectionExtensions.AddLatticeBackupApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeBackupApiGrpc",
+        "package": "Orleans.Lattice.Api.Backup.Grpc",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupApiGrpcServiceCollectionExtensions.cs#LatticeBackupApiGrpcServiceCollectionExtensions.AddLatticeBackupApiGrpc"
+      },
+      {
+        "registration": "MapLatticeBackupApiGrpc",
+        "package": "Orleans.Lattice.Api.Backup.Grpc",
+        "source": "src/lattice.api.backup.grpc/LatticeBackupApiGrpcServiceCollectionExtensions.cs#LatticeBackupApiGrpcServiceCollectionExtensions.MapLatticeBackupApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "ArtifactChunk": {
       "kind": "record",

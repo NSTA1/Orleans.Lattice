@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_tree_delete, lattice_treeadmin_tree_recover, lattice_treeadmin_tree_purge"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tree_delete, lattice_treeadmin_tree_purge, lattice_treeadmin_tree_recover), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
   - id: not-reserved
     check: "Tree id is not reserved."
     source: "docs/lattice.api.treeadmin/README.md"
@@ -80,6 +83,10 @@ failure_modes:
     signal: "A purge interrupted after recording its completion but before removing the registry entry leaves that entry behind."
     effect: "The id reads as a live, empty tree that keeps the purged tree's registry settings."
     response: "Check TreeExistsAsync before reusing the id; docs/lattice/tree-deletion.md states no automatic repair for the leftover entry."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: true
   mechanism: "RecoverTreeAsync reverses soft delete within the recovery window; purge has no rollback."

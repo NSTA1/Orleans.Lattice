@@ -51,7 +51,14 @@
       "facade_operation": "null, 'api/<surface>.json#<operation-id>', or a list when a request parameter selects between facade operations",
       "inheritance": "with a single facade_operation string, retry, idempotency and concurrency are copied verbatim from that facade operation",
       "read_only": "a read_only tool is idempotent and safe to retry"
-    }
+    },
+    "availability": {
+      "rule": "The specifications describe every surface Lattice ships, but a host exposes only the packages it registers. A surface or tool missing from a host is host configuration, not a fault: read availability before relying on a surface, confirm an MCP tool by its presence in the session's tools/list, and never emulate an unavailable operation through a different surface.",
+      "api_surface": "api/<surface>.json availability is {in_process, requires, grpc_server, grpc_client, absent}: in_process, grpc_server and grpc_client list registration entries {registration, package, provides?, source}, where provides names the interfaces a registration makes resolvable and source is the declaration of that registration method; requires lists {name, kind (registration or options), arguments?, reason, source} that the surface needs as well; an empty grpc_server means the surface has no gRPC binding; absent states what a caller observes when the surface is not registered, or is null when no source states it.",
+      "mcp_tool": "api/mcp.json operations[].availability is {module, package, opt_in, requires, source}: module is the registration that contributes the tool, opt_in names the parameter or option that must also be set (null when registering the module is enough), requires lists the facade registrations the tool delegates to, and source is the code that declares the tool. The session's tools/list is further filtered to the caller's effective permissions.",
+      "procedure": "The first precondition of every procedure has id surface-available, and its failure_modes include surface-not-available."
+    },
+    "json_schemas": "schemas/<kind>.schema.json is the JSON Schema (draft 2020-12) of every artifact whose schema id is lattice.agents/<kind>/v1, including index.json (kind index). YAML artifacts validate after YAML 1.2 core-schema typing of plain scalars; a quoted scalar is a string."
   },
   "coverage": {
     "api_surfaces_covered": [
@@ -127,7 +134,7 @@
       "kind": "api",
       "format": "json",
       "schema": "lattice.agents/api/v1",
-      "summary": "Replication facade and peer-status facade (Orleans.Lattice.Api.Replication, .Grpc) and operator re-seed admin (Orleans.Lattice.Replication): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
+      "summary": "Replication facade and peer-status facade (Orleans.Lattice.Api.Replication, .Grpc) and operator re-seed admin and dead-letter queue (Orleans.Lattice.Replication): operations, request/response types, errors and gRPC status, retry, idempotency, concurrency."
     },
     {
       "path": "api/schema.json",
@@ -242,6 +249,34 @@
       "summary": "Operational procedure (compaction): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
     },
     {
+      "path": "procedures/replication-dead-letters.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (replication-dead-letters): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/replication-enrollment.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (replication-enrollment): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/replication-peer-status.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (replication-peer-status): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "procedures/replication-reseed.yaml",
+      "kind": "procedure",
+      "format": "yaml",
+      "schema": "lattice.agents/procedure/v1",
+      "summary": "Operational procedure (replication-reseed): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
       "path": "procedures/reshard.yaml",
       "kind": "procedure",
       "format": "yaml",
@@ -303,6 +338,83 @@
       "format": "yaml",
       "schema": "lattice.agents/procedure/v1",
       "summary": "Operational procedure (wal-tuning): preconditions, steps, postconditions, failure modes, rollback semantics, concurrency."
+    },
+    {
+      "path": "schemas/api.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of api artifacts (lattice.agents/api/v1)."
+    },
+    {
+      "path": "schemas/capabilities.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of capabilities artifacts (lattice.agents/capabilities/v1)."
+    },
+    {
+      "path": "schemas/concepts.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of concepts artifacts (lattice.agents/concepts/v1)."
+    },
+    {
+      "path": "schemas/deployment.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of deployment artifacts (lattice.agents/deployment/v1)."
+    },
+    {
+      "path": "schemas/governance-audit-events.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of governance-audit-events artifacts (lattice.agents/governance-audit-events/v1)."
+    },
+    {
+      "path": "schemas/governance-authorization.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of governance-authorization artifacts (lattice.agents/governance-authorization/v1)."
+    },
+    {
+      "path": "schemas/governance-identity-propagation.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of governance-identity-propagation artifacts (lattice.agents/governance-identity-propagation/v1)."
+    },
+    {
+      "path": "schemas/governance-policies.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of governance-policies artifacts (lattice.agents/governance-policies/v1)."
+    },
+    {
+      "path": "schemas/index.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of index artifacts (lattice.agents/index/v1)."
+    },
+    {
+      "path": "schemas/invariants.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of invariants artifacts (lattice.agents/invariants/v1)."
+    },
+    {
+      "path": "schemas/procedure.schema.json",
+      "kind": "json-schema",
+      "format": "json",
+      "schema": "lattice.agents/json-schema/v1",
+      "summary": "JSON Schema (draft 2020-12) defining the format of procedure artifacts (lattice.agents/procedure/v1)."
     }
   ]
 }

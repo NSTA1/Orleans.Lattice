@@ -28,6 +28,24 @@
     "source": "src/lattice/LatticeServiceCollectionExtensions.cs#AddLattice"
   },
   "grpc": null,
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLattice",
+        "package": "Orleans.Lattice",
+        "provides": [
+          "ILattice",
+          "ILatticeAdmin",
+          "ILatticeQueue<T>"
+        ],
+        "source": "src/lattice/LatticeServiceCollectionExtensions.cs#LatticeServiceCollectionExtensions.AddLattice"
+      }
+    ],
+    "requires": [],
+    "grpc_server": [],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AtomicWriteOutcome": {
       "kind": "enum",

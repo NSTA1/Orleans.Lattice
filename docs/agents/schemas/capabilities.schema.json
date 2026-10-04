@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nsta1.github.io/Orleans.Lattice/docs/agents/schemas/capabilities.schema.json",
+  "schema": "lattice.agents/json-schema/v1",
+  "title": "Orleans.Lattice capability envelopes",
+  "description": "Per capability: the packages and concepts it spans, what it guarantees, what it explicitly does not guarantee, unsafe operation sequences, and concurrency rules. Each item is one atomic claim with the source that states it.",
+  "type": "object",
+  "required": [
+    "schema",
+    "capabilities"
+  ],
+  "properties": {
+    "schema": {
+      "const": "lattice.agents/capabilities/v1"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "packages",
+          "concepts",
+          "guarantees",
+          "non_guarantees",
+          "unsafe_sequences",
+          "concurrency_rules",
+          "sources"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "packages": {
+            "$ref": "#/$defs/packages"
+          },
+          "concepts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/id"
+            }
+          },
+          "guarantees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/claim"
+            }
+          },
+          "non_guarantees": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/claim"
+            }
+          },
+          "unsafe_sequences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "sequence",
+                "hazard",
+                "source"
+              ],
+              "properties": {
+                "sequence": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "minItems": 1
+                },
+                "hazard": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "source": {
+                  "$ref": "#/$defs/source"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "concurrency_rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/claim"
+            }
+          },
+          "sources": {
+            "$ref": "#/$defs/sources"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "statement",
+            "source"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/uncertain"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "package": {
+      "type": "string",
+      "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+      }
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uncertain": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "properties": {
+        "status": {
+          "const": "uncertain"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

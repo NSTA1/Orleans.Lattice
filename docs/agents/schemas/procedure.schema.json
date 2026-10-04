@@ -1,0 +1,355 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nsta1.github.io/Orleans.Lattice/docs/agents/schemas/procedure.schema.json",
+  "schema": "lattice.agents/json-schema/v1",
+  "title": "Orleans.Lattice operational procedure",
+  "description": "One operational procedure: the surfaces that carry it out, preconditions (including that the surface is available on the host), ordered steps, postconditions, failure modes, rollback semantics and concurrency rules.",
+  "type": "object",
+  "required": [
+    "schema",
+    "id",
+    "name",
+    "surfaces",
+    "preconditions",
+    "steps",
+    "postconditions",
+    "failure_modes",
+    "rollback",
+    "concurrency",
+    "sources"
+  ],
+  "properties": {
+    "schema": {
+      "const": "lattice.agents/procedure/v1"
+    },
+    "id": {
+      "$ref": "#/$defs/id"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "surfaces": {
+      "type": "object",
+      "required": [],
+      "properties": {
+        "in_process": {
+          "type": "object",
+          "required": [
+            "api",
+            "source"
+          ],
+          "properties": {
+            "api": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        "grpc": {
+          "type": "object",
+          "required": [
+            "api",
+            "source"
+          ],
+          "properties": {
+            "api": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        "mcp_tool": {
+          "type": "object",
+          "required": [
+            "api",
+            "source"
+          ],
+          "properties": {
+            "api": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "preconditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "check",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "check": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "n",
+          "action",
+          "api",
+          "expects",
+          "source"
+        ],
+        "properties": {
+          "n": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "action": {
+            "type": "string",
+            "minLength": 1
+          },
+          "api": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expects": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "postconditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "check",
+          "source"
+        ],
+        "properties": {
+          "check": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "failure_modes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "signal",
+          "effect",
+          "response"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "signal": {
+            "type": "string",
+            "minLength": 1
+          },
+          "effect": {
+            "type": "string",
+            "minLength": 1
+          },
+          "response": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "rollback": {
+      "type": "object",
+      "required": [
+        "supported",
+        "mechanism",
+        "steps",
+        "source"
+      ],
+      "properties": {
+        "supported": {
+          "type": "boolean"
+        },
+        "mechanism": {
+          "type": "string",
+          "minLength": 1
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "action",
+              "api",
+              "source"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "minLength": 1
+              },
+              "api": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "$ref": "#/$defs/source"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        }
+      },
+      "additionalProperties": false
+    },
+    "concurrency": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rule",
+          "source"
+        ],
+        "properties": {
+          "rule": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "sources": {
+      "$ref": "#/$defs/sources"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "statement",
+            "source"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/uncertain"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "package": {
+      "type": "string",
+      "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+      }
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uncertain": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "properties": {
+        "status": {
+          "const": "uncertain"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

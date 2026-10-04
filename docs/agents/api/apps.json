@@ -67,6 +67,81 @@
       "source": "src/lattice.api.apps.grpc/Security/LatticeAppsApiGrpcAuthInterceptor.cs#LatticeAppsApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeAppsApi",
+        "package": "Orleans.Lattice.Api.Apps",
+        "provides": [
+          "ILatticeAppsControl",
+          "ILatticeAppRoleBindings",
+          "ILatticeAppCatalog",
+          "ILatticeAppWorkspace"
+        ],
+        "source": "src/lattice.api.apps/LatticeAppsApiServiceCollectionExtensions.cs#LatticeAppsApiServiceCollectionExtensions.AddLatticeAppsApi"
+      },
+      {
+        "registration": "AddLatticeAppBridgeApi",
+        "package": "Orleans.Lattice.Api.Apps",
+        "provides": [
+          "ILatticeAppBridge"
+        ],
+        "source": "src/lattice.api.apps/LatticeAppBridgeApiServiceCollectionExtensions.cs#LatticeAppBridgeApiServiceCollectionExtensions.AddLatticeAppBridgeApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeApps",
+        "kind": "registration",
+        "reason": "The app facades compose the apps engine registry, source seam and activation pipeline and fail fast if AddLatticeApps was not called first.",
+        "source": "src/lattice.api.apps/LatticeAppsApiServiceCollectionExtensions.cs#LatticeAppsApiServiceCollectionExtensions.AddLatticeAppsApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeAppsApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.cs#LatticeAppsApiGrpcServiceCollectionExtensions.AddLatticeAppsApiGrpc"
+      },
+      {
+        "registration": "MapLatticeAppsApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.cs#LatticeAppsApiGrpcServiceCollectionExtensions.MapLatticeAppsApiGrpc"
+      },
+      {
+        "registration": "AddLatticeAppCatalogApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Catalog.cs#LatticeAppsApiGrpcServiceCollectionExtensions.AddLatticeAppCatalogApiGrpc"
+      },
+      {
+        "registration": "MapLatticeAppCatalogApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Catalog.cs#LatticeAppsApiGrpcServiceCollectionExtensions.MapLatticeAppCatalogApiGrpc"
+      },
+      {
+        "registration": "AddLatticeAppWorkspaceApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Workspace.cs#LatticeAppsApiGrpcServiceCollectionExtensions.AddLatticeAppWorkspaceApiGrpc"
+      },
+      {
+        "registration": "MapLatticeAppWorkspaceApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Workspace.cs#LatticeAppsApiGrpcServiceCollectionExtensions.MapLatticeAppWorkspaceApiGrpc"
+      },
+      {
+        "registration": "AddLatticeAppBridgeApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Bridge.cs#LatticeAppsApiGrpcServiceCollectionExtensions.AddLatticeAppBridgeApiGrpc"
+      },
+      {
+        "registration": "MapLatticeAppBridgeApiGrpc",
+        "package": "Orleans.Lattice.Api.Apps.Grpc",
+        "source": "src/lattice.api.apps.grpc/LatticeAppsApiGrpcServiceCollectionExtensions.Bridge.cs#LatticeAppsApiGrpcServiceCollectionExtensions.MapLatticeAppBridgeApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AppBridgeException": {
       "kind": "exception",
