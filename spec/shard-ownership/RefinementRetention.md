@@ -46,7 +46,8 @@ may still hold any pair the registry ever published.
 | The split's sweep resolves an Indeterminate answer to the recorded decision behind it, as the #4445 leaf refusal does (`SplitSweep`) | The pre-check reads `GetStatusAsync` and treats Indeterminate as InFlight; the replay is refused at the destination, leaving only an activation-scoped shadow marker | #4473 | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | A routed operation on a purged old copy is refused, so the caller refreshes its pair (`Gone` in `RoutedRefused`) | A routed read answers as the empty tree and a routed write is accepted, re-seeding the purged copy; a routing activation that cached the old pair across `SoftDeleteDuration` is never told to refresh | #4503 | `NoResurrectionRetainedPurgedCopyServesEmpty` |
 | The online snapshot carries prepared buckets (`SnapCopy`) | It copies committed entries only | #4455 | `OwnerMonotonicRetainedSnapshotDropsBuckets` |
-| A terminal a purged old copy refuses is delivered to the copy it mirrored into, following that copy's own layout; one the copy an undo discarded refuses counts as delivered (`SagaTerminal`, `TermTargets`) | The broadcast fails on a purged copy, and re-sends to the old copy after an undo | #4475, #4474 | in `ShardOwnership`: `SagaCompletesPurgedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
+| A terminal a purged old copy refuses is delivered to the copy it mirrored into, following that copy's own layout; one the copy an undo discarded refuses counts as delivered (`SagaTerminal`, `TermTargets`) | The broadcast fails on a purged copy, and on a copy the undo discarded (the refusal is `InvalidOperationException`, which it does not follow), so the saga never completes | #4475, #4474 | in `ShardOwnership`: `SagaCompletesPurgedCopyRefusesTerminal`, `SagaCompletesDiscardedCopyRefusesTerminal` (`AtomicOnOwnerDiscardedCopyTerminalRedirects` stands against a fix that follows the refusal) |
+| The terminal's committed-values backstop installs a key it finds no bucket for last-writer-wins at the saga's own stamp (`TermRow`) | The backstop is stamped above whatever the row holds, so it overwrites a later write of a moved key | #4522 | `NoKeyLostRetainedFreshStampBackstop` |
 
 The extent of the split/resize interlock (#4452) left this table when its fix
 landed (#4466): production holds a split until no shard of the replaced copy
@@ -95,7 +96,7 @@ That is the intended design #4475's fix has to meet.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `SplitBegin` | An adaptive split opens its shadow-write window | `TreeShardSplitGrain.SplitAsync` and `ShardRootGrain.BeginSplitAsync`. It refuses while `TreeResizeGrain.HoldsShardMigrationsAsync` reports a hold, which lasts until no shard of the replaced copy mirrors into the resized one (#4452). | Yes: `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`, `TreeShardSplitGrainTests.SplitAsync_refuses_while_a_completed_resize_still_has_the_replaced_copy_mirroring` and `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`. |
+| `SplitBegin` | An adaptive split opens its shadow-write window | `TreeShardSplitGrain.SplitAsync` and `ShardRootGrain.BeginSplitAsync`. It refuses while `TreeResizeGrain.HoldsShardMigrationsAsync` reports a hold, which lasts until no shard of the replaced copy mirrors into the resized one (#4452). | Yes: `ResizeMigrationHoldDetectorIntegrationTests.A_split_is_refused_by_the_resize_hold_while_the_replaced_copy_still_mirrors` (real grains end to end, red when the hold stops holding), `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`, and the caller test `TreeShardSplitGrainTests.SplitAsync_refuses_while_a_completed_resize_still_has_the_replaced_copy_mirroring`, which stubs the hold. The fence's two arms: `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map` (the alias already moved) and `TreeShardSplitGrainTests.Swap_while_a_cutover_has_carried_the_copy_map_but_not_swapped_the_alias_does_not_apply_the_diff` (a cutover carried the map but has not swapped). |
 | `SplitSweep` | The retroactive sweep of prepares that predate the window | `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`. Resolving an Indeterminate answer to the recorded decision is the intended design (#4473). | Partial: `TreeShardSplitGrainTests.RetroactiveSweep_replays_prepare_when_saga_in_flight` and `TreeShardSplitGrainTests.RetroactiveSweep_skips_replay_and_applies_commit_terminal_when_saga_already_committed`. An Indeterminate answer is replayed and leaves only a marker (#4473). |
 | `SplitFreeze` | The source refuses the moved slot | `TreeShardSplitGrain.SwapAsync`: `MarkLeavesMovedAwayAsync`, then `EnterRejectPhaseAsync`. | Yes: `TreeShardSplitGrainTests.Swap_enters_reject_phase_before_setting_shard_map` and `TreeShardSplitGrainTests.Swap_calls_source_enter_reject_phase_exactly_once`. |
 | `SplitCommit` | Final drain, then the map moves | `TreeShardSplitGrain.SwapAsync`'s final drain (`ForwardMovedSlotEntriesAtomicallyAsync`) and `ILatticeRegistry.ReassignSlotsAsync`. | Yes: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip`. |
@@ -112,7 +113,7 @@ That is the intended design #4475's fix has to meet.
 | `SagaPrepare(k, p)` | One key's prepared write through the current pair | `LatticeGrain.SetManyAsyncCore` through `SagaCopyBinding.AdmitsDispatch`, admitted by the bound copy through a fence via `ResizeFence.AdmitsBoundSaga`, and mirrored by `ShardRootGrain.ForwardShadowAsync`. **Under-approximation, deliberate:** `Next` dispatches through the current pair only; stale-pair dispatch is `ShardOwnership`'s. | Yes: `ShardRootGrainShadowForwardTests.SetManyAsync_prepared_by_a_saga_bound_to_the_fenced_copy_is_applied_and_forwarded` and `ShardRootGrainShadowForwardTests.SetManyAsync_forwards_full_batch_in_single_call_to_destination`. |
 | `SagaDecide` | The commit decision is recorded | `AtomicWriteGrain.RebindAcrossAliasSwapAsync` answering `Commit` or `StayBound`. | Yes: `AtomicWriteGrainTests.ExecuteAsync_stays_bound_across_a_move_only_when_its_bound_copy_mirrors_into_the_new_copy`. |
 | `SagaAbort` | The abort decision is recorded; the broadcast compensates | `AtomicWriteGrain.BroadcastTerminalsAsync` with an abort. **Environment action:** unguarded through the execute phase; fair only once the bound copy can no longer commit, which stands for production's prepare retries ending in an abort where this module has no re-bind. | Yes: `CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard`. |
-| `SagaTerminal(s)` | One shard of the terminal broadcast | `AtomicWriteGrain.MarkOneShardAsync` into `ShardRootGrain.AppendTxTerminalAsync` and `MigrationTerminalCore.DecideBucketAction`. Delivery past a purge or an undo is the intended design (#4475, #4474). | Partial: `ShardRootGrainShadowForwardTests.AppendTxTerminalAsync_addressed_to_the_fenced_copy_directly_is_applied_and_forwarded` and `BPlusLeafGrainTests.ApplyTxTerminalAsync_with_already_terminalled_txid_discards_orphan_pending_bucket`. Production fails the broadcast on a purged copy (#4475) and re-sends after an undo (#4474). |
+| `SagaTerminal(s)` | One shard of the terminal broadcast | `AtomicWriteGrain.MarkOneShardAsync` into `ShardRootGrain.AppendTxTerminalAsync` and `MigrationTerminalCore.DecideBucketAction`. Delivery past a purge or an undo (#4475, #4474), and a backstop stamped at the saga's stamp (`TermRow`, #4522), are the intended design. | Partial: `ShardRootGrainShadowForwardTests.AppendTxTerminalAsync_addressed_to_the_fenced_copy_directly_is_applied_and_forwarded` and `BPlusLeafGrainTests.ApplyTxTerminalAsync_with_already_terminalled_txid_discards_orphan_pending_bucket`. Production fails the broadcast on a purged copy (#4475) and on a copy the undo discarded (#4474), and stamps the backstop above the row (#4522). |
 | `SagaComplete` | The broadcast finished; the caller is acknowledged | `AtomicWriteGrain.CompleteSagaAsync`. | Yes: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard`. |
 | `RegistryMask` | The registry stops, or resumes, reporting the decision | `TxRegistryGrain.GetStatusAsync` answering `TxStatus.Indeterminate` for an expired tombstone or an unreachable cross-tree coordinator. **Environment action, over-approximating:** it may toggle at any point after the decision and before the row is retired, whatever the participants have seen; production's retention mask follows the fan-out and its snapshot pin is what clears it, and a dial failure has no ordering at all, so every Indeterminate answer production gives is one the model can give. Before the decision the registry reads InFlight whatever the mask, so the guard loses nothing. | Yes: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight`. |
 | `RegistryForget` | The saga's row leaves the registry | `TxRegistryGrain.ForgetAsync` from the completed saga (`AtomicWriteGrain`'s retention keepalive), and the prune behind it. **Environment action, not fair:** retirement may never happen. | Yes: `AtomicWriteGrainTests.ReceiveReminder_keepalive_on_a_completed_saga_arms_retention_and_forgets_the_decision`. |
@@ -125,13 +126,13 @@ That is the intended design #4475's fix has to meet.
 
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
-| `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Yes: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip` and `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`. |
+| `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Partial: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip` and `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`. A backstop stamped above the row overwrites a later write of a moved key (#4522). |
 | `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. A read through a pair naming the purged old copy answers empty (#4503). |
 | `AtomicOnOwner` | A fresh reader that gets an answer for both keys sees the batch on both or on neither. | Yes: `AtomicWriteGrainTests.ExecuteAsync_binds_its_prepared_dispatch_to_the_copy_it_prepared_on`. |
 | `OwnerMonotonic` | A fresh reader's value never moves backwards across a mask, a retirement, a late forward or a reactivation; a hidden read in between does not launder a reversion. | Partial: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight` and `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx`. A sweep under Indeterminate leaves only a marker that a reactivation loses (#4473), and a decision before a flip reverts on the resized copy (#4455). |
 | `SplitCompletes` | A split that opened its window finishes. | Yes: `TreeShardSplitGrainTests.ProcessNextPhase_drives_the_shadow_write_phase_through_the_full_split_pass`. |
 | `ResizeCompletes` | A resize that started is purged or undone. | Yes: `TreeResizeGrainTests.Cleanup_soft_deletes_a_later_resizes_old_physical_tree`. |
-| `SagaCompletes` | A saga that started completes. | Partial: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard`. A saga bound to a purged old copy never completes (#4475). |
+| `SagaCompletes` | A saga that started completes. | Partial: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard`. A saga bound to a purged old copy never completes (#4475), nor does one bound to a resized copy an undo discards before its broadcast finishes (#4474). |
 | `NoStrandedBucket` | A decided saga's prepared bucket on a copy that can still become the tree is eventually consumed by its terminal, unless the registry retired the row first. | Partial: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard` and `CompensationContinuousReaderTests.Compensation_broadcasts_TxAbort_to_every_touched_shard`. A terminal that cannot follow the resized copy's split strands its bucket until #4475's fix lands. |
 
 ## Excluded properties
@@ -148,8 +149,9 @@ under-approximations are stated so that they are not mistaken for coverage:
 - **Writers use the current pair.** `SagaPrepare` and `LaterWrite` dispatch
   through the pair the registry names now, not through any pair it ever
   published. Stale writers are `ShardOwnership`'s territory, where the same
-  actions range over `published`. A defect that needs a stale writer and a
-  retention event together is outside both modules.
+  actions range over `published`. Composing them with this module's retention
+  events was checked once and adds no reachable state (82,155 distinct states,
+  identical to this module alone).
 - **No re-bind, reshard, refused flip or undo before a flip.** These are
   `ShardOwnership`'s. The fair abort (see `SagaAbort`) is what keeps a saga
   that would have re-bound from stalling here.
@@ -163,9 +165,13 @@ check inside the harness's per-run budget.
 
 ## Deliberate abstraction gaps
 
-- **Composition with `ShardOwnership`.** See the README: a behaviour that needs
+- **Composition with `ShardOwnership`.** Not a CI gate. A behaviour that needs
   a stale writer, a re-bind, a reshard, a refused flip or an undo before a flip
-  together with a retention event is checked by neither module.
+  together with a retention event is checked by neither module's gate. The
+  composition of everything `ShardOwnership` has with this module was checked
+  once and is clean against all thirteen properties of both modules (497,105
+  distinct states, depth 29, 9 min 54 s on two workers); it exceeds the per-run
+  budget, which is why the modules are separate. See the README.
 - **The post-sweep cleanup and the sweep's non-atomic window.** The sweep is one
   step. Its window (a decision landing between the pre-check and the replay) is
   covered by the late forward, which may arrive at any time; the cleanup that
@@ -185,9 +191,10 @@ check inside the harness's per-run budget.
 |-------|---------------|
 | #4455 | Prepared buckets in the online snapshot (`SnapCopy`, `OwnerMonotonic`). |
 | #4473 | The sweep treating Indeterminate as InFlight (`SplitSweep`, `OwnerMonotonic`). |
-| #4474 | A terminal the copy an undo discarded refuses (`SagaTerminal`). |
+| #4474 | A terminal the copy an undo discarded refuses (`SagaTerminal`, `SagaCompletes`). |
 | #4475 | A terminal a purged old copy refuses, and following the resized copy's layout after it (`SagaTerminal`, `SagaCompletes`, `NoStrandedBucket`). |
 | #4503 | A routed read on a purged old copy (`ResizePurge`, `NoResurrection`). |
+| #4522 | The stamp of the terminal's committed-values backstop (`SagaTerminal`, `NoKeyLost`). |
 
 When one of these lands, its rows move from `Partial` to `Yes` with the fix's
 regression test named, after that test is shown red against the mutation that

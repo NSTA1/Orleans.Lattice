@@ -1006,8 +1006,9 @@ specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
 (routing, the operations, the saga's binding) and `ShardOwnershipRetention`
 (the registry's mask and retirement, late forwarded prepares and leaf
 reactivation, over a saga bound across a split and a resize). The seam between
-them, and what composing them would add, is described in that directory's
-README; coverage of one module is not coverage of the other. Three ownership
+them is described in that directory's README: each module's CI gate covers
+only that module, and their composition was checked once, clean, but is too
+large to gate. Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1016,15 +1017,15 @@ encoding is listed where one exists.
 
 | TLA+ property | Module | Plain-language property | Coyote encoding | Guard tests (prove non-vacuous) |
 |---------------|--------|-------------------------|-----------------|---------------------------------|
-| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`. |
+| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved, deciding whether a stale routed call is served through `ResizeFence.AdmitsBoundSaga`, so the core's refusal arm is what is checked. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`, `A_fence_that_admits_a_stale_routed_call_serves_the_old_copy`. |
 | `NoKeyLost` | both | The owner holds every acknowledged value. | TLA+ only. | Mutations, e.g. `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow`. |
-| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`. |
-| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
-| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
+| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form, through the core's refusal of an unbound or foreign-bound routed call. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`, `A_fence_that_admits_a_stale_routed_call_is_caught_only_by_the_stale_read_assertion`. |
+| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. It constrains copies, not shards: the router ignoring the binding on its own (#4358) is caught by `AtomicOnOwner` in the TLA+ module, not by this property. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere, that the bound copy at the decision is one the undo does not discard, and that a refused saga makes bounded progress; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_pre_decision_check_that_always_stays_bound_decides_on_a_copy_the_undo_discards`, `A_refusal_that_never_rebinds_stops_the_saga_making_progress`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
+| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerRouterIgnoresBinding` (#4358 on its own) and `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
 | `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
-| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
+| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
 `..._only_the_..._assertion_fires`) that disables exactly the assertion it

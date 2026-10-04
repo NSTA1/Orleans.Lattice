@@ -139,8 +139,13 @@ public sealed class RoutingPairPublishModel : ICoyoteModel
 
             finished[r] = true;
             var publish = RoutingPairPublishGate.ShouldPublish(
+                // NoEpochCheck pins the start epoch to the current one, so the gate can
+                // never see an invalidation that happened while this resolve was in
+                // flight: that is the guard's defect, not a scope limit.
                 _guard == RoutingPairPublishGuard.NoEpochCheck ? epoch : startEpoch[r],
                 epoch,
+                // NoVersionCheck pins the published version to null (nothing published),
+                // so the gate cannot refuse a regression: again the guard's defect.
                 _guard == RoutingPairPublishGuard.NoVersionCheck ? null : published,
                 readVersion[r]);
             if (!publish)
