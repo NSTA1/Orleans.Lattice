@@ -83,9 +83,9 @@ its dependent write first - needs four writes.
 
 `ReplicationCausalDelivery.tla` checks exactly that, with two writers, four
 writes, shipping order free of authoring order and a shipper that waits on
-every entry's acknowledgement. The intended design of #4464 - acknowledge a
-parked entry, hold it durably, drain it once its dependency arrives -
-converges. Withholding the acknowledgement until the entry can be applied
+every entry's acknowledgement. The design #4483 implemented for #4464 -
+acknowledge a parked entry, hold it durably, drain it once its dependency
+arrives - converges. Withholding the acknowledgement until the entry can be applied
 deadlocks, and stands as `EventualConvergenceDeferredParkStalls`.
 
 The only deferral in `Replication.tla`'s intended design is a duplicate of an
@@ -104,14 +104,19 @@ shape, kept after the fix lands as the check that reintroducing it is caught:
 - #4463, fixed by #4476 - the bootstrap pin installed a drop floor that
   discarded writes the snapshot did not hold
   (`BootstrapHandoffLosesNothingPinnedFloor`).
-- #4464 - the causal buffer can strand or lose parked entries (four
-  `EventualConvergence*` mutations).
+- #4464, fixed by #4483 - the causal buffer could strand or lose parked
+  entries: a lost wakeup between the dependency check and the park, a buffer
+  held only in memory, a bootstrap pin that replaced the vector, and a pin
+  that did not drain (`EventualConvergenceParkLostWakeup`,
+  `EventualConvergenceVolatileCausalBuffer`,
+  `EventualConvergencePinRegressesVector`,
+  `EventualConvergencePinSkipsDrain`).
 - #4465, fixed by #4477 - a duplicate of an entry still in flight was
   acknowledged, so an aborted first delivery was lost
   (`CursorNeverSkipsUnshippedDuplicateOfParkingAcked`).
 
-[`Refinement.md`](Refinement.md#territory-owned-by-other-open-issues) lists
-every row they touch.
+[`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
+fixes.
 
 ## How to run TLC
 

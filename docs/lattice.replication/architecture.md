@@ -177,6 +177,51 @@ flowchart LR
    those as duplicates of the originating cluster's events. See
    [`../lattice/events.md`](../lattice/events.md#operations-that-deliberately-do-not-emit-events).
 
+## Formal verification
+
+The plain replication protocol has a design-level TLA+ specification,
+[`spec/replication/Replication.tla`](../../spec/replication/README.md), checked
+exhaustively by TLC on every pull request over a bounded instance of three
+clusters. Its transport loses, duplicates, reorders, and partitions entries,
+receivers restart, and the merge is abstracted over both last-writer-wins and a
+grow-only counter. It checks six properties:
+
+| Property | What it guarantees |
+|----------|--------------------|
+| `NoRelay` | A cluster ships only the writes it authored, so nothing is relayed or ping-pongs around a ring. |
+| `NoReflection` | A cluster never applies its own write received back from a peer. |
+| `CursorNeverSkipsUnshipped` | A shipper's cursor never passes a write the peer has not absorbed. |
+| `DedupNeverDropsNew` | A receiver discards an entry as a duplicate only when its replica already reflects it. |
+| `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is still applied when it arrives. |
+| `EventualConvergence` | Once writing stops, with a fair transport and dead letters eventually replayed, every replica of every key converges to the value of all its writes. |
+
+A companion module,
+[`ReplicationCausalDelivery.tla`](../../spec/replication/ReplicationCausalDelivery.tla),
+checks that a receiver cannot deadlock on causal dependencies when shipping
+order inverts a cross-origin dependency cycle and every shipper waits on each
+acknowledgement.
+
+The specification is tied to the code three ways. The decisions it checks run
+in production through pure cores (`ReplicationShipEligibility` for the
+shipper's cycle-break and cursor filter, `ReplicationReceiveDedup` for the
+receiver's cycle-break and high-water mark), which Coyote models in
+`test/lattice.replication/Coyote/` execute under systematic interleaving. Every
+spec action and property is mapped to the production seam it abstracts, and to
+a test that was proven to fail when that seam is broken, in the
+[refinement note](../../spec/replication/Refinement.md). And every property has
+a mutation that makes it fail, so none holds vacuously.
+
+Writing the specification found three production defects, each now fixed and
+kept as a mutation that reproduces it: a bootstrap pin that discarded writes
+(#4463), a causal buffer that could strand or lose parked entries (#4464), and
+a duplicate of an in-flight entry that was acknowledged and lost (#4465).
+
+**Scope.** The specification covers plain replication only. Atomic-write sagas
+carried over replication (invariant 4 above) are not modelled here; that is
+owned by #4436. The refinement note lists every other abstraction the model
+makes, among them a single WAL partition per cluster, a bounded fault budget,
+and an unbounded identity cache.
+
 ## Relationship to the core library
 
 The replication subsystem attaches to the core library through public

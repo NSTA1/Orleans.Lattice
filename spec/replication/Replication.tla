@@ -18,10 +18,10 @@
 (* dropping a write whose effect a replica already holds is not a loss,    *)
 (* and dropping one whose effect it lacks is.                              *)
 (*                                                                         *)
-(* Where production deviates from a design that satisfies the properties  *)
-(* below, the module models the intended design and the deviation stands  *)
-(* as a paired mutation that reproduces production, linked to the issue    *)
-(* that owns the fix. Refinement.md lists every such row.                  *)
+(* Where production deviated from a design that satisfies the properties   *)
+(* below, the module models the intended design and the deviation stands   *)
+(* as a paired mutation that reproduces the former production shape,       *)
+(* linked to the issue that fixed it. Refinement.md lists every such row.  *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
@@ -302,8 +302,9 @@ Deliver(e, i) ==
 (* returns, so a shipped entry is acknowledged. The dependency check and   *)
 (* the buffer insert are separate steps because production separates them *)
 (* by awaits, and an apply on another call can advance the HWM and run its *)
-(* drain in between. Parking re-arms a drain - the intended design; the    *)
-(* EventualConvergenceParkLostWakeup mutation is production's shape.      *)
+(* drain in between. Parking re-arms a drain, as CausalApplyBufferGrain's  *)
+(* park has re-checked and drained in the same turn since #4464; the       *)
+(* EventualConvergenceParkLostWakeup mutation is the former shape.         *)
 (***************************************************************************)
 Park(x, p) ==
     /\ p \in parking[x]
@@ -412,8 +413,9 @@ Replay(x, r) ==
 (* identity cache, and every call in progress (an unacknowledged park is   *)
 (* re-sent by its shipper; a replay in progress returns to the dead-letter *)
 (* queue). The causal buffer survives and a drain is re-armed on           *)
-(* activation - the intended design; production's buffer is in memory      *)
-(* (mutation EventualConvergenceVolatileCausalBuffer).                     *)
+(* activation, as CausalApplyBufferGrain has persisted it since #4464;     *)
+(* the EventualConvergenceVolatileCausalBuffer mutation is the former      *)
+(* in-memory buffer.                                                       *)
 (***************************************************************************)
 Restart(x) ==
     /\ faults < MaxFaults
@@ -455,9 +457,10 @@ Restart(x) ==
 (* are unordered. Production pinned the floor at the frontier until #4476  *)
 (* (mutation BootstrapHandoffLosesNothingPinnedFloor). The intended design *)
 (* also takes the pointwise maximum with the vector already held, where    *)
-(* production replaces it (mutation EventualConvergencePinRegressesVector, *)
-(* #4464), and re-arms a drain, because the pin can satisfy a parked      *)
-(* entry's dependency (mutation EventualConvergencePinSkipsDrain, #4464).  *)
+(* production replaced it until #4464 (mutation                            *)
+(* EventualConvergencePinRegressesVector), and re-arms a drain, because    *)
+(* the pin can satisfy a parked entry's dependency (mutation               *)
+(* EventualConvergencePinSkipsDrain).                                      *)
 (***************************************************************************)
 Bootstrap ==
     /\ ~booted
