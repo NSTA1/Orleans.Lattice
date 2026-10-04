@@ -27,19 +27,19 @@ public sealed class TenancyRegionFollowerTests
         Assert.That(follower.IsFollowing, Is.True);
 
         Advance(time, TenancyRegionFollower.Interval);
-        ReadsReach(() => reads, 1);
+        ReadsReach(() => Volatile.Read(ref reads), 1);
 
         Advance(time, TenancyRegionFollower.Interval);
-        Assert.That(reads, Is.EqualTo(1), "after a quiet read the follower waits twice as long");
+        Assert.That(Volatile.Read(ref reads), Is.EqualTo(1), "after a quiet read the follower waits twice as long");
         Advance(time, TenancyRegionFollower.Interval);
-        ReadsReach(() => reads, 2);
+        ReadsReach(() => Volatile.Read(ref reads), 2);
 
         Advance(time, TenancyRegionFollower.Interval);
-        ReadsReach(() => reads, 3);
+        ReadsReach(() => Volatile.Read(ref reads), 3);
 
         Assert.Multiple(() =>
         {
-            Assert.That(SpinWait.SpinUntil(() => !follower.IsFollowing, TimeSpan.FromSeconds(10)), Is.True);
+            FollowBarriers.Reaches(() => !follower.IsFollowing, "a steady read stops the follow");
             Assert.That(time.ArmedTimers, Is.Zero, "every region is steady, so nothing is followed");
         });
     }
@@ -73,11 +73,10 @@ public sealed class TenancyRegionFollowerTests
     }
 
     private static void ReadsReach(Func<int> reads, int expected) =>
-        Assert.That(SpinWait.SpinUntil(() => reads() == expected, TimeSpan.FromSeconds(10)), Is.True, $"the follower reads {expected} time(s)");
+        FollowBarriers.ReadsReach(reads, expected);
 
-    private static void Advance(ManualTimeProvider time, TimeSpan delta)
-    {
-        Assert.That(SpinWait.SpinUntil(() => time.ArmedTimers == 1, TimeSpan.FromSeconds(10)), Is.True, "the follower re-arms");
-        time.Advance(delta);
-    }
+    // The next wait is armed on the follow's continuation once the read returns;
+    // FollowBarriers.Advance waits for it before moving the clock again.
+    private static void Advance(ManualTimeProvider time, TimeSpan delta) =>
+        FollowBarriers.Advance(time, delta);
 }
