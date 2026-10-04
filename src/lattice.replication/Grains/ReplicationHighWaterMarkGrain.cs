@@ -42,7 +42,7 @@ internal sealed class ReplicationHighWaterMarkGrain(
         cancellationToken.ThrowIfCancellationRequested();
 
         var current = state.State.Vector.GetClock(originClusterId);
-        if (candidate <= current)
+        if (!ReplicationReceiveDedup.AdvancesHighWaterMark(current, candidate))
         {
             return false;
         }

@@ -21,6 +21,8 @@ be quiet about one.
 | Directory | Module | What it specifies |
 |-----------|--------|-------------------|
 | [`atomic-commit/`](atomic-commit/README.md) | `AtomicCommit` | The multi-leaf prepare / commit / abort saga, the per-tree transaction-registry decision, and reader visibility. |
+| [`replication/`](replication/README.md) | `Replication` | Plain (non-saga) cross-cluster replication: the shipper's cursor and cycle-break, the receiver's dedup, causal buffer and dead-lettering, and the bootstrap handoff, over a lossy, reordering transport. |
+| [`replication/`](replication/README.md) | `ReplicationCausalDelivery` | Causal-dependency delivery to a receiver whose shippers block at the head of the line, over shipping orders that differ from authoring order. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

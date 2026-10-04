@@ -646,7 +646,7 @@ internal sealed partial class ReplicationApplier
         }
 
         var resolved = options.Get(treeId);
-        if (string.Equals(origin, resolved.ClusterId, StringComparison.Ordinal))
+        if (ReplicationReceiveDedup.IsOwnOrigin(origin, resolved.ClusterId))
         {
             // Local-origin defence: the per-entry path classifies each
             // entry as Dedup with HighWaterMark=Zero. Replay the same
@@ -953,9 +953,11 @@ internal sealed partial class ReplicationApplier
                 // for both gates.
                 var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
 
-                if (!bootstrapMode
-                    && !isPreparedAtomicBatch
-                    && entry.Timestamp.CompareTo(pinnedFloor) <= 0)
+                if (ReplicationReceiveDedup.IsCoveredByPinnedFloor(
+                        entry.Timestamp,
+                        pinnedFloor,
+                        bootstrapMode,
+                        isPreparedAtomicBatch))
                 {
                     outcome = LatticeReplicationMetrics.OutcomeDedup;
                     continue;

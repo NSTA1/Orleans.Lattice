@@ -343,7 +343,7 @@ internal sealed partial class ReplicationApplier(
             }
 
             var resolved = options.Get(entry.TreeId);
-            if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
+            if (ReplicationReceiveDedup.IsOwnOrigin(entry.OriginClusterId, resolved.ClusterId))
             {
                 // This is the receiving cluster's ONLY enforcement that a
                 // local-origin entry is never applied back onto its authoring
@@ -477,7 +477,11 @@ internal sealed partial class ReplicationApplier(
             if (!isBootstrapDrain && !isPreparedAtomicBatch)
             {
                 var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(entry.OriginClusterId!, cancellationToken);
-                if (entry.Timestamp <= pinnedFloor)
+                if (ReplicationReceiveDedup.IsCoveredByPinnedFloor(
+                        entry.Timestamp,
+                        pinnedFloor,
+                        isBootstrapDrain,
+                        isPreparedAtomicBatch))
                 {
                     outcome = LatticeReplicationMetrics.OutcomeDedup;
                     return new ApplyResult { Applied = false, HighWaterMark = hwm };
