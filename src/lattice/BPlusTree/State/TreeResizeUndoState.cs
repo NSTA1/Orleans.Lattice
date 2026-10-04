@@ -45,4 +45,15 @@ internal sealed class TreeResizeUndoState
 
     /// <summary>The reason the undo named by <see cref="FailedOperationId"/> was withdrawn.</summary>
     [Id(5)] public string? FailureMessage { get; set; }
+
+    /// <summary>
+    /// The operation id of a resize whose after-swap unwind has passed the
+    /// replicated-tree check and may arm the resized copy, or
+    /// <see langword="null"/>. The check is made once, before anything is armed,
+    /// and a retried unwind of the same operation does not repeat it: an unwind
+    /// that has armed the resized copy must finish, so a tree that becomes
+    /// replicated between attempts cannot strand it armed (issue #4518).
+    /// Legacy persisted state decodes the missing slot to <see langword="null"/>.
+    /// </summary>
+    [Id(6)] public string? UnwindClearedOperationId { get; set; }
 }
