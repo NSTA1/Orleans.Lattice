@@ -1,6 +1,5 @@
 using Grpc.Core;
-using Microsoft.Extensions.DependencyInjection;
-using Orleans.Serialization;
+using static Orleans.Lattice.Api.Apps.Grpc.LatticeAppsGrpcUnaryMethods;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
@@ -8,6 +7,10 @@ internal sealed class LatticeAppBridgeGrpcMethods
 {
     public const string ServiceName = "orleans.lattice.api.apps.bridge";
     public const string ServicePrefix = "/" + ServiceName + "/";
+
+    // Every bridge method is bounded in both directions, never by raising the service or channel limit.
+    private const int MaxRequestBytes = LatticeAppsGrpcMarshallers.MaxBridgeRequestBytes;
+    private const int MaxResponseBytes = LatticeAppsGrpcMarshallers.MaxBridgeResponseBytes;
 
     public Method<AppsBridgeKeyRequest, AppsBridgeGetResponse> Get { get; }
     public Method<AppsBridgeScanRequest, AppBridgePage> Scan { get; }
@@ -17,18 +20,9 @@ internal sealed class LatticeAppBridgeGrpcMethods
     public LatticeAppBridgeGrpcMethods(IServiceProvider serializers)
     {
         ArgumentNullException.ThrowIfNull(serializers);
-        Get = Create<AppsBridgeKeyRequest, AppsBridgeGetResponse>(nameof(Get), serializers);
-        Scan = Create<AppsBridgeScanRequest, AppBridgePage>(nameof(Scan), serializers);
-        Set = Create<AppsBridgeSetRequest, AppsEmptyRequest>(nameof(Set), serializers);
-        Delete = Create<AppsBridgeKeyRequest, AppsBridgeDeleteResponse>(nameof(Delete), serializers);
+        Get = BoundedUnary<AppsBridgeKeyRequest, AppsBridgeGetResponse>(ServiceName, nameof(Get), serializers, MaxRequestBytes, MaxResponseBytes);
+        Scan = BoundedUnary<AppsBridgeScanRequest, AppBridgePage>(ServiceName, nameof(Scan), serializers, MaxRequestBytes, MaxResponseBytes);
+        Set = BoundedUnary<AppsBridgeSetRequest, AppsEmptyRequest>(ServiceName, nameof(Set), serializers, MaxRequestBytes, MaxResponseBytes);
+        Delete = BoundedUnary<AppsBridgeKeyRequest, AppsBridgeDeleteResponse>(ServiceName, nameof(Delete), serializers, MaxRequestBytes, MaxResponseBytes);
     }
-
-    // Every bridge method is bounded in both directions, never by raising the service or channel limit.
-    private static Method<TRequest, TResponse> Create<TRequest, TResponse>(string name, IServiceProvider serializers)
-        where TRequest : class where TResponse : class
-        => new(MethodType.Unary, ServiceName, name,
-            LatticeAppsGrpcMarshallers.CreateBounded(
-                serializers.GetRequiredService<Serializer<TRequest>>(), LatticeAppsGrpcMarshallers.MaxBridgeRequestBytes),
-            LatticeAppsGrpcMarshallers.CreateBounded(
-                serializers.GetRequiredService<Serializer<TResponse>>(), LatticeAppsGrpcMarshallers.MaxBridgeResponseBytes));
 }
