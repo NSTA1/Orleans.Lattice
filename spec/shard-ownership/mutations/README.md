@@ -23,7 +23,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453 and #4452, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454 and #4455, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
@@ -47,7 +47,9 @@ The #4503 reproductions that serve a read from the purged copy edit
 `RoutedRefused`, the operator every routed read and write shares, rather than an
 action, and so declare no `PERTURBS`; the write half is reproduced separately,
 inside `LaterWrite`. The #4522 reproductions edit `TermRow`, the operator the
-terminal broadcast applies, and likewise declare no `PERTURBS`. Every mutant in both catalogues was checked free of deadlock with only
+terminal broadcast applies, or the stamp operators `BVal`, `KnowsP` and
+`WVal` that the read gate, the drain and the later write share, and likewise
+declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same way. Every mutant in both catalogues was checked free of deadlock with only
 `TypeOK` checked, apart from the two whose target is `TypeOK` itself.
 
 ## Inventory: ShardOwnership
@@ -61,10 +63,15 @@ terminal broadcast applies, and likewise declare no `PERTURBS`. Every mutant in 
 | [`NoKeyLostAckBeforeDecision`](NoKeyLostAckBeforeDecision.mutation) | `NoKeyLost` | Invariant | `SagaComplete` | the caller is acknowledged before the decision is recorded |
 | [`NoKeyLostCommitSkipsFinalDrain`](NoKeyLostCommitSkipsFinalDrain.mutation) | `NoKeyLost` | Invariant | `SplitCommit` | the split moves the map without the final drain, so the new owner does not hold the key |
 | [`NoKeyLostFreshStampBackstop`](NoKeyLostFreshStampBackstop.mutation) | `NoKeyLost` | Invariant | none (edits `TermRow`) | the terminal's backstop installs over a later write with a dominating stamp |
+| [`NoKeyLostFreshStampDrainOverMigratedRow`](NoKeyLostFreshStampDrainOverMigratedRow.mutation) | `NoKeyLost` | Invariant | none (edits `TermRow`) | the drain skips only a newer non-migrated row and otherwise installs at a fresh stamp, overwriting a migrated later write |
+| [`NoKeyLostLaterWriteBelowP`](NoKeyLostLaterWriteBelowP.mutation) | `NoKeyLost` | Invariant | none (edits `WVal`) | a later write stamped below the saga's prepare loses to the drain or the backstop at P |
 | [`NoKeyLostLaterWriteNotMirrored`](NoKeyLostLaterWriteNotMirrored.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a write during a resize is not mirrored, so the flip loses it |
+| [`NoKeyLostMigrationImportDropped`](NoKeyLostMigrationImportDropped.mutation) | `NoKeyLost` | Invariant | `SplitCommit`, `LaterWrite` | a migration import over a non-migrated destination row is dropped, losing a later write across the split |
 | [`NoKeyLostPurgeClearsLiveCopy`](NoKeyLostPurgeClearsLiveCopy.mutation) | `NoKeyLost` | Invariant | `ResizePurge` | the purge clears the live copy's rows instead of the retired copy's |
 | [`NoKeyLostPurgedCopyAcceptsWrites`](NoKeyLostPurgedCopyAcceptsWrites.mutation) | `NoKeyLost` | Invariant | `LaterWrite` | a routed write on the purged old copy is accepted and acknowledged but lands where nothing reads it |
 | [`NoKeyLostResizeDuringSplit`](NoKeyLostResizeDuringSplit.mutation) | `NoKeyLost` | Invariant | `ResizeBegin` | a resize starts with a split in flight, so writes on the split target are lost at the flip |
+| [`NoKeyLostResizeMirrorUnmarkedPrepare`](NoKeyLostResizeMirrorUnmarkedPrepare.mutation) | `NoKeyLost` | Invariant | none (edits `BVal`, `KnowsP`) | the resize mirror re-mints a prepare at R's clock, so a later write on R is stamped below P and the backstop overwrites it |
+| [`NoKeyLostSnapshotResolvesAtFreshStamp`](NoKeyLostSnapshotResolvesAtFreshStamp.mutation) | `NoKeyLost` | Invariant | `SnapCopy` | the snapshot resolves a decided saga's bucket on R at a fresh stamp, overwriting a later write already copied |
 | [`NoKeyLostSnapshotSkipsRows`](NoKeyLostSnapshotSkipsRows.mutation) | `NoKeyLost` | Invariant | `SnapCopy` | the snapshot copies no committed rows, so the resized copy loses every pre-resize key at the flip |
 | [`NoKeyLostTerminalDropsBucket`](NoKeyLostTerminalDropsBucket.mutation) | `NoKeyLost` | Invariant | `SagaTerminal` | the terminal discards the bucket instead of draining it |
 | [`NoKeyLostUndoRestoresWrongMap`](NoKeyLostUndoRestoresWrongMap.mutation) | `NoKeyLost` | Invariant | `UndoSwap` | the undo pairs the old copy with a map that does not describe it |

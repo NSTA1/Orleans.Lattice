@@ -9,9 +9,9 @@ PERTURBS: LaterWrite
 
 --- FIND
                         IF k = k2 /\ <<x, y>> \in Landing(c, s, k2)
-                        THEN Max(row[x][y][k], LaterV) ELSE row[x][y][k]]]]
+                        THEN LWW(row[x][y][k], WVal(c, s)) ELSE row[x][y][k]]]]
 --- REPLACE
 \* MUTATION: the write lands only where it was routed.
                         IF k = k2 /\ <<x, y>> = <<c, s>>
-                        THEN Max(row[x][y][k], LaterV) ELSE row[x][y][k]]]]
+                        THEN LWW(row[x][y][k], WVal(c, s)) ELSE row[x][y][k]]]]
 --- END
