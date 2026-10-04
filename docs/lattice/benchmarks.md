@@ -366,6 +366,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `sortcomparertrims` | The comparison delegate a sort reached through an `IComparer<T>` allocates on every call, against a cached comparison, over ordinal string-key sorts, the CRDT provenance decoders' causal member-change sorts and struct-array sorts; read it for bytes. |
 | `walbatchbuffertrims` | The transient WAL record batch buffer the leaf's CRDT batch-apply and two merge-batch commit-log dispatches built per call, against a pooled rental above a size threshold, with a below-threshold control lane. |
 | `setkeytrims` | The base64 string the OR-set and RW-set delta accessors built on every staged remove only to probe a dictionary, against encoding into a stack or pooled span and probing through an alternate lookup. |
+| `replayscanloop` | The leaf replay scan loop bounded by the exclusive WAL head, which made one extra empty slice read past the newest entry per pass, against bounding it by the newest offset (head - 1). |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'
