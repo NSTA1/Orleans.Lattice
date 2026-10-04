@@ -1,0 +1,19 @@
+# Pairs with RestoreNeverTorn. A revert moves the alias back but leaves the
+# shadow's map under the tree (#4250), so once the previous copy's redirect
+# is cleared a reader pairs the previous copy with the shadow's map.
+MODULE: RestoreNeverTornRevertMovesAliasOnly
+TARGET: RestoreNeverTorn
+CLASS: Invariant
+SUMMARY: the revert moves the alias without the shard map
+PERTURBS: RevertSwap
+
+--- FIND
+    /\ alias' = "prev"
+    /\ map' = "prev"
+    /\ rp' = "reverting"
+--- REPLACE
+    /\ alias' = "prev"
+    \* MUTATION: the map stays the shadow's.
+    /\ map' = map
+    /\ rp' = "reverting"
+--- END

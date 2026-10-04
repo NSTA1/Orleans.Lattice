@@ -67,4 +67,14 @@ public sealed class TerminalArrivalTallyTests
             Assert.That(final, Is.EqualTo(arrivals >= expected));
         }
     }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void A_terminal_with_no_positive_count_is_ungated(int expected) =>
+        Assert.That(TerminalArrivalTally.IsUngated(expected), Is.True);
+
+    [TestCase(1)]
+    [TestCase(2)]
+    public void A_terminal_with_a_positive_count_is_gated(int expected) =>
+        Assert.That(TerminalArrivalTally.IsUngated(expected), Is.False);
 }

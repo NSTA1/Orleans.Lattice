@@ -465,7 +465,7 @@ internal sealed class LatticeBackupCaptureService(
                         {
                             var underGate = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
                                 grainFactory, registries[i]).ConfigureAwait(false);
-                            if (underGate.InFlightCount != 0 || underGate.UnresolvableCount != 0)
+                            if (!CrossTreeFenceWindow.IsRecheckClean(underGate.InFlightCount, underGate.UnresolvableCount))
                             {
                                 recheckClean = false;
                                 break;
@@ -524,7 +524,7 @@ internal sealed class LatticeBackupCaptureService(
                             {
                                 var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
                                     grainFactory, registries[i]).ConfigureAwait(false);
-                                if (after.RegistrationEpoch != epochBefore[i] || after.InFlightCount != 0)
+                                if (!CrossTreeFenceWindow.IsStable(epochBefore[i], after.RegistrationEpoch, after.InFlightCount))
                                 {
                                     stable = false;
                                     break;
@@ -677,7 +677,7 @@ internal sealed class LatticeBackupCaptureService(
                 peakInFlight = totalInFlight;
             }
 
-            if (totalInFlight == 0)
+            if (CrossTreeFenceWindow.IsDrained(totalInFlight))
             {
                 return (epoch, peakInFlight, sw.Elapsed);
             }
@@ -1053,13 +1053,9 @@ internal sealed class LatticeBackupCaptureService(
             }
         }
 
-        var hlcTimestamp = Math.Max(
+        var hlcTimestamp = BackupChainFrontier.FullCut(
             coordinate.RegistrySnapshotHlc.WallClockTicks,
             capturedHighestHlc.WallClockTicks);
-        if (hlcTimestamp < 0)
-        {
-            hlcTimestamp = 0;
-        }
 
         var perOriginFrontier = perOriginHighWater.Count > 0
             ? new Dictionary<string, long>(perOriginHighWater)
@@ -1189,17 +1185,9 @@ internal sealed class LatticeBackupCaptureService(
             }
         }
 
-        var hlcTimestamp = highestHlc.WallClockTicks;
-        if (hlcTimestamp < baseCut.HlcTimestamp)
-        {
-            // An increment with no intervening writes carries the base frontier
-            // forward so the chain's timestamp never regresses.
-            hlcTimestamp = baseCut.HlcTimestamp;
-        }
-        if (hlcTimestamp < 0)
-        {
-            hlcTimestamp = 0;
-        }
+        // An increment with no intervening writes carries the base frontier
+        // forward so the chain's timestamp never regresses.
+        var hlcTimestamp = BackupChainFrontier.IncrementalCut(baseCut.HlcTimestamp, highestHlc.WallClockTicks);
 
         var perOriginFrontier = perOriginHighWater.Count > 0
             ? new Dictionary<string, long>(perOriginHighWater)

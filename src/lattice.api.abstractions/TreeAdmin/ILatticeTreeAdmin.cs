@@ -599,12 +599,19 @@ public interface ILatticeTreeAdmin
     /// accepted and is still unwinding; poll <see cref="GetResizeStatusAsync"/>
     /// rather than retrying.
     /// </para>
+    /// <para>
+    /// A <b>replicated</b> tree cannot be undone once the alias has swapped onto
+    /// the resized copy: writes that copy took may already have been shipped to a
+    /// peer, and cross-cluster shipping never retracts them. Resize the tree
+    /// again, back to its previous sizing, instead. An undo before the swap is
+    /// unaffected.
+    /// </para>
     /// </summary>
     /// <param name="treeId">The tree whose last resize to undo. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The tree's resize status after the undo was accepted (and, when it finished within the wait, applied).</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">No in-flight or recoverable completed resize exists to undo, or the pre-resize tree has already been purged.</exception>
+    /// <exception cref="InvalidOperationException">No in-flight or recoverable completed resize exists to undo, the pre-resize tree has already been purged, or the tree is replicated and its alias has already swapped onto the resized copy.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
     Task<TreeResizeStatus> UndoTreeResizeAsync(
         string treeId,

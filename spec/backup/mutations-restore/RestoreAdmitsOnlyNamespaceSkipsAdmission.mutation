@@ -1,0 +1,15 @@
+# Pairs with RestoreAdmitsOnlyNamespace. The shadow build writes every backup
+# record, without the per-record admission that dead-letters a record outside
+# the tenant's namespace (IBackupRestoreAdmission.Admit).
+MODULE: RestoreAdmitsOnlyNamespaceSkipsAdmission
+TARGET: RestoreAdmitsOnlyNamespace
+CLASS: Invariant
+SUMMARY: the shadow build installs every record of the backup, unadmitted
+PERTURBS: Build
+
+--- FIND
+         /\ data' = [data EXCEPT ![c]["new"] = IF v = "yes" THEN Admitted ELSE {}]
+--- REPLACE
+         \* MUTATION: no admission.
+         /\ data' = [data EXCEPT ![c]["new"] = IF v = "yes" THEN Backup ELSE {}]
+--- END

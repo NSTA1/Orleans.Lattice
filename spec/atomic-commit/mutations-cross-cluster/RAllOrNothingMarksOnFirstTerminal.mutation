@@ -1,0 +1,18 @@
+# Pairs with RAllOrNothing. The receiver ignores the stamped count and treats
+# every terminal as final, which is the legacy behaviour applied to every
+# saga: the registry is marked on the first source shard's terminal while
+# another source shard's prepare has not yet arrived, and a receiver reader
+# sees one key post-saga and the other pre-saga. The count-stamped tally is
+# what holds the saga back until every source shard has reported.
+MODULE: RAllOrNothingMarksOnFirstTerminal
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the receiver tally is final on the first terminal regardless of the stamped count
+PERTURBS: DeliverTerminal
+
+--- FIND
+           final == legacy \/ Cardinality(arr2) >= exp2
+--- REPLACE
+\* MUTATION: the tally completes on any arrival.
+           final == TRUE
+--- END

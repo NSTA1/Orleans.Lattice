@@ -60,7 +60,8 @@ internal sealed class TreeResizeGrain(
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeResizeState> state,
     [PersistentState("tree-resize-undo", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeResizeUndoState> undoIntent)
+    IPersistentState<TreeResizeUndoState> undoIntent,
+    ILatticeReplicationContext? replicationContext = null)
     : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
 {
     private string TreeId => Context.GrainId.Key.ToString()!;
@@ -626,6 +627,60 @@ internal sealed class TreeResizeGrain(
         await CompleteCoordinatorAsync();
     }
 
+    /// <summary>
+    /// Refuses the after-swap unwind of a replicated tree whose alias names the
+    /// resized copy, and otherwise records, before anything is armed, that this
+    /// operation's unwind has been cleared. A replicated tree cannot be moved back
+    /// once the resized copy has served it: the shipper has been tailing that
+    /// copy's log, so writes it took may already be on a peer, and cross-cluster
+    /// shipping is last-writer-wins and never retracts them, so the undo would
+    /// discard them here and leave them there (issue #4518). The refusal is an
+    /// <see cref="InvalidOperationException"/> raised before any compensation, so
+    /// the intent is withdrawn with the reason and the alias still names the
+    /// resized copy. The decision is taken once per operation and persisted: a
+    /// retried unwind that may already have armed the resized copy must finish
+    /// whatever the tree's replication says by then, or routed traffic would be
+    /// refused by a copy the alias still names. A swap the alias has not taken,
+    /// or one an earlier attempt already moved back, needs no decision.
+    /// </summary>
+    private async Task ClearUnwindForReplicationAsync(string operationId, TreeRegistryEntry logicalBefore, string snapshotTreeId)
+    {
+        if (!string.Equals(logicalBefore.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal)
+            || string.Equals(undoIntent.State.UnwindClearedOperationId, operationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (replicationContext?.ResolveMergeMode(TreeId) is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot undo the resize of replicated tree '{TreeId}' after its alias swap: writes the resized copy "
+                + "took may already have been shipped to a peer, and the undo cannot retract them there. "
+                + $"Resize the tree again, back to its previous sizing (MaxLeafKeys {state.State.OldRegistryEntry?.MaxLeafKeys}, "
+                + $"MaxInternalChildren {state.State.OldRegistryEntry?.MaxInternalChildren}), instead.");
+        }
+
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            var previous = undoIntent.State.UnwindClearedOperationId;
+            undoIntent.State.UnwindClearedOperationId = operationId;
+            try
+            {
+                await WriteUndoIntentAsync();
+            }
+            catch
+            {
+                undoIntent.State.UnwindClearedOperationId = previous;
+                throw;
+            }
+        }
+        finally
+        {
+            _undoIntentGate.Release();
+        }
+    }
+
     private async Task ExecuteUndoAsync()
     {
         _undoRunning++;
@@ -826,6 +881,8 @@ internal sealed class TreeResizeGrain(
         var registry = grainFactory.GetLatticeRegistry();
         var logicalBefore = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
+
+        await ClearUnwindForReplicationAsync(opId, logicalBefore, snapshotTreeId);
 
         // Defensively abort any snapshot activation that may have been
         // resurrected by crash recovery - a no-op when the snapshot has

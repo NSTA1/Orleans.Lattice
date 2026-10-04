@@ -1,0 +1,16 @@
+# Pairs with BackupSagaConsistent. A single-tree saga's decision Mark is
+# admitted while its tree is gated, so the decision - and the terminals it
+# licenses - lands after the snapshot: a shard captured after a terminal
+# holds the saga post-saga while another resolves it against the snapshot,
+# pre-saga.
+MODULE: BackupSagaConsistentMarkUnderGate
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a decision Mark is recorded while the gate is held
+PERTURBS: Decide
+
+--- FIND
+    /\ ~CrossTree(t) => ~Gated("T1")
+--- REPLACE
+    \* MUTATION: the gate does not refuse the Mark.
+--- END

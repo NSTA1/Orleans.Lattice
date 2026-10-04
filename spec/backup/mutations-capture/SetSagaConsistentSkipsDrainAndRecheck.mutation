@@ -1,0 +1,27 @@
+# Pairs with SetSagaConsistent. The capture that skips the drain gate - and,
+# because the gate's re-check would otherwise refuse the attempt, the
+# re-check too. A cross-tree saga registered before the fence finalizes on
+# one tree before its gate and not on the other, which then resolves it
+# against a snapshot with no local decision, pre-saga, beside the first
+# tree's post-saga terminal. Its registration predates the drain, so the
+# epoch validation cannot see it.
+MODULE: SetSagaConsistentSkipsDrainAndRecheck
+TARGET: SetSagaConsistent
+CLASS: Invariant
+SUMMARY: the drain gate passes with delegation rows live, and the gated re-check is skipped
+PERTURBS: DrainGate, Recheck
+
+--- FIND
+    /\ phase = "drain"
+    /\ \A T \in Members : ~InFlight(T)
+--- REPLACE
+    /\ phase = "drain"
+    \* MUTATION: no wait for the rows to drain.
+--- END
+
+--- FIND
+    /\ IF kind = "single" \/ \A T \in Members : ~InFlight(T)
+--- REPLACE
+    \* MUTATION: no re-check.
+    /\ IF TRUE
+--- END
