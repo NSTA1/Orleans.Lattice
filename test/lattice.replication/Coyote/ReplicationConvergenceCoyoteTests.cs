@@ -35,8 +35,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Incremental_diagonal_dedup_drops_a_new_write()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationDedupConvergenceModel(ReplicationDedupMode.IncrementalDiagonal));
+        AssertViolationOf(
+            new ReplicationDedupConvergenceModel(ReplicationDedupMode.IncrementalDiagonal), "DedupNeverDropsNew:");
     }
 
     /// <summary>
@@ -46,8 +46,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Exploration_reaches_a_delivery_below_the_origin_high_water_mark()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationDedupConvergenceModel(ReplicationDedupMode.MonotonicDeliveryProbe));
+        AssertViolationOf(
+            new ReplicationDedupConvergenceModel(ReplicationDedupMode.MonotonicDeliveryProbe), "PROBE:");
     }
 
     /// <summary>
@@ -76,8 +76,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Without_the_ship_filter_a_cluster_relays_a_peers_write()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.NoShipFilter));
+        AssertViolationOf(
+            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.NoShipFilter), "NoRelay:");
     }
 
     /// <summary>
@@ -87,8 +87,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Without_the_receiver_guard_an_echoed_own_write_is_applied()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.NoReceiverGuard));
+        AssertViolationOf(
+            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.NoReceiverGuard), "NoReflection:");
     }
 
     /// <summary>
@@ -98,8 +98,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Exploration_reaches_a_shipper_draining_a_foreign_entry()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.ForeignEntryProbe));
+        AssertViolationOf(
+            new ReplicationCycleBreakModel(ReplicationCycleBreakMode.ForeignEntryProbe), "PROBE:");
     }
 
     /// <summary>
@@ -120,8 +120,8 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Scalar_cursor_filter_skips_an_unshipped_write()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationShipCursorModel(ReplicationShipCursorMode.ScalarCursorAlwaysFilters));
+        AssertViolationOf(
+            new ReplicationShipCursorModel(ReplicationShipCursorMode.ScalarCursorAlwaysFilters), "CursorNeverSkipsUnshipped:");
     }
 
     /// <summary>
@@ -131,7 +131,19 @@ public sealed class ReplicationConvergenceCoyoteTests
     [Test]
     public void Exploration_reaches_a_write_below_the_scalar_cursor()
     {
-        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new ReplicationShipCursorModel(ReplicationShipCursorMode.BelowCursorProbe));
+        AssertViolationOf(
+            new ReplicationShipCursorModel(ReplicationShipCursorMode.BelowCursorProbe), "PROBE:");
+    }
+
+    /// <summary>
+    /// Asserts Coyote finds a violation and that every violation it reports is the named one, so
+    /// a guard arm is specific: it goes red when exactly the assertion it targets is disabled,
+    /// rather than passing on whichever other assertion a removed fix also trips.
+    /// </summary>
+    private static void AssertViolationOf(ICoyoteModel model, string label)
+    {
+        var result = CoyoteModelHarness.Explore(model);
+        Assert.That(result.BugsFound, Is.GreaterThan(0), $"Coyote found no violation; expected one reporting '{label}'.");
+        Assert.That(result.BugReports, Has.All.Contains(label), $"every violation must be the '{label}' assertion.");
     }
 }

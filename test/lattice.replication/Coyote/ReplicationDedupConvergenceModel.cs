@@ -182,11 +182,11 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
 
         Specification.Assert(
             lww is { } final && SameValue(final, expectedLww),
-            $"the last-writer-wins key did not converge: got {Describe(lww)}, "
+            $"EventualConvergence: the last-writer-wins key did not converge: got {Describe(lww)}, "
             + $"expected {Describe(expectedLww)}");
         Specification.Assert(
             counter.Value == expectedCounter.Value,
-            $"the counter key did not converge: got {counter.Value}, expected {expectedCounter.Value}");
+            $"EventualConvergence: the counter key did not converge: got {counter.Value}, expected {expectedCounter.Value}");
     }
 
     private static void AssertSubsumed(WalRecord entry, LwwValue<byte[]>? lww, GCounter counter)
@@ -198,7 +198,7 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
                 lww is { } held
                     && LwwValue<byte[]>.Merge(held, incoming) is var merged
                     && SameValue(merged, held),
-                $"a new write {entry.OriginClusterId}@{entry.Timestamp} to {entry.Key} was dropped as a duplicate");
+                $"DedupNeverDropsNew: a new write {entry.OriginClusterId}@{entry.Timestamp} to {entry.Key} was dropped as a duplicate");
         }
         else
         {
@@ -206,7 +206,7 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
             probe.MergeFrom(Delta(entry));
             Specification.Assert(
                 probe.Value == counter.Value,
-                $"a new increment {entry.OriginClusterId}@{entry.Timestamp} to {entry.Key} was dropped as a duplicate");
+                $"DedupNeverDropsNew: a new increment {entry.OriginClusterId}@{entry.Timestamp} to {entry.Key} was dropped as a duplicate");
         }
     }
 
