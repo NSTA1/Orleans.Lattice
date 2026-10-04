@@ -185,13 +185,14 @@ standing mutation. The refinement notes record which are fixed.
 
 | Issue | Defect | Mutation |
 |-------|--------|----------|
-| #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow` |
+| #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map (fixed, #4466) | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow` |
 | #4453 | The undo cleared the old copy's fence before the swap and armed the resized copy after it (fixed, #4457) | `UniqueOwnerUndoClearsBeforeSwap` |
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror | `SagaBatchOnOneCopyRebindIgnoresMirror` |
 | #4455 | The online snapshot does not copy prepared buckets | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | #4474 | Terminals for a saga bound to the copy an undo discarded are re-sent to the old copy | `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
+| #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was being fixed
 elsewhere; its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -219,8 +220,8 @@ workers, liveness checked at the end, deadlock checking on, on a 16-core
 workstation (wall clock includes JVM start-up):
 
 ```
-ShardOwnership:          69,328 distinct states, depth 26, clean, 1 min 18 s
-ShardOwnershipRetention: 82,593 distinct states, depth 24, clean, 1 min 18 s
+ShardOwnership:          69,088 distinct states, depth 26, clean, 1 min 18 s
+ShardOwnershipRetention: 82,155 distinct states, depth 24, clean, 1 min 36 s
 ```
 
 The current specifications are model-checked in CI by
@@ -235,5 +236,5 @@ TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `ShardOwnership` | 7 | 5 | 27 | 33 | 37 | 69,328 |
-| `ShardOwnershipRetention` | 5 | 4 | 25 | 25 | 32 | 82,593 |
+| `ShardOwnership` | 7 | 5 | 27 | 35 | 37 | 69,088 |
+| `ShardOwnershipRetention` | 5 | 4 | 25 | 26 | 32 | 82,155 |

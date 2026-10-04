@@ -43,11 +43,17 @@ may still hold any pair the registry ever published.
 
 | Intended design in the base | Production today | Issue | Mutation reproducing production |
 |---|---|---|---|
-| The split interlock holds until the old copy is purged or the resize undone, so no split changes the resized copy's layout while the old copy mirrors into it (`SplitBegin`) | Only reshard and resize are interlocked; the rule first proposed for the fix stopped at the end of the resize | #4452 | `NoKeyLostSplitInSoftDeleteWindow` |
 | The split's sweep resolves an Indeterminate answer to the recorded decision behind it, as the #4445 leaf refusal does (`SplitSweep`) | The pre-check reads `GetStatusAsync` and treats Indeterminate as InFlight; the replay is refused at the destination, leaving only an activation-scoped shadow marker | #4473 | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | A delayed forwarded prepare is refused once the registry holds a decision, whatever the leaf remembers (`DeliverLate`) | The leaf refuses only when its activation remembers applying the terminal | #4445 | `NoResurrectionLatePrepareActivationMemory` |
+| A routed operation on a purged old copy is refused, so the caller refreshes its pair (`Gone` in `RoutedRefused`) | A routed read answers as the empty tree and a routed write is accepted, re-seeding the purged copy; a routing activation that cached the old pair across `SoftDeleteDuration` is never told to refresh | #4503 | `NoResurrectionRetainedPurgedCopyServesEmpty` |
 | The online snapshot carries prepared buckets (`SnapCopy`) | It copies committed entries only | #4455 | `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | A terminal a purged old copy refuses is delivered to the copy it mirrored into, following that copy's own layout; one the copy an undo discarded refuses counts as delivered (`SagaTerminal`, `TermTargets`) | The broadcast fails on a purged copy, and re-sends to the old copy after an undo | #4475, #4474 | in `ShardOwnership`: `SagaCompletesPurgedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
+
+The extent of the split/resize interlock (#4452) left this table when its fix
+landed (#4466): production holds a split until no shard of the replaced copy
+mirrors into the resized one, which is the base's `SplitBegin`.
+`NoKeyLostSplitInSoftDeleteWindow` stays as the standing check on the rule the
+fix first proposed, which stopped at the end of the resize.
 
 #4445's fix (PR #4461) makes production refuse on the recorded decision, which
 is the base's `DeliverLate`; it reaches this branch through `main`. When it has,
@@ -89,7 +95,7 @@ That is the intended design #4475's fix has to meet.
 
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
-| `SplitBegin` | An adaptive split opens its shadow-write window | `TreeShardSplitGrain.SplitAsync` and `ShardRootGrain.BeginSplitAsync`. Refusing while the old copy of a resize still mirrors into the copy being split is the intended design (#4452). | Partial: `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`. No test pins the interlock's extent until #4452's fix lands. |
+| `SplitBegin` | An adaptive split opens its shadow-write window | `TreeShardSplitGrain.SplitAsync` and `ShardRootGrain.BeginSplitAsync`. It refuses while `TreeResizeGrain.HoldsShardMigrationsAsync` reports a hold, which lasts until no shard of the replaced copy mirrors into the resized one (#4452). | Yes: `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`, `TreeShardSplitGrainTests.SplitAsync_refuses_while_a_completed_resize_still_has_the_replaced_copy_mirroring` and `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`. |
 | `SplitSweep` | The retroactive sweep of prepares that predate the window | `TreeShardSplitGrain.RetroactiveSweepPreparedMutationsAsync`. Resolving an Indeterminate answer to the recorded decision is the intended design (#4473). | Partial: `TreeShardSplitGrainTests.RetroactiveSweep_replays_prepare_when_saga_in_flight` and `TreeShardSplitGrainTests.RetroactiveSweep_skips_replay_and_applies_commit_terminal_when_saga_already_committed`. An Indeterminate answer is replayed and leaves only a marker (#4473). |
 | `SplitFreeze` | The source refuses the moved slot | `TreeShardSplitGrain.SwapAsync`: `MarkLeavesMovedAwayAsync`, then `EnterRejectPhaseAsync`. | Yes: `TreeShardSplitGrainTests.Swap_enters_reject_phase_before_setting_shard_map` and `TreeShardSplitGrainTests.Swap_calls_source_enter_reject_phase_exactly_once`. |
 | `SplitCommit` | Final drain, then the map moves | `TreeShardSplitGrain.SwapAsync`'s final drain (`ForwardMovedSlotEntriesAtomicallyAsync`) and `ILatticeRegistry.ReassignSlotsAsync`. | Yes: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip`. |
@@ -98,7 +104,7 @@ That is the intended design #4475's fix has to meet.
 | `ResizeFence(s)` | One old shard enters Rejecting before the flip | `TreeResizeGrain.SwapAliasAsync` calling `ShardRootGrain.EnterRejectingAsync` (#4362). | Yes: `TreeResizeGrainTests.SwapAlias_fences_every_old_shard_before_moving_the_alias`. |
 | `ResizeFlip` | The alias and map move in one write | `ILatticeRegistry.SwapAliasAsync` from `TreeResizeGrain.SwapAliasAsync`. | Yes: `AliasSwapRoutingAtomicityIntegrationTests.SwapAliasAsync_writes_the_alias_and_the_map_in_one_row`. |
 | `ResizeRetire` | Reject, then soft-delete the old copy | `TreeResizeGrain.RejectOldShardsAsync` and `TreeResizeGrain.CleanupOldTreeAsync`. | Yes: `TreeResizeGrainTests.Cleanup_soft_deletes_a_later_resizes_old_physical_tree`. |
-| `ResizePurge` | The purge clears the old copy | `ShardRootGrain.PurgeAsync`. **Timing assumption**, as in `ShardOwnership`: a reader idle for longer than `SoftDeleteDuration` has been collected. | Yes: `ShardRootGrainPurgeTests.PurgeAsync_clears_the_single_root_leaf_when_tree_is_flat`. |
+| `ResizePurge` | The purge clears the old copy | `ShardRootGrain.PurgeAsync`. Pairs naming the old copy stay published, as in `ShardOwnership`; a routed read on the purged copy being refused is the intended design (#4503). | Partial: `ShardRootGrainPurgeTests.PurgeAsync_clears_the_single_root_leaf_when_tree_is_flat`. A routed read on the purged copy answers empty until #4503's fix lands. |
 | `UndoArm` | The resized copy is armed to redirect, before the swap | `AliasCutoverShardMaps.ArmRedirectsAsync` from `TreeResizeGrain.UndoResizeCoreAsync` (#4453). | Yes: `TreeResizeGrainTests.UndoResize_after_swap_arms_the_resized_copy_before_the_swap_and_lifts_the_old_fence_after_it`. |
 | `UndoSwap` | The alias and the old map move back | `ILatticeRegistry.SwapAliasAsync` from `TreeResizeGrain.UndoResizeCoreAsync`. | Yes: `TreeResizeGrainTests.UndoResize_recovers_old_tree_and_removes_alias`. |
 | `UndoClear` | The old copy's fence lifts, after the swap | `ShardRootGrain.ClearShadowForwardAsync` on every old shard (#4453). | Yes: `TreeResizeGrainTests.UndoResize_after_swap_arms_the_resized_copy_before_the_swap_and_lifts_the_old_fence_after_it`. |
@@ -119,8 +125,8 @@ That is the intended design #4475's fix has to meet.
 
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
-| `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Partial: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip`. A split in the soft-delete window loses an acknowledged batch until #4452's fix lands. |
-| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. The registry-based refusal lands with #4445's fix. |
+| `NoKeyLost` | The owner holds every acknowledged value, or the read gate declines to answer: a retired row never makes an acknowledged commit unreadable. | Yes: `TreeShardSplitGrainTests.Swap_runs_final_drain_after_reject_and_before_shard_map_flip` and `TreeResizeGrainTests.HoldsShardMigrations_is_true_while_any_replaced_shard_still_mirrors_into_the_resized_copy`. |
+| `NoResurrection` | No served read returns a value older than one already acknowledged, including a late forwarded orphan outranking a newer row (#4445). | Partial: `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it`. The registry-based refusal lands with #4445's fix, and a read through a pair naming the purged old copy answers empty (#4503). |
 | `AtomicOnOwner` | A fresh reader that gets an answer for both keys sees the batch on both or on neither. | Yes: `AtomicWriteGrainTests.ExecuteAsync_binds_its_prepared_dispatch_to_the_copy_it_prepared_on`. |
 | `OwnerMonotonic` | A fresh reader's value never moves backwards across a mask, a retirement, a late forward or a reactivation; a hidden read in between does not launder a reversion. | Partial: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight` and `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx`. A sweep under Indeterminate leaves only a marker that a reactivation loses (#4473), and a decision before a flip reverts on the resized copy (#4455). |
 | `SplitCompletes` | A split that opened its window finishes. | Yes: `TreeShardSplitGrainTests.ProcessNextPhase_drives_the_shadow_write_phase_through_the_full_split_pass`. |
@@ -171,19 +177,18 @@ check inside the harness's per-run budget.
 - **More than one of anything.** One split, one resize with its undo, one saga,
   one later write, one late forward, one reactivation, one mask toggle at a
   time.
-- **Time.** Retention windows, deadlines and the purge's delay are not modelled;
-  the purge relies on the timing assumption in its row.
+- **Time.** Retention windows, deadlines and the purge's delay are not modelled.
 
 ## Territory owned by other open issues
 
 | Issue | Claim it owns |
 |-------|---------------|
 | #4445 | The late-prepare refusal's dependence on per-activation memory (`DeliverLate`, `NoResurrection`). |
-| #4452 | The extent of the split/resize interlock (`SplitBegin`, `NoKeyLost`). |
 | #4455 | Prepared buckets in the online snapshot (`SnapCopy`, `OwnerMonotonic`). |
 | #4473 | The sweep treating Indeterminate as InFlight (`SplitSweep`, `OwnerMonotonic`). |
 | #4474 | A terminal the copy an undo discarded refuses (`SagaTerminal`). |
 | #4475 | A terminal a purged old copy refuses, and following the resized copy's layout after it (`SagaTerminal`, `SagaCompletes`, `NoStrandedBucket`). |
+| #4503 | A routed read on a purged old copy (`ResizePurge`, `NoResurrection`). |
 
 When one of these lands, its rows move from `Partial` to `Yes` with the fix's
 regression test named, after that test is shown red against the mutation that
