@@ -21,6 +21,7 @@ be quiet about one.
 | Directory | Module | What it specifies |
 |-----------|--------|-------------------|
 | [`atomic-commit/`](atomic-commit/README.md) | `AtomicCommit` | The multi-leaf prepare / commit / abort saga, the per-tree transaction-registry decision, and reader visibility. |
+| [`atomic-commit/`](atomic-commit/README.md#the-cross-cluster-module) | `AtomicCommitCrossCluster` | The same saga replicated to a peer cluster: the receiver's terminal tally, cross-tree barrier, delegation dial-back and bootstrap, and the receiver's all-or-nothing visibility. |
 
 `SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
 direction, so a module cannot be added, removed or renamed without this table

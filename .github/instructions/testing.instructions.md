@@ -849,6 +849,12 @@ core unit-test suite both execute):**
   `TerminalArrivalTallyTests` rather than by a Coyote model. The
   count arithmetic is extracted; the dedup of *which* source shards have arrived
   stays in the grain (see documented exclusions below).
+- Cross-tree receiver barrier - `CrossTreeReceiverBarrier` (completeness over the
+  frozen wait set, the single commit-iff-all verdict, and the wait-set match in
+  `LatticeCrossTreeReceiverGrain.NotifyTerminalAsync`); model
+  `CrossTreeReceiverBarrierModel`, unit suite `CrossTreeReceiverBarrierTests`.
+  `TerminalArrivalTally.IsUngated` (the legacy no-count path) is driven by
+  `CrossClusterReceiverTallyModel` alongside the rest of that core.
 
 **Documented exclusions (a decision deliberately left in the grain, with why it
 is safe):**
@@ -947,6 +953,32 @@ duplicating a non-vacuous assertion an existing model already makes.
 recorded as out-of-scope. The wall-clock, real-RPC, grain-local synchronous-state,
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
+
+### Cross-cluster property catalogue (issue #4436)
+
+The replicated half of the protocol has its own TLA+ module,
+`spec/atomic-commit/AtomicCommitCrossCluster.tla`, and its own properties, all of
+them claims about the **receiver**. None of the catalogue above covers a
+receiver, and nothing here covers the origin. The receiver-side cores are
+`TerminalArrivalTally` (including `IsUngated`, the legacy path) and
+`CrossTreeReceiverBarrier`; their Coyote models are
+`CrossClusterReceiverTallyModel` and `CrossTreeReceiverBarrierModel`, tested by
+`CrossClusterReceiverCoyoteTests`, whose guards each require a violation of one
+named property by its tag in Coyote's bug report.
+
+| TLA+ property | Plain-language property | Core | Encoding (model + assertion) | Guard test (proves non-vacuous) |
+|---------------|-------------------------|------|------------------------------|---------------------------------|
+| `RAllOrNothing` | A receiver reader never sees one key of a replicated saga post-saga and another pre-saga, within a tree or across trees. | `TerminalArrivalTally`, `CrossTreeReceiverBarrier`, `AtomicVisibilityGate` | Both models assert `[RAllOrNothing]` at every reader probe. | `Unstamped_terminals_on_a_multi_shard_saga_split_the_receiver`, `A_tally_final_on_its_first_terminal_splits_the_receiver`, `A_terminal_overtaking_its_prepare_splits_the_receiver` (reproduces #4480), `A_barrier_deciding_on_its_first_arrival_splits_the_receiver`, `Notifying_the_barrier_before_registering_the_delegation_splits_the_receiver`, `An_undialled_delegation_read_as_in_flight_splits_the_receiver` (reproduces #4448). |
+| `RStrictIsolation` | The receiver never surfaces a saga the origin did not commit. | `AtomicVisibilityGate`, `TxRegistryDecisionCore` | Both models assert `[RStrictIsolation]` at every reader probe, over committed and aborted sagas. | None of its own in Coyote; the TLA+ mutation `RStrictIsolationTerminalOutcomeIgnored` and the production detectors in `spec/atomic-commit/RefinementCrossCluster.md` carry it. |
+| `RLinearizedTerminals` | A receiver leaf applies only the outcome its registry recorded, after it was recorded. | `TxRegistryDecisionCore`, `MigrationTerminalCore` | Structural in both models: the fan-out reads the recorded decision. | TLA+ only (`RLinearizedTerminalsFanOutAppliesCommit`). |
+| `DelegationsDisjoint` | No registry holds both delegation rows for one txid. | Registry registration guard (grain-local) | Not encoded in Coyote: the check is `TxRegistryGrain.ThrowIfWouldCoexist`, pinned by `TxRegistryGrainTests`' delegation-disjointness partial. | TLA+ only (`DelegationsDisjointRegistryAdmitsForeignClaim`). |
+| `RMonotonicVisibility` | A replicated committed value, once served on the receiver, is never served pre-saga again. | `MigrationTerminalCore`, `AtomicVisibilityGate` | Implied by the per-probe `[RAllOrNothing]` and the drained-end `[RCommittedEventuallyVisible]` in both models; not asserted separately. | TLA+ only (`RMonotonicVisibilityFanOutDiscardsCommittedBucket`). |
+| `RCommittedEventuallyVisible` | Under at-least-once delivery every replicated committed saga is eventually materialised on every receiver leaf. | Tally, barrier, `MigrationTerminalCore` | Both models assert `[RCommittedEventuallyVisible]` once the stream drains (bounded progress). | TLA+ only (`RCommittedEventuallyVisiblePrepareNotShipped`, `RCommittedEventuallyVisibleFinalizeSkipsFanOut`). |
+| `RNoStrandedPrepare` | Every bucket the receiver stages is eventually consumed by the saga's terminal. | `MigrationTerminalCore` and the late-prepare refusal | Both models assert `[RNoStrandedPrepare]` once the stream drains. | `A_leaf_staging_a_prepare_that_trails_its_terminal_strands_it`. |
+
+Every property above is also paired with mutations of the TLA+ module under
+`spec/atomic-commit/mutations-cross-cluster/`, which is where the properties
+without a Coyote guard of their own are shown able to fail.
 
 ## Browser UI tier
 
