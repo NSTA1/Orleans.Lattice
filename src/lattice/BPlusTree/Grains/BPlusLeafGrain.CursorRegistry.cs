@@ -1302,7 +1302,22 @@ internal sealed partial class BPlusLeafGrain
             && clock <= HybridLogicalClock.Zero
             && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
         {
-            return (HybridLogicalClock.Zero, GetPersistedCheckpointForPartition(partition));
+            // Issue #4456: bounded by the leaf's own snapshot coverage when it
+            // holds one. The argument above covers only a leaf with NO snapshot.
+            // A leaf that holds one takes the warm path on its next activation:
+            // the rehydrate lowers this partition's checkpoint to the snapshot's
+            // coverage, and the fall-off detector, which does not exempt that
+            // path, latches LeafProjectionStaleException once the WAL tail has
+            // passed coverage + 1. Releasing at the persisted checkpoint above
+            // that coverage licenses exactly that trim, bricking a leaf that owns
+            // nothing in the trimmed prefix. Coverage below 0 - no snapshot, or one
+            // whose slot for this partition is empty - keeps the release at the
+            // persisted checkpoint: the rehydrate then resets the partition to
+            // the -1 sentinel, which the detector exempts.
+            var persistedScan = GetPersistedCheckpointForPartition(partition);
+            var snapshotCovered = DurableSnapshotCoverageForPartition(partition);
+            return (HybridLogicalClock.Zero,
+                snapshotCovered >= 0 ? Math.Min(persistedScan, snapshotCovered) : persistedScan);
         }
 
         // Data-bearing partition (live cache rows) OR a durably-checkpointed
