@@ -553,6 +553,32 @@ or by a later commit or abort decision carrying a *conflicting* outcome
 (a repeat of the same outcome is recognised as idempotent and leaves the
 tombstone in place, so it can never resurrect a decision the tree already
 retired).
+On a host with replication enabled, every tree's expired tombstone is
+also held until the write-ahead log can no longer retain a prepare of its
+saga ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) -
+every tree, not only those replicated today, because a tree added to the
+replicated set later still has its earlier prepares in its log. WAL
+partitions trim independently, so a prepare can outlive its saga's
+terminal in the log and be re-shipped to a peer that bootstraps from the
+tree, and only a decision the registry still stores reaches that peer in
+the snapshot export. After a forget, the registry samples every
+partition's next sequence (at most once per half retention, up to 30 s)
+and purges the tombstone once every partition's oldest retained entry is
+at or past that sample. It fails closed: a failed read or a changed
+partition layout keeps the tombstone. On such a host
+`TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
+(masked at once) rather than dropping it.
+
+**Capacity on a replication host.** A tombstone there lives for the longer
+of `TxDecisionRetention` and the tree's WAL trim lag, and a held
+tombstone stays masked from reads exactly as below but still counts
+against `TxRegistryAdmissionBudgetBytes`. Where the WAL trims more slowly
+than the retention, the sustained saga rate one registry shard admits
+falls in proportion, and a tree whose log stops trimming (a lagging
+consumer with no `WalRetention`, for example) eventually refuses new
+sagas with `TxRegistryCapacity` until it trims again. Raise
+`TxRegistryShardCount` to restore headroom. A host without replication is
+unaffected.
 A tombstone held by a live point-in-time cursor pin is skipped by both
 the purge and the read-side mask. Setting
 `TxDecisionRetention = TimeSpan.Zero` restores the
