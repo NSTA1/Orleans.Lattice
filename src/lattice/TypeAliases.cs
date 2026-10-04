@@ -652,6 +652,8 @@ internal static class TypeAliases
     internal const string WalMoveOptions = "ol.wmo";
     internal const string WalMoveOutcome = "ol.wmc";
     internal const string WalMoveQuiesceResult = "ol.wqr";
+    // Durable WAL move fence held in the placement pin (issue #4525).
+    internal const string WalMoveFence = "ol.wmf";
     internal const string LatticeWalProviderMissing = "ol.wpm";
     internal const string LatticeWalQuiescing = "ol.wqx";
 

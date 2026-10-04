@@ -330,11 +330,32 @@ internal sealed partial class LatticeAdminGrain
             };
         }
 
-        var copy = await RunMoveCopyPhasesAsync(
-            physicalTreeId, pin, partition, targetProviderKey, resolver, encoder, opts, cancellationToken);
+        // Raise the durable move fence before the first quiesce (issue #4525).
+        // From here until the flip clears it, every activation of the source -
+        // including one that replaces a lost fenced activation - comes up fenced.
+        var moveId = NewWalMoveId();
+        await registry.RaiseWalMoveFencesAsync(
+            physicalTreeId, pin.Version, [partition], moveId, opts.EffectiveQuiesceLease, renew: false);
 
-        // 5. Atomically flip the placement pin (compare-and-swap on version).
-        var flipped = await registry.UpdateWalPlacementAsync(physicalTreeId, pin.Version, partition, targetProviderKey);
+        var copy = await RunMoveCopyPhasesAsync(
+            physicalTreeId, pin, partition, targetProviderKey, resolver, encoder, opts, moveId, cancellationToken);
+
+        // 5. Atomically flip the placement pin: a compare-and-swap on the version
+        //    that also requires the partition to still carry this move's fence,
+        //    and clears it in the same write. A fence that lapsed and was released
+        //    may have let the source acknowledge appends the copy never saw, so
+        //    the flip is refused and the move aborts with the source still live.
+        State.WalPlacementPin flipped;
+        try
+        {
+            flipped = await registry.FlipFencedWalPlacementAsync(
+                physicalTreeId, pin.Version, [(partition, targetProviderKey)], moveId);
+        }
+        catch
+        {
+            await ReleaseFenceAndDeactivateSourceAsync(physicalTreeId, partition, moveId);
+            throw;
+        }
 
         // 6. Force the source activation to deactivate so the next activation
         //    (on any silo) re-resolves placement and routes to the target.
@@ -375,8 +396,9 @@ internal sealed partial class LatticeAdminGrain
     /// that slipped in, and verify the target tail. Does <b>not</b> flip the pin
     /// or deactivate the source on success - the caller flips (single CAS for one
     /// partition, or one batched CAS for many) and then deactivates. On any
-    /// failure the fenced source is deactivated best-effort so it resumes service
-    /// without waiting out the quiesce lease, and the exception is rethrown with
+    /// failure the move's durable fence is released and the fenced source is
+    /// deactivated best-effort so it resumes service without waiting out the
+    /// quiesce lease, and the exception is rethrown with
     /// the partial target copy retained for a resumable retry.
     /// <para>
     /// The caller must already have validated that the target key resolves and
@@ -391,26 +413,16 @@ internal sealed partial class LatticeAdminGrain
         LatticeOptionsResolver resolver,
         IWalRecordEncoder encoder,
         WalMoveOptions opts,
+        string moveId,
         CancellationToken cancellationToken)
     {
         var (srcProvider, _) = resolver.ResolveWalProvider(physicalTreeId, basePin, partition);
         var movedPin = basePin.WithPartition(partition, targetProviderKey, basePin.Version);
         var (dstProvider, _) = resolver.ResolveWalProvider(physicalTreeId, movedPin, partition);
         var wal = grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+        var registry = grainFactory.GetLatticeRegistry();
 
-        // 1. Quiesce + fence the source activation at the pin version we read.
-        var quiesce = await wal.QuiesceForMoveAsync(basePin.Version, opts.EffectiveQuiesceLease, cancellationToken);
-        if (!quiesce.Quiesced)
-        {
-            throw new InvalidOperationException(
-                $"WAL move of {physicalTreeId}/{partition} aborted: the source activation resolved placement version "
-                + $"{quiesce.ObservedPlacementVersion}, but the coordinator expected {basePin.Version}. The placement changed "
-                + "underneath the move; re-read placement and retry.");
-        }
-
-        var srcHighest = quiesce.HighestOffsetInclusive;
-        var srcLowest = await srcProvider.GetLowestOffsetAsync(physicalTreeId, partition, cancellationToken);
-
+        long srcHighest = -1, srcLowest = -1;
         long copiedFrom = -1, copiedThrough = -1;
 
         // Copies source entries with offset in (fromExclusive, throughInclusive]
@@ -450,16 +462,26 @@ internal sealed partial class LatticeAdminGrain
         }
 
         long dstHighest;
-
-        // True when the source actually holds live entries to copy. srcHighest
-        // is a monotonic high-water mark that survives a trim, so it is NOT a
-        // safe proxy: a fully-trimmed shard reports a positive tail with
-        // nothing retained. Gating the copy - and the post-copy verification -
-        // on the live range keeps a fully-trimmed partition movable instead of
-        // failing verification against a tail that no longer has entries.
-        var hasLiveRange = srcLowest >= 0 && srcHighest >= srcLowest;
+        var hasLiveRange = false;
         try
         {
+            // 1. Quiesce + fence the source activation at the pin version we read.
+            //    The durable fence the caller raised already holds, so whichever
+            //    activation answers is fenced; this drains it and reads its tail.
+            var quiesce = await wal.QuiesceForMoveAsync(basePin.Version, opts.EffectiveQuiesceLease, cancellationToken);
+            ThrowIfNotQuiesced(quiesce, physicalTreeId, partition, basePin.Version, "");
+
+            srcHighest = quiesce.HighestOffsetInclusive;
+            srcLowest = await srcProvider.GetLowestOffsetAsync(physicalTreeId, partition, cancellationToken);
+
+            // True when the source actually holds live entries to copy. srcHighest
+            // is a monotonic high-water mark that survives a trim, so it is NOT a
+            // safe proxy: a fully-trimmed shard reports a positive tail with
+            // nothing retained. Gating the copy - and the post-copy verification -
+            // on the live range keeps a fully-trimmed partition movable instead of
+            // failing verification against a tail that no longer has entries.
+            hasLiveRange = srcLowest >= 0 && srcHighest >= srcLowest;
+
             // 2. Copy the retained tail [srcLowest..srcHighest] to the target,
             //    preserving offsets and the source trim floor. Resumable: if a
             //    prior attempt copied a prefix, continue past the target's tail.
@@ -511,22 +533,23 @@ internal sealed partial class LatticeAdminGrain
                 }
             }
 
-            // 3. Convergence: re-quiesce with a fresh lease right before the
-            //    cutover. This (a) resets the source's self-heal deadline so the
-            //    fence is guaranteed to outlast the compare-and-swap below, and
-            //    (b) catches any appends that slipped onto the source if the
-            //    first lease lapsed during a slow copy. Loop until the source
-            //    tail is stable, then flip immediately while the lease holds.
+            // 3. Convergence: renew the durable fence and re-quiesce with a fresh
+            //    lease right before the cutover. This (a) resets the source's
+            //    self-heal deadline, and (b) catches any appends that slipped onto
+            //    the source if the first lease lapsed during a slow copy. Loop until
+            //    the source tail is stable, then flip immediately. The lease alone
+            //    does not make the cutover safe: the activation holding it can be
+            //    lost. What does is the durable fence, which every later activation
+            //    honours and which the flip requires to still be held (issue #4525).
             while (true)
             {
+                // Renew the durable fence before every re-quiesce. A renewal never
+                // re-creates a fence that lapsed and was released - the source may
+                // have served appends since - so a lost fence aborts the move here.
+                await registry.RaiseWalMoveFencesAsync(
+                    physicalTreeId, basePin.Version, [partition], moveId, opts.EffectiveQuiesceLease, renew: true);
                 var recheck = await wal.QuiesceForMoveAsync(basePin.Version, opts.EffectiveQuiesceLease, cancellationToken);
-                if (!recheck.Quiesced)
-                {
-                    throw new InvalidOperationException(
-                        $"WAL move of {physicalTreeId}/{partition} aborted: the source activation resolved placement "
-                        + $"version {recheck.ObservedPlacementVersion} during convergence, but the coordinator expected "
-                        + $"{basePin.Version}. The placement changed underneath the move; retry.");
-                }
+                ThrowIfNotQuiesced(recheck, physicalTreeId, partition, basePin.Version, " during convergence");
                 if (recheck.HighestOffsetInclusive <= srcHighest)
                 {
                     break;
@@ -566,6 +589,19 @@ internal sealed partial class LatticeAdminGrain
                     + "not flipped; the source remains live. Retry once the partition holds live entries.");
             }
 
+            // Defence in depth for issue #4525: re-read the source's durable tail
+            // directly. The fenced flip is what makes the cutover safe, but an
+            // append that slipped past the final quiesce is caught here, before
+            // the irreversible step, with a precise diagnosis.
+            var srcDurableHighest = await srcProvider.GetHighestOffsetAsync(physicalTreeId, partition, cancellationToken);
+            if (srcDurableHighest > srcHighest)
+            {
+                throw new InvalidOperationException(
+                    $"WAL move of {physicalTreeId}/{partition} aborted: the source's durable highest offset is "
+                    + $"{srcDurableHighest}, beyond the quiesced highest {srcHighest} the copy was taken at. An append "
+                    + "reached the source after the final quiesce. The pin was not flipped; the source remains live; retry.");
+            }
+
             // The last cancellation point of a tracked move: a cancel observed here
             // still lands in the catch below, which unfences the source. The report
             // itself can carry the stop signal back, so check the token after it.
@@ -575,21 +611,86 @@ internal sealed partial class LatticeAdminGrain
         catch
         {
             // The pin was never flipped, so the partition's durable placement
-            // still points at the source. Force the fenced source activation to
-            // deactivate so the next activation resumes service on the source
-            // immediately instead of waiting out the quiesce lease.
-            try
-            {
-                await wal.DeactivateForMoveAsync(CancellationToken.None);
-            }
-            catch (Exception ex)
-            {
-                logger.LogDebug(ex, "Best-effort source deactivation after aborted WAL move of {TreeId}/{Partition} failed.", physicalTreeId, partition);
-            }
+            // still points at the source. Release the durable fence first, then
+            // force the fenced source activation to deactivate, so the next
+            // activation resumes service on the source immediately instead of
+            // waiting out the quiesce lease. In that order: an activation that
+            // came up before the release would stay fenced for the whole lease.
+            await ReleaseFenceAndDeactivateSourceAsync(physicalTreeId, partition, moveId);
             throw;
         }
 
         return new MoveCopyResult(copiedFrom, copiedThrough, srcHighest, dstHighest);
+    }
+
+    /// <summary>
+    /// Throws when a <see cref="IWalShardGrain.QuiesceForMoveAsync"/> did not
+    /// quiesce the source: either the activation resolved a newer placement, or
+    /// provider writes it stopped waiting for may still land (issue #4525).
+    /// </summary>
+    private static void ThrowIfNotQuiesced(
+        WalMoveQuiesceResult result, string physicalTreeId, int partition, long expectedVersion, string phase)
+    {
+        if (result.Quiesced)
+        {
+            return;
+        }
+        if (result.DrainIncomplete)
+        {
+            throw new InvalidOperationException(
+                $"WAL move of {physicalTreeId}/{partition} aborted{phase}: the source could not drain within its drain "
+                + "budget and provider writes it stopped waiting for may still land, so its tail is not stable. The pin "
+                + "was not flipped; the source remains live; retry once the source's provider recovers.");
+        }
+        throw new InvalidOperationException(
+            $"WAL move of {physicalTreeId}/{partition} aborted{phase}: the source activation resolved placement version "
+            + $"{result.ObservedPlacementVersion}, but the coordinator expected {expectedVersion}. The placement changed "
+            + "underneath the move; re-read placement and retry.");
+    }
+
+    /// <summary>A fresh identity for one WAL move's durable fence.</summary>
+    private static string NewWalMoveId() => Guid.NewGuid().ToString("N");
+
+    /// <summary>
+    /// Best-effort abort cleanup for a batch move: releases the fence and
+    /// deactivates the source of every partition the batch fenced.
+    /// </summary>
+    private async Task ReleaseBatchFencesAsync(string physicalTreeId, IEnumerable<int> partitions, string moveId)
+    {
+        foreach (var partition in partitions)
+        {
+            await ReleaseFenceAndDeactivateSourceAsync(physicalTreeId, partition, moveId);
+        }
+    }
+
+    /// <summary>
+    /// Best-effort abort cleanup for a fenced move of one partition: releases the
+    /// move's durable fence, then deactivates the source activation so the next
+    /// one re-resolves placement unfenced. Each step is logged rather than
+    /// propagated; a fence that cannot be released lapses with its lease and is
+    /// released by the next activation of the source. A no-op for a fence the
+    /// flip already cleared.
+    /// </summary>
+    private async Task ReleaseFenceAndDeactivateSourceAsync(string physicalTreeId, int partition, string moveId)
+    {
+        try
+        {
+            await grainFactory.GetLatticeRegistry()
+                .ReleaseWalMoveFenceAsync(physicalTreeId, partition, moveId, onlyIfExpired: false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Releasing the fence of aborted WAL move {MoveId} of {TreeId}/{Partition} failed; it lapses with its lease.", moveId, physicalTreeId, partition);
+        }
+        try
+        {
+            await grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}")
+                .DeactivateForMoveAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Best-effort source deactivation after aborted WAL move of {TreeId}/{Partition} failed.", physicalTreeId, partition);
+        }
     }
 
     /// <summary>
@@ -662,8 +763,20 @@ internal sealed partial class LatticeAdminGrain
         }
 
         var copyResults = new MoveCopyResult[requested.Count];
+        var moveId = NewWalMoveId();
         if (realMoveIndexes.Count > 0)
         {
+            // Raise every real move's durable fence in one registry write before
+            // any source is quiesced (issue #4525). A conflict with another move
+            // refuses the whole batch before any log is touched.
+            var fencedPartitions = new int[realMoveIndexes.Count];
+            for (var slot = 0; slot < realMoveIndexes.Count; slot++)
+            {
+                fencedPartitions[slot] = requested[realMoveIndexes[slot]].Partition;
+            }
+            await registry.RaiseWalMoveFencesAsync(
+                physicalTreeId, pin.Version, fencedPartitions, moveId, opts.EffectiveQuiesceLease, renew: false);
+
             // Phases 1-4 for every real move, bounded by the configured ceiling.
             // Task.WhenAll waits for all phases to settle even on failure, so the
             // catch can release every fenced source deterministically.
@@ -674,34 +787,25 @@ internal sealed partial class LatticeAdminGrain
                     var i = realMoveIndexes[slot];
                     copyResults[i] = await RunMoveCopyPhasesAsync(
                         physicalTreeId, pin, requested[i].Partition, requested[i].TargetProviderKey,
-                        resolver, encoder, opts, cancellationToken);
+                        resolver, encoder, opts, moveId, cancellationToken);
                 });
             }
             catch
             {
                 // Any per-partition failure aborts the whole batch: the pin was
-                // never flipped, so release every fenced source (the failed ones
-                // were already deactivated by the copy helper; re-requesting is an
-                // idempotent no-op) and retain partial target copies for a
-                // resumable retry.
-                foreach (var slot in realMoveIndexes)
-                {
-                    try
-                    {
-                        await grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{requested[slot].Partition}")
-                            .DeactivateForMoveAsync(CancellationToken.None);
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogDebug(ex, "Best-effort source deactivation after aborted batch WAL move of {TreeId}/{Partition} failed.", physicalTreeId, requested[slot].Partition);
-                    }
-                }
+                // never flipped, so release every fence and fenced source (the
+                // failed ones were already released by the copy helper;
+                // re-requesting is an idempotent no-op) and retain partial target
+                // copies for a resumable retry.
+                await ReleaseBatchFencesAsync(physicalTreeId, fencedPartitions, moveId);
                 throw;
             }
         }
 
-        // 5. Flip every real move together under a single compare-and-swap. When
-        //    no partition needed moving the placement is left untouched.
+        // 5. Flip every real move together under a single compare-and-swap that
+        //    requires every moved partition to still carry this move's fence and
+        //    clears them in the same write. When no partition needed moving the
+        //    placement is left untouched.
         var previousVersion = pin.Version;
         var newVersion = pin.Version;
         if (realMoveIndexes.Count > 0)
@@ -712,8 +816,16 @@ internal sealed partial class LatticeAdminGrain
                 var i = realMoveIndexes[slot];
                 batched[slot] = (requested[i].Partition, requested[i].TargetProviderKey);
             }
-            var flipped = await registry.UpdateWalPlacementAsync(physicalTreeId, pin.Version, batched);
-            newVersion = flipped.Version;
+            try
+            {
+                var flipped = await registry.FlipFencedWalPlacementAsync(physicalTreeId, pin.Version, batched, moveId);
+                newVersion = flipped.Version;
+            }
+            catch
+            {
+                await ReleaseBatchFencesAsync(physicalTreeId, batched.Select(static m => m.Partition), moveId);
+                throw;
+            }
         }
 
         // 6. Force every requested partition's source activation to deactivate so

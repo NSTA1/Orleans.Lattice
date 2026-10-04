@@ -101,7 +101,10 @@ internal sealed partial class WalShardGrain(
     /// administrative placement move: new appends are refused with
     /// <see cref="LatticeWalQuiescingException"/> so the move coordinator can
     /// copy a stable source tail and flip the placement pin without racing a
-    /// concurrent writer. Mutated and read under <see cref="_stateGate"/>.
+    /// concurrent writer. Raised by <see cref="QuiesceForMoveAsync"/>, and at
+    /// activation when the placement pin carries a live durable move fence for
+    /// this partition's provider (issue #4525), so an activation that replaces a
+    /// lost fenced one is fenced too. Mutated and read under <see cref="_stateGate"/>.
     /// </summary>
     private bool _moveFenced;
 
@@ -113,6 +116,18 @@ internal sealed partial class WalShardGrain(
     /// <see cref="_stateGate"/>.
     /// </summary>
     private long _fenceDeadlineTicks;
+
+    /// <summary>
+    /// Provider work this activation stopped waiting for but that may still land
+    /// a write: the FlushAsync of every slot the drain budget force-faulted, and
+    /// every provider call a flush deadline abandoned. Neither is acknowledged,
+    /// but a write that lands after a move quiesce read the source tail would sit
+    /// above the copied range, readable on the source and reissued by the target
+    /// (issue #4525). <see cref="QuiesceForMoveAsync"/> therefore refuses to
+    /// report a stable tail while any of it is outstanding. Mutated and read
+    /// under <see cref="_stateGate"/>; completed entries are pruned lazily.
+    /// </summary>
+    private readonly List<Task> _outstandingProviderWork = new();
 
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag bound to this
@@ -365,11 +380,28 @@ internal sealed partial class WalShardGrain(
         // activation lifetime). The default-key path preserves the legacy
         // LatticeOptions.WalStorageProvider resolver exactly; a partition pinned
         // to a named catalog key that this silo cannot resolve fails closed.
-        var (resolvedProvider, placementVersion, providerKey) =
-            await optionsResolver.GetWalProviderAsync(_treeId, _shardIndex).ConfigureAwait(true);
-        _provider = resolvedProvider;
-        _placementVersion = placementVersion;
-        _providerKey = providerKey;
+        //
+        // The same read carries the partition's durable move fence (issue
+        // #4525). The in-memory fence QuiesceForMoveAsync raises dies with its
+        // activation, so a move that is still copying this partition must fence
+        // this activation too, or it would acknowledge an append the copy never
+        // saw and the flip would strand it. A lapsed fence has already been
+        // released by the resolver, which then resolved from the pin the release
+        // returned.
+        var resolution = await optionsResolver.ResolveWalShardPlacementAsync(_treeId, _shardIndex).ConfigureAwait(true);
+        _provider = resolution.Provider;
+        _placementVersion = resolution.PlacementVersion;
+        _providerKey = resolution.ProviderKey;
+        if (resolution.FenceExpiresUtcTicks is { } fenceExpiresUtcTicks)
+        {
+            var remaining = TimeSpan.FromTicks(Math.Max(0, fenceExpiresUtcTicks - TimeProvider.System.GetUtcNow().UtcTicks));
+            lock (_stateGate)
+            {
+                _moveFenced = true;
+                _fenceDeadlineTicks = SaturatingStopwatchDeadlineTicks(Stopwatch.GetTimestamp(), remaining);
+            }
+            Trace($"move.fence.durable tree={_treeId} shard={_shardIndex} remaining={remaining}");
+        }
         // Reconcile any half-committed state a multi-phase backend
         // (e.g. Azure Table's per-batch partition + manifest layout)
         // may have left from a previous activation's crash between
@@ -610,6 +642,13 @@ internal sealed partial class WalShardGrain(
             foreach (var slot in _inFlight)
             {
                 abandoned.Add(slot);
+                // The slot's FlushAsync - and so its provider call - is still
+                // running, and its write may yet land. Record it so a move
+                // quiesce cannot report a stable tail until it settles (#4525).
+                if (slot.Task is { IsCompleted: false } flushTask)
+                {
+                    _outstandingProviderWork.Add(flushTask);
+                }
             }
             _inFlight.Clear();
 
@@ -1810,9 +1849,10 @@ internal sealed partial class WalShardGrain(
                     (false, null) => new CancellationTokenSource(flushTimeout),
                     (false, not null) => LinkWithFlushTimeout(drainSnapshot.Token, flushTimeout),
                 };
+                Task? providerCall = null;
                 try
                 {
-                    var providerCall = _provider.AppendEncodedBatchAsync(
+                    providerCall = _provider.AppendEncodedBatchAsync(
                         _treeId,
                         _shardIndex,
                         encodedArray.AsMemory(),
@@ -1843,6 +1883,10 @@ internal sealed partial class WalShardGrain(
                 catch (OperationCanceledException oce)
                     when (deadline is not null && deadline.IsCancellationRequested)
                 {
+                    // The bounded wait gave up on the provider call, but the
+                    // call itself may still land. Record it so a move quiesce
+                    // does not report a stable tail while it is outstanding.
+                    TrackOutstandingProviderWork(providerCall);
                     // Distinguish the two cancellation sources so the
                     // surfaced TimeoutException attributes the trip to
                     // the actually-firing deadline rather than blaming
@@ -2458,7 +2502,9 @@ internal sealed partial class WalShardGrain(
         // The fence therefore holds until this activation dies; the next
         // activation re-resolves placement from the durable pin (resuming on the
         // old provider if the move aborted, or routing to the new provider if
-        // the pin was already flipped) and comes up unfenced.
+        // the pin was already flipped). If the move's durable fence is still in
+        // the pin, that activation releases it when its lease has lapsed and
+        // otherwise comes up fenced itself (issue #4525).
         Trace($"move.quiesce.lease_expired tree={_treeId} shard={_shardIndex}");
         context.Deactivate(new DeactivationReason(
             DeactivationReasonCode.ApplicationRequested,
@@ -2514,6 +2560,21 @@ internal sealed partial class WalShardGrain(
         }
         await DrainInFlightAsync(Options.WalDrainBudget).ConfigureAwait(true);
 
+        // The drain budget may have force-faulted slots whose provider writes are
+        // still running, and an earlier flush deadline may have abandoned a call
+        // that has not settled. Either can still land above the tail read below,
+        // so the tail is not stable: refuse to report it (issue #4525).
+        if (HasOutstandingProviderWork())
+        {
+            Trace($"move.quiesce.drain_incomplete tree={_treeId} shard={_shardIndex}");
+            return new WalMoveQuiesceResult(
+                Quiesced: false,
+                HighestOffsetInclusive: -1,
+                ObservedPlacementVersion: _placementVersion,
+                ProviderKey: _providerKey,
+                DrainIncomplete: true);
+        }
+
         var highest = await _provider
             .GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken)
             .ConfigureAwait(true);
@@ -2522,6 +2583,35 @@ internal sealed partial class WalShardGrain(
             HighestOffsetInclusive: highest,
             ObservedPlacementVersion: _placementVersion,
             ProviderKey: _providerKey);
+    }
+
+    /// <summary>
+    /// Records provider work the activation has stopped waiting for while it may
+    /// still land a write. See <see cref="_outstandingProviderWork"/>.
+    /// </summary>
+    private void TrackOutstandingProviderWork(Task? work)
+    {
+        if (work is null || work.IsCompleted)
+        {
+            return;
+        }
+        lock (_stateGate)
+        {
+            _outstandingProviderWork.Add(work);
+        }
+    }
+
+    /// <summary>
+    /// Prunes settled entries from <see cref="_outstandingProviderWork"/> and
+    /// reports whether any provider work that may still land a write remains.
+    /// </summary>
+    private bool HasOutstandingProviderWork()
+    {
+        lock (_stateGate)
+        {
+            _outstandingProviderWork.RemoveAll(static t => t.IsCompleted);
+            return _outstandingProviderWork.Count > 0;
+        }
     }
 
     /// <inheritdoc />

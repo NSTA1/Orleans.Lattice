@@ -2166,7 +2166,7 @@ rather than registered as silo configuration; a `null` argument uses
 
 | Option | Type | Default | Meaning |
 |--------|------|---------|---------|
-| `QuiesceLease` | `TimeSpan` | 30 seconds | How long the source partition stays fenced while the move copies its tail and flips the placement pin; if the move fails, the fence self-heals after this lease. A non-positive value uses the default. |
+| `QuiesceLease` | `TimeSpan` | 30 seconds | How long the source partition stays fenced while the move copies its tail and flips the placement pin. The fence is held durably in the placement pin and renewed before every convergence re-quiesce, so it survives the loss of the fenced WAL grain; if the move coordinator dies, the next activation of the source releases the fence once this lease has passed, and the abandoned move can then no longer flip. A non-positive value uses the default. |
 | `CopyPageSize` | `int` | 256 | Entries copied per page from source to target. A non-positive value uses the default. |
 | `VerifyAfterCopy` | `bool` | `true` in `WalMoveOptions.Default` | Whether the move checks that the target tail matches the copied source range before flipping the pin. It is a plain `bool`, so `new WalMoveOptions { ... }` leaves it `false`; start from `WalMoveOptions.Default with { ... }` instead. |
 | `MaxConcurrentPartitionMoves` | `int` | 1 | Partitions a batch move copies in parallel; ignored by the single-partition overload. A non-positive value uses the default. |
