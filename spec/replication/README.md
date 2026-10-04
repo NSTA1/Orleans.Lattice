@@ -89,7 +89,7 @@ converges. Withholding the acknowledgement until the entry can be applied
 deadlocks, and stands as `EventualConvergenceDeferredParkStalls`.
 
 The only deferral in `Replication.tla`'s intended design is a duplicate of an
-entry whose first delivery is still parking (#4465). Production backs off and
+entry whose first delivery is still parking (#4465, fixed by #4477). Production backs off and
 re-ships on it, stalling that line, but the first delivery's park completes on
 its own (or a restart aborts it and the entry is re-sent), so the stall always
 ends; the main module's freer delivery therefore loses no liveness behaviour
@@ -106,8 +106,9 @@ shape, kept after the fix lands as the check that reintroducing it is caught:
   (`BootstrapHandoffLosesNothingPinnedFloor`).
 - #4464 - the causal buffer can strand or lose parked entries (four
   `EventualConvergence*` mutations).
-- #4465 - a duplicate of an entry still in flight is acknowledged, so an
-  aborted first delivery is lost (`CursorNeverSkipsUnshippedDuplicateOfParkingAcked`).
+- #4465, fixed by #4477 - a duplicate of an entry still in flight was
+  acknowledged, so an aborted first delivery was lost
+  (`CursorNeverSkipsUnshippedDuplicateOfParkingAcked`).
 
 [`Refinement.md`](Refinement.md#territory-owned-by-other-open-issues) lists
 every row they touch.
