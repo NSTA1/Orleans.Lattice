@@ -1,0 +1,34 @@
+# Pairs with SagaCompletes. Reproduces current production (#4474): a saga bound
+# to the resized copy R, whose resize is undone after the swap, sends its
+# terminals to R directly. The routed-logical stamp is stripped, so R's undo
+# redirect does not refuse them, and R takes them until the undo discards it;
+# from then on R's shards are deleted and AppendTxTerminalAsync throws
+# InvalidOperationException, which the broadcast does not follow. The saga never
+# completes. A second edit lets the stalled saga count as quiescent, so the
+# mutant cannot deadlock and the liveness property is the only thing TLC can
+# report. The naive fix, following that refusal to the old copy, is
+# AtomicOnOwnerDiscardedCopyTerminalRedirects.
+MODULE: SagaCompletesDiscardedCopyRefusesTerminal
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: a saga bound to a copy an undo discarded can never deliver its remaining terminals
+PERTURBS: SagaTerminal
+
+--- FIND
+    /\ s \in TermTargets \ told
+    /\ told' = told \cup {s}
+--- REPLACE
+    /\ s \in TermTargets \ told
+\* MUTATION: the discarded copy refuses the terminal outright.
+    /\ ~(bound = R /\ ~Live(R))
+    /\ told' = told \cup {s}
+--- END
+
+--- FIND
+Quiescent ==
+    /\ sg \in {"idle", "done"}
+--- REPLACE
+Quiescent ==
+\* MUTATION: a saga stalled on a discarded copy is not in flight.
+    /\ sg \in {"idle", "done"} \/ (bound = R /\ ~Live(R))
+--- END

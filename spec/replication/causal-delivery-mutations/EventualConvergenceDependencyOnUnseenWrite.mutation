@@ -1,0 +1,20 @@
+# Pairs with EventualConvergence in ReplicationCausalDelivery. A writer can
+# record a write it never received - here, one that was never authored - and
+# then stamp a dependency on it. The receiver parks the dependent write for a
+# dependency that will never arrive. Production stamps a frontier from what
+# the author actually applied; this mutation shows the property is sensitive
+# to that.
+MODULE: EventualConvergenceDependencyOnUnseenWrite
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a writer learns a write that was never authored and depends on it, so the receiver waits for ever
+PERTURBS: Learn
+
+--- FIND
+Learn(x, w) ==
+    /\ w \in authored
+--- REPLACE
+Learn(x, w) ==
+\* MUTATION: a write is learned whether or not it was ever authored.
+    /\ w \in Writes
+--- END

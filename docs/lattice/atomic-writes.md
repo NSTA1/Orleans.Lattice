@@ -328,7 +328,14 @@ the undo discards it with every write it took, so a terminal the discarded copy
 refuses counts as delivered: it is neither re-sent to the copy the undo restored,
 which would land part of the batch there, nor retried until the saga stalls, and
 the saga completes
-([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). A batch therefore commits wholly on one copy - kept or
+([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). When the bound copy is instead a
+completed resize's old copy and its broadcast outlives `SoftDeleteDuration`, the
+purge leaves that copy refusing every terminal; each refused terminal is
+redelivered to the resized copy - to its shard at the same index, which the old
+copy mirrored every prepared bucket into, to the shard that now owns each key, and
+to their split-forward targets - so the saga completes. The redelivered terminal
+carries no committed-values backstop: the buckets it resolves were all mirrored
+there ([#4475](https://github.com/NSTA1/Orleans.Lattice/issues/4475)). A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
 
@@ -1475,6 +1482,19 @@ batch that is.
   `PreconditionFailed` nothing is committed on any tree. A mid-flight
   write failure compensates every tree and throws
   `InvalidOperationException`.
+- **Refused while a cross-tree-consistent backup set is captured.** A
+  cross-tree-consistent backup set fences the saga decision registry of
+  every member tree while it captures (see
+  [Backup architecture](../lattice.backup/architecture.md#backup-set-and-the-cross-tree-fence)).
+  A cross-tree write that tries to start on a fenced tree is refused, not
+  retried or queued: it is compensated on every tree and throws
+  `InvalidOperationException`, and the caller retries it once the capture
+  completes. This applies to every tree of the write that had not yet
+  registered when the fence went up; a write that had already registered on
+  every tree finishes normally, and the capture waits for it. Single-tree writes and atomic batches are never
+  refused by a capture: a batch whose commit or abort decision falls
+  inside any snapshot capture of its tree waits for the capture to
+  release the tree's saga decision gate (issue #4485).
 - **Crash recovery.** The coordinator grain drives the saga to a
   terminal state via a keepalive reminder if its silo crashes mid-flight,
   exactly as the single-tree saga does.

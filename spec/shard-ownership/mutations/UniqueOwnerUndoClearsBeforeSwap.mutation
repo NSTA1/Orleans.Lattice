@@ -1,7 +1,8 @@
-# Pairs with UniqueOwner. Reproduces current production (#4453): the undo
-# clears T's shadow-forward state (lifting its fence) before moving the alias
-# back, and arms R's redirect only after the swap. In the first window T serves
-# while the alias names R; in the second, R serves while the alias names T.
+# Pairs with UniqueOwner. Reproduces production before #4453 was fixed (#4457):
+# the undo cleared T's shadow-forward state (lifting its fence) before moving
+# the alias back, and armed R's redirect only after the swap. In the first
+# window T serves while the alias names R; in the second, R serves while the
+# alias names T.
 MODULE: UniqueOwnerUndoClearsBeforeSwap
 TARGET: UniqueOwner
 CLASS: Invariant

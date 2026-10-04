@@ -1,0 +1,13 @@
+{
+  "mutations": "causal-delivery-mutations",
+  "refinement": "ReplicationCausalDelivery.Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 1,
+    "properties": 1,
+    "actions": 5,
+    "mutations": 4,
+    "behaviourRows": 5,
+    "distinctStates": 19753
+  }
+}

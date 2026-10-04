@@ -1,0 +1,16 @@
+# Pairs with NoRelay. The shipper's local-origin cycle-break is removed: b
+# ships the writes it applied from a onward to c, so a -> b -> c becomes a
+# path and every apply is re-shipped.
+MODULE: NoRelayShipsForeignWrites
+TARGET: NoRelay
+CLASS: Action
+SUMMARY: drops the shipper's local-origin cycle-break, so a cluster relays the writes it applied from a peer
+PERTURBS: Deliver
+
+--- FIND
+       /\ \/ ShouldShip(s, w)
+          \/ w.o = x
+--- REPLACE
+\* MUTATION: any entry of the source's WAL is shipped.
+       /\ TRUE
+--- END
