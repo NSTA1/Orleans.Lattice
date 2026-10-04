@@ -227,8 +227,8 @@ public sealed class LatticeAuthorizationPolicyStoreIntegrationTests
         Func<List<string>, bool> satisfied)
     {
         var ids = await scan();
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (!satisfied(ids) && DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        while (!satisfied(ids) && Environment.TickCount64 < deadline)
         {
             await Task.Delay(50);
             ids = await scan();

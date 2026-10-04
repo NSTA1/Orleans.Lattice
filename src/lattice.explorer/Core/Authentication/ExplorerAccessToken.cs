@@ -27,4 +27,16 @@ public readonly record struct ExplorerAccessToken
 
     /// <summary>The composed <c>authorization</c> header value (<c>"&lt;scheme&gt; &lt;token&gt;"</c>).</summary>
     public string ToAuthorizationHeader() => $"{Scheme} {Token}";
+
+    /// <summary>
+    /// A description that never carries the token. Deliberately overrides the
+    /// compiler-generated record <see cref="object.ToString"/>, which prints
+    /// every property and would therefore put the raw bearer token into the
+    /// first log line, exception message or diagnostic dump that formats this
+    /// token. The redaction is a fixed token rather than a run of stars sized to
+    /// the secret, so it does not disclose the token's length either.
+    /// </summary>
+    /// <returns>The redacted description.</returns>
+    public override string ToString() =>
+        $"ExplorerAccessToken {{ Scheme = {Scheme}, Token = [redacted], ExpiresOn = {ExpiresOn:O} }}";
 }

@@ -116,7 +116,7 @@ internal static class PreparedBucketSweep
                 // as a participant via RecordAffectedLeafIfPreparedAsync,
                 // so any saga broadcast that runs AFTER this point
                 // will reach destination.
-                await ReplayPreparedSnapshotAsync(target, snapshot);
+                await ReplayPreparedSnapshotAsync(target, snapshot, decisionTreeId);
                 progress.Replayed++;
 
                 // Install the destination-side shadow marker for
@@ -229,13 +229,19 @@ internal static class PreparedBucketSweep
     /// preserved verbatim.
     /// </para>
     /// </summary>
-    internal static async Task ReplayPreparedSnapshotAsync(IShardRootGrain target, PendingMutationSnapshot snapshot)
+    internal static async Task ReplayPreparedSnapshotAsync(IShardRootGrain target, PendingMutationSnapshot snapshot, string registryTreeId)
     {
         var previousTxId = LatticeTransactionContext.Current;
         LatticeTransactionContext.Set(snapshot.TransactionId);
         try
         {
             using var preparedScope = LatticePreparedContext.BeginScope();
+            // A sweep replay can reach the destination after the saga decided
+            // (the saga may decide between the sweep's pre-check and this
+            // replay landing), so it is a forwarded prepare (#4445). Its
+            // decision is recorded under the logical tree, as the pre-check
+            // reads it (#4368).
+            using var forwardedScope = LatticeForwardedPrepareContext.BeginScope(registryTreeId);
             using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
             using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
             using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);

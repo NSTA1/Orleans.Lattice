@@ -1,0 +1,19 @@
+# Pairs with ReadPositionHonest, and reproduces issue #2404's shape: after
+# rehydrating a snapshot that predates the persisted checkpoint, the leaf
+# resumes reading past the PERSISTED checkpoint instead of lowering it to the
+# snapshot's coverage, silently skipping the rows between them that the cleared
+# cache no longer holds.
+MODULE: ReadPositionHonestRehydrateKeepsPersistedCheckpoint
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a rehydrated leaf resumes past its persisted checkpoint rather than its snapshot's coverage
+PERTURBS: Activate
+
+--- FIND
+       THEN /\ cache' = [cache EXCEPT ![l] = snapRows[l]]
+            /\ rp' = [rp EXCEPT ![l] = snapCov[l]]
+--- REPLACE
+       THEN /\ cache' = [cache EXCEPT ![l] = snapRows[l]]
+\* MUTATION: the read position is not lowered to the snapshot's coverage.
+            /\ rp' = [rp EXCEPT ![l] = IF durCp[l] > snapCov[l] THEN durCp[l] ELSE snapCov[l]]
+--- END

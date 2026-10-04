@@ -218,7 +218,7 @@ public sealed class SchemaRuleBuilderTests : SchemaRuleBuilderTestBase
     public void The_advanced_view_shows_the_exact_policy_and_keeps_the_raw_editor()
     {
         UseTrees("orders");
-        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("^[A-Z]{3}$", "currency")], strictIngest: true);
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([LatticeSchemaRule.Regex("^[A-Z]{3}\\z", "currency")], strictIngest: true);
         var cut = OpenEditor();
         cut.FindAll("[role=switch]").Single(control => control.TextContent.Contains("Advanced", StringComparison.Ordinal)).Click();
 

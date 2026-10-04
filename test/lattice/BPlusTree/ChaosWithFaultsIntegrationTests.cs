@@ -535,10 +535,10 @@ public class ChaosWithFaultsIntegrationTests
     /// </summary>
     private static async Task DrainAndHealAsync(ILattice tree)
     {
-        var deadline = DateTime.UtcNow + QuiescenceTimeout;
+        var deadline = Environment.TickCount64 + (long)QuiescenceTimeout.TotalMilliseconds;
         int cleanPasses = 0;
         int healSeq = 0;
-        while (cleanPasses < 3 && DateTime.UtcNow < deadline)
+        while (cleanPasses < 3 && Environment.TickCount64 < deadline)
         {
             bool passClean = true;
             for (int i = 0; i < UniverseSize; i++)

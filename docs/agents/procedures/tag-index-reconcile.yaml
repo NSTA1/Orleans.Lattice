@@ -12,6 +12,9 @@ surfaces:
     api: "lattice_treeadmin_tag_index_reconcile"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tag_index_reconcile, lattice_treeadmin_tag_index_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/treeadmin.json"
   - id: backing-tree-admin
     check: "Caller has Admin authority over the derived backing membership tree."
     source: "docs/lattice.api.treeadmin/README.md"
@@ -55,6 +58,10 @@ failure_modes:
     signal: "Facade rejects an index whose backing tree is not registered."
     effect: "No reconcile is performed."
     response: "Define the tag index through the host code layer."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
 rollback:
   supported: false
   mechanism: "No inverse operation for removed orphan membership rows is surfaced; reconcile is idempotent against current source state."

@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations",
+  "refinement": "Refinement.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 8,
+    "properties": 4,
+    "actions": 14,
+    "mutations": 20,
+    "behaviourRows": 25,
+    "distinctStates": 116530
+  }
+}

@@ -96,7 +96,7 @@ public static class RepoContextMcpClientExtensions
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(repoId);
 
-        var deadline = DateTimeOffset.UtcNow + (timeout ?? TimeSpan.FromSeconds(30));
+        var deadline = Environment.TickCount64 + (long)(timeout ?? TimeSpan.FromSeconds(30)).TotalMilliseconds;
         var args = new Dictionary<string, object?> { ["repoId"] = repoId };
 
         while (true)
@@ -110,7 +110,7 @@ public static class RepoContextMcpClientExtensions
                 return json;
             }
 
-            if (DateTimeOffset.UtcNow >= deadline)
+            if (Environment.TickCount64 >= deadline)
             {
                 throw new TimeoutException(
                     $"The indexing job for '{repoId}' did not reach a terminal state within the timeout.");

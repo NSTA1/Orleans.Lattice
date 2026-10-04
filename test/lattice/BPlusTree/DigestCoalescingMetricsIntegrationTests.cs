@@ -104,8 +104,8 @@ public class DigestCoalescingMetricsIntegrationTests
         // ceiling elapses. With a 5 ms coalescing window the timer
         // will tick within tens of milliseconds; the 2-second cap
         // is a stuck-test backstop, not the expected wait.
-        var firedDeadline = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < firedDeadline
+        var firedDeadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(2).TotalMilliseconds;
+        while (Environment.TickCount64 < firedDeadline
             && recorder.CountFor(LatticeMetrics.PathCoalescedFiredTag) == 0)
         {
             await Task.Delay(15);
@@ -358,8 +358,8 @@ public class DigestCoalescingMetricsIntegrationTests
         // a generous timeout elapses; capping at 5 s of wall-clock
         // keeps a stuck test bounded without racing the configured
         // 5 s coalescing window's lower bound.
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             var flushNow = recorder.CountFor(LatticeMetrics.PathDeactivationFlushTag);
             if (flushNow > flushBefore) break;

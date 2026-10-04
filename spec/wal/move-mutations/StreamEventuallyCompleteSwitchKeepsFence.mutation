@@ -1,0 +1,17 @@
+# Pairs with StreamEventuallyComplete. The move switches to its copy but never
+# lowers the fence, so every later append is refused and the stream never
+# completes; the spec's fairness is intact.
+MODULE: StreamEventuallyCompleteSwitchKeepsFence
+TARGET: StreamEventuallyComplete
+CLASS: Temporal
+SUMMARY: a completed move leaves the fence raised, so appends stall for ever
+PERTURBS: MoveSwitch
+
+--- FIND
+    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move' = "idle"
+--- REPLACE
+\* MUTATION: the fence is never lowered.
+    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move' = "fenced"
+--- END

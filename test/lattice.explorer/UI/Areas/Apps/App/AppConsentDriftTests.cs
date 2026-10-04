@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App.AppPageTestData;
 
@@ -70,6 +71,61 @@ public sealed class AppConsentDriftTests
         };
 
         Assert.That(AppConsentDrift.Analyze(own, CoveringConsent()).HasDrift, Is.False);
+    }
+
+    // The cluster's role compiler judges an exception scope by its extent as well as its
+    // tree (AppRoleCompiler.IsCovered), so an approval narrower than the request is drift.
+    [Test]
+    [TestCase(LatticeScopeKind.Prefix, "eu/", LatticeScopeKind.Prefix, "us/")]
+    [TestCase(LatticeScopeKind.Tree, null, LatticeScopeKind.Key, "2026/0001")]
+    [TestCase(LatticeScopeKind.Tree, null, LatticeScopeKind.Prefix, "2026/")]
+    [TestCase(LatticeScopeKind.Prefix, "2026/", LatticeScopeKind.Key, "2026/0001")]
+    public void An_approved_exception_narrower_than_the_cross_app_scope_is_drift(
+        LatticeScopeKind requestedKind, string? requested, LatticeScopeKind approvedKind, string? approved)
+    {
+        var drift = AppConsentDrift.Analyze(CrossApp(requestedKind, requested), ApprovingCrossApp(approvedKind, approved));
+
+        Assert.That(drift.Findings, Is.EqualTo(new[]
+        {
+            "The role auditor reaches a/billing/invoices, outside the app's namespace, without an approved exception scope.",
+        }));
+    }
+
+    [Test]
+    [TestCase(LatticeScopeKind.Prefix, "eu/2026/", LatticeScopeKind.Prefix, "eu/")]
+    [TestCase(LatticeScopeKind.Key, "eu/0001", LatticeScopeKind.Prefix, "eu/")]
+    [TestCase(LatticeScopeKind.Key, "eu/0001", LatticeScopeKind.Key, "eu/0001")]
+    [TestCase(LatticeScopeKind.Key, "eu/0001", LatticeScopeKind.Tree, null)]
+    public void An_approved_exception_as_wide_as_the_cross_app_scope_is_not_drift(
+        LatticeScopeKind requestedKind, string? requested, LatticeScopeKind approvedKind, string? approved)
+    {
+        Assert.That(AppConsentDrift.Analyze(CrossApp(requestedKind, requested), ApprovingCrossApp(approvedKind, approved)).HasDrift, Is.False);
+    }
+
+    private static AppDescriptor CrossApp(LatticeScopeKind kind, string? keyOrPrefix) => Admin(ui: false) with
+    {
+        Roles =
+        [
+            new AppRoleDescriptor
+            {
+                Name = "auditor",
+                Operations = LatticeOperation.Read,
+                Scopes = [new AppRoleScope { Tree = "invoices", App = "billing", Kind = kind, KeyOrPrefix = keyOrPrefix }],
+            },
+        ],
+        Trees = [],
+    };
+
+    private static AppConsentReport ApprovingCrossApp(LatticeScopeKind kind, string? keyOrPrefix)
+    {
+        var consent = CoveringConsent();
+        return consent with
+        {
+            Ceiling = consent.Ceiling with
+            {
+                ApprovedExceptionScopes = [new AppExceptionScope { App = "billing", Tree = "invoices", Kind = kind, KeyOrPrefix = keyOrPrefix }],
+            },
+        };
     }
 
     [Test]

@@ -101,7 +101,7 @@ public class BootstrapTransientRetryIntegrationTests
         var coord = _siteB.Client.GetGrain<Orleans.Lattice.Replication.Grains.ILatticeBootstrapCoordinatorGrain>(tree);
         await coord.BootstrapAsync(SiteAClusterId, CancellationToken.None);
 
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
         LatticeBootstrapState state;
         do
         {
@@ -110,7 +110,7 @@ public class BootstrapTransientRetryIntegrationTests
         }
         while (state != LatticeBootstrapState.LiveIncremental
             && state != LatticeBootstrapState.Failed
-            && DateTimeOffset.UtcNow < deadline);
+            && Environment.TickCount64 < deadline);
 
         await Assert.MultipleAsync(async () =>
         {

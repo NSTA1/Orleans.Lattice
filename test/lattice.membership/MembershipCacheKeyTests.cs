@@ -302,4 +302,52 @@ public class MembershipCacheKeyTests
             Assert.That(issuerB.AuthenticateCalls, Is.EqualTo(1), "the second credential must actually be authenticated");
         });
     }
+
+    /// <summary>
+    /// Regression: the key is a record struct, so its compiler-generated
+    /// <see cref="object.ToString"/> printed the caller's raw credential token.
+    /// Any log line, exception message or diagnostic dump that formatted a cache
+    /// key would have disclosed a live bearer token, so the description is
+    /// overridden to redact it without revealing its length.
+    /// </summary>
+    [Test]
+    public void ToString_does_not_disclose_the_token()
+    {
+        var key = MembershipCacheKey.For(new LatticeCredential(Token, scheme: "issuer-a", principalId: "alice"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(key.ToString(), Does.Not.Contain(Token));
+            Assert.That(key.ToString(), Does.Contain("issuer-a"), "the non-secret fields stay readable");
+            Assert.That(key.ToString(), Does.Contain("alice"));
+        });
+    }
+
+    [Test]
+    public void ToString_does_not_vary_with_the_token_length()
+    {
+        var shortest = MembershipCacheKey.For(new LatticeCredential("a")).ToString();
+        var longest = MembershipCacheKey.For(new LatticeCredential(new string('a', 512))).ToString();
+
+        Assert.That(shortest, Is.EqualTo(longest));
+    }
+
+    [Test]
+    public void ToString_distinguishes_a_present_token_from_an_absent_one()
+    {
+        var present = MembershipCacheKey.For(new LatticeCredential("a")).ToString();
+        var absent = MembershipCacheKey.For(default).ToString();
+
+        Assert.That(present, Is.Not.EqualTo(absent));
+    }
+
+    [Test]
+    public void Redacting_the_description_leaves_key_equality_intact()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MembershipCacheKey.For(new LatticeCredential(Token)), Is.EqualTo(MembershipCacheKey.For(new LatticeCredential(Token))));
+            Assert.That(MembershipCacheKey.For(new LatticeCredential(Token)), Is.Not.EqualTo(MembershipCacheKey.For(new LatticeCredential("other"))));
+        });
+    }
 }

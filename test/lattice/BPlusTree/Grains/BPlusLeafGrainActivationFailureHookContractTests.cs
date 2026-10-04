@@ -115,8 +115,8 @@ public class BPlusLeafGrainActivationFailureHookContractTests
     /// </summary>
     private static async Task WaitForDeactivationAsync(string key)
     {
-        var deadline = DateTime.UtcNow.AddSeconds(5);
-        while (DateTime.UtcNow < deadline)
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(5).TotalMilliseconds;
+        while (Environment.TickCount64 < deadline)
         {
             if (ActivationFailureProbeGrain.DeactivationCount(key) > 0)
                 return;

@@ -246,6 +246,43 @@ public sealed class SchemaPredicateTextTests
         Assert.That(SchemaPredicateText.Expression(node), Is.EqualTo("\"say \\\"hello\\\"\""));
     }
 
+    // A quote is written \" , so a backslash must be written \\ or the text is ambiguous:
+    // C:\new would read as a newline, and a\" as a backslash followed by a stray quote.
+    [Test]
+    [TestCase("C:\\new", "\"C:\\\\new\"")]
+    [TestCase("a\\\"", "\"a\\\\\\\"\"")]
+    [TestCase("\\d+", "\"\\\\d+\"")]
+    public void A_text_constant_has_its_backslashes_escaped(string value, string written)
+    {
+        Assert.That(SchemaPredicateText.Expression(LatticePredicateNode.Const(LatticeConstant.Text(value))), Is.EqualTo(written));
+    }
+
+    [Test]
+    [TestCase("line\nbreak", "\"line\\nbreak\"")]
+    [TestCase("cr\rlf", "\"cr\\rlf\"")]
+    [TestCase("tab\there", "\"tab\\there\"")]
+    [TestCase("bell\u0007", "\"bell\\u0007\"")]
+    [TestCase("next\u0085line", "\"next\\u0085line\"")]
+    [TestCase("para\u2029graph", "\"para\\u2029graph\"")]
+    public void A_text_constant_never_breaks_the_expression_across_lines(string value, string written)
+    {
+        var expression = SchemaPredicateText.Expression(LatticePredicateNode.Const(LatticeConstant.Text(value)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(expression, Is.EqualTo(written));
+            Assert.That(expression.Any(ch => char.IsControl(ch) || ch is '\u2028' or '\u2029'), Is.False);
+        });
+    }
+
+    [Test]
+    public void A_text_constant_keeps_characters_outside_ascii_as_written()
+    {
+        var node = LatticePredicateNode.Const(LatticeConstant.Text("caf\u00e9 \u4e2d\u6587 \U0001F600"));
+
+        Assert.That(SchemaPredicateText.Expression(node), Is.EqualTo("\"caf\u00e9 \u4e2d\u6587 \U0001F600\""));
+    }
+
     [Test]
     public void A_text_constant_with_no_value_is_written_as_empty_quotes()
     {

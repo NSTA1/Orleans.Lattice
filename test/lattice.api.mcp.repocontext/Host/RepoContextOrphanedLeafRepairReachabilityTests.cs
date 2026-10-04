@@ -96,7 +96,7 @@ public sealed class RepoContextOrphanedLeafRepairReachabilityTests
     private static async Task WaitForReadyAsync(WebApplication app)
     {
         using var client = app.GetTestServer().CreateClient();
-        var deadline = DateTime.UtcNow.AddSeconds(60);
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
 
         HttpStatusCode status;
         do
@@ -109,7 +109,7 @@ public sealed class RepoContextOrphanedLeafRepairReachabilityTests
 
             await Task.Delay(100, Ct);
         }
-        while (DateTime.UtcNow < deadline);
+        while (Environment.TickCount64 < deadline);
 
         Assert.Fail($"The host did not report ready within the timeout; last status was {status}.");
     }

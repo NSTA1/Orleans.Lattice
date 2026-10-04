@@ -713,9 +713,14 @@ internal sealed partial class TxRegistryGrain(
     /// is the correct conservative accounting; this figure names the subset of
     /// that count which is unreachable rather than pending.
     /// </returns>
-    private async Task<int> ResolveAllDelegatedAsync()
+    /// <param name="unresolvable">
+    /// When supplied, receives the txid of every delegation whose coordinator
+    /// could not be reached, so a snapshot can report it as
+    /// <see cref="TxStatus.Indeterminate"/> rather than omit it (issue #4448).
+    /// </param>
+    private async Task<int> ResolveAllDelegatedAsync(List<Guid>? unresolvable = null)
     {
-        var unresolvable = 0;
+        var unresolvableCount = 0;
         if (state.State.ExternalAuthorities.Count > 0)
         {
             // Snapshot the pending delegations: ResolveDelegatedAsync mutates the
@@ -726,7 +731,8 @@ internal sealed partial class TxRegistryGrain(
                 if (state.State.Decisions.ContainsKey(txid)) continue;
                 if (await ResolveDelegatedAsync(txid, coordinatorKey) == TxStatus.Indeterminate)
                 {
-                    unresolvable++;
+                    unresolvableCount++;
+                    unresolvable?.Add(txid);
                 }
             }
         }
@@ -741,11 +747,55 @@ internal sealed partial class TxRegistryGrain(
                 if (state.State.Decisions.ContainsKey(txid)) continue;
                 if (await ResolveReceiverDelegatedAsync(txid, receiverKey) == TxStatus.Indeterminate)
                 {
-                    unresolvable++;
+                    unresolvableCount++;
+                    unresolvable?.Add(txid);
                 }
             }
         }
-        return unresolvable;
+        return unresolvableCount;
+    }
+
+    /// <summary>
+    /// Whether any cross-tree delegation is active, so the snapshot paths can
+    /// skip allocating an unresolvable-txid list in the common case of none.
+    /// </summary>
+    private bool HasDelegations =>
+        state.State.ExternalAuthorities.Count > 0 || state.State.ReceiverDecisionAuthorities.Count > 0;
+
+    /// <summary>
+    /// Adds an <see cref="TxStatus.Indeterminate"/> entry to a snapshot for
+    /// every delegation in <paramref name="unresolvable"/> that is still
+    /// delegated and still has no local decision, matching what
+    /// <see cref="GetStatusAsync(Guid)"/> answers for the same txid (issue
+    /// #4448). Omitting it would read as <see cref="TxStatus.InFlight"/>, which
+    /// the visibility gate acts on by serving the saga's pre-saga values: an
+    /// affirmative claim that a saga whose coordinator could not be reached did
+    /// not commit, while sibling trees may already show it committed.
+    /// <para>
+    /// A txid the resolution pass could not settle may have been settled since
+    /// by an interleaved call, so it is re-checked here, synchronously, inside
+    /// the caller's snapshot-building block. Carrying the mask does not move
+    /// the revision token: a reader holding this snapshot keeps the key hidden
+    /// until the next decision mutation moves it, which the coordinator's own
+    /// finalisation of this tree produces once it decides.
+    /// </para>
+    /// </summary>
+    private void MaskUnresolvableDelegations(Dictionary<Guid, TxStatus> snapshot, List<Guid>? unresolvable)
+    {
+        if (unresolvable is null)
+            return;
+
+        foreach (var txid in unresolvable)
+        {
+            if (snapshot.ContainsKey(txid) || state.State.Decisions.ContainsKey(txid))
+                continue;
+
+            if (state.State.ExternalAuthorities.ContainsKey(txid)
+                || state.State.ReceiverDecisionAuthorities.ContainsKey(txid))
+            {
+                snapshot[txid] = TxStatus.Indeterminate;
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -931,7 +981,10 @@ internal sealed partial class TxRegistryGrain(
         // this tree while a sibling tree that already finalized shows the
         // value, a partial cross-tree view. Resolving here caches terminal
         // verdicts into Decisions so the snapshot reflects the global flip.
-        await ResolveAllDelegatedAsync();
+        // A delegation whose coordinator could not be reached is collected
+        // and carried as Indeterminate below, as the point path reports it.
+        var unresolvable = HasDelegations ? new List<Guid>() : null;
+        await ResolveAllDelegatedAsync(unresolvable);
 
         // Return a defensive copy so callers cannot mutate the
         // registry's persisted state through the returned reference.
@@ -960,6 +1013,7 @@ internal sealed partial class TxRegistryGrain(
                 ? TxStatus.Indeterminate
                 : status;
         }
+        MaskUnresolvableDelegations(result, unresolvable);
         return result;
     }
 
@@ -987,7 +1041,9 @@ internal sealed partial class TxRegistryGrain(
         // dict + revision are then captured in one synchronous block with no
         // intervening await, so both reflect the exact same persisted state
         // (including any verdicts just cached by the resolution pass).
-        await ResolveAllDelegatedAsync();
+        // Unreachable delegations are carried as Indeterminate (#4448).
+        var unresolvable = HasDelegations ? new List<Guid>() : null;
+        await ResolveAllDelegatedAsync(unresolvable);
 
         // The revision captured inside the same synchronous block. Both
         // fields therefore reflect the exact same persisted state - no
@@ -1011,6 +1067,7 @@ internal sealed partial class TxRegistryGrain(
                 ? TxStatus.Indeterminate
                 : status;
         }
+        MaskUnresolvableDelegations(dict, unresolvable);
         return new TxRegistrySnapshot
         {
             Decisions = dict,

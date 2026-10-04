@@ -51,9 +51,9 @@ public sealed class ShadowCutoverRoutingSelfHealChaosTests
         IReadOnlyDictionary<string, string?> expected,
         TimeSpan timeout)
     {
-        var deadline = DateTime.UtcNow + timeout;
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         (string, string?) last = default;
-        while (DateTime.UtcNow < deadline)
+        while (Environment.TickCount64 < deadline)
         {
             var converged = true;
             foreach (var (key, want) in expected)

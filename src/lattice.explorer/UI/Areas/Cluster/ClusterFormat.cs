@@ -50,14 +50,30 @@ internal static class ClusterFormat
     /// <summary>A duration in the largest whole unit that fits: <c>7 days</c>, <c>3 hours</c>, <c>90 seconds</c>.</summary>
     /// <param name="value">The duration.</param>
     /// <returns>The text.</returns>
-    public static string Duration(TimeSpan value) => value switch
+    /// <remarks>
+    /// A fraction of a second is rounded up first and the unit chosen on the
+    /// rounded figure, so 59.6 seconds reads "1 minute" rather than "60 seconds".
+    /// </remarks>
+    public static string Duration(TimeSpan value)
     {
-        { Ticks: <= 0 } => "none",
-        { TotalDays: >= 1 } when value.TotalDays % 1 == 0 => Plural((long)value.TotalDays, "day"),
-        { TotalHours: >= 1 } when value.TotalHours % 1 == 0 => Plural((long)value.TotalHours, "hour"),
-        { TotalMinutes: >= 1 } when value.TotalMinutes % 1 == 0 => Plural((long)value.TotalMinutes, "minute"),
-        _ => Plural((long)Math.Ceiling(value.TotalSeconds), "second"),
-    };
+        if (value.Ticks <= 0)
+        {
+            return "none";
+        }
+
+        var seconds = (long)Math.Ceiling(value.TotalSeconds);
+        if (seconds % 86_400 == 0)
+        {
+            return Plural(seconds / 86_400, "day");
+        }
+
+        if (seconds % 3_600 == 0)
+        {
+            return Plural(seconds / 3_600, "hour");
+        }
+
+        return seconds % 60 == 0 ? Plural(seconds / 60, "minute") : Plural(seconds, "second");
+    }
 
     /// <summary>"1 tree" or "3 trees".</summary>
     /// <param name="count">The count.</param>

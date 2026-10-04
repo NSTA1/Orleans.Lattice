@@ -379,7 +379,7 @@ internal sealed partial class WalShardGrain(
         // no-op implementation.
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
-        _nextOffset = highest + 1;
+        _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
         // Construct the per-activation drain cancellation source up-front
         // so every FlushAsync (including the very first one) can link
         // its per-flush deadline to a stable token. A deactivation that
@@ -2146,7 +2146,7 @@ internal sealed partial class WalShardGrain(
                 deadline?.Token ?? CancellationToken.None).ConfigureAwait(true);
             lock (_stateGate)
             {
-                _nextOffset = highest + 1;
+                _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
                 _stickyFailure = null;
             }
         }
@@ -2577,7 +2577,7 @@ internal sealed partial class WalShardGrain(
         // production grains use.
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
-        _nextOffset = highest + 1;
+        _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
         // Mirror OnActivateAsync's drain-CTS construction so unit tests
         // see the same activation contract production grains use; the
         // drain-budget tests rely on the CTS being available so every

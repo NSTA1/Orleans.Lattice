@@ -6,6 +6,18 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
 /// cluster's linear-time (<c>RegexOptions.NonBacktracking</c>) engine accepts:
 /// no back-references and no look-arounds. A policy's pattern equal to one of
 /// these reads back as that format card.
+/// <para>
+/// The tail anchor is <c>\z</c>, never <c>$</c>. In .NET <c>$</c> also matches
+/// immediately before a line feed that ends the input, so <c>^[A-Z]{2}$</c>
+/// admitted <c>"GB\n"</c> as a country code. These patterns are not a preview:
+/// <c>SchemaCardCompiler</c> turns them into a cluster-enforced
+/// <c>LatticeSchemaRule.Regex</c> that <c>CompiledSchemaRule</c> applies to the
+/// raw write payload with no trimming, so the smuggled line feed reached every
+/// consumer that trusts the format rule. <c>\z</c> admits only the true end of
+/// input and is accepted by the non-backtracking engine, so the linear-time
+/// guarantee is unchanged. This matches the anchor convention the glob matcher,
+/// the gitignore scope and the telemetry allow-list already state.
+/// </para>
 /// </summary>
 internal static class SchemaFormatPatterns
 {
@@ -20,19 +32,19 @@ internal static class SchemaFormatPatterns
     private static readonly Format[] Formats =
     [
         new(SchemaTextFormat.Email, "Email address", "an email address",
-            "^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}$", "dana@example.com", "dana@example"),
+            "^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)*\\.[A-Za-z]{2,}\\z", "dana@example.com", "dana@example"),
         new(SchemaTextFormat.Url, "URL", "an http or https URL",
-            "^https?://[^\\s/?#]+([/?#][^\\s]*)?$", "https://example.com/orders?id=7", "example.com/orders"),
+            "^https?://[^\\s/?#]+([/?#][^\\s]*)?\\z", "https://example.com/orders?id=7", "example.com/orders"),
         new(SchemaTextFormat.Uuid, "UUID", "a UUID",
-            "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "3f2504e04f8911d3"),
+            "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\\z", "3f2504e0-4f89-11d3-9a0c-0305e82c3301", "3f2504e04f8911d3"),
         new(SchemaTextFormat.Date, "ISO date", "an ISO date",
-            "^" + DatePart + "$", "2026-09-29", "29/09/2026"),
+            "^" + DatePart + "\\z", "2026-09-29", "29/09/2026"),
         new(SchemaTextFormat.DateTime, "ISO date and time", "an ISO date and time with an offset",
-            "^" + DatePart + "T" + TimePart + "(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$", "2026-09-29T14:02:11Z", "2026-09-29 14:02"),
+            "^" + DatePart + "T" + TimePart + "(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])\\z", "2026-09-29T14:02:11Z", "2026-09-29 14:02"),
         new(SchemaTextFormat.Time, "ISO time", "an ISO time of day",
-            "^" + TimePart + "$", "14:02:11", "2pm"),
+            "^" + TimePart + "\\z", "14:02:11", "2pm"),
         new(SchemaTextFormat.Ipv4, "IPv4 address", "an IPv4 address",
-            "^(" + Octet + "\\.){3}" + Octet + "$", "192.0.2.10", "192.0.2.300"),
+            "^(" + Octet + "\\.){3}" + Octet + "\\z", "192.0.2.10", "192.0.2.300"),
         new(SchemaTextFormat.Ipv6, "IPv6 address", "an IPv6 address",
             "^((" + Hex + ":){7}" + Hex
             + "|(" + Hex + ":){1,7}:"
@@ -42,19 +54,19 @@ internal static class SchemaFormatPatterns
             + "|(" + Hex + ":){1,3}(:" + Hex + "){1,4}"
             + "|(" + Hex + ":){1,2}(:" + Hex + "){1,5}"
             + "|" + Hex + ":(:" + Hex + "){1,6}"
-            + "|:((:" + Hex + "){1,7}|:))$", "2001:db8::ff00:42:8329", "2001:db8:::1"),
+            + "|:((:" + Hex + "){1,7}|:))\\z", "2001:db8::ff00:42:8329", "2001:db8:::1"),
         new(SchemaTextFormat.Slug, "Slug", "a slug",
-            "^[a-z0-9]+(-[a-z0-9]+)*$", "spring-sale-2026", "Spring Sale"),
+            "^[a-z0-9]+(-[a-z0-9]+)*\\z", "spring-sale-2026", "Spring Sale"),
         new(SchemaTextFormat.CountryCode, "Country code", "a two-letter country code",
-            "^[A-Z]{2}$", "GB", "gbr"),
+            "^[A-Z]{2}\\z", "GB", "gbr"),
         new(SchemaTextFormat.CurrencyCode, "Currency code", "a three-letter currency code",
-            "^[A-Z]{3}$", "EUR", "euro"),
+            "^[A-Z]{3}\\z", "EUR", "euro"),
         new(SchemaTextFormat.HexColour, "Hex colour", "a hex colour",
-            "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$", "#1a2b3c", "1a2b3c"),
+            "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})\\z", "#1a2b3c", "1a2b3c"),
         new(SchemaTextFormat.SemanticVersion, "Semantic version", "a semantic version",
-            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", "2.1.0", "v2.1"),
+            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?\\z", "2.1.0", "v2.1"),
         new(SchemaTextFormat.Phone, "Phone number", "an E.164 phone number",
-            "^\\+[1-9][0-9]{1,14}$", "+441632960961", "01632 960961"),
+            "^\\+[1-9][0-9]{1,14}\\z", "+441632960961", "01632 960961"),
     ];
 
     /// <summary>Every format, in the order the builder lists them.</summary>
@@ -86,6 +98,16 @@ internal static class SchemaFormatPatterns
     public static string FailingExampleOf(SchemaTextFormat format) => Find(format).Failing;
 
     /// <summary>The format whose pattern is exactly <paramref name="pattern"/>, if any.</summary>
+    /// <remarks>
+    /// A policy written before the tail anchor became <c>\z</c> carries the
+    /// <c>$</c> form, which is deliberately not recognised here. Recognising it
+    /// would show a format card whose save rewrote the stored pattern, and
+    /// <see cref="SchemaCardDecompiler"/> refuses any reading that does not
+    /// recompile to the very rule it read, so such a rule reads back as a
+    /// pattern card holding the <c>$</c> form unchanged. The operator sees the
+    /// real pattern and chooses the format card, which writes the <c>\z</c>
+    /// form.
+    /// </remarks>
     /// <param name="pattern">A policy's pattern.</param>
     /// <param name="format">The format, when one matches.</param>
     /// <returns><see langword="true"/> when <paramref name="pattern"/> is a format's pattern.</returns>
