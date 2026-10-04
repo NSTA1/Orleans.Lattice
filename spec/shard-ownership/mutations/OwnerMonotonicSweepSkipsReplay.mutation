@@ -4,7 +4,7 @@
 # a reader already saw on the source reverts.
 MODULE: OwnerMonotonicSweepSkipsReplay
 TARGET: OwnerMonotonic
-CLASS: Action
+CLASS: Invariant
 SUMMARY: the retroactive sweep drops an undecided prepare, so a visible commit reverts when the map moves
 PERTURBS: SplitSweep
 

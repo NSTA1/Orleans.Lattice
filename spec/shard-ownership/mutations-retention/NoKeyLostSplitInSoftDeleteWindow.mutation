@@ -7,6 +7,13 @@
 # terminal the bound saga sends after the split has committed reaches only the
 # resized copy's s1. The s2 bucket is never resolved, and once the registry
 # forgets the saga it reads as a revert of an acknowledged commit.
+#
+# The weaker rule also lets an undo move the alias off a split it admitted on
+# the resized copy, which production abandons (AbandonRetargetedSplitAsync,
+# #4264) and the base, whose interlock makes that unreachable, has no action
+# for. A second edit lets such a split count as finished, standing for the
+# abandon, so the mutant cannot deadlock and the invariant is the only thing
+# TLC can report.
 MODULE: NoKeyLostSplitInSoftDeleteWindow
 TARGET: NoKeyLost
 CLASS: Invariant
@@ -16,10 +23,19 @@ PERTURBS: SplitBegin
 --- FIND
 SplitBegin ==
     /\ sp = "idle"
-    /\ rs = "migrating" \/ rz \in {"idle", "purged", "undone"}
+    /\ rz \in {"idle", "purged", "undone"}
 --- REPLACE
 SplitBegin ==
     /\ sp = "idle"
 \* MUTATION: the interlock covers only a resize in flight, not its soft-delete window.
-    /\ rs = "migrating" \/ rz \notin {"snap", "copied", "swapped", "undoing"}
+    /\ rz \notin {"snap", "copied", "swapped", "undoing"}
+--- END
+
+--- FIND
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+--- REPLACE
+    /\ sg \in {"idle", "done"}
+\* MUTATION: a split the undo stranded counts as finished (AbandonRetargetedSplitAsync).
+    /\ sp \in {"idle", "done"} \/ alias # spCopy
 --- END

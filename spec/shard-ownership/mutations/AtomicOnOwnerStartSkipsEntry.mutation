@@ -10,10 +10,10 @@ PERTURBS: SagaStart
 
 --- FIND
     /\ bound' = alias
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, prepped, told, dec, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, prepped, told, dec, wDone, ackOn>>
 --- REPLACE
     /\ bound' = alias
 \* MUTATION: k1 is checkpointed as dispatched without being dispatched.
     /\ prepped' = {k1}
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, told, dec, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, told, dec, wDone, ackOn>>
 --- END

@@ -1,0 +1,16 @@
+# Pairs with SagaCompletes. The saga never records its completion once the
+# broadcast has visited every target, so it stays decided for ever.
+MODULE: SagaCompletesCompletionNeverRecorded
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: the saga never records its completion once the broadcast has visited every target
+PERTURBS: SagaComplete
+
+--- FIND
+    /\ TermTargets \subseteq told
+    /\ sg' = "done"
+--- REPLACE
+    /\ TermTargets \subseteq told
+\* MUTATION: completion is never recorded.
+    /\ sg' = "decided"
+--- END

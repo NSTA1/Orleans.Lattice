@@ -1,0 +1,15 @@
+# Pairs with NoStrandedBucket. The terminal broadcast to the old copy is not
+# mirrored into the resized copy while the resize forwards, so the buckets the
+# mirrored prepares left there are never consumed.
+MODULE: NoStrandedBucketTerminalNotMirrored
+TARGET: NoStrandedBucket
+CLASS: Temporal
+SUMMARY: a terminal to the old copy is not mirrored, so the resized copy keeps the batch's buckets forever
+PERTURBS: SagaTerminal
+
+--- FIND
+                  ELSE {<<target, s>>} \cup (IF ResizeMirrors(target, s) THEN {<<R, s>>} ELSE {})
+--- REPLACE
+\* MUTATION: the terminal is not shadow-forwarded.
+                  ELSE {<<target, s>>}
+--- END

@@ -16,3 +16,10 @@ SagaComplete ==
 \* MUTATION: completion does not wait for the decision or the broadcast.
     /\ sg \in {"exec", "decided"}
 --- END
+
+--- FIND
+                    IF dec = "committed" /\ c \in AckCopies(bound) THEN Max(ackOn[c][k], SagaV) ELSE ackOn[c][k]]]
+--- REPLACE
+\* MUTATION: the caller is acknowledged whatever the decision.
+                    IF c \in AckCopies(bound) THEN Max(ackOn[c][k], SagaV) ELSE ackOn[c][k]]]
+--- END

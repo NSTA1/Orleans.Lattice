@@ -3,23 +3,16 @@
 # through its bucket reverts to the pre-saga row.
 MODULE: OwnerMonotonicReactivationDropsBuckets
 TARGET: OwnerMonotonic
-CLASS: Action
+CLASS: Invariant
 SUMMARY: a reactivation loses the leaf's prepared buckets, so a visible commit reverts
 PERTURBS: Reactivate
 
 --- FIND
-    /\ ~reacted
-    /\ term[c][s]
+    /\ term[c][s] \/ \E k \in Keys : pend[c][s][k] = "mark"
     /\ term' = [term EXCEPT ![c][s] = FALSE]
+    /\ pend' = [pend EXCEPT ![c][s] = [k \in Keys |-> IF @[k] = "mark" THEN "none" ELSE @[k]]]
 --- REPLACE
-    /\ ~reacted
 \* MUTATION: replay does not rebuild the prepared buckets.
-    /\ pend' = [pend EXCEPT ![c][s] = [k \in Keys |-> "none"]]
     /\ term' = [term EXCEPT ![c][s] = FALSE]
---- END
-
---- FIND
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, late, wDone, ackOn>>
---- REPLACE
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, late, wDone, ackOn>>
+    /\ pend' = [pend EXCEPT ![c][s] = [k \in Keys |-> "none"]]
 --- END

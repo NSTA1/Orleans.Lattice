@@ -38,9 +38,11 @@ ReshardStart ==
 
 --- FIND
     /\ rs # "migrating"
-    /\ late # "inflight"
+
+Stutter ==
 --- REPLACE
 \* MUTATION: so does a reshard whose one split has been dispatched.
     /\ rs # "migrating" \/ sp # "idle"
-    /\ late # "inflight"
+
+Stutter ==
 --- END

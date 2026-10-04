@@ -3,7 +3,7 @@
 # never reaches the destination the map then moves k2 to.
 MODULE: OwnerMonotonicFreezeBeforeSweep
 TARGET: OwnerMonotonic
-CLASS: Action
+CLASS: Invariant
 SUMMARY: the split freezes before its retroactive sweep, so a visible commit reverts when the map moves
 PERTURBS: SplitFreeze
 

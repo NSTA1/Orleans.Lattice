@@ -1,4 +1,4 @@
-# Pairs with NoResurrection. Reproduces current production (#4445): the
+# Pairs with NoResurrection. Reproduces production before #4445 was fixed: the
 # destination refuses a late prepare only when its activation remembers
 # applying the saga's terminal. A delayed shadow-forwarded prepare that arrives
 # after the decision and a newer write - before the terminal, or after a
@@ -11,7 +11,7 @@ SUMMARY: the late-prepare refusal reads per-activation memory, so a late orphan 
 PERTURBS: DeliverLate
 
 --- FIND
-    /\ IF dec = "committed" \/ Gone(spCopy)
+    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy)
 --- REPLACE
 \* MUTATION: the refusal consults the activation's terminal memory.
     /\ IF term[spCopy][s2] \/ Gone(spCopy)
