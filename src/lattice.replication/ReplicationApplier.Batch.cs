@@ -718,6 +718,10 @@ internal sealed partial class ReplicationApplier
         // batch; every other entry in the run is still processed, and the
         // re-send re-classifies them idempotently.
         var deferInFlightDuplicate = false;
+        // Sagas whose prepare this run deferred (#4499). A later terminal of
+        // the same saga in the run is deferred with it, so the receiver never
+        // applies a terminal ahead of a prepare that was delivered before it.
+        HashSet<Guid>? deferredSagaPrepares = null;
 
         // Lazy local vector clock: only the first causal-dep entry
         // pays the GetVectorAsync round trip; later entries reuse it
@@ -953,6 +957,14 @@ internal sealed partial class ReplicationApplier
                 // untouched.
                 if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
                 {
+                    if (deferredSagaPrepares is not null && deferredSagaPrepares.Contains(entry.TransactionId))
+                    {
+                        // The run is already reported Deferred, so the sender
+                        // re-ships this terminal behind the deferred prepare.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        continue;
+                    }
+
                     await FlushPendingAsync().ConfigureAwait(false);
                     await FlushPendingCrdtAsync().ConfigureAwait(false);
                     await ApplyTxTerminalCoreAsync(entry, cancellationToken).ConfigureAwait(false);
@@ -989,6 +1001,11 @@ internal sealed partial class ReplicationApplier
                         && !PendingHolds(pendingCrdtApplies, entries, in entry))
                     {
                         deferInFlightDuplicate = true;
+                        if (entry.IsPrepared && entry.TransactionId != Guid.Empty)
+                        {
+                            (deferredSagaPrepares ??= new HashSet<Guid>()).Add(entry.TransactionId);
+                        }
+
                         outcome = LatticeReplicationMetrics.OutcomeDedup;
                         continue;
                     }

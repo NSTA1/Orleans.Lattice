@@ -974,6 +974,7 @@ production detectors, each proven red by perturbing production, in
 | `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
 | `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
+| `ReconcileDeletesOnlyDeleted` | An in-place re-bootstrap turns an export's absence into a delete only where the source really deleted the key (`ReplicationReBootstrap.tla`, the reconcile of a reaped delete). | None yet: the reconcile is #4537. | TLA+ only. | Not applicable until #4537 extracts the decision. | TLA+ only. |
 
 ### WAL durability property catalogue (epic #4430, issue #4432)
 
@@ -999,15 +1000,17 @@ reported under that fix's own assertion tag, not merely some violation.
 | `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
-| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. | Net-new. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. Its two-fault sibling #4523 (fixed) is reached only by the TLA+ `TwoFaults` variant configuration. | Net-new. |
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
+| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | Not encoded in Coyote. | `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
 | `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
-| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. | Cited. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is TLA+ only. | Cited. |
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
+| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
 
 **Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
@@ -1018,10 +1021,12 @@ table says so rather than borrowing one:
 - `EveryAckedWriteMaterialised`;
 - `ReclamationEventuallyAdvances`.
 
-`SnapshotCoverageMonotonic` and `StreamEventuallyComplete` are not encoded in
-Coyote at all. The TLA+ catalogue pairs every one of them with a firing mutation.
-The four defects the model found (#4450, #4451, #4456, #4467) are fixed, and their
-mutations in `spec/wal/` are now ordinary regression checks.
+`SnapshotCoverageMonotonic`, `ReleaseBackedBySnapshot`, `StreamEventuallyComplete` and
+`FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
+every one of them with a firing mutation. The four defects the model found (#4450,
+#4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
+regression checks. The review (#4433) found #4523 (fixed) and #4525 (open: a standing mutation in
+`spec/wal/` and gap rows in its refinement note until its fix lands).
 
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 

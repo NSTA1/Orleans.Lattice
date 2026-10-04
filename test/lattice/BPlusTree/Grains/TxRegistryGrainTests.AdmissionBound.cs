@@ -195,6 +195,7 @@ public partial class TxRegistryGrainTests
             var txid = Guid.NewGuid();
             registry.Decisions[txid] = TxStatus.Committed;
             registry.ForgottenAt[txid] = now;
+            registry.ForgetWalGenerations[txid] = long.MaxValue;
         }
         for (var i = 0; i < 100; i++)
         {
@@ -223,6 +224,7 @@ public partial class TxRegistryGrainTests
 
     [TestCase(nameof(TxRegistryState.Decisions))]
     [TestCase(nameof(TxRegistryState.ForgottenAt))]
+    [TestCase(nameof(TxRegistryState.ForgetWalGenerations))]
     [TestCase(nameof(TxRegistryState.Participants))]
     [TestCase(nameof(TxRegistryState.TerminalArrivals))]
     [TestCase(nameof(TxRegistryState.ExpectedTerminals))]
@@ -246,6 +248,9 @@ public partial class TxRegistryGrainTests
                 case nameof(TxRegistryState.ForgottenAt):
                     registry.ForgottenAt[txid] = now;
                     break;
+                case nameof(TxRegistryState.ForgetWalGenerations):
+                    registry.ForgetWalGenerations[txid] = long.MaxValue;
+                    break;
                 case nameof(TxRegistryState.Participants):
                     registry.Participants[txid] = [100, 101, 102, 103];
                     break;
@@ -267,6 +272,7 @@ public partial class TxRegistryGrainTests
         {
             nameof(TxRegistryState.Decisions) => TxRegistryGrain.AdmissionEstimateDecisionBytes,
             nameof(TxRegistryState.ForgottenAt) => TxRegistryGrain.AdmissionEstimateForgottenAtBytes,
+            nameof(TxRegistryState.ForgetWalGenerations) => TxRegistryGrain.AdmissionEstimateWalGenerationBytes,
             nameof(TxRegistryState.Participants) => TxRegistryGrain.AdmissionEstimateParticipantsBytes,
             nameof(TxRegistryState.TerminalArrivals) => TxRegistryGrain.AdmissionEstimateTerminalArrivalsBytes,
             nameof(TxRegistryState.ExpectedTerminals) => TxRegistryGrain.AdmissionEstimateExpectedTerminalsBytes,

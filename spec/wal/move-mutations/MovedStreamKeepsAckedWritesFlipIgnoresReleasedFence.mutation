@@ -1,0 +1,20 @@
+# Pairs with MovedStreamKeepsAckedWrites. Activations honour the durable fence,
+# but the flip does not require it still held: once the lease lapses, a source
+# activation releases the fence and serves unfenced, acknowledges a write, and
+# the unguarded flip switches to a copy without it. The activation's honouring
+# of the record is not sufficient on its own; the flip must check it too.
+MODULE: MovedStreamKeepsAckedWritesFlipIgnoresReleasedFence
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: the flip does not require the durable fence, so it completes after a lapsed fence was released and appends resumed
+PERTURBS: MoveSwitch
+
+--- FIND
+    /\ move = "copied"
+    /\ dfence
+    /\ durable' = {o \in moveCopy : o >= tail}
+--- REPLACE
+\* MUTATION: the flip's compare-and-swap does not require this move's fence.
+    /\ move = "copied"
+    /\ durable' = {o \in moveCopy : o >= tail}
+--- END

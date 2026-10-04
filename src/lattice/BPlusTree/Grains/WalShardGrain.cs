@@ -1532,6 +1532,17 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
+    public async Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+
+        var lowest = await _provider.GetLowestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+        return lowest < 0 ? -1L : lowest;
+    }
+
+    /// <inheritdoc />
     [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
     public Task<long> GetEntryCountAsync(CancellationToken cancellationToken)
     {
