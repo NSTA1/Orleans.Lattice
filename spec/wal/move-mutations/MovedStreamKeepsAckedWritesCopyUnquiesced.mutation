@@ -9,11 +9,11 @@ SUMMARY: a move copies the stream while appends are still in flight and loses th
 PERTURBS: MoveCopy
 
 --- FIND
-    /\ move = "fenced"
     /\ inflight = {}
+    /\ dfence
     /\ moveCopy' = durable
 --- REPLACE
 \* MUTATION: no quiesce before the copy.
-    /\ move = "fenced"
+    /\ dfence
     /\ moveCopy' = durable
 --- END
