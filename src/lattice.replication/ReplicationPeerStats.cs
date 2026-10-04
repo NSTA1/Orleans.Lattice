@@ -181,7 +181,22 @@ public partial class ReplicationPeerStats
         ArgumentNullException.ThrowIfNull(tree);
         ArgumentNullException.ThrowIfNull(peer);
 
-        var entry = state.GetOrAdd(new PeerKey(tree, peer, ReplicationContactDirection.Outbound), static _ => new PeerState());
+        var key = new PeerKey(tree, peer, ReplicationContactDirection.Outbound);
+        PeerState? entry;
+        if (since is null)
+        {
+            // Clearing never creates a row: a peer the sender has not touched
+            // otherwise must not appear in the status read path.
+            if (!state.TryGetValue(key, out entry))
+            {
+                return;
+            }
+        }
+        else
+        {
+            entry = state.GetOrAdd(key, static _ => new PeerState());
+        }
+
         lock (entry)
         {
             entry.ReseedRequiredSince = since;
