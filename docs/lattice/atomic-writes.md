@@ -328,7 +328,14 @@ the undo discards it with every write it took, so a terminal the discarded copy
 refuses counts as delivered: it is neither re-sent to the copy the undo restored,
 which would land part of the batch there, nor retried until the saga stalls, and
 the saga completes
-([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). A batch therefore commits wholly on one copy - kept or
+([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). When the bound copy is instead a
+completed resize's old copy and its broadcast outlives `SoftDeleteDuration`, the
+purge leaves that copy refusing every terminal; each refused terminal is
+redelivered to the resized copy - to its shard at the same index, which the old
+copy mirrored every prepared bucket into, to the shard that now owns each key, and
+to their split-forward targets - so the saga completes. The redelivered terminal
+carries no committed-values backstop: the buckets it resolves were all mirrored
+there ([#4475](https://github.com/NSTA1/Orleans.Lattice/issues/4475)). A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
 
@@ -587,6 +594,32 @@ or by a later commit or abort decision carrying a *conflicting* outcome
 (a repeat of the same outcome is recognised as idempotent and leaves the
 tombstone in place, so it can never resurrect a decision the tree already
 retired).
+On a host with replication enabled, every tree's expired tombstone is
+also held until the write-ahead log can no longer retain a prepare of its
+saga ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) -
+every tree, not only those replicated today, because a tree added to the
+replicated set later still has its earlier prepares in its log. WAL
+partitions trim independently, so a prepare can outlive its saga's
+terminal in the log and be re-shipped to a peer that bootstraps from the
+tree, and only a decision the registry still stores reaches that peer in
+the snapshot export. After a forget, the registry samples every
+partition's next sequence (at most once per half retention, up to 30 s)
+and purges the tombstone once every partition's oldest retained entry is
+at or past that sample. It fails closed: a failed read or a changed
+partition layout keeps the tombstone. On such a host
+`TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
+(masked at once) rather than dropping it.
+
+**Capacity on a replication host.** A tombstone there lives for the longer
+of `TxDecisionRetention` and the tree's WAL trim lag, and a held
+tombstone stays masked from reads exactly as below but still counts
+against `TxRegistryAdmissionBudgetBytes`. Where the WAL trims more slowly
+than the retention, the sustained saga rate one registry shard admits
+falls in proportion, and a tree whose log stops trimming (a lagging
+consumer with no `WalRetention`, for example) eventually refuses new
+sagas with `TxRegistryCapacity` until it trims again. Raise
+`TxRegistryShardCount` to restore headroom. A host without replication is
+unaffected.
 A tombstone held by a live point-in-time cursor pin is skipped by both
 the purge and the read-side mask. Setting
 `TxDecisionRetention = TimeSpan.Zero` restores the
@@ -1516,6 +1549,19 @@ batch that is.
   `PreconditionFailed` nothing is committed on any tree. A mid-flight
   write failure compensates every tree and throws
   `InvalidOperationException`.
+- **Refused while a cross-tree-consistent backup set is captured.** A
+  cross-tree-consistent backup set fences the saga decision registry of
+  every member tree while it captures (see
+  [Backup architecture](../lattice.backup/architecture.md#backup-set-and-the-cross-tree-fence)).
+  A cross-tree write that tries to start on a fenced tree is refused, not
+  retried or queued: it is compensated on every tree and throws
+  `InvalidOperationException`, and the caller retries it once the capture
+  completes. This applies to every tree of the write that had not yet
+  registered when the fence went up; a write that had already registered on
+  every tree finishes normally, and the capture waits for it. Single-tree writes and atomic batches are never
+  refused by a capture: a batch whose commit or abort decision falls
+  inside any snapshot capture of its tree waits for the capture to
+  release the tree's saga decision gate (issue #4485).
 - **Crash recovery.** The coordinator grain drives the saga to a
   terminal state via a keepalive reminder if its silo crashes mid-flight,
   exactly as the single-tree saga does.

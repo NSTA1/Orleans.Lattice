@@ -82,4 +82,24 @@ public sealed class ResizeFenceCoyoteTests
         CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
             new ResizeFenceModel(2, ResizeFenceGuard.FlipBeforeFence, ResizeFenceAssertions.BatchWholeOnOldCopy));
     }
+
+    /// <summary>
+    /// A fence whose refusal arm admits a stale router's call serves the old copy
+    /// after the resized copy took a write: the core's refusal is what the
+    /// stale-read assertion checks (shard-ownership review #4435, finding F5).
+    /// </summary>
+    [Test]
+    public void A_fence_that_admits_a_stale_routed_call_serves_the_old_copy()
+    {
+        CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
+            new ResizeFenceModel(2, ResizeFenceGuard.FenceAdmitsAStaleCall));
+    }
+
+    /// <summary>Specificity: the over-admitting fence is caught only by the stale-read assertion.</summary>
+    [Test]
+    public void A_fence_that_admits_a_stale_routed_call_is_caught_only_by_the_stale_read_assertion()
+    {
+        CoyoteModelHarness.AssertNoViolationInAnyExploredRun(
+            new ResizeFenceModel(2, ResizeFenceGuard.FenceAdmitsAStaleCall, ResizeFenceAssertions.BatchWholeOnOldCopy));
+    }
 }

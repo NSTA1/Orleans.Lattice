@@ -118,6 +118,9 @@ internal sealed partial class BPlusLeafGrain
             Rows = rows,
             FrontierPerPartition = frontier,
             Pending = pending,
+            RecentlyTerminal = _recentlyTerminal is { Count: > 0 } terminal
+                ? [.. terminal]
+                : Array.Empty<Guid>(),
         };
     }
 
@@ -159,15 +162,33 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenAsync(
+    public Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenAsync(
         LeafBaselineFreeze freeze,
         long[] capturedHead,
+        CancellationToken cancellationToken) =>
+        FoldTailOntoFrozenCoreAsync(freeze, capturedHead, decisionGate: null, requireGate: false, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenGatedAsync(
+        LeafBaselineFreeze freeze,
+        long[] capturedHead,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken) =>
+        FoldTailOntoFrozenCoreAsync(freeze, capturedHead, decisionGate, requireGate: true, cancellationToken);
+
+    private async Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenCoreAsync(
+        LeafBaselineFreeze freeze,
+        long[] capturedHead,
+        SnapshotDecisionGate? decisionGate,
+        bool requireGate,
         CancellationToken cancellationToken)
     {
         await AwaitReplayBarrierAsync();
 
         ArgumentNullException.ThrowIfNull(freeze);
         ArgumentNullException.ThrowIfNull(capturedHead);
+        if (requireGate)
+            ArgumentNullException.ThrowIfNull(decisionGate);
         cancellationToken.ThrowIfCancellationRequested();
 
         var treeId = state.State.TreeId
@@ -279,6 +300,20 @@ internal sealed partial class BPlusLeafGrain
         {
             cancellationToken.ThrowIfCancellationRequested();
             folder.Apply(mutation);
+        }
+
+        // Issue #4485: resolve every bucket still pending at capturedHead
+        // against the capture's decision snapshot (D0), exactly as a live
+        // multi-key read resolves it, so a saga Committed in D0 reads post-saga
+        // here whether or not its terminal reached this leaf before the capture.
+        // Without a gate (a direct caller) a pending bucket reads pre-saga, the
+        // pre-#4485 behaviour.
+        if (decisionGate is not null && folder.PendingSagaCount > 0)
+        {
+            var txids = new List<Guid>(folder.PendingTransactionIds);
+            var decisions = await TxRegistryFanOut.GetCaptureGateStatusManyAsync(
+                grainFactory, decisionGate.RegistryTreeId, decisionGate.Token, txids);
+            folder.ResolvePendingAgainst(decisions, freeze.RecentlyTerminal);
         }
 
         return folder.Materialize();

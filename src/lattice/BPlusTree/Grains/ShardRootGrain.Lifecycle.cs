@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -133,7 +134,28 @@ internal sealed partial class ShardRootGrain
 
         await ClearTopologyAsync();
 
-        await state.ClearStateAsync();
+        // Leave a purge tombstone rather than no row (issue #4503): a router that
+        // still caches this physical copy must keep being refused, as it was in
+        // the soft-delete window, instead of meeting a fresh empty shard that
+        // answers its read as empty and accepts - and loses - its write. A system
+        // tree is never routed through an alias, so it keeps the empty row.
+        if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            await state.ClearStateAsync();
+            return;
+        }
+
+        var purged = state.State;
+        state.State = new ShardRootState { IsPurged = true };
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State = purged;
+            throw;
+        }
     }
 
     /// <inheritdoc />
