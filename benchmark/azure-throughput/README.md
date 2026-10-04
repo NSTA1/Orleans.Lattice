@@ -407,6 +407,13 @@ reused. `-Resume` continues an interrupted sweep from the state saved under its 
 repeat that prefix with `-NamePrefix` (or `-ReuseAca` for a rig that was kept). Both scripts can
 also be run by hand.
 
+Between cohorts the silo-count change (`Set-AcaSiloCount` in `scripts/aca-common.ps1`) does
+not return until every superseded silo revision has drained: it polls the app's full revision
+list and the replicas of the newest retired revisions, and fails closed with the lingering
+revision names if they have not retired within the timeout. A deactivated revision keeps
+serving for 30-60 s, so this adds roughly that much per silo-count transition, but it stops an
+old revision's replicas from overlapping the next cohort's warm-up (#3588).
+
 A provisioning run names its rig from `-NamePrefix <prefix>` when given, otherwise from
 a fresh prefix. To sweep a rig you provisioned yourself, run
 `scripts/deploy-aca.ps1 -NamePrefix <prefix>` first, pass `-ReuseAca <prefix>`, and
