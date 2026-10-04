@@ -1,0 +1,14 @@
+# Pairs with TypeOK. The full capture records a frontier beyond the WAL's
+# heads, outside the declared domain of a recorded frontier.
+MODULE: TypeOkFullHeadsPastLog
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the full capture records a frontier past the heads
+PERTURBS: FullHeads
+
+--- FIND
+    /\ pending' = Lens
+--- REPLACE
+    \* MUTATION: a frontier past the heads.
+    /\ pending' = [p \in Parts |-> Len(wal[p]) + 5]
+--- END

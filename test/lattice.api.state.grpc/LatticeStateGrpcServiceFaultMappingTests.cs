@@ -136,6 +136,20 @@ public sealed class LatticeStateGrpcServiceFaultMappingTests
     }
 
     [Test]
+    public void InvokeAsync_maps_a_bootstrap_read_fence_to_Unavailable()
+    {
+        // Issue #4526: a tree being bootstrapped from a snapshot refuses reads
+        // until the import completes. Transient, so the retry-later code.
+        var ex = MapUnaryFault(new LatticeTreeBootstrappingException("refused", "orders"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(ex.Status.Detail, Does.Contain("bootstrapped"));
+        });
+    }
+
+    [Test]
     public void InvokeAsync_maps_a_tenant_access_denial_to_PermissionDenied()
     {
         var ex = MapUnaryFault(new LatticeTenantAccessDeniedException("tenant-a is not in scope"));

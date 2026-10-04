@@ -237,13 +237,13 @@ Collapses redundant per-key versions before shipping. Keep enabled for normal de
 
 ### `ContentHashDedupElisionEnabled`
 
-Enables actual payload elision for repeated content. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
+Enables actual payload elision for repeated content. The receiver elides only a write it already merged exactly - the same content hash, origin, and source HLC - while its leaf still holds the key at that version or newer; the same bytes at another version always ship. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
 
 ### `WalRetention`
 
 Optional wall-clock hard ceiling on retained WAL. `null` means consumers and cursors drive retention. If set too low, lagging peers may fall off the log and require bootstrap.
 
-For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - it advances past a trimmed prefix without emitting a fall-off event, and the receiver-side fall-off detector only compares against its own local WAL, so it never sees entries it never received. Setting `WalRetention` on a replicated tree can therefore let the sender trim entries a lagging shipper has not shipped yet, silently and permanently diverging the receiver for the trimmed range with no metric and no repair.
+For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - the receiver-side fall-off detector only compares against the receiver's own local WAL, so it never sees entries it never received from the sender. The source shipper therefore detects sender WAL trims itself: if a shipping read returns a first sequence greater than the requested cursor, it records a re-seed epoch, withholds saga records, and asks the receiver to re-seed through `ReplicationBatch.ReseedAfterEpoch`. A custom transport that drops that field fails closed: saga records remain withheld and the link stays stalled until an operator re-seeds or the transport carries the request.
 
 To prevent that footgun, the silo **refuses to start** when a replicated tree (declared in [`ReplicatedTrees`](#replicatedtrees)) has an effective `WalRetention` set while the anti-entropy detection backstop [`DigestProbeEnabled`](#digestprobeenabled) is off. Resolve it by one of: enable `DigestProbeEnabled` (and, for automatic repair, the remaining [anti-entropy stages](automatic-drift-remediation.md)) so the divergence is detected and healed out-of-band; remove `WalRetention` from the tree so a lagging shipper pins the WAL until it catches up; or set [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) to acknowledge the risk explicitly. The effective retention is read from the per-tree core `LatticeOptions.WalRetention`, which already reflects any value mirrored from this replication-side `WalRetention`, so the rule catches retention configured on either surface.
 
@@ -253,7 +253,7 @@ Escape hatch (default `false`) that permits `WalRetention` on a replicated tree 
 
 ### `AutoBootstrapOnFallOffLog`
 
-When enabled, a fall-off detection makes this cluster re-seed the tree automatically from a snapshot of the source cluster it fell behind; when disabled the detection is still counted on `peer.fell_off_log`. See [Auto-Bootstrap](auto-bootstrap.md), and [`WalRetention`](#walretention) for the cross-cluster trim gap the built-in check cannot see.
+When enabled, a receiver-side local fall-off detection makes this cluster re-seed the tree automatically from a snapshot of the source cluster it fell behind; when disabled the detection is still counted on `peer.fell_off_log`. Source-side WAL trim gaps use the shipper's sequence-gap request path described in [Auto-Bootstrap](auto-bootstrap.md).
 
 ### `OperatorReseedMinInterval`
 

@@ -9,6 +9,7 @@ CLASS: Temporal
 SUMMARY: the handoff replaces the HWM vector, so it can regress and strand a parked entry
 PERTURBS: Bootstrap
 DEADLOCK: off
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
        IN /\ hwm' = [hwm EXCEPT ![BootTarget] = [o \in Writers |-> Max({@[o], front[o]})]]

@@ -877,7 +877,9 @@ HLC and the sender advances its durable cursor to
 `ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
 the receiver's stored timestamp behind the sender's cursor and change
 LWW/HLC convergence against concurrent foreign-origin writes. Eliding
-safely requires the receiver to report which content it already holds.
+safely requires the receiver to report which writes it already holds -
+exactly, by content hash, origin and source HLC, with its leaf still at
+that version or newer (#4585), never by bytes alone.
 That is the separate opt-in `ContentHashDedupElisionEnabled` (default
 `false`, and it requires this master switch): before each batch ships
 the shipper runs a content-manifest exchange over the digest-probe
@@ -1005,11 +1007,16 @@ last-run timestamps in persistent state:
   and, for each current topology peer that authored at least one
   entry in the window, calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
-  with that peer's own oldest HLC. A peer with no authored entry in the
-  window is skipped - probing it against another origin's entries was
-  the source of a false-positive re-bootstrap loop. On positive
-  detection, the detector drives the bootstrap kickoff itself -
-  the maintenance grain is a pure scheduler.
+  with that peer's own oldest local HLC. A peer with no authored entry
+  in the window is skipped - probing it against another origin's entries
+  was the source of a false-positive re-bootstrap loop. This probe only
+  compares local readings and guards local seal gaps; it is not the
+  cross-cluster source-WAL trim detector. Source trims are detected by
+  the sender shipper when a shipping read returns a first sequence above
+  the requested sequence, and the request is carried on
+  `ReplicationBatch.ReseedAfterEpoch`. On positive local detection, the
+  detector drives the bootstrap kickoff itself - the maintenance grain
+  is a pure scheduler.
 
 ### Failure handling
 
@@ -1088,7 +1095,7 @@ emits; the table shows which driver is the source of each.
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
 | `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |

@@ -1,0 +1,15 @@
+# Pairs with ChainCoversCommitted. An increment that finds a base-undecided
+# saga still undecided does not hand it on, so the increment after it - taken
+# once the saga committed, before its terminals land - no longer looks it up.
+MODULE: ChainCoversCommittedUndecidedNotHandedOn
+TARGET: ChainCoversCommitted
+CLASS: Invariant
+SUMMARY: a still-undecided saga is dropped from the increment's undecided set
+PERTURBS: Drain
+
+--- FIND
+               und |-> Last.und /\ d0 = "none"])
+--- REPLACE
+               \* MUTATION: never handed on.
+               und |-> FALSE])
+--- END

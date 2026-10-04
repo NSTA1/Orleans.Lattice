@@ -15,7 +15,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
 {
     private static bool PinWasFlipped(Harness harness) =>
         harness.Registry.ReceivedCalls().Any(c =>
-            c.GetMethodInfo().Name == nameof(ILatticeRegistry.UpdateWalPlacementAsync));
+            c.GetMethodInfo().Name == nameof(ILatticeRegistry.FlipFencedWalPlacementAsync));
 
     // ---- a target whose mark overlaps the source's retained range
 

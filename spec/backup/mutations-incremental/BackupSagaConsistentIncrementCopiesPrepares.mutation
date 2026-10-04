@@ -1,0 +1,21 @@
+# Pairs with BackupSagaConsistent. REPRODUCES PRODUCTION BEFORE THE #4589 FIX:
+# IncrementalDeltaCollector copied every prepared write in the delta window as
+# an ordinary entry and dropped the TxCommit / TxAbort terminals, so nothing was
+# resolved against a decision and nothing was held back. An increment taken
+# while a saga is half prepared holds one of its keys post-saga.
+MODULE: BackupSagaConsistentIncrementCopiesPrepares
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: prepared writes are copied as data and terminals dropped (#4589)
+PERTURBS: Drain
+
+--- FIND
+         IF FallsBack
+         THEN FullLink(Lens, TRUE)
+         ELSE [kind |-> "incr", heads |-> NewHeads, emit |-> Emit,
+--- REPLACE
+         \* MUTATION: every prepare in the window is copied; no decision, no hold.
+         IF FALSE
+         THEN FullLink(Lens, TRUE)
+         ELSE [kind |-> "incr", heads |-> Lens, emit |-> SeenPrep,
+--- END

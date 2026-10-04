@@ -369,4 +369,18 @@ public readonly record struct LatticeMutation
     /// </para>
     /// </summary>
     [Id(25)] public bool PrepareStampOriginal { get; init; }
+
+    /// <summary>
+    /// The migration provenance (<c>LwwValue.IsMigrated</c>) of the value this
+    /// mutation stores: set on a cross-shard migration import, and on a saga
+    /// value stored at an original prepare stamp carried from another shard
+    /// (issue #4564). Replay restores it on the rebuilt row or pending bucket, so
+    /// a later migration import is admitted or dropped as it was before the leaf
+    /// reactivated.
+    /// <para>
+    /// Strictly additive: a mutation decoded from a record that predates the
+    /// field reads <see langword="false"/>, and an older decoder skips the field.
+    /// </para>
+    /// </summary>
+    [Id(26)] public bool IsMigrated { get; init; }
 }

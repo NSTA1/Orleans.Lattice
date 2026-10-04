@@ -71,6 +71,20 @@ internal sealed partial class ShardRootGrain
             throw new InvalidOperationException(
                 $"Shard {MyShardIndex} has been retired by an online consolidation and cannot be a migration source.");
 
+        // A receiver snapshot bootstrap is draining into the tree (issue #4526).
+        // Its read fence covers exactly the shards that existed when it was armed,
+        // so a migration opened now would move keys onto a shard the fence never
+        // reached. The bootstrap reads every shard's migration record only after
+        // arming, and this check runs on the same activation as the fence write,
+        // so whichever of the two comes second sees the other. A coordinator
+        // re-asserting a window it already opened is let through: that window
+        // predates the fence, and the bootstrap waits for it to finish.
+        if (state.State.BootstrapReadFenced
+            && !(state.State.SplitInProgress is { } opened
+                && HasSameAim(opened, targetShardIndex, movedSlots, virtualShardCount)))
+            throw new InvalidOperationException(
+                $"Shard {MyShardIndex} cannot be a migration source while a snapshot bootstrap is draining into the tree.");
+
         await PrepareForOperationAsync();
 
         var existing = state.State.SplitInProgress;

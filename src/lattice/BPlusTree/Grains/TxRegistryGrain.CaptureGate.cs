@@ -47,6 +47,9 @@ internal sealed partial class TxRegistryGrain
         public TxRegistryCaptureGateMode Mode;
         public DateTimeOffset ExpiresAt;
         public Dictionary<Guid, TxStatus>? Decisions;
+
+        /// <summary>The txids this hold's status lookups answered undecided (issue #4589).</summary>
+        public HashSet<Guid>? Undecided;
     }
 
     /// <inheritdoc />
@@ -138,10 +141,32 @@ internal sealed partial class TxRegistryGrain
         var result = new Dictionary<Guid, TxStatus>(txids.Count);
         foreach (var txid in txids)
         {
-            result[txid] = decisions.TryGetValue(txid, out var status) ? status : TxStatus.InFlight;
+            var status = decisions.TryGetValue(txid, out var decided) ? decided : TxStatus.InFlight;
+            result[txid] = status;
+            if (status == TxStatus.InFlight)
+            {
+                // Remembered so an incremental backup layered on this capture can
+                // learn of the saga's later decision (issue #4589).
+                (hold.Undecided ??= new HashSet<Guid>()).Add(txid);
+            }
         }
 
         return Task.FromResult(result);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<Guid>> GetCaptureGateUndecidedAsync(Guid token)
+    {
+        var now = TimeProvider.GetUtcNow();
+        if (_captureHolds is null
+            || !_captureHolds.TryGetValue(token, out var hold)
+            || now > hold.ExpiresAt
+            || hold.Decisions is null)
+        {
+            throw GateLapsed();
+        }
+
+        return Task.FromResult<IReadOnlyList<Guid>>(hold.Undecided is { } undecided ? undecided.ToArray() : Array.Empty<Guid>());
     }
 
     /// <inheritdoc />

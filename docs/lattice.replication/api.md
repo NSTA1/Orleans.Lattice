@@ -60,7 +60,7 @@ See [Replication Modes](replication-modes.md) and [Replication Drivers](replicat
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeReplicationOptions` | class | Main replication options. | Identity, tree opt-in, WAL, apply, ship, bootstrap, compression, wire-version, and remediation properties. See [Configuration](configuration.md). |
-| `FallOffLogDecision` | readonly record struct | Result of a receiver-side fall-off check: whether the receiver's per-origin high-water mark is older than the sender's oldest retained WAL entry, and whether a bootstrap was triggered or absorbed. | `FellOffLog`, `LocalHighWaterMark`, `BootstrapTriggered`, `Suppressed` |
+| `FallOffLogDecision` | readonly record struct | Result of a receiver-side local fall-off check: whether the receiver's per-origin high-water mark is older than the local oldest retained WAL entry for that origin, and whether a bootstrap was triggered or absorbed. | `FellOffLog`, `LocalHighWaterMark`, `BootstrapTriggered`, `Suppressed` |
 | `OperatorReseedDecision` | readonly record struct | Result of an operator snapshot request. | `Triggered`, `LastRequestedAt`, `RetryAfter` |
 
 `ReplicatedTrees` is the static opt-in map from tree id to `LatticeMergeMode`. Trees not in the map do not ship unless runtime replication config is enabled (`AddLatticeReplication(..., enableRuntimeConfig: true)`), in which case a tree enabled at runtime through `ILatticeReplicationConfigAuthority` replicates too - see [Runtime Replication Config](runtime-config.md). `KeyFilter` and `KeyPrefixes` narrow which keys the shipper emits from opted-in trees; snapshot exports do not apply them.
@@ -146,7 +146,7 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 |---|---|---|---|
 | `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync` |
 | `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync`, `GetOldestAvailableHlcByOriginAsync` |
-| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against a sender's oldest retained WAL entry; on fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
+| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against this receiver's local retained WAL for that origin; on local fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. Source WAL trims are detected by the sender shipper and carried as `ReplicationBatch.ReseedAfterEpoch`. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.
 
