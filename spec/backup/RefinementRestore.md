@@ -11,17 +11,21 @@ The saga's single global decision runs in the extracted core
 `CrossClusterSagaCoordinatorGrain` folds its votes through and
 `CoordinatedRestoreDecisionModel` drives under Coyote.
 
-## The resume is the intended design of #4490
+## The resume is the rebind-first design of #4490
 
 `Ship(c)` ships only from the copy the alias resolves to, so a shipper
-re-resolves its source before it ships again after a fence. Production checks
-its binding only on the alias-change push or once
-`LatticeReplicationOptions.ShipSourceIdentityBackstopInterval` has elapsed, so a
-shipper whose push was lost resumes from the retired copy's log. Issue #4490
+re-resolves its source before it ships again after a fence. Before #4490 was
+fixed, production checked its binding only on the alias-change push or once
+`LatticeReplicationOptions.ShipSourceIdentityBackstopInterval` had elapsed, so a
+shipper whose push was lost resumed from the retired copy's log. Issue #4490
 found this, and confirmed the shipper half by execution.
 `RestoredCutNotReAdvancedResumeShipsRetiredLog` drops the conjunct and
-reproduces production. The `Ship` row below cites the issue; when the fix lands
-the row is re-pointed and its detector re-proved red against that mutation.
+reproduces production before the fix. The fix (#4498) makes
+`ReplicationShipperGrain.ResumeShippingAsync` clear the shipper's
+identity-resolved flag, so the first tick after a resume re-resolves and rebinds
+before it reads or sends; its code analogue of that mutation, a resume that
+leaves the flag set, turns the regression test red (the detector-proof log of
+#4517).
 
 ## Variable mapping
 
@@ -42,7 +46,7 @@ the row is re-pointed and its detector re-proved red against that mutation.
 | Spec action | Protocol step | Code counterpart | Detector |
 |-------------|---------------|------------------|----------|
 | `Write(w)` | An application write on its author's served copy | Any write through `ILattice`, routed by the alias. **Environment argument:** not fair, any time; the write fence makes the swap one step, so no write interleaves it. | Yes: `SagaWriteFenceGrainTests.Engage_fences_every_shard_and_pauses_shipping_and_receive` pins that the cutover is write-fenced. |
-| `Ship(c)` | A shipper sends one unshipped write of its bound log, deferred while the peer's receive is paused | `ReplicationShipperGrain`'s drain tick, `ReplicationApplier` deferring a receive-fenced entry unacknowledged. Re-resolving the source before the first post-fence send is the #4490 fix. | Partial: #4490. `ReplicationShipperGrainTests.Pump_keeps_cursor_while_receive_fenced_then_reships_and_applies_after_lift` and `ReplicationApplierTests.ApplyAsync_flags_deferred_and_skips_apply_when_receive_fence_engaged` pin the deferral; the post-fence rebind lands with the fix. |
+| `Ship(c)` | A shipper sends one unshipped write of its bound log, deferred while the peer's receive is paused | `ReplicationShipperGrain`'s drain tick, `ReplicationApplier` deferring a receive-fenced entry unacknowledged. `ReplicationShipperGrain.ResumeShippingAsync` clears the identity-resolved flag, so the first tick after a resume re-resolves the source and rebinds before its first send (#4498). | Yes: `ReplicationShipperGrainTests.Resume_after_a_saga_pause_rebinds_to_the_restored_copy_before_its_first_send` pins the rebind before the first send, `ReplicationShipperGrainTests.Resume_without_an_alias_change_keeps_shipping_the_same_log` its no-regression arm, and `ReplicationShipperGrainTests.Pump_keeps_cursor_while_receive_fenced_then_reships_and_applies_after_lift` and `ReplicationApplierTests.ApplyAsync_flags_deferred_and_skips_apply_when_receive_fence_engaged` the deferral. |
 | `Rebind(c)` | The shipper finds the alias moved, rebinds and resets its cursors | `ReplicationShipperGrain.NotifySourceIdentityChangedAsync` (the push) and `ReplicationShipperGrain.MaybeRefreshSourceIdentityAsync` (the backstop), both through `ReplicationShipperGrain.ApplyResolvedIdentityAsync`. | Yes: `ReplicationShipperGrainTests.NotifySourceIdentityChanged_rebinds_and_resets_cursors_without_registry_read` and `ReplicationShipperGrainTests.SourceIdentity_backstop_elapsed_triggers_re_resolve`. |
 | `Build(c)` | Admission pre-flight, then the shadow build of the admitted records; vote | `RestoreParticipant.PrepareAsync` into `LatticeBackupRestoreService.ProbeAdmissionAsync` and `LatticeBackupRestoreService.BuildShadowAsync`, whose apply loops consult `IBackupRestoreAdmission.Admit` per record. **Environment argument:** the vote is unconstrained, covering every probe and build failure. | Yes: `RestoreParticipantTests.PrepareAsync_permanent_build_failure_gcs_shadow_and_votes_abort`, `RestoreParticipantTests.PrepareAsync_admission_probe_failure_votes_abort`, and `TenantBackupRestoreAdmissionTests.Cross_tenant_admission_refuses_every_record`. |
 | `Decide` | The single global decision; abort is always possible (a dissent, the prepare deadline, or a lost coordinator) | `CrossClusterSagaCoordinatorGrain` folding the votes through `CrossClusterSagaDecisionCore.Decide`. | Yes: `CrossClusterSagaDecisionCoreTests.Decide_aborts_on_one_abort_and_names_it`, `CrossClusterSagaCoordinatorGrainTests.RunAsync_one_abort_aborts_and_compensates_only_prepared_participants`, and `CoordinatedRestoreDecisionCoyoteTests.Committing_on_any_vote_leaves_the_restore_mixed`. |
@@ -57,7 +61,7 @@ the row is re-pointed and its detector re-proved red against that mutation.
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
 | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted to commit and none compensated: the coordinator commits only on a unanimous commit, and a participant that voted abort has already compensated. | Yes: `CoordinatedRestoreDecisionCoyoteTests.Production_fold_keeps_a_coordinated_restore_all_or_nothing`, `RestoreSagaDispatcherTests.TryDispatchAsync_saga_abort_throws_all_or_nothing`, and `RestoreSagaDispatcherSetRestoreTests.TryDispatchSetAsync_aborted_saga_throws_all_or_nothing`. |
-| `RestoredCutNotReAdvanced` | No write made before a cluster's cutover reaches a restored copy: receive pauses at the cutover, shipping and receiving resume only on global completion, and a shipper re-ships from its new copy's log. Production violates the last clause when the push is lost (#4490). | Partial: #4490. `SagaWriteFenceGrainTests.Laggard_does_not_resume_shipping_until_global_completion` and `ReplicationApplierTests.ApplyAsync_flags_deferred_and_skips_apply_when_receive_fence_engaged` pin the pauses; the rebind-before-resume lands with the fix. |
+| `RestoredCutNotReAdvanced` | No write made before a cluster's cutover reaches a restored copy: receive pauses at the cutover, shipping and receiving resume only on global completion, and a shipper re-ships from its new copy's log. Production violated the last clause when the push was lost, until #4490 was fixed. | Yes: `ReplicationShipperGrainTests.Resume_after_a_saga_pause_rebinds_to_the_restored_copy_before_its_first_send` (red against the code analogue of `RestoredCutNotReAdvancedResumeShipsRetiredLog`) pins the rebind, and `SagaWriteFenceGrainTests.Laggard_does_not_resume_shipping_until_global_completion` and `ReplicationApplierTests.ApplyAsync_flags_deferred_and_skips_apply_when_receive_fence_engaged` the pauses. |
 | `RestoreAdmitsOnlyNamespace` | A restore never installs a record outside the restoring tenant's namespace: the per-record admission dead-letters it. | Yes: `LatticeBackupRestoreAdmissionWiringTests.A_bulk_load_restore_dead_letters_a_record_the_admission_refuses` and `LatticeBackupRestoreAdmissionWiringTests.A_merge_restore_dead_letters_a_record_the_admission_refuses` pin that both apply loops consult the admission; `TenantBackupRestoreAdmissionTests.Cross_tenant_admission_refuses_every_record` pins the tenancy admission itself. |
 | `AckedWritesServed` | A write made after a cluster's cutover is served by that cluster: writes route by the alias that moved. | Yes: `LatticeBackupRestoreIntegrationTests.RestoreAsync_shadow_cutover_swaps_alias_then_revert_restores_prior_tree`. |
 | `RestoreConverges` | A restore followed by resumed replication converges: every cluster eventually serves the same content for good. Fails on a protocol defect under the spec's fairness: a resume that leaves receiving paused, or a shipper that never re-resolves a source whose push was lost. | Yes: `ReplicationShipperGrainTests.Pump_keeps_cursor_while_receive_fenced_then_reships_and_applies_after_lift` and `ReplicationShipperGrainTests.SourceIdentity_backstop_elapsed_triggers_re_resolve`. |

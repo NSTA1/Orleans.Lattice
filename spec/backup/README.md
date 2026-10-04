@@ -65,11 +65,12 @@ reproduces production and the refinement note's row cites the issue:
   Confirmed by execution. The module checks the approved fix, a lease-fenced
   decision gate; `BackupSagaConsistentPendingReadsPre` and
   `BackupSagaConsistentShardsCapturedApart` reproduce production.
-- **#4490** (`BackupRestore`): a shipper whose alias-change push was lost resumes
-  from the retired copy's log and re-advances the peer's restored cut. The
-  shipper half was confirmed by execution. The module checks a resume that
-  rebinds first; `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces
-  production.
+- **#4490** (`BackupRestore`, fixed by #4498): a shipper whose alias-change push
+  was lost resumed from the retired copy's log and re-advanced the peer's
+  restored cut. The shipper half was confirmed by execution. The module checks
+  a resume that rebinds first, which the fix implements;
+  `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces production before
+  it, and its code analogue turns the fix's regression test red.
 
 So a clean TLC run of these two modules is evidence about the design, not about
 the code running today, until those fixes land.

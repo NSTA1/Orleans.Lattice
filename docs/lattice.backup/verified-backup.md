@@ -33,12 +33,13 @@ were found not to hold in production, and are tracked as defects:
   another old. A cross-tree-consistent backup set is affected the same way.
   The specification checks the approved fix, a short decision gate held for
   the capture; until it ships, the capture guarantees above describe the fix.
-- **A restore's resumed replication can re-advance a peer (#4490).** If a
-  shipper misses the notification that a restore moved the tree's alias, it can
-  resume shipping from the retired copy for up to
+- **A restore's resumed replication could re-advance a peer (#4490, fixed).**
+  If a shipper missed the notification that a restore moved the tree's alias,
+  it could resume shipping from the retired copy for up to
   `ShipSourceIdentityBackstopInterval`, and a write made just before the
-  restore can reach a peer's restored copy. The specification checks a resume
-  that re-binds first.
+  restore could reach a peer's restored copy. The fix re-binds the shipper
+  before its first send after every resume, which is the design the
+  specification checks.
 
 ## Which parts run in production code
 

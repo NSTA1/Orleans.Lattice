@@ -2,8 +2,10 @@
 # below the restored frontier: after the restore, a shipper whose alias-change
 # push was lost keeps shipping from the retired copy's log until its backstop
 # re-resolve, so a pre-restore write still unshipped there reaches the peer's
-# restored copy. This is production's gate: the shipper re-checks its binding
-# only on the push or after ShipSourceIdentityBackstopInterval.
+# restored copy. This was production's gate before the #4490 fix (#4498): the
+# shipper re-checked its binding only on the push or after
+# ShipSourceIdentityBackstopInterval. Its code analogue (a resume that leaves
+# the identity-resolved flag set) turns the regression test red.
 MODULE: RestoredCutNotReAdvancedResumeShipsRetiredLog
 TARGET: RestoredCutNotReAdvanced
 CLASS: Invariant
