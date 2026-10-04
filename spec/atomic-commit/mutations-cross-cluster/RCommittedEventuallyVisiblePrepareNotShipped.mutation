@@ -1,0 +1,18 @@
+# Pairs with RCommittedEventuallyVisible. The origin never ships the prepare of
+# one participant, so the receiver leaf that owns it has no bucket when the
+# saga's terminal arrives: it records the terminal and materialises nothing,
+# and the committed saga's write never becomes visible there. The transport,
+# the tally and the fairness are untouched; this is a protocol defect, and the
+# liveness property reports it under the fairness the module asserts.
+MODULE: RCommittedEventuallyVisiblePrepareNotShipped
+TARGET: RCommittedEventuallyVisible
+CLASS: Temporal
+SUMMARY: one participant's prepare is never written for replication, so its committed write never reaches the receiver
+PERTURBS: OriginPrepare
+
+--- FIND
+    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys}
+--- REPLACE
+\* MUTATION: k2's prepare is not replicated.
+    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys \ {k2}}
+--- END

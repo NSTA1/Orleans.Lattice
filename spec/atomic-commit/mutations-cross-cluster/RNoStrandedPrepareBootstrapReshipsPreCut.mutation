@@ -1,0 +1,21 @@
+# Pairs with RNoStrandedPrepare, and reproduces issue #4482. After a bootstrap
+# the stream does not resume cleanly at the cut: records written before it that
+# the origin's WAL still retains are shipped again, and nothing dedupes a saga
+# record against what the snapshot already settled. A retained prepare whose
+# terminal has been trimmed - the two are in different WAL partitions, trimmed
+# independently - is staged on the receiver for a saga
+# the snapshot already settled, and no terminal will ever consume it.
+MODULE: RNoStrandedPrepareBootstrapReshipsPreCut
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: a bootstrap keeps an arbitrary subset of the pre-cut records, so a retained prepare outlives its trimmed terminal
+PERTURBS: Bootstrap
+
+--- FIND
+    /\ outbox' = {}
+    /\ rconn' = TRUE
+--- REPLACE
+\* MUTATION: any pre-cut record still retained is shipped again.
+    /\ outbox' \in SUBSET outbox
+    /\ rconn' = TRUE
+--- END

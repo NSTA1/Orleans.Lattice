@@ -72,6 +72,8 @@ VACUITY_HEADING = "Shards that executed no tests in any tier"
 REPORT_HEADING = "## Test matrix result"
 COLLISION_HEADING = "Colliding leg results"
 SUPERSEDED_HEADING = "Superseded leg results"
+NOT_RUN_HEADING = "Tiers NOT run on this run"
+MEMBER_REASON = "member pull request into integration branch 'feat/epic/x'"
 
 failures = 0
 checks = 0
@@ -112,6 +114,14 @@ def item(package: str, shard: str, tier: str, executed: int, outcome: str,
         "failures": names,
         "failure_count": len(names),
     }
+
+
+def policy_skipped(package: str, shard: str, tier: str) -> dict:
+    """A tier skipped by policy, as run-test-leg.py records it without running it."""
+    record = item(package, shard, tier, 0, "policy-skipped")
+    record["duration"] = 0.0
+    record["reason"] = MEMBER_REASON
+    return record
 
 
 def leg(leg_id: str, items: list[dict], attempt: int = 1) -> dict:
@@ -197,7 +207,7 @@ def main() -> int:
     # would reduce the suite silently and the survivors would still pass.
     # Assert the population before asserting anything about it.
     # -----------------------------------------------------------------------
-    expected_cases = 5
+    expected_cases = 8
     observed_cases = 0
 
     # -----------------------------------------------------------------------
@@ -432,6 +442,97 @@ def main() -> int:
         passed("the failing verdict is printed to stdout.")
 
     # -----------------------------------------------------------------------
+    # G. A MEMBER PULL REQUEST: a shard whose only tests sit in a tier skipped
+    # by policy. MUST PASS, and must say the tiers were NOT run.
+    #
+    # `bplustree-chaos` has no deterministic tests, so on a member pull request
+    # (coyote and chaos skipped, see tier-scope.py) it executes nothing. That
+    # is not a broken filter, and failing it would make every member pull
+    # request red. But a pass that did not SAY the tier was skipped would read
+    # as a pass over chaos, which is the defect this case also pins.
+    # -----------------------------------------------------------------------
+    observed_cases += 1
+    code, report = run_aggregator([
+        leg("leg-1", [
+            item("pkgA", "chaosOnly", "deterministic", 0, "empty"),
+            policy_skipped("pkgA", "chaosOnly", "chaos"),
+            policy_skipped("pkgA", "chaosOnly", "coyote"),
+            item("pkgA", "shardX", "deterministic", 355, "passed"),
+        ]),
+    ])
+    print(f"  case G: exit={code} (expected 0)")
+
+    check()
+    if code != 0:
+        fail(
+            f"a shard whose tests all sit in tiers skipped by policy failed the aggregate "
+            f"(exit {code}); every member pull request would be red."
+        )
+    else:
+        passed("a shard empty only because its tiers were skipped by policy is not failed.")
+
+    check()
+    if NOT_RUN_HEADING not in report or "pkgA / chaosOnly (chaos)" not in report:
+        fail(
+            "the aggregate passed without naming the tiers it did not run, so a skip reads "
+            "as a pass."
+        )
+    else:
+        passed("the skipped tiers are named as NOT RUN.")
+
+    check()
+    if MEMBER_REASON not in report:
+        fail("the report does not say WHY the tiers were skipped.")
+    else:
+        passed("the report states why the tiers were skipped.")
+
+    # -----------------------------------------------------------------------
+    # H. A skipped tier must not let a GENUINELY FAILED item pass. MUST FAIL.
+    # -----------------------------------------------------------------------
+    observed_cases += 1
+    code, report = run_aggregator([
+        leg("leg-1", [
+            item("pkgA", "shardX", "deterministic", 355, "failed",
+                 failures=["Broken_in_the_tier_that_ran"]),
+            policy_skipped("pkgA", "shardX", "chaos"),
+        ]),
+    ])
+    print(f"  case H: exit={code} (expected 1)")
+
+    check()
+    if code != 1 or "Broken_in_the_tier_that_ran" not in report:
+        fail(
+            f"a failed deterministic item beside a policy-skipped tier exited {code} or was not "
+            "named; a skip is masking a real failure."
+        )
+    else:
+        passed("a policy-skipped tier does not mask a failure in a tier that ran.")
+
+    # -----------------------------------------------------------------------
+    # I. The exemption is per shard, not per run. A shard with NO skipped tier
+    # that executed nothing MUST still fail, even when another shard in the
+    # same run had tiers skipped.
+    # -----------------------------------------------------------------------
+    observed_cases += 1
+    code, report = run_aggregator([
+        leg("leg-1", [
+            item("pkgA", "chaosOnly", "deterministic", 0, "empty"),
+            policy_skipped("pkgA", "chaosOnly", "chaos"),
+            item("pkgB", "brokenFilter", "all", 0, "empty"),
+        ]),
+    ])
+    print(f"  case I: exit={code} (expected 1)")
+
+    check()
+    if code != 1 or "`pkgB` / `brokenFilter`" not in report:
+        fail(
+            f"a silent shard with no skipped tier exited {code} or was not named because "
+            "another shard had tiers skipped; the exemption has widened to the whole run."
+        )
+    else:
+        passed("the policy exemption is scoped to the shard whose tiers were skipped.")
+
+    # -----------------------------------------------------------------------
     # F. SELF-VALIDATION. Can this suite fail at all?
     #
     # Cases A to E establish what the guards do. They do not establish that
@@ -495,6 +596,30 @@ def main() -> int:
                 0,
                 "case D would still have passed against an aggregate that reads every "
                 "attempt at once, which is the defect itself",
+            ),
+            (
+                "the policy exemption is lost, so member pull requests go red",
+                "        if executed == 0 and key not in partial\n",
+                "        if executed == 0\n",
+                [leg("leg-1", [
+                    item("pkgA", "chaosOnly", "deterministic", 0, "empty"),
+                    policy_skipped("pkgA", "chaosOnly", "chaos"),
+                ])],
+                0,
+                "case G would still have passed against a guard that fails every shard whose "
+                "tiers were skipped",
+            ),
+            (
+                "the policy exemption widens to every shard in the run",
+                "    partial = {(item[\"package\"], item[\"shard\"]) for item in policy_skipped + narrowed}\n",
+                "    partial = set(per_shard) if (policy_skipped or narrowed) else set()\n",
+                [leg("leg-1", [
+                    item("pkgA", "chaosOnly", "deterministic", 0, "empty"),
+                    policy_skipped("pkgA", "chaosOnly", "chaos"),
+                    item("pkgB", "brokenFilter", "all", 0, "empty"),
+                ])],
+                1,
+                "case I would still have passed against an exemption that covers the whole run",
             ),
             (
                 "a same-attempt collision is resolved instead of refused",

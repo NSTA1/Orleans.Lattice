@@ -1,0 +1,17 @@
+# Pairs with TypeOK. The receiver tally sums the touched-shard counts its
+# terminals carry instead of taking the larger, so a saga's second terminal
+# raises the expected count to 4 for a saga with 2 source shards. TerminalArrivalTally.MergeExpected
+# is monotonic precisely so a redelivered or late terminal cannot move the
+# quorum; summing moves it on every arrival and leaves the declared domain.
+MODULE: TypeOkTallyExpectedRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the receiver tally adds each terminal's count to the expected total instead of merging it upward
+PERTURBS: DeliverTerminal
+
+--- FIND
+                   ELSE IF rexp[tr] = 0 THEN m.count ELSE Max(rexp[tr], m.count)
+--- REPLACE
+\* MUTATION: counts are summed rather than merged with Max.
+                   ELSE rexp[tr] + m.count
+--- END

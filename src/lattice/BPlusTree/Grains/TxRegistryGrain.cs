@@ -1591,7 +1591,7 @@ internal sealed partial class TxRegistryGrain(
         // accumulate tally state in this branch - there is no
         // expected total to compare against, so the dedup set would
         // grow unbounded if cross-cluster delivery retries piled up.
-        if (expectedShardCount <= 0)
+        if (TerminalArrivalTally.IsUngated(expectedShardCount))
         {
             return new TerminalTallyResult
             {

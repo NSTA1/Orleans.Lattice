@@ -140,6 +140,11 @@ Each loses no behaviour the instance can distinguish.
   `DeliverLate` and `Reactivate`.
 - **A later write** (`LaterWrite`) of `k2`, which gives `NoResurrection` a newer
   value to protect.
+- **Stamps and migrated rows** (ownership module only): a row holds a version of
+  a write, whose real-time rank and HLC stamp are kept apart, and a flag for a
+  row last written by a cross-shard migration. The base stamps every version in
+  real-time order; mutations use the separation to reproduce the stamp and
+  import defects (#4522, #4564).
 
 Both modules model the **intended** design where production has an open defect,
 and keep a mutation that reproduces production as it stands. The refinement
@@ -207,12 +212,13 @@ standing mutation. The refinement notes record which are fixed.
 |-------|--------|----------|
 | #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map (fixed, #4466) | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow` |
 | #4453 | The undo cleared the old copy's fence before the swap and armed the resized copy after it (fixed, #4457) | `UniqueOwnerUndoClearsBeforeSwap` |
-| #4454 | The mid-dispatch re-bind ignores the bound copy's mirror | `SagaBatchOnOneCopyRebindIgnoresMirror` |
-| #4455 | The online snapshot does not copy prepared buckets | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
+| #4454 | The mid-dispatch re-bind ignores the bound copy's mirror (fixed, #4521) | `SagaBatchOnOneCopyRebindIgnoresMirror` |
+| #4455 | The online snapshot does not copy prepared buckets (fixed, #4506) | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
-| #4522 | The terminal's committed-values backstop is stamped above the row, so it overwrites a later write of a moved key (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop` |
+| #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
+| #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design) | `NoKeyLostMigrationImportDropped` |
 | #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
@@ -241,7 +247,7 @@ workers, liveness checked at the end, deadlock checking on, on a 16-core
 workstation (wall clock includes JVM start-up):
 
 ```
-ShardOwnership:          69,088 distinct states, depth 26, clean, 1 min 18 s
+ShardOwnership:          80,612 distinct states, depth 26, clean, 1 min 03 s
 ShardOwnershipRetention: 82,155 distinct states, depth 24, clean, 1 min 36 s
 ```
 
@@ -257,5 +263,5 @@ TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `ShardOwnership` | 7 | 5 | 27 | 39 | 37 | 69,088 |
+| `ShardOwnership` | 7 | 5 | 27 | 44 | 37 | 80,612 |
 | `ShardOwnershipRetention` | 5 | 4 | 25 | 27 | 32 | 82,155 |

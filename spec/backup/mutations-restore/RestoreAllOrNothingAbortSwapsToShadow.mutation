@@ -1,0 +1,19 @@
+# Pairs with RestoreAllOrNothing. Compensation moves the alias onto the shadow
+# instead of leaving the pre-restore tree serving.
+MODULE: RestoreAllOrNothingAbortSwapsToShadow
+TARGET: RestoreAllOrNothing
+CLASS: Invariant
+SUMMARY: an aborting participant swaps to its shadow rather than discarding it
+PERTURBS: Abort
+
+--- FIND
+    /\ vote' = [vote EXCEPT ![c] = "comp"]
+    /\ data' = [data EXCEPT ![c]["new"] = {}]
+    /\ log' = [log EXCEPT ![c]["new"] = {}]
+    /\ UNCHANGED <<alias, bound, sent, shipOn, recvOn, rphase, pre, post>>
+--- REPLACE
+    /\ vote' = [vote EXCEPT ![c] = "comp"]
+    \* MUTATION: the shadow is swapped in, not collected.
+    /\ alias' = [alias EXCEPT ![c] = "new"]
+    /\ UNCHANGED <<data, log, bound, sent, shipOn, recvOn, rphase, pre, post>>
+--- END

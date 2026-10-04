@@ -49,7 +49,12 @@ stateDiagram-v2
    [#4499](https://github.com/NSTA1/Orleans.Lattice/issues/4499)), so any prepared write that landed on *S*
    before the window opened survives the topology change. A saga the
    transaction registry already reports as committed or aborted has its
-   terminal applied to *T* directly instead. The sweep is idempotent per
+   terminal applied to *T* directly instead, and so does one whose decision
+   the registry still records but has stopped reporting once its retention
+   window elapsed (`Indeterminate`): the sweep reads the recorded decision
+   rather than replaying a prepare *T* would refuse for a decided saga
+   ([#4473](https://github.com/NSTA1/Orleans.Lattice/issues/4473)). An online
+   resize snapshot carries prepared buckets through the same sweep. The sweep is idempotent per
    `(transaction, key)`, and a coordinator crash mid-sweep re-runs the whole
    sweep on recovery. Instrumentation:
    `orleans.lattice.split.retroactive_forward.entries` (counter, per

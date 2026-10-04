@@ -1,0 +1,16 @@
+# Pairs with SetComplete. A capture that faults part-way is accepted with
+# whatever members it had captured, instead of failing.
+MODULE: SetCompleteFaultAccepts
+TARGET: SetComplete
+CLASS: Invariant
+SUMMARY: a faulted capture attempt is accepted rather than failed
+PERTURBS: CaptureFault
+
+--- FIND
+    /\ phase \in {"fence", "drain", "gating", "capture"}
+    /\ phase' = "failed"
+--- REPLACE
+    /\ phase \in {"fence", "drain", "gating", "capture"}
+    \* MUTATION: the fault path accepts.
+    /\ phase' = "done"
+--- END
