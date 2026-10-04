@@ -1310,6 +1310,27 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// <see cref="FoldTailOntoFrozenAsync"/> for a snapshot capture that holds a
+    /// saga decision gate (issue #4485). After the tail fold, every prepared
+    /// bucket still pending at <paramref name="capturedHead"/> is resolved
+    /// against the gate's decision snapshot (D0), exactly as a live multi-key
+    /// read resolves it: a saga Committed in D0 reads post-saga, an
+    /// Indeterminate one reads absent, and any other reads pre-saga. Every shard
+    /// of the capture resolves against the same D0, so no saga is split across
+    /// the capture. Throws <see cref="TxDecisionGateRefusedException"/> when the
+    /// gate is no longer held.
+    /// </summary>
+    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAsync"/>.</param>
+    /// <param name="capturedHead">The uniform per-partition WAL head the shard captured.</param>
+    /// <param name="decisionGate">The capture's decision gate.</param>
+    /// <param name="cancellationToken">Cancellation token observed during the fold.</param>
+    Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenGatedAsync(
+        LeafBaselineFreeze freeze,
+        long[] capturedHead,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Test-only seam: requests that the grain runtime collect this
     /// activation by calling <c>DeactivateOnIdle</c> from inside the
     /// grain. Integration tests use this to exercise activation-time
