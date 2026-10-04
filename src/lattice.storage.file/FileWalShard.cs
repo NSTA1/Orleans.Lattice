@@ -879,7 +879,7 @@ internal sealed class FileWalShard : IDisposable
             EnsureLoaded();
             if (_deadBytes > 0)
             {
-                Compact(LatticeMetrics.WalCompactionTriggerReconcile);
+                Compact(CompactionTrigger.Reconcile);
             }
         }
         finally
@@ -1298,7 +1298,7 @@ internal sealed class FileWalShard : IDisposable
         var ceiling = _options.CompactionMaximumDeadBytes;
         if (ceiling > 0L && _deadBytes >= ceiling)
         {
-            Compact(LatticeMetrics.WalCompactionTriggerCeiling);
+            Compact(CompactionTrigger.Ceiling);
             return;
         }
 
@@ -1307,10 +1307,10 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
-        Compact(LatticeMetrics.WalCompactionTriggerRatio);
+        Compact(CompactionTrigger.Ratio);
     }
 
-    private void Compact(KeyValuePair<string, object?> trigger)
+    private void Compact(CompactionTrigger trigger)
     {
         var reclaimed = _deadBytes;
         var stream = _stream!;
@@ -1397,21 +1397,42 @@ internal sealed class FileWalShard : IDisposable
     /// <para>
     /// Both also carry the <see cref="LatticeMetrics.TagTrigger"/> of the arm
     /// that ran, so the bytes each arm released can be read per arm alongside
-    /// how often it fired (issue #3226).
+    /// how often it fired (issue #3226). The arm travels as a
+    /// <see cref="CompactionTrigger"/> and is mapped to its tag here, rather
+    /// than passed in as a tag, so the instrument-priming enrolment analyser
+    /// can resolve every tag value an emission can carry.
     /// </para>
     /// </summary>
-    private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
+    private void RecordCompaction(CompactionTrigger trigger, long reclaimedBytes)
     {
         if (_treeId.Length == 0)
         {
             return;
         }
 
-        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, trigger, _tenantTag);
+        var compactionTriggerTag = trigger switch
+        {
+            CompactionTrigger.Ceiling => LatticeMetrics.WalCompactionTriggerCeiling,
+            CompactionTrigger.Reconcile => LatticeMetrics.WalCompactionTriggerReconcile,
+            _ => LatticeMetrics.WalCompactionTriggerRatio,
+        };
+
+        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, compactionTriggerTag, _tenantTag);
         if (reclaimedBytes > 0)
         {
-            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, trigger, _tenantTag);
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, compactionTriggerTag, _tenantTag);
         }
+    }
+
+    /// <summary>
+    /// The compaction arm that ran, mapped to its
+    /// <see cref="LatticeMetrics.TagTrigger"/> value by <see cref="RecordCompaction"/>.
+    /// </summary>
+    private enum CompactionTrigger
+    {
+        Ratio,
+        Ceiling,
+        Reconcile,
     }
 
     /// <summary>
