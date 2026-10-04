@@ -392,8 +392,7 @@ public sealed class LatticeWalGcOffsetEntitlementTests
         var sut = new LatticeWalGc(
             Services(provider, durablePins, durableOffsets), registry, Monitor(partitions: 2));
 
-        var (report, stops) = await RunAsync(sut);
-        TestContext.Out.WriteLine($"trimmed={report.EntriesTrimmed} stops={string.Join(",", stops)}");
+        var (report, _) = await RunAsync(sut);
 
         var lowestBlocked = await provider.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
         Assert.Multiple(() =>
