@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A local write stamped with the clock before it is
+# advanced carries HLC 0 on the first write, outside the declared HLC domain.
+MODULE: TypeOkLocalWriteUnclocked
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a local write is stamped with the clock before it advances
+PERTURBS: LocalWrite
+
+--- FIND
+    /\ log' = Append(log, [author |-> "", stamp |-> "", hlc |-> clock + 1])
+--- REPLACE
+    \* MUTATION: stamped with the old clock.
+    /\ log' = Append(log, [author |-> "", stamp |-> "", hlc |-> clock])
+--- END

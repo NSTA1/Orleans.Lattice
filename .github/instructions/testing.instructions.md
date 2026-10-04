@@ -1061,6 +1061,34 @@ Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
 targets and requires a clean run. The assurance document is
 [`docs/lattice/verified-shard-ownership.md`](../../docs/lattice/verified-shard-ownership.md).
 
+### Backup and restore property catalogue (epic #4430, issue #4440)
+
+The backup area's properties are checked by four TLA+ modules under
+[`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
+naming the production symbols and detector tests per row. Its Coyote models
+live in the backup and replication test projects, not in `test/lattice/`, and
+drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
+`BackupChainFrontier` (origin normalisation and chain frontier, core unit suite
+only, not schedule-sensitive) and `CrossClusterSagaDecisionCore` (coordinated
+restore decision).
+
+| Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
+|--------|---------------|-------------------------|-------------------------|
+| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) are the detectors. |
+| `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
+| `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
+| `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
+| `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
+| `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
+| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
+| `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
+
+What these do not cover - the participant fence timer, a batch in flight across
+a whole cutover, reader atomicity across set members, in-place and cold
+restores, resharded trees, and the receiver side (#4480) - is listed in each
+module's refinement note and in
+[`docs/lattice.backup/verified-backup.md`](../../docs/lattice.backup/verified-backup.md).
+
 ## Browser UI tier
 
 Blazor UI has two distinct failure modes, and they need two different tools. Getting this split wrong is how #1792 and #1793 shipped despite the Explorer having over three thousand tests.

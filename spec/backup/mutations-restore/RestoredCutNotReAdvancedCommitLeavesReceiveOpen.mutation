@@ -1,0 +1,16 @@
+# Pairs with RestoredCutNotReAdvanced. The cutover pauses shipping but not
+# receiving, so a laggard cluster that has not cut over yet ships a
+# pre-restore write straight into an early cluster's restored copy - the
+# re-advance the receive fence exists to stop.
+MODULE: RestoredCutNotReAdvancedCommitLeavesReceiveOpen
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: the commit fence does not pause inbound apply
+PERTURBS: Commit
+
+--- FIND
+    /\ recvOn' = [recvOn EXCEPT ![c] = FALSE]
+--- REPLACE
+    \* MUTATION: receive stays open.
+    /\ UNCHANGED recvOn
+--- END
