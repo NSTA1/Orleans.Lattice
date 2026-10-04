@@ -40,6 +40,40 @@
       "source": "src/lattice.api.telemetry.grpc/Security/LatticeTelemetryApiGrpcAuthInterceptor.cs#LatticeTelemetryApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeTelemetryApi",
+        "package": "Orleans.Lattice.Api.Telemetry",
+        "provides": [
+          "ILatticeTelemetry"
+        ],
+        "source": "src/lattice.api.telemetry/LatticeApiTelemetryServiceCollectionExtensions.cs#LatticeApiTelemetryServiceCollectionExtensions.AddLatticeTelemetryApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "LatticeTelemetryOptions",
+        "kind": "options",
+        "reason": "The telemetry backend proxy is bound to IOptions<LatticeTelemetryOptions>, and the caller is responsible for binding and validating those options.",
+        "source": "src/lattice.api.telemetry/LatticeApiTelemetryServiceCollectionExtensions.cs#LatticeApiTelemetryServiceCollectionExtensions.AddLatticeTelemetryBackend"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeTelemetryApiGrpc",
+        "package": "Orleans.Lattice.Api.Telemetry.Grpc",
+        "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryApiGrpcServiceCollectionExtensions.cs#LatticeTelemetryApiGrpcServiceCollectionExtensions.AddLatticeTelemetryApiGrpc"
+      },
+      {
+        "registration": "MapLatticeTelemetryApiGrpc",
+        "package": "Orleans.Lattice.Api.Telemetry.Grpc",
+        "source": "src/lattice.api.telemetry.grpc/LatticeTelemetryApiGrpcServiceCollectionExtensions.cs#LatticeTelemetryApiGrpcServiceCollectionExtensions.MapLatticeTelemetryApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AuthSchemeAdvertisement": {
       "kind": "record",

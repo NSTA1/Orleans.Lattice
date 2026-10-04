@@ -45,6 +45,42 @@
       "source": "src/lattice.api.state.grpc/Security/LatticeStateApiGrpcAuthInterceptor.cs#EnforceAuthAsync"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeStateApi",
+        "package": "Orleans.Lattice.Api.State",
+        "provides": [
+          "ILatticeStateQuery",
+          "ILatticeStateObserver",
+          "ILatticeStateMetricsObserver"
+        ],
+        "source": "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#LatticeApiStateServiceCollectionExtensions.AddLatticeStateApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLattice",
+        "kind": "registration",
+        "reason": "The state facade reads the core tree registry, digest surface and options system and fails fast when AddLattice has not registered them.",
+        "source": "src/lattice.api.state/LatticeApiStateServiceCollectionExtensions.cs#LatticeApiStateServiceCollectionExtensions.AddLatticeStateApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeStateApiGrpc",
+        "package": "Orleans.Lattice.Api.State.Grpc",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcServiceCollectionExtensions.cs#LatticeStateApiGrpcServiceCollectionExtensions.AddLatticeStateApiGrpc"
+      },
+      {
+        "registration": "MapLatticeStateApiGrpc",
+        "package": "Orleans.Lattice.Api.State.Grpc",
+        "source": "src/lattice.api.state.grpc/LatticeStateApiGrpcServiceCollectionExtensions.cs#LatticeStateApiGrpcServiceCollectionExtensions.MapLatticeStateApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AllowAllStateApiAuthorizer": {
       "kind": "class",

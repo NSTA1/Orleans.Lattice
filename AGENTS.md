@@ -4,6 +4,13 @@ Guidance for AI coding agents working in the Orleans.Lattice repository. Human
 contributors should read this too. It complements, and does not replace, the
 detailed rules under `.github/` - when they disagree, `.github/` wins.
 
+This file is for agents **changing this repository**. An agent **operating** an
+Orleans.Lattice deployment - calling its APIs or MCP tools, running procedures
+such as backup, restore or reshard - should start from the machine-readable
+specifications in [docs/agents/index.json](docs/agents/index.json) instead. They
+describe every surface Lattice ships, while a given host exposes only the
+packages it registers, so each surface and tool states its `availability`.
+
 ## What this project is
 
 Orleans.Lattice is a platform for building durable, distributed state systems on

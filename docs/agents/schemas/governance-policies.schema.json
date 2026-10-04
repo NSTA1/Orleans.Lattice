@@ -1,0 +1,262 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nsta1.github.io/Orleans.Lattice/docs/agents/schemas/governance-policies.schema.json",
+  "schema": "lattice.agents/json-schema/v1",
+  "title": "Orleans.Lattice policy definitions",
+  "description": "The role and permission catalogue, tenant policy definitions, security options with defaults, and allow-lists.",
+  "type": "object",
+  "required": [
+    "schema",
+    "role_permission_catalogue",
+    "policy_definitions",
+    "security_options",
+    "allow_lists"
+  ],
+  "properties": {
+    "schema": {
+      "const": "lattice.agents/governance-policies/v1"
+    },
+    "role_permission_catalogue": {
+      "type": "object",
+      "required": [
+        "operations",
+        "effects",
+        "subjects",
+        "scopes",
+        "source"
+      ],
+      "properties": {
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "subjects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "source": {
+          "$ref": "#/$defs/source"
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy_definitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "fields",
+          "definition",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "security_options": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "properties",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "type": {
+            "type": "string",
+            "minLength": 1
+          },
+          "properties": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "type",
+                "default"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "default": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "allow_lists": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "definition",
+          "source"
+        ],
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/id"
+          },
+          "definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "source": {
+            "$ref": "#/$defs/source"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "claim": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "statement",
+            "source"
+          ],
+          "properties": {
+            "statement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "source": {
+              "$ref": "#/$defs/source"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/uncertain"
+        }
+      ]
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "package": {
+      "type": "string",
+      "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+    },
+    "packages": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^Orleans\\.Lattice(\\.[A-Z][A-Za-z0-9]*)*$"
+      }
+    },
+    "source": {
+      "type": "string",
+      "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^((src|docs|test|samples|spec|tools|benchmark|reference-architecture|\\.github)/[A-Za-z0-9_./\\-]+|FEATURES\\.md|PACKAGES\\.md|README\\.md|reference-architecture\\.md)(#[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*)?$"
+      }
+    },
+    "text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "uncertain": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "required_source"
+      ],
+      "properties": {
+        "status": {
+          "const": "uncertain"
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "required_source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "issue": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

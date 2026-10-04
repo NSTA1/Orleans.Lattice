@@ -47,6 +47,40 @@
       "source": "src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiGrpcAuthInterceptor.cs#LatticeTreeAdminApiGrpcAuthInterceptor"
     }
   },
+  "availability": {
+    "in_process": [
+      {
+        "registration": "AddLatticeTreeAdminApi",
+        "package": "Orleans.Lattice.Api.TreeAdmin",
+        "provides": [
+          "ILatticeTreeAdmin"
+        ],
+        "source": "src/lattice.api.treeadmin/LatticeApiTreeAdminServiceCollectionExtensions.cs#LatticeApiTreeAdminServiceCollectionExtensions.AddLatticeTreeAdminApi"
+      }
+    ],
+    "requires": [
+      {
+        "name": "AddLatticeSchemaApi",
+        "kind": "registration",
+        "reason": "The tree-admin facade composes ILatticeSchemaControl and fails fast when AddLatticeSchemaApi has not registered it.",
+        "source": "src/lattice.api.treeadmin/LatticeApiTreeAdminServiceCollectionExtensions.cs#LatticeApiTreeAdminServiceCollectionExtensions.AddLatticeTreeAdminApi"
+      }
+    ],
+    "grpc_server": [
+      {
+        "registration": "AddLatticeTreeAdminApiGrpc",
+        "package": "Orleans.Lattice.Api.TreeAdmin.Grpc",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminApiGrpcServiceCollectionExtensions.cs#LatticeTreeAdminApiGrpcServiceCollectionExtensions.AddLatticeTreeAdminApiGrpc"
+      },
+      {
+        "registration": "MapLatticeTreeAdminApiGrpc",
+        "package": "Orleans.Lattice.Api.TreeAdmin.Grpc",
+        "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminApiGrpcServiceCollectionExtensions.cs#LatticeTreeAdminApiGrpcServiceCollectionExtensions.MapLatticeTreeAdminApiGrpc"
+      }
+    ],
+    "grpc_client": [],
+    "absent": null
+  },
   "types": {
     "AuthSchemeAdvertisement": {
       "kind": "record",

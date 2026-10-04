@@ -1,0 +1,116 @@
+schema: lattice.agents/procedure/v1
+id: replication-enrollment
+name: "Enable or disable runtime replication for a tree"
+surfaces:
+  in_process:
+    api: "ILatticeReplicationControl.EnableReplicationAsync / DisableReplicationAsync / GetReplicationConfigAsync"
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl"
+  grpc:
+    api: "/orleans.lattice.api.replication/EnableReplication, /orleans.lattice.api.replication/DisableReplication, /orleans.lattice.api.replication/GetReplicationConfig"
+    source: "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods.EnableReplicationMethodName"
+  mcp_tool:
+    api: "lattice_replication_enable, lattice_replication_disable, lattice_replication_get_config"
+    source: "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs#ReplicationToolGroup"
+preconditions:
+  - id: surface-available
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/replication.json and, for each MCP tool used (lattice_replication_disable, lattice_replication_enable, lattice_replication_get_config), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    source: "docs/agents/api/replication.json"
+  - id: replication-authority
+    check: "Caller has the Replication capability for the effective target tree before enable, disable or config reporting touches engine state."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl"
+  - id: runtime-config-enabled
+    check: "Runtime replication configuration is enabled because AddLatticeReplicationApi requires AddLatticeReplication with enableRuntimeConfig true."
+    source: "docs/lattice.api.replication/README.md"
+  - id: mode-fixed
+    check: "The merge mode is fixed at first enable; changing an already-enabled mode requires disable then re-enable."
+    source: "docs/lattice.replication/runtime-config.md"
+  - id: local-replica-preconditions
+    check: "A host authoring enable or real disable has the local replica id needed to stamp runtime config dots, and flag modes require that id."
+    source: "docs/lattice.api.replication/api.md"
+steps:
+  - n: 1
+    action: "Read the current permission-scoped replication configuration."
+    api: "ILatticeReplicationControl.GetReplicationConfigAsync / GetReplicationConfig / lattice_replication_get_config"
+    expects: "Returns only trees the caller may manage, with source Runtime, Static or RuntimeAndStatic."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
+  - n: 2
+    action: "Enable the target tree under the intended merge mode, naming a bootstrap source only when this cluster must pull pre-existing rows."
+    api: "ILatticeReplicationControl.EnableReplicationAsync / EnableReplication / lattice_replication_enable"
+    expects: "Returns the effective tree id, fixed mode, AlreadyEnabled, and BootstrapRequested."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#EnableReplicationAsync"
+  - n: 3
+    action: "Re-read the config report and confirm the tree is enabled with a non-ambiguous mode."
+    api: "ILatticeReplicationControl.GetReplicationConfigAsync / GetReplicationConfig / lattice_replication_get_config"
+    expects: "The tree is present only if the caller may manage it; Ambiguous false means one mode resolves."
+    source: "docs/lattice.api.replication/api.md"
+  - n: 4
+    action: "When disabling is intended, disable the runtime enrollment for the tree."
+    api: "ILatticeReplicationControl.DisableReplicationAsync / DisableReplication / lattice_replication_disable"
+    expects: "Returns AlreadyDisabled true for an absent or already disabled runtime entry."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DisableReplicationAsync"
+  - n: 5
+    action: "After disable, re-read config and determine whether a static enrollment still keeps the tree replicated."
+    api: "ILatticeReplicationControl.GetReplicationConfigAsync / GetReplicationConfig / lattice_replication_get_config"
+    expects: "A Static source means deployment configuration, not runtime disable, still puts the tree in force."
+    source: "docs/lattice.replication/runtime-config.md"
+postconditions:
+  - check: "A runtime enable authors config into the replicated sys-replication-config tree so enrolled peers converge on the decision."
+    source: "docs/lattice.replication/runtime-config.md"
+  - check: "Disable writes a disable-wins runtime flag and never purges data already replicated to peers."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DisableReplicationAsync"
+  - check: "A disabled runtime-only tree resolves to no mode, but an already-active shipper may still ship and converged peers drop those entries at the receiver enrollment gate."
+    source: "docs/lattice.replication/runtime-config.md"
+failure_modes:
+  - id: authorization-denied
+    signal: "The facade or MCP access gate denies the call."
+    effect: "Engine state is not consulted and no runtime config is authored."
+    response: "Grant Replication capability for the effective tree or run as an authorized operator."
+  - id: mode-change-rejected
+    signal: "Enable is rejected because the tree is already enabled under another mode or is mode-ambiguous."
+    effect: "The existing or ambiguous mode remains authoritative."
+    response: "Disable the tree, resolve ambiguity, then re-enable under the intended single mode."
+  - id: precondition-failed
+    signal: "A runtime precondition fails, such as missing local replica id for authoring dots or a flag mode."
+    effect: "No valid runtime config change is authored."
+    response: "Configure the local replica id and retry the operation."
+  - id: static-floor
+    signal: "After disable, the config report still lists the tree with Source Static."
+    effect: "The tree continues to resolve from deployment configuration and keeps shipping."
+    response: "Remove or change the static ReplicatedTrees declaration in deployment configuration."
+  - id: bootstrap-conflict
+    signal: "Enable with a bootstrap source raises InvalidOperationException because a bootstrap is in flight from a different source cluster."
+    effect: "The enable config may already be written, but the requested bootstrap was not started."
+    response: "Wait for the current bootstrap to finish or explicitly re-seed from the desired source."
+  - id: surface-not-available
+    signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
+    effect: "The operation cannot be carried out through that surface on this host."
+    response: "Stop and report which registration or opt-in the availability block names as missing; do not emulate the operation through a different surface."
+rollback:
+  supported: true
+  mechanism: "A runtime enable can be rolled back by disabling runtime enrollment; a runtime disable can be rolled forward by re-enabling with the previous mode. Neither action purges or rewinds peer data already shipped."
+  steps:
+    - action: "For an unwanted enable, call DisableReplicationAsync for the same effective tree."
+      api: "ILatticeReplicationControl.DisableReplicationAsync / DisableReplication / lattice_replication_disable"
+      source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DisableReplicationAsync"
+    - action: "For an unwanted disable, call EnableReplicationAsync with the previous merge mode and an explicit bootstrap source if data must be re-seeded."
+      api: "ILatticeReplicationControl.EnableReplicationAsync / EnableReplication / lattice_replication_enable"
+      source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#EnableReplicationAsync"
+  source: "docs/lattice.replication/runtime-config.md"
+concurrency:
+  - rule: "Concurrent enables under the same mode converge and are not ambiguous."
+    source: "docs/lattice.replication/runtime-config.md"
+  - rule: "Concurrent enables under different modes leave the mode ambiguous until an operator resolves it."
+    source: "docs/lattice.replication/runtime-config.md"
+  - rule: "Concurrent enable and disable resolve disabled because the enablement flag is disable-wins."
+    source: "docs/lattice.replication/runtime-config.md"
+  - rule: "Permission-scoped config reads silently omit trees the caller may not manage."
+    source: "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#GetReplicationConfigAsync"
+sources:
+  - "docs/lattice.api.replication/README.md"
+  - "docs/lattice.api.replication/api.md"
+  - "docs/lattice.replication/runtime-config.md"
+  - "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs"
+  - "src/lattice.api.replication/LatticeReplicationControl.cs"
+  - "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs"
+  - "src/lattice.api.mcp/Tools/Replication/ReplicationToolGroup.cs"
+  - "src/lattice.api.mcp/Tools/Replication/ReplicationToolInvocations.cs"
