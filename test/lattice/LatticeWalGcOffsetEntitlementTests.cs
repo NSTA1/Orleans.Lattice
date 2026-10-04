@@ -358,6 +358,53 @@ public sealed class LatticeWalGcOffsetEntitlementTests
             "Nothing in the blocked partition may be reclaimed, so no scan there may report having run to the end.");
     }
 
+    /// <summary>
+    /// The partition-level block, reached by a pass that genuinely scans. A
+    /// never-checkpointed leaf on partition 0 publishes the Zero block pin with
+    /// offset -1, so it abstains from the offset floor rather than opening a
+    /// census gap (which would hold the whole tree before any scan, and make
+    /// the block itself unobservable). Partition 1 is trimmed through the offset
+    /// floor, which proves the pass reached the scan; partition 0 keeps every
+    /// entry, which is the block.
+    /// </summary>
+    [Test]
+    public async Task RunOnceAsync_a_block_pin_holds_its_own_partition_while_the_pass_trims_the_others()
+    {
+        var provider = await SeededProviderAsync(partition: 0);
+        await provider.AppendBatchAsync(
+            Tree,
+            1,
+            new[] { Entry(0, Hlc(10)), Entry(1, Hlc(20)), Entry(2, Hlc(30)), Entry(3, Hlc(40)) },
+            CancellationToken.None);
+        var registry = await FlatLeafRegistryAsync();
+
+        const string blockedLeaf = "_lattice_materialiser_tree_leaf-2_0";
+        var durablePins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = Hlc(1),
+            [blockedLeaf] = HybridLogicalClock.Zero,
+        };
+        var durableOffsets = new Dictionary<string, long>(StringComparer.Ordinal)
+        {
+            [LeafConsumer] = 3,
+            [blockedLeaf] = -1,
+        };
+        var sut = new LatticeWalGc(
+            Services(provider, durablePins, durableOffsets), registry, Monitor(partitions: 2));
+
+        var (report, stops) = await RunAsync(sut);
+        TestContext.Out.WriteLine($"trimmed={report.EntriesTrimmed} stops={string.Join(",", stops)}");
+
+        var lowestBlocked = await provider.GetLowestOffsetAsync(Tree, 0, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(lowestBlocked, Is.EqualTo(0L),
+                "the blocked partition must keep every entry: its leaf has no durable copy but the WAL");
+            Assert.That(report.EntriesTrimmed, Is.EqualTo(4),
+                "the unblocked partition is trimmed through the offset floor, so the pass did reach the scan");
+        });
+    }
+
     [Test]
     public void ClassifyEntry_with_no_offset_admission_is_the_pre_fix_hlc_only_predicate()
     {
