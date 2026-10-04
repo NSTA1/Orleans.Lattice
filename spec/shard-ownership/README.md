@@ -70,28 +70,42 @@ counterexample found when they were one module is still reachable in a single
 module. The mutation catalogues show it: each mutation was re-proved red, with
 a clean control, in the module it now lives in.
 
-### What is lost by not composing them
+### What composing them costs, and what it shows
 
-A behaviour that needs a retention event **together with** something only
-`ShardOwnership` has is checked by neither module:
+The behaviours the split puts in neither module on its own are a retention
+event **together with** something only `ShardOwnership` has: a stale router
+writing, a saga re-binding, a reshard-driven split, a refused flip, or an undo
+before the flip. They were checked once, by composing the modules, rather than
+argued. The review (#4435, finding F7) built the compositions from
+`ShardOwnershipRetention.tla` and re-checking them here reproduced its results.
+Each composition was run under the retention cfg (`TypeOK`, `NoKeyLost`,
+`NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic`, `SplitCompletes`,
+`ResizeCompletes`, `SagaCompletes`, `NoStrandedBucket`) on two TLC workers,
+liveness checked at the end:
 
-- a **stale router writing** while the registry masks or has retired the row;
-- a saga **re-binding** (`SagaRebindOnRefusal`, `SagaRebindBeforeDecision`) and
-  then meeting a mask, a retirement, a late forward or a reactivation;
-- a **reshard-driven** split under retention (the retention module's split is
-  adaptive; the two differ only in the interlock that admits them);
-- a **refused flip** or an **undo before the flip** under retention.
+| Composition | Added to the retention module | Result |
+|---|---|---|
+| (a) | stale writers: `SagaPrepare(k, p)` and `LaterWrite(p)` over every published pair | clean, 82,155 distinct states, depth 24: **identical to the module alone**, so stale writers add no reachable behaviour in this instance |
+| (b) | (a), plus `SagaRebindOnRefusal` and `SagaRebindBeforeDecision` (weakly fair) and `UndoBeforeFlip` | clean, 132,491 distinct states, depth 25, 3 min 11 s |
+| (c) | (b), plus the reshard (`ReshardStart`, `ReshardFinish` fair, the split's `rs = "migrating"` arm, the resize's reshard interlock) and `ResizeFlipRefused` | clean, 497,105 distinct states, depth 29, 9 min 54 s |
 
-Two arguments narrow, but do not close, that gap. Retention acts on a saga's
-buckets and the registry's answer about them, and each of the excluded
-behaviours changes where buckets land or which copy serves, which
-`ShardOwnership` checks exhaustively under a registry that always answers.
-And the retention module's readers may hold any pair the registry ever
-published, so a stale *read* under retention is covered. What is not argued is
-that a stale *write* landing a bucket somewhere unusual cannot then be stranded
-or reverted by a retention event; that is the composition this split gives up.
-The review issue for this area (#4435) should audit exactly this seam.
+Composition (c) is everything `ShardOwnership` has that the retention module
+lacks. It was also checked against the four properties only `ShardOwnership`
+states (`UniqueOwner`, `SagaBatchOnOneCopy`, `ReshardCompletes`,
+`RoutingConverges`), all thirteen in one run, and is clean: the state count and
+time above are that run's. The review measured 498,905 states and 8 min 35 s for
+(c) under the retention cfg alone, on the bucket before the purge's timing
+assumption was removed (#4503); the difference is that change.
 
+So in this instance nothing is lost by the split. The composition is not a CI
+gate because (c) exceeds the five-minute per-run limit on two workers by a wide
+margin, and every mutation would pay it twice. It is the measured cost of
+composing the two modules, and the reason they are separate; anyone changing
+either module's shared machinery should re-run it. The compositions are
+mechanical: replace the retention module's current-pair writers with the
+published-pair forms, then add the named actions and their fairness from
+`ShardOwnership.tla` with the retention variables added to their `UNCHANGED`
+tuples.
 ### Budget
 
 Each module's full configuration, liveness included, runs on two TLC workers
@@ -150,8 +164,14 @@ notes list each one with its issue.
 | `NoStrandedBucket` | liveness | retention | A decided saga's bucket on a copy that can still become the tree is eventually consumed, unless the registry retired the row first. |
 
 Every liveness property can fail on a protocol defect under the fairness the
-spec asserts, shown by a mutation that leaves that fairness intact (for
-example `SplitCompletesSweepStalls`, `NoStrandedBucketTerminalNotMirrored`).
+spec asserts, shown by a mutation that leaves that fairness intact. Many of
+those mutations are a step that records nothing (`SplitCompletesSweepStalls`),
+but some are real protocol defects: `SplitCompletesSplitDuringResize` is the
+#4452 shape, the split/resize interlock removed with every fairness condition
+kept, and the split is stranded; `SagaCompletesDiscardedCopyRefusesTerminal`,
+`SagaCompletesPurgedCopyRefusesTerminal` and
+`NoStrandedBucketTerminalNotMirrored` are a broadcast production does not
+finish.
 
 ### Classification
 
@@ -190,8 +210,9 @@ standing mutation. The refinement notes record which are fixed.
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror | `SagaBatchOnOneCopyRebindIgnoresMirror` |
 | #4455 | The online snapshot does not copy prepared buckets | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
 | #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
-| #4474 | Terminals for a saga bound to the copy an undo discarded are re-sent to the old copy | `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
+| #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
+| #4522 | The terminal's committed-values backstop is stamped above the row, so it overwrites a later write of a moved key (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop` |
 | #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
@@ -236,5 +257,5 @@ TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `ShardOwnership` | 7 | 5 | 27 | 35 | 37 | 69,088 |
-| `ShardOwnershipRetention` | 5 | 4 | 25 | 26 | 32 | 82,155 |
+| `ShardOwnership` | 7 | 5 | 27 | 39 | 37 | 69,088 |
+| `ShardOwnershipRetention` | 5 | 4 | 25 | 27 | 32 | 82,155 |

@@ -1,10 +1,12 @@
-# Pairs with AtomicOnOwner. Reproduces current production: a saga bound to the
-# resized copy R whose resize is undone after the swap sends its terminals to R
-# directly; R's armed redirect answers StaleTreeRoutingException, and
-# MarkOneShardAsync refreshes routing and re-sends the shard's terminal, with
-# its committed-values backstop, to the old copy, which the undo made the tree
-# again and which lays keys out by the same map. Terminals R took before the
-# undo are discarded with R, so the old copy gets the batch on some shards only.
+# Pairs with AtomicOnOwner. The naive fix for #4474: a saga bound to the resized
+# copy R, whose resize is undone after the swap, has terminals R refuses once
+# the undo discarded it; following that refusal to the copy the tree resolves to
+# re-sends the shard's terminal, with its committed-values backstop, to the old
+# copy, which the undo made the tree again and which lays keys out by the same
+# map. Terminals R took before the discard are discarded with R, so the old copy
+# gets the batch on some shards only. Production today stalls instead
+# (SagaCompletesDiscardedCopyRefusesTerminal); this mutation stands against a
+# fix that follows the refusal.
 MODULE: AtomicOnOwnerDiscardedCopyTerminalRedirects
 TARGET: AtomicOnOwner
 CLASS: Invariant
