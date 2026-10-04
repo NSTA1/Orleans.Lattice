@@ -1,4 +1,5 @@
-# Pairs with TrimCoveredBySnapshot, and reproduces production's coverage stamp.
+# Pairs with TrimCoveredBySnapshot, and reproduces the coverage stamp production
+# had until issue #4451 was fixed (#4489, BuildUnanchoredCoverage).
 # BuildCheckpointCoverage claims GetCurrentCheckpointForPartition - the higher of
 # the persisted and pending checkpoints - as the snapshot's coverage. During a
 # cold rebuild the persisted slot still holds the previous activation's

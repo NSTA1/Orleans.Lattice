@@ -84,9 +84,9 @@ current production behaviour so the property keeps firing on it:
 | Issue | Defect | Standing mutation |
 |-------|--------|-------------------|
 | #4450 | A snapshot that fails to load falls through to a cold replay of a WAL trimmed under its coverage; the leaf comes up silently missing acknowledged writes. **Fixed by #4470**: the replay now fails closed. | `ReadPositionHonestLoadFailureColdReplays`, now an ordinary regression mutation |
-| #4451 | A capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection, licensing the GC to trim rows that exist nowhere else. | `TrimCoveredBySnapshotColdCaptureOverclaims` |
+| #4451 | A capture during a cold rebuild claims the persisted checkpoint as coverage for a partly rebuilt projection, licensing the GC to trim rows that exist nowhere else. **Fixed by #4489**: an unanchored capture claims only what has been re-read. | `TrimCoveredBySnapshotColdCaptureOverclaims`, now an ordinary regression mutation |
 | #4456 | A never-written leaf releases its block pin at its persisted checkpoint above its snapshot's coverage, and its next activation latches stale. | `RecoveryNeverFallsOffLogNeverWrittenReleaseUnbounded` |
-| #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. | `ReadPositionHonestFaultedColdReplayResumesWarm` |
+| #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm`, now an ordinary regression mutation |
 
 The model also showed that one proposed fix for #4450 - cold-starting whenever the
 WAL prefix probes intact - is unsafe. The leaf's pin was resolved against the

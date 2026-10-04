@@ -1,4 +1,5 @@
-# Pairs with ReadPositionHonest, and reproduces the sibling of issue #4451 the
+# Pairs with ReadPositionHonest, and reproduces issue #4467 as production had it
+# until #4489 fixed it (the sibling of issue #4451 the
 # fix session found: a cold rebuild that faults part-way re-arms its replay
 # barrier within the same activation with the partly rebuilt projection still in
 # memory, sees a non-empty cache, and resumes WARM from the persisted checkpoint,

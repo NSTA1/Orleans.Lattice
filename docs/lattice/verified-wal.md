@@ -153,9 +153,9 @@ kept as a standing mutation until it is fixed:
 | Issue | Defect |
 |-------|--------|
 | #4450 | A snapshot that fails to load falls through to a cold replay of a trimmed WAL. Fixed: the replay now fails closed. |
-| #4451 | A capture during a cold rebuild claims more coverage than its rows hold. |
+| #4451 | A capture during a cold rebuild claims more coverage than its rows hold. Fixed: the claim stops at what has been re-read. |
 | #4456 | A never-written leaf releases its block pin above its snapshot's coverage. |
-| #4467 | A faulted cold rebuild re-arms warm over a partial projection. |
+| #4467 | A faulted cold rebuild re-arms warm over a partial projection. Fixed: the retry stays cold. |
 
 Until each open fix lands, the property it violates holds of the intended design the
 specification describes, not of the code that runs.

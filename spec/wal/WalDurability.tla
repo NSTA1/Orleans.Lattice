@@ -307,9 +307,9 @@ PersistFail(l) ==
 (* actually holds - and the store keeps only a claim that does not regress *)
 (* the coverage it already holds. Coverage is recorded in memory only from *)
 (* a kept capture (#3440): a failed or declined capture records nothing.   *)
-(* CLAIMING THE READ POSITION IS THE INTENDED DESIGN, NOT PRODUCTION'S      *)
-(* (#4451): production claims the current checkpoint, which stands above   *)
-(* the projection for the whole of a cold rebuild.                         *)
+(* Production matches it since #4451 was fixed: an unanchored cache claims *)
+(* only what its cold rebuild has re-read (BuildUnanchoredCoverage), and   *)
+(* an anchored one its checkpoint.                                         *)
 (***************************************************************************)
 Capture(l) ==
     /\ up[l]
@@ -481,8 +481,8 @@ ActivateLoadFail(l) ==
 (* re-armed within the same activation, with the partly rebuilt projection *)
 (* still in memory. The re-armed replay stays cold - it resumes from what  *)
 (* it has actually re-read - so the step changes nothing and is a stutter. *)
-(* THIS IS THE INTENDED DESIGN; production resumed warm from the persisted *)
-(* checkpoint over the partial projection (the sibling of #4451).          *)
+(* Production matches it since #4467 was fixed: a pending cold rebuild     *)
+(* keeps the cache unanchored, so LeafReplayStartPolicy retries it cold.   *)
 (***************************************************************************)
 ReplayFaultRearm(l) ==
     /\ up[l]
