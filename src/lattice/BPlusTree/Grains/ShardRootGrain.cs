@@ -2847,8 +2847,14 @@ internal sealed partial class ShardRootGrain(
         await leafGrain.SetShardIndexAsync(MyShardIndex);
         var prevRootNodeId = state.State.RootNodeId;
         var prevRootIsLeaf = state.State.RootIsLeaf;
+        var prevIsPurged = state.State.IsPurged;
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
+
+        // Seeding a purged copy is the reuse PrepareForPurgedCopyAsync admitted
+        // only once the registry named this copy live again (issue #4503), so
+        // the tombstone is lifted in the same write.
+        state.State.IsPurged = false;
         try
         {
             await WriteShardStateAsync();
@@ -2875,6 +2881,7 @@ internal sealed partial class ShardRootGrain(
             state.State.IsRegistered = prevIsRegistered;
             state.State.RootNodeId = prevRootNodeId;
             state.State.RootIsLeaf = prevRootIsLeaf;
+            state.State.IsPurged = prevIsPurged;
             throw;
         }
 
@@ -3051,6 +3058,14 @@ internal sealed partial class ShardRootGrain(
             ThrowIfRetired();
         }
 
+        // A purged copy keeps refusing whoever still addresses it (issue #4503).
+        // A live shard never carries the tombstone, so this is one field read on
+        // the hot path; the registry is consulted only on a purged shard.
+        if (state.State.IsPurged)
+        {
+            return PrepareForPurgedCopyAsync(forWrite, purgedAnswersEmpty);
+        }
+
         // Steady-state sync fast path: on the read hot path each `await`
         // below resolves synchronously - `EnsureRootAsync` short-circuits
         // when `RootNodeId is not null`, and the two `ResumePending*` helpers
@@ -3093,6 +3108,53 @@ internal sealed partial class ShardRootGrain(
         {
             EndRoutingMutation();
         }
+    }
+
+    /// <summary>
+    /// <see cref="PrepareForOperationAsync(bool, bool, bool)"/> on a shard the
+    /// purge has tombstoned (<see cref="ShardRootState.IsPurged"/>, issue #4503).
+    /// The copy is live again only when the registry says so: for a routed call,
+    /// when the router's logical tree resolves to this copy; for a call with no
+    /// routed stamp, when this id is registered and not aliased elsewhere. That
+    /// is the deliberate reuse of the id (issue #3940), and the seed that follows
+    /// lifts the tombstone. Otherwise a routed call is refused with the
+    /// stale-routing signal the soft-delete window gave, so its router refreshes
+    /// and retries on the live copy; an unrouted read answers as the empty tree
+    /// the purge left; and any other unrouted call - a maintenance verb, a write
+    /// addressed to the copy, an atomic-write saga's direct terminal - is refused
+    /// with <see cref="LatticeTreePurgedException"/>. Nothing is seeded on a copy
+    /// the registry does not name, so a purged copy cannot be re-opened by any
+    /// caller.
+    /// </summary>
+    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty)
+    {
+        var routedLogical = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string;
+        var registry = grainFactory.GetLatticeRegistry();
+        if (routedLogical is not null)
+        {
+            var resolved = await registry.ResolveAsync(routedLogical);
+            if (!string.Equals(resolved, TreeId, StringComparison.Ordinal))
+            {
+                throw new StaleTreeRoutingException(
+                    logicalTreeId: routedLogical,
+                    stalePhysicalTreeId: TreeId,
+                    destinationPhysicalTreeId: resolved);
+            }
+        }
+        else
+        {
+            var entry = await registry.GetEntryAsync(TreeId);
+            var live = entry is not null
+                && (entry.PhysicalTreeId is null
+                    || string.Equals(entry.PhysicalTreeId, TreeId, StringComparison.Ordinal));
+            if (!live)
+            {
+                if (!forWrite && purgedAnswersEmpty) return false;
+                throw new LatticeTreePurgedException(TreeId);
+            }
+        }
+
+        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
