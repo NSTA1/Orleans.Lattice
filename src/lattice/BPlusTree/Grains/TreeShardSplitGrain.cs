@@ -160,7 +160,7 @@ internal sealed class TreeShardSplitGrain(
 
     /// <summary>
     /// Abandons a split resumed in <see cref="ShardSplitPhase.BeginShadowWrite"/>
-    /// while a resize of the tree is in flight (issue #4452). The split's intent
+    /// while a resize of the tree holds shard migrations (issue #4452). The split's intent
     /// was persisted before the resize read the shards' migration records, but
     /// its source record was not yet open, so the resize started; the split backs
     /// out instead. Nothing has been drained or committed, so the tree is
@@ -169,7 +169,7 @@ internal sealed class TreeShardSplitGrain(
     private async Task AbandonSplitForResizeAsync()
     {
         Logger.LogWarning(
-            "Shard split {OperationId} of shard {SourceShardIndex} on tree {TreeId} abandoned before its drain: a resize of the tree is in progress.",
+            "Shard split {OperationId} of shard {SourceShardIndex} on tree {TreeId} abandoned before its drain: a resize of the tree holds shard migrations.",
             state.State.OperationId, state.State.SourceShardIndex, TreeId);
         await AbandonSplitAsync(sourceFrozen: false);
     }
@@ -247,14 +247,16 @@ internal sealed class TreeShardSplitGrain(
         // not to whichever one an earlier split on this coordinator used.
         _physicalTreeId = null;
 
-        // Refuse while a resize of the tree is in flight (issue #4452): the
-        // resize fixed the shards it copies and fences, and the map it carries
-        // at its flip, when it started. Checked again once the source's record
+        // Refuse while a resize of the tree holds shard migrations (issue #4452):
+        // the resize fixed the shards it copies and fences, and the map it
+        // carries at its flip, when it started, and until the copy it replaced
+        // stops mirroring into the resized one, a split there would move keys
+        // that mirror cannot follow. Checked again once the source's record
         // is open, which is what closes the race; this read only spares a
         // refused split an allocated shard index and a persisted intent.
-        if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
             throw new InvalidOperationException(
-                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress.");
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress or can still be undone.");
 
         // Serialise behind any migration already in flight on the source
         // shard. A shard carries a single migration record, and an online
@@ -393,7 +395,7 @@ internal sealed class TreeShardSplitGrain(
         // started after the read in SplitAsync guaranteed to see it, so read the
         // resize again and back out if one is in flight (issue #4452). The record
         // is still reversible: nothing has been swept or drained yet.
-        if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
         {
             await source.AbortSplitAsync();
             state.State.InProgress = prevInProgress;
@@ -406,7 +408,7 @@ internal sealed class TreeShardSplitGrain(
             state.State.OriginalShardMap = prevOriginalShardMap;
             await state.WriteStateAsync();
             throw new InvalidOperationException(
-                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress.");
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress or can still be undone.");
         }
 
         // Retroactive shadow-forward of in-flight prepared
@@ -470,7 +472,7 @@ internal sealed class TreeShardSplitGrain(
 
             // A resize that started between this split persisting its intent and
             // opening the source's record could not see the split (issue #4452).
-            if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+            if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
             {
                 await AbandonSplitForResizeAsync();
                 return;

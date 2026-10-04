@@ -310,11 +310,12 @@ internal sealed class TreeShardConsolidationGrain(
             throw new InvalidOperationException(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while an alias cutover of the tree is in progress.");
 
-        // Refuse while a resize of the tree is in flight (issue #4452); the read
-        // after the donor's record opens below is what closes the race.
-        if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+        // Refuse while a resize of the tree holds shard migrations (issue
+        // #4452); the read after the donor's record opens below is what closes
+        // the race.
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
             throw new InvalidOperationException(
-                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while a resize of the tree is in progress.");
+                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while a resize of the tree is in progress or can still be undone.");
 
         var donor = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{donorShardIndex}");
         var survivor = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{survivorShardIndex}");
@@ -389,13 +390,13 @@ internal sealed class TreeShardConsolidationGrain(
         // The donor's record is open, so a resize that starts from here on sees
         // it; one that started earlier is seen now (issue #4452). Back out while
         // the record is still reversible.
-        if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
         {
             await donor.AbortSplitAsync();
             Restore(previous);
             await state.WriteStateAsync();
             throw new InvalidOperationException(
-                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while a resize of the tree is in progress.");
+                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while a resize of the tree is in progress or can still be undone.");
         }
 
         await AdvancePhaseAsync(ShardConsolidationPhase.Drain);
@@ -592,10 +593,10 @@ internal sealed class TreeShardConsolidationGrain(
 
         // A resize that started between this fold persisting its intent and
         // opening the donor's record could not see the fold (issue #4452).
-        if (await ShardMigrationResizeInterlock.IsResizeInFlightAsync(grainFactory, TreeId))
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(grainFactory, TreeId))
         {
             Logger.LogWarning(
-                "Consolidation {OperationId} of shard {Donor} into shard {Survivor} on tree {TreeId} abandoned before its drain: a resize of the tree is in progress.",
+                "Consolidation {OperationId} of shard {Donor} into shard {Survivor} on tree {TreeId} abandoned before its drain: a resize of the tree holds shard migrations.",
                 state.State.OperationId, state.State.DonorShardIndex, state.State.SurvivorShardIndex, TreeId);
             await AbandonUnreportedAsync(donorFrozen: false);
             return;

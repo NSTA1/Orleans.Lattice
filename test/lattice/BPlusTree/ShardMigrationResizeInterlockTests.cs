@@ -1,4 +1,5 @@
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 
@@ -20,57 +21,92 @@ public class ShardMigrationResizeInterlockTests
         return (factory, registry);
     }
 
-    private static ITreeResizeGrain Resize(IGrainFactory factory, string treeId, bool idle)
+    private static ITreeResizeGrain Resize(IGrainFactory factory, string treeId, bool holds)
     {
         var resize = Substitute.For<ITreeResizeGrain>();
-        resize.IsIdleAsync().Returns(Task.FromResult(idle));
+        resize.HoldsShardMigrationsAsync().Returns(Task.FromResult(holds));
         factory.GetGrain<ITreeResizeGrain>(treeId, Arg.Any<string?>()).Returns(resize);
         return resize;
     }
 
     [Test]
-    public async Task No_resize_is_in_flight_when_the_trees_coordinator_is_idle()
+    public async Task No_hold_when_the_trees_coordinator_holds_none()
     {
         var (factory, _) = CreateFactory();
-        Resize(factory, "t", idle: true);
+        Resize(factory, "t", holds: false);
 
-        Assert.That(await ShardMigrationResizeInterlock.IsResizeInFlightAsync(factory, "t"), Is.False);
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t"), Is.False);
     }
 
     [Test]
-    public async Task A_resize_is_in_flight_when_the_trees_coordinator_is_busy()
+    public async Task A_hold_when_the_trees_coordinator_holds_migrations()
     {
         var (factory, registry) = CreateFactory();
-        Resize(factory, "t", idle: false);
+        Resize(factory, "t", holds: true);
 
-        Assert.That(await ShardMigrationResizeInterlock.IsResizeInFlightAsync(factory, "t"), Is.True);
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t"), Is.True);
         await registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
     }
 
     [Test]
-    public async Task A_resized_copy_reports_the_resize_of_the_tree_it_was_derived_from()
+    public async Task A_resized_copy_reports_the_hold_of_the_tree_it_was_derived_from()
     {
         // A consolidation driven by the healing orchestrator is keyed by the
         // physical copy id, whose own resize coordinator is never used.
         var (factory, registry) = CreateFactory();
-        Resize(factory, "t/resized/op", idle: true);
-        Resize(factory, "t", idle: false);
+        Resize(factory, "t/resized/op", holds: false);
+        Resize(factory, "t", holds: true);
         registry.GetEntryAsync("t/resized/op").Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { DerivedFrom = "t" }));
 
-        Assert.That(await ShardMigrationResizeInterlock.IsResizeInFlightAsync(factory, "t/resized/op"), Is.True);
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t/resized/op"), Is.True);
     }
 
     [Test]
-    public async Task A_resized_copy_whose_owner_is_idle_has_no_resize_in_flight()
+    public async Task A_resized_copy_whose_owner_holds_nothing_has_no_hold()
     {
         var (factory, registry) = CreateFactory();
-        Resize(factory, "t/resized/op", idle: true);
-        Resize(factory, "t", idle: true);
+        Resize(factory, "t/resized/op", holds: false);
+        Resize(factory, "t", holds: false);
         registry.GetEntryAsync("t/resized/op").Returns(Task.FromResult<TreeRegistryEntry?>(
             new TreeRegistryEntry { DerivedFrom = "t" }));
 
-        Assert.That(await ShardMigrationResizeInterlock.IsResizeInFlightAsync(factory, "t/resized/op"), Is.False);
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t/resized/op"), Is.False);
+    }
+
+    [Test]
+    public async Task A_coordinator_that_cannot_answer_holds_migrations()
+    {
+        // Fail closed: a coordinator on a silo that predates the method, or one
+        // that is unreachable, must refuse the migration rather than admit it.
+        var (factory, _) = CreateFactory();
+        var resize = Resize(factory, "t", holds: false);
+        resize.HoldsShardMigrationsAsync().ThrowsAsync(new NotImplementedException("older silo"));
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t"), Is.True);
+    }
+
+    [Test]
+    public async Task A_registry_that_cannot_answer_holds_migrations()
+    {
+        var (factory, registry) = CreateFactory();
+        Resize(factory, "t", holds: false);
+        registry.GetEntryAsync("t").ThrowsAsync(new TimeoutException());
+
+        Assert.That(await ShardMigrationResizeInterlock.ResizeHoldsShardMigrationsAsync(factory, "t"), Is.True);
+    }
+
+    [Test]
+    public void ReadResizeHold_propagates_a_fault_rather_than_reporting_a_hold()
+    {
+        // The reshard coordinator's faulted tick runs its own recovery (it
+        // abandons a reshard on a purged tree); a fault read as a hold would
+        // pause it forever instead.
+        var (factory, _) = CreateFactory();
+        var resize = Resize(factory, "t", holds: false);
+        resize.HoldsShardMigrationsAsync().ThrowsAsync(new InvalidOperationException("purged"));
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => ShardMigrationResizeInterlock.ReadResizeHoldAsync(factory, "t"));
     }
 
     [Test]

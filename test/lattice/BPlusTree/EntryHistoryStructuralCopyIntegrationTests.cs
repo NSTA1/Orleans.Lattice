@@ -47,6 +47,10 @@ public sealed class EntryHistoryStructuralCopyIntegrationTests
         var resize = Cluster.GrainFactory.GetGrain<ITreeResizeGrain>(treeId);
         await resize.ResizeAsync(16, 16);
         await resize.RunResizePassAsync();
+
+        // A completed resize holds reshards until its replaced copy stops
+        // mirroring (issue #4452); release it as the purge would.
+        await ResizeMigrationHoldSeam.ReleaseAsync(Cluster.GrainFactory, treeId);
         await tree.ReshardAsync(4);
         await DriveReshardToCompletionAsync(treeId);
 

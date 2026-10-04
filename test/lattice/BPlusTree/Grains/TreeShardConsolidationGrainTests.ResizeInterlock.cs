@@ -13,10 +13,22 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 public partial class TreeShardConsolidationGrainTests
 {
     [Test]
+    public void StartAsync_refuses_while_a_completed_resize_still_has_the_replaced_copy_mirroring()
+    {
+        var h = CreateGrain();
+        h.Factory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
+
+        Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.StartAsync(0));
+
+        Assert.That(h.Log.Entries, Does.Not.Contain("donor.BeginSplit"));
+        Assert.That(h.State.State.InProgress, Is.False);
+    }
+
+    [Test]
     public async Task StartAsync_refuses_while_a_resize_of_the_tree_is_in_flight()
     {
         var h = CreateGrain();
-        h.Factory.StubResizeIdle().IsIdleAsync().Returns(Task.FromResult(false));
+        h.Factory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
 
         var ex = Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.StartAsync(0));
 
@@ -32,7 +44,7 @@ public partial class TreeShardConsolidationGrainTests
         // Idle at the pre-check, in flight at the read after the donor's record
         // opens: the race only the second read can close.
         var h = CreateGrain();
-        h.Factory.StubResizeIdle().IsIdleAsync().Returns(Task.FromResult(true), Task.FromResult(false));
+        h.Factory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(false), Task.FromResult(true));
 
         Assert.ThrowsAsync<InvalidOperationException>(() => h.Grain.InitiateConsolidationStateAsync(1, 0));
 
@@ -44,7 +56,7 @@ public partial class TreeShardConsolidationGrainTests
     public async Task A_fold_resumed_before_its_drain_abandons_when_a_resize_is_in_flight()
     {
         var h = CreateGrain(existingState: InFlightState(ShardConsolidationPhase.BeginShadowWrite));
-        h.Factory.StubResizeIdle().IsIdleAsync().Returns(Task.FromResult(false));
+        h.Factory.StubResizeIdle().HoldsShardMigrationsAsync().Returns(Task.FromResult(true));
 
         await h.Grain.ReopenShadowWriteAsync();
 

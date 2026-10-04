@@ -9911,7 +9911,7 @@ public static class LatticeMetrics
     /// before starting a coordinator. Tagged with <see cref="TagTree"/> and a
     /// <c>reason</c> tag enumerating the rejection cause (e.g.
     /// <c>argument_out_of_range_min</c>, <c>argument_out_of_range_max</c>,
-    /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
+    /// <c>resize_in_flight</c>, <c>resize_undoable</c>, <c>state_write_failed</c>).
     /// <para>
     /// Excludes Orleans-side message-routing rejections, which the
     /// Orleans runtime logs as "Forwarding failed" but does not surface
