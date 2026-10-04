@@ -171,16 +171,6 @@ public partial class ReplicationPeerStats
     }
 
     /// <summary>
-    /// Records the current per-peer outbound in-flight pipelining depth -
-    /// the number of shipped-but-unacknowledged batches the sender holds
-    /// open against the named peer. Called by the sender each time the
-    /// pipelining window grows (a batch is launched) or shrinks (a batch
-    /// is acknowledged or the window is drained / collapsed). Backs the
-    /// <see cref="LatticeReplicationMetrics.ShipInFlightName"/> gauge.
-    /// Outbound-only by design - the receiver does not pipeline into
-    /// itself - so this method has no inbound counterpart.
-    /// </summary>
-    /// <summary>
     /// Records whether the local sender has taken the peer off the log after a
     /// write-ahead-log trim lost records it never shipped (issue #4534), and
     /// since when; <see langword="null"/> clears it. Surfaces on the peer-status
@@ -198,6 +188,16 @@ public partial class ReplicationPeerStats
         }
     }
 
+    /// <summary>
+    /// Records the current per-peer outbound in-flight pipelining depth -
+    /// the number of shipped-but-unacknowledged batches the sender holds
+    /// open against the named peer. Called by the sender each time the
+    /// pipelining window grows (a batch is launched) or shrinks (a batch
+    /// is acknowledged or the window is drained / collapsed). Backs the
+    /// <see cref="LatticeReplicationMetrics.ShipInFlightName"/> gauge.
+    /// Outbound-only by design - the receiver does not pipeline into
+    /// itself - so this method has no inbound counterpart.
+    /// </summary>
     public void RecordInFlight(string tree, string peer, long depth)
     {
         ArgumentNullException.ThrowIfNull(tree);
