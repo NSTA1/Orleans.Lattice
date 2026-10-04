@@ -183,6 +183,14 @@ check inside the harness's per-run budget.
 - **More than one of anything.** One split, one resize with its undo, one saga,
   one later write, one late forward, one reactivation, one mask toggle at a
   time.
+- **Stamps that disagree with real time, and migrated rows.** This module's
+  values are write stamps in commit order, so property H (a write acknowledged
+  after a prepare on the same leaf is stamped above it) is built in, and it
+  does not track migrated rows. Both are `ShardOwnership`'s: its versions
+  separate a write's real-time rank from its stamp, and it reproduces the
+  stamp and import defects (#4522, #4564) as standing mutations. What this
+  module adds to them, a reactivation that loses the activation's memory
+  before a fresh-stamp backstop, is `NoKeyLostRetainedFreshStampBackstop`.
 - **Time.** Retention windows, deadlines and the purge's delay are not modelled.
 
 ## Territory owned by other open issues

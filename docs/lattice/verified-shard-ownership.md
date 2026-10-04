@@ -76,7 +76,9 @@ re-bind that ignores the bound copy's mirror (#4454, fixed), an online snapshot 
 drops prepared buckets (#4455), a split sweep that treats an undeterminable
 registry answer as in flight (#4473), a saga that never completes once the
 copy it is bound to is discarded by an undo (#4474) or, as an old copy, purged
-(#4475), a terminal backstop that overwrites a later write (#4522), and, found by the review of this coverage, a router that cached the
+(#4475), saga values installed at a stamp that overwrites a later write (#4522), a
+migration import dropped over a destination row the saga already resolved
+(#4564), and, found by the review of this coverage, a router that cached the
 old copy reading empty and losing writes once that copy is purged (#4503). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
