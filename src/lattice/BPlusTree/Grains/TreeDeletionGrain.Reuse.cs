@@ -9,8 +9,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <remarks>
 /// <para>
 /// A completed purge unregisters the tree but leaves this grain's deletion record
-/// behind, and the next read or write under the same id registers a new tree with
-/// fresh shards. The record used to go on describing that new tree: it read as
+/// behind. A read or a background loop never registers the id again (issue #4219,
+/// see <see cref="PurgedTreeRegistrationGuard"/>): it answers as the empty tree the
+/// purge left. Only a deliberate create, a write, or an alias assignment registers
+/// a new tree with fresh shards under the same id. The record used to go on
+/// describing that new tree: it read as
 /// deleted and purged, so <c>DeleteTreeAsync</c> was a silent no-op, recovery and
 /// purge were refused as for a purged tree, and every alias change - a resize
 /// among them - was refused because the tree was "deleted". Nothing could clear
