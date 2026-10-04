@@ -564,10 +564,38 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        // ReadSliceAsync invoked with fromExclusive = persistedCheckpoint = 1.
-        await coord.Received(1).ReadSliceAsync(1, 4, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // ReadSliceAsync invoked with fromExclusive = persistedCheckpoint = 1,
+        // bounded inclusively by the newest offset below the exclusive head
+        // (head - 1 = 3, issue #3489).
+        await coord.Received(1).ReadSliceAsync(1, 3, Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("seeded"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k2"))!), Is.EqualTo("v2"));
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k3"))!), Is.EqualTo("v3"));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3));
+    }
+
+    [Test]
+    public async Task Materialiser_does_not_read_past_newest_entry_below_exclusive_head()
+    {
+        // Head 4 is the exclusive next sequence, so the newest entry is 3.
+        // The reader's upper bound is inclusive, so replay must ask for
+        // (-1, 3] and stop: never a bound at or above the head, and never a
+        // trailing empty read once offset 3 is applied (issue #3489).
+        var entry1 = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
+        var entry2 = new CommitLogSliceEntry(2, BuildCommittedSet("k2", Encoding.UTF8.GetBytes("v2"), hlcPhysical: 200));
+        var entry3 = new CommitLogSliceEntry(3, BuildCommittedSet("k3", Encoding.UTF8.GetBytes("v3"), hlcPhysical: 300));
+        var coord = BuildCoordinator(head: 4, entry1, entry2, entry3);
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
+
+        await ActivateAsync(grain);
+
+        await coord.Received(1).ReadSliceAsync(
+            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await coord.DidNotReceive().ReadSliceAsync(
+            Arg.Any<long>(), Arg.Is<long>(bound => bound >= 4), Arg.Any<int>(), Arg.Any<CancellationToken>());
+
+        Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k1"))!), Is.EqualTo("v1"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k2"))!), Is.EqualTo("v2"));
         Assert.That(Encoding.UTF8.GetString((await grain.GetAsync("k3"))!), Is.EqualTo("v3"));
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3));
@@ -629,11 +657,12 @@ public partial class BPlusLeafGrainTests
 
         await ActivateAsync(grain);
 
-        // Three slices required for 600 entries at budget 256. Each stitching
-        // read is pinned by its start offset rather than by a total call count:
-        // with the reachable head (601, exclusive) production also issues one
-        // trailing empty read at (600, 601], which is issue #3489 and is not
-        // what this test guards.
+        // Exactly three slices for 600 entries at budget 256: the head (601)
+        // is exclusive, so the loop stops once the newest entry (600) is
+        // applied rather than issuing a trailing empty read at (600, 601]
+        // (issue #3489).
+        await coord.Received(3).ReadSliceAsync(
+            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         await coord.Received(1).ReadSliceAsync(
             -1, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         await coord.Received(1).ReadSliceAsync(

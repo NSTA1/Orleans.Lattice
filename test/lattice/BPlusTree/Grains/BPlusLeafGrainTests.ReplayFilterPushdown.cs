@@ -132,13 +132,18 @@ public partial class BPlusLeafGrainTests
 
         // Each slice resumes from the previous slice's routing-only record - the
         // last record it examined - which is the whole mechanism under test.
-        // Pinned by start offset rather than by a total count, because the loop
-        // also issues one trailing empty read at the head (#3489).
-        foreach (var resumedFrom in new long[] { 256, 512, 600 })
+        // Head 601 is exclusive and 600 is the newest record, so the walk ends
+        // once offset 600 is examined: no trailing read starting at 600 (#3489).
+        foreach (var resumedFrom in new long[] { -1, 256, 512 })
         {
             await coord.Received(1).ReadSliceAsync(
-                resumedFrom, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>());
+                resumedFrom, 600, Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>());
         }
+
+        await coord.DidNotReceive().ReadSliceAsync(
+            600, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>());
+        await coord.Received(3).ReadSliceAsync(
+            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<WalKeyFilter>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
