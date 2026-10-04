@@ -202,6 +202,7 @@ internal sealed class LatticeBackupCaptureService(
         DateTimeOffset createdAtUtc;
         string artifactId;
         IncrementalDeltaCollector collector;
+        var gateHeld = false;
         try
         {
             // Pin the WAL at the base frontier so garbage collection cannot trim
@@ -219,26 +220,84 @@ internal sealed class LatticeBackupCaptureService(
             createdAtUtc = DateTimeOffset.UtcNow;
             artifactId = BuildArtifactId(scope, createdAtUtc);
 
-            collector = new IncrementalDeltaCollector(
-                serializer,
-                walSubscriber,
-                treeId,
-                consumerId,
-                partitions,
-                baseOffsets,
-                startInclusive,
-                endExclusive,
-                ResolveTreeMergeMode(treeId),
-                request.BaseBackupId,
-                request.PageSize);
+            // Issue #4589: an atomic write's prepared writes in the delta window are
+            // resolved against the same #4485 decision gate a full capture resolves
+            // its pending buckets against. The gate is taken before the drain, so a
+            // batch committed in its decision snapshot (D0) has every prepare in the
+            // WAL by then, and it is held - renewed - until the drain has caught up,
+            // so the snapshot stays readable for every transaction the drain meets.
+            // Writes are never blocked; only new saga decisions wait.
+            var gateToken = Guid.NewGuid();
+            var gateHighWater = await TxRegistryFanOut.AcquireCaptureGateAsync(
+                grainFactory, treeId, gateToken, TxRegistryCaptureGateMode.Gate, SnapshotDecisionGateContext.Lease)
+                .ConfigureAwait(false);
+            var gateLost = false;
+            try
+            {
+                bool renewed;
+                using (var renewStop = new CancellationTokenSource())
+                {
+                    var renewal = RenewSetGateAsync(
+                        grainFactory, [treeId], [gateHighWater], gateToken, renewStop.Token);
+                    try
+                    {
+                        collector = new IncrementalDeltaCollector(
+                            serializer,
+                            walSubscriber,
+                            treeId,
+                            consumerId,
+                            partitions,
+                            baseOffsets,
+                            startInclusive,
+                            endExclusive,
+                            ResolveTreeMergeMode(treeId),
+                            request.BaseBackupId,
+                            request.PageSize,
+                            async (txIds, _) =>
+                            {
+                                try
+                                {
+                                    return await TxRegistryFanOut.GetCaptureGateStatusManyAsync(
+                                        grainFactory, treeId, gateToken, txIds).ConfigureAwait(false);
+                                }
+                                catch (TxDecisionGateRefusedException)
+                                {
+                                    // The gate lapsed: no decision snapshot to resolve
+                                    // against. Every transaction reads undecided, which is
+                                    // safe, and the attempt is abandoned below.
+                                    gateLost = true;
+                                    return new Dictionary<Guid, TxStatus>();
+                                }
+                            },
+                            baseManifest.ConsistencyCut.UndecidedSagaIds);
 
-            // Stream the delta pages to the sink; the collector accumulates the
-            // manifest metadata and the new per-partition offset frontier as each page
-            // passes through.
-            await sink.WriteArtifactAsync(
-                artifactId,
-                collector.StreamAsync(cancellationToken),
-                cancellationToken).ConfigureAwait(false);
+                        // Stream the delta pages to the sink; the collector accumulates the
+                        // manifest metadata and the new per-partition offset frontier as each page
+                        // passes through.
+                        await sink.WriteArtifactAsync(
+                            artifactId,
+                            collector.StreamAsync(cancellationToken),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        renewStop.Cancel();
+                        renewed = await renewal.ConfigureAwait(false);
+                    }
+                }
+
+                gateHeld = renewed && !gateLost;
+            }
+            finally
+            {
+                // Release with validation: the snapshot is trusted only if the gate
+                // was held, without a lapse, on every registry key throughout.
+                if (!await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, treeId, gateHighWater, gateToken)
+                        .ConfigureAwait(false))
+                {
+                    gateHeld = false;
+                }
+            }
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
             BackupKind.Incremental, LatticeBackupMetrics.PhaseExport, ex))
@@ -246,11 +305,12 @@ internal sealed class LatticeBackupCaptureService(
             throw;
         }
 
-        // A trim that raced the up-front check, or a range delete that the uniform
-        // point-keyed artifact cannot faithfully encode, abandons the delta for a
-        // fresh full backup. The partial artifact is addressed by this capture's
-        // artifact id and simply orphaned.
-        if (collector.FellOffLog || collector.RequiresFullFallback)
+        // A trim that raced the up-front check, a range delete that the uniform
+        // point-keyed artifact cannot faithfully encode, a committed atomic write the
+        // window does not hold whole, or a decision gate that was not held throughout
+        // abandons the delta for a fresh full backup. The partial artifact is
+        // addressed by this capture's artifact id and simply orphaned.
+        if (collector.FellOffLog || collector.RequiresFullFallback || collector.RequiresSagaFallback || !gateHeld)
         {
             logger.LogWarning(
                 "Incremental capture on base {BaseBackupId} for tree {TreeId} fell back to a full backup ({Reason}).",
@@ -258,7 +318,16 @@ internal sealed class LatticeBackupCaptureService(
                 treeId,
                 collector.FellOffLog
                     ? "the WAL trimmed past the base resume point mid-drain"
-                    : "a range delete surfaced in the delta window");
+                    : collector.RequiresFullFallback
+                        ? "a range delete surfaced in the delta window"
+                        : collector.RequiresSagaFallback
+                            ? "a committed atomic write's prepares precede the delta window"
+                            : "the saga decision gate was not held for the whole drain");
+
+            // The fresh full backup starts a new chain, so this chain's held-back
+            // atomic writes no longer need the WAL kept for them.
+            await cursorRegistry.ReportCursorAsync(
+                treeId, consumerId, HybridLogicalClock.Zero, blockedAtHlc: null, cancellationToken).ConfigureAwait(false);
             LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
             return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
                 .ConfigureAwait(false);
@@ -274,7 +343,8 @@ internal sealed class LatticeBackupCaptureService(
                 baseManifest.ConsistencyCut,
                 collector.NewPartitionOffsets(),
                 collector.HighestHlc,
-                collector.PerOriginHighWater);
+                collector.PerOriginHighWater,
+                collector.CarriedUndecided);
             var provenance = BuildProvenance(collector.PerOriginHighWater);
 
             var contentDescriptor = new BackupContentDescriptor(
@@ -310,11 +380,12 @@ internal sealed class LatticeBackupCaptureService(
 
             // Advance the WAL pin to the increment frontier so GC can now reclaim the
             // entries we have captured; the next increment re-pins from its own base.
-            if (collector.HighestHlc > HybridLogicalClock.Zero)
-            {
-                await cursorRegistry.ReportCursorAsync(treeId, consumerId, collector.HighestHlc, cancellationToken)
-                    .ConfigureAwait(false);
-            }
+            // An atomic write the increment held back (#4589) keeps its entries pinned
+            // through the blocked floor until a later increment resolves it; the report
+            // replaces the previous floor, so a floor nothing still needs is cleared.
+            await cursorRegistry.ReportCursorAsync(
+                treeId, consumerId, collector.HighestHlc, collector.BlockedFloor, cancellationToken)
+                .ConfigureAwait(false);
 
             LatticeBackupMetrics.RecordCaptureSuccess(
                 manifest,
@@ -1061,7 +1132,11 @@ internal sealed class LatticeBackupCaptureService(
             ? new Dictionary<string, long>(perOriginHighWater)
             : null;
 
-        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier, walPartitionOffsets);
+        // The sagas the snapshot held pre-saga because they were undecided at its
+        // gate: an incremental layered on this capture looks each one up (#4589).
+        return new BackupConsistencyCut(
+            walSequence, hlcTimestamp, perOriginFrontier, walPartitionOffsets,
+            coordinate.UndecidedSagaIds ?? Array.Empty<Guid>());
     }
 
     /// <summary>
@@ -1167,14 +1242,16 @@ internal sealed class LatticeBackupCaptureService(
     /// <summary>
     /// Builds the incremental manifest's consistency cut: the new per-partition
     /// offset frontier reached by the drain, the highest consumed HLC as the
-    /// frontier timestamp (never regressing below the base), and the per-origin
-    /// high-water of the delta.
+    /// frontier timestamp (never regressing below the base), the per-origin
+    /// high-water of the delta, and the atomic writes the base held as undecided
+    /// that are undecided still (issue #4589).
     /// </summary>
     private static BackupConsistencyCut BuildIncrementalCut(
         BackupConsistencyCut baseCut,
         IReadOnlyDictionary<int, long> newOffsets,
         HybridLogicalClock highestHlc,
-        IReadOnlyDictionary<string, long> perOriginHighWater)
+        IReadOnlyDictionary<string, long> perOriginHighWater,
+        IReadOnlyList<Guid> undecidedSagaIds)
     {
         long walSequence = 0;
         foreach (var offset in newOffsets.Values)
@@ -1193,7 +1270,7 @@ internal sealed class LatticeBackupCaptureService(
             ? new Dictionary<string, long>(perOriginHighWater)
             : null;
 
-        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier, newOffsets);
+        return new BackupConsistencyCut(walSequence, hlcTimestamp, perOriginFrontier, newOffsets, undecidedSagaIds);
     }
 
     /// <summary>The stable cursor-registry consumer id the backup engine pins the WAL under.</summary>

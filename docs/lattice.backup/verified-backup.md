@@ -3,7 +3,7 @@
 Backup and restore meet concurrent atomic writes, replication and failures at
 several points, and the argument that they stay consistent there was until now
 made only in prose and chaos tests. This page states what is now checked
-formally, by four TLA+ specifications under
+formally, by five TLA+ specifications under
 [`spec/backup/`](../../spec/backup/README.md) and by Coyote models driving
 extracted production cores, and - just as importantly - what is not.
 
@@ -12,6 +12,7 @@ extracted production cores, and - just as importantly - what is not.
 | Area | The guarantee checked | Specification |
 |------|-----------------------|---------------|
 | Capture | A backup never holds part of an atomic batch: not across two shards of one tree, and, for a cross-tree-consistent backup set, not across its member trees. A capture never holds an uncommitted batch's writes. Every set capture is accepted or fails explicitly. | `BackupCapture` |
+| Incremental backups | Restoring an incremental backup chain never yields part of an atomic batch, or the writes of a batch that did not commit; an increment taken after a batch commits restores it whole; and an increment falls back to a full backup only for a batch it could not otherwise hold whole. | `BackupIncremental` |
 | Provenance | A manifest never names an empty origin, never drops a real one, and a backup chain's HLC frontier covers every write it captured and never regresses. | `BackupProvenance` |
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
 | Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore that crashes part-way still completes on retry. | `BackupCutover` |
@@ -23,7 +24,7 @@ build. TLC runs these checks on every pull request.
 
 ## Defects the specifications found
 
-The specifications check the **intended** design. Two of the guarantees above
+The specifications check the **intended** design. Three of the guarantees above
 were found not to hold in production:
 
 - **A backup could hold an atomic batch torn (#4485, fixed).** A capture read
@@ -41,10 +42,18 @@ were found not to hold in production:
   restore could reach a peer's restored copy. The fix re-binds the shipper
   before its first send after every resume, which is the design the
   specification checks.
+- **An incremental backup could hold an aborted or undecided batch (#4589,
+  fixed).** An increment copied an atomic batch's prepare-phase writes as
+  ordinary data, so restoring it could install the writes of a batch that later
+  aborted, or of one still undecided, or only some keys of a batch. The fix
+  resolves each batch in the increment's window against the same decision gate a
+  full backup uses: a committed batch is included whole, an aborted one never,
+  and an undecided one is left for the next increment. A batch that straddles a
+  full backup's frontier makes the increment fall back to a full backup.
 
 ## Which parts run in production code
 
-The checks reach production through three extracted cores, each executed by the
+The checks reach production through four extracted cores, each executed by the
 code that runs and by a test that drives it:
 
 - the cross-tree set's drain gate, re-check under the decision gate and
@@ -52,6 +61,8 @@ code that runs and by a test that drives it:
   model;
 - the origin normalisation, per-origin high-water and consistency-cut frontier
   rules of every capture (`BackupChainFrontier`);
+- how an incremental backup resolves the atomic batches in its window against
+  the decision gate (`IncrementalSagaStaging`);
 - the coordinated restore's single commit-or-abort decision
   (`CrossClusterSagaDecisionCore`), also driven by a Coyote model.
 

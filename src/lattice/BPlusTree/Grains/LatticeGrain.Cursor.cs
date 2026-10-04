@@ -275,7 +275,7 @@ internal sealed partial class LatticeGrain
         // it keeps all but the in-flight shards free; the captured baseline
         // and its point-in-time consistency are unchanged - only the dispatch
         // schedule differs (see issue #1054).
-        var (baselineToken, captureResults) = await CaptureGatedBaselinesAsync(
+        var (baselineToken, captureResults, undecidedSagaIds) = await CaptureGatedBaselinesAsync(
             physicalTreeId, physicalShards, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -336,6 +336,9 @@ internal sealed partial class LatticeGrain
             // leave the slot null there to avoid persisting the full slot
             // array for the common no-split case.
             PinnedShardMap = physicalShards.Count > 1 ? shardMap : null,
+            // The sagas this snapshot holds pre-saga because they were undecided
+            // at its gate, for an incremental backup layered on it (#4589).
+            UndecidedSagaIds = undecidedSagaIds,
 
             // Per-cursor frozen-baseline identity. The per-shard baseline rows
             // captured above are persisted under this token; the snapshot
@@ -385,7 +388,7 @@ internal sealed partial class LatticeGrain
     /// fails closed with <see cref="LatticeTransactionOutcomeUnavailableException"/>.
     /// </para>
     /// </summary>
-    private async Task<(Guid BaselineToken, SnapshotBaselineCaptureResult[] Results)> CaptureGatedBaselinesAsync(
+    private async Task<(Guid BaselineToken, SnapshotBaselineCaptureResult[] Results, IReadOnlyList<Guid> UndecidedSagaIds)> CaptureGatedBaselinesAsync(
         string physicalTreeId,
         IReadOnlyList<int> physicalShards,
         CancellationToken cancellationToken)
@@ -395,7 +398,8 @@ internal sealed partial class LatticeGrain
             var baselineToken = Guid.NewGuid();
             var results = await CaptureShardBaselinesAsync(
                 physicalTreeId, physicalShards, baselineToken, new SnapshotDecisionGate(externalToken, TreeId), cancellationToken);
-            return (baselineToken, results);
+            var undecided = await TxRegistryFanOut.GetCaptureGateUndecidedAsync(grainFactory, TreeId, externalToken);
+            return (baselineToken, results, undecided);
         }
 
         for (var attempt = 1; ; attempt++)
@@ -408,6 +412,7 @@ internal sealed partial class LatticeGrain
 
             var baselineToken = Guid.NewGuid();
             SnapshotBaselineCaptureResult[]? results = null;
+            IReadOnlyList<Guid> undecided = Array.Empty<Guid>();
             var renewed = true;
             using (var renewStop = new CancellationTokenSource())
             {
@@ -416,6 +421,10 @@ internal sealed partial class LatticeGrain
                 {
                     results = await CaptureShardBaselinesAsync(
                         physicalTreeId, physicalShards, baselineToken, new SnapshotDecisionGate(gateToken, TreeId), cancellationToken);
+
+                    // Read before the release: the registry forgets the hold, and
+                    // with it the sagas it answered undecided, once released (#4589).
+                    undecided = await TxRegistryFanOut.GetCaptureGateUndecidedAsync(grainFactory, TreeId, gateToken);
                 }
                 catch (TxDecisionGateRefusedException ex) when (ex.Refusal == TxDecisionGateRefusal.GateLapsed)
                 {
@@ -447,7 +456,7 @@ internal sealed partial class LatticeGrain
             var valid = await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, TreeId, highWater, gateToken);
             if (valid && renewed && results is not null)
             {
-                return (baselineToken, results);
+                return (baselineToken, results, undecided);
             }
 
             if (attempt >= SnapshotDecisionGateContext.MaxCaptureAttempts)

@@ -323,6 +323,35 @@ internal static class TxRegistryFanOut
     }
 
     /// <summary>
+    /// The transactions the snapshot capture under <paramref name="token"/>
+    /// resolved as undecided on any registry key of <paramref name="treeId"/>
+    /// (issue #4589), widening to the durable shard high-water. Throws
+    /// <see cref="TxDecisionGateRefusedException"/> when any key no longer holds
+    /// the gate.
+    /// </summary>
+    /// <param name="grainFactory">The grain factory.</param>
+    /// <param name="treeId">The tree id the registry is keyed by.</param>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>The distinct undecided transaction ids.</returns>
+    public static async Task<IReadOnlyList<Guid>> GetCaptureGateUndecidedAsync(
+        IGrainFactory grainFactory, string treeId, Guid token)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var (parts, _) = await FanOutAsync(
+            grainFactory,
+            treeId,
+            TxRegistryHighWaterCache.Get(grainFactory, treeId),
+            registry => registry.GetCaptureGateUndecidedAsync(token));
+        var merged = new HashSet<Guid>();
+        foreach (var part in parts)
+        {
+            merged.UnionWith(part);
+        }
+
+        return merged.ToArray();
+    }
+
+    /// <summary>
     /// Acquires (or upgrades) a snapshot capture's hold under
     /// <paramref name="token"/> on every registry key of
     /// <paramref name="treeId"/> (issue #4485), widening to the durable shard
