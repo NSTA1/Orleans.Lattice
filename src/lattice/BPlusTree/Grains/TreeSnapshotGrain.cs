@@ -901,6 +901,15 @@ internal sealed class TreeSnapshotGrain(
         }
         await Task.WhenAll(tasks);
 
+        // Only now, with every source shard mirroring, carry the prepared
+        // buckets the shards already held: the copy drains live entries, and
+        // a prepared bucket is not one, so a saga that prepared a key before
+        // the mirroring began would otherwise reach the destination with part
+        // of its batch - torn on it once it serves (issue #4455). A prepare
+        // after this point is mirrored, and so is every terminal. Re-run in
+        // full if this step is retried; the sweep is idempotent.
+        await SweepPreparedBucketsAsync(destinationTreeId, logicalTreeId);
+
         // Snapshot the three fields the ShadowBegin->Copy flip mutates so
         // a failing persist doesn't leak Phase=Copy / NextShardIndex=0 /
         // ShardRetries=0 ahead of disk. Bundled with the high-priority
@@ -924,6 +933,57 @@ internal sealed class TreeSnapshotGrain(
             state.State.NextShardIndex = prevNextShardIndex;
             state.State.ShardRetries = prevShardRetries;
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Carries every prepared saga mutation a copied source shard holds onto
+    /// the destination shard of the same index, for the slots the source's
+    /// routing map sends to that shard (see <see cref="PreparedBucketSweep"/>).
+    /// Sagas record their decisions under the logical tree, so
+    /// <paramref name="decisionTreeId"/> is the logical id. Each shard's walk is
+    /// sequential, as the split's is; shards are swept concurrently.
+    /// </summary>
+    private async Task SweepPreparedBucketsAsync(string destinationTreeId, string decisionTreeId)
+    {
+        var map = state.State.SourceShardMap
+            ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, state.State.ShardCount);
+        var virtualShardCount = map.Slots.Length;
+        var shardIndices = CopiedShardIndices;
+        var progress = new PreparedBucketSweepProgress[shardIndices.Length];
+        var sweeps = new Task[shardIndices.Length];
+        for (var i = 0; i < shardIndices.Length; i++)
+        {
+            progress[i] = new PreparedBucketSweepProgress();
+            sweeps[i] = SweepShardAsync(shardIndices[i], progress[i]);
+        }
+
+        var atomicWalk = new AtomicLeafWalk(nameof(SweepPreparedBucketsAsync));
+        try
+        {
+            await Task.WhenAll(sweeps);
+        }
+        finally
+        {
+            foreach (var shard in progress) atomicWalk.RecordLeavesVisited(shard.LeavesVisited);
+            atomicWalk.ReportIfSlow(Logger, Context.GrainId);
+        }
+
+        async Task SweepShardAsync(int shardIndex, PreparedBucketSweepProgress shardProgress)
+        {
+            var slots = new List<int>();
+            for (var slot = 0; slot < virtualShardCount; slot++)
+            {
+                if (map.Slots[slot] == shardIndex) slots.Add(slot);
+            }
+            if (slots.Count == 0) return;
+
+            var source = grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndex}");
+            if (await source.GetLeftmostLeafIdAsync() is not { } firstLeaf) return;
+
+            var target = grainFactory.GetGrain<IShardRootGrain>($"{destinationTreeId}/{shardIndex}");
+            await PreparedBucketSweep.RunAsync(
+                grainFactory, decisionTreeId, firstLeaf, target, slots.ToArray(), virtualShardCount, shardProgress);
         }
     }
 

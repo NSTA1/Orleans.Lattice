@@ -1,5 +1,5 @@
-# Pairs with UniqueOwner. Reproduces current production (#4452): an adaptive
-# split may open its window while an online resize is in flight. The split
+# Pairs with UniqueOwner. Reproduces production before #4452 was fixed (#4466):
+# an adaptive split may open its window while an online resize is in flight. The split
 # commits on T and routes k2 to s2, a shard the resize neither forwards nor
 # fences, and the flip carries R's pre-split map, so a router that cached
 # (T, s2) keeps serving T/s2 while the registry routes k2 to R/s1.

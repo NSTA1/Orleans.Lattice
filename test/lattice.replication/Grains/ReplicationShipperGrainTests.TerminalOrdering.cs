@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
@@ -94,14 +95,32 @@ public partial class ReplicationShipperGrainTests
             LatticeReplicationOptions options,
             ReplicationShipperState? seedState = null,
             StubReplogShardGrain[]? feeds = null,
-            StubWalRecordEncoder? walEncoder = null)
+            StubWalRecordEncoder? walEncoder = null,
+            StubReplogShardGrain[]? reboundFeeds = null,
+            ILatticeRegistry? registry = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
+        // ResumeShippingAsync re-arms the coordinator, whose phase timer
+        // resolves ITimerRegistry off the activation services.
+        var services = Substitute.For<IServiceProvider>();
+        services.GetService(typeof(ITimerRegistry)).Returns(Substitute.For<ITimerRegistry>());
+        ctx.ActivationServices.Returns(services);
         walEncoder ??= new StubWalRecordEncoder();
         feeds ??= Enumerable.Range(0, options.ReplogPartitions)
             .Select(_ => new StubReplogShardGrain(walEncoder))
             .ToArray();
+        var factory = BuildGrainFactory(null, feeds, Tree);
+        if (reboundFeeds is not null)
+        {
+            BuildGrainFactory(factory, reboundFeeds, ReboundPhysical);
+        }
+
+        if (registry is not null)
+        {
+            factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
+        }
+
         var transport = Substitute.For<IReplicationTransport>();
         var stream = RecordAppliedStream(transport, walEncoder);
         var fakeState = new FakePersistentState<ReplicationShipperState>();
@@ -114,7 +133,7 @@ public partial class ReplicationShipperGrainTests
             ctx, Substitute.For<IReminderRegistry>(),
             NullLogger<ReplicationShipperGrain>.Instance,
             Monitor(options), transport, new TestEncoder(), walEncoder, Substitute.For<IWalCursorRegistry>(),
-            BuildGrainFactory(null, feeds, Tree), fakeState,
+            factory, fakeState,
             new ReplicationPeerStats(),
             Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
@@ -316,17 +335,23 @@ public partial class ReplicationShipperGrainTests
         Assert.That(after.Applied.SelectMany(b => b).Count(r => r.Op == MutationKind.TxCommit), Is.EqualTo(1));
     }
 
-    [Test]
-    public async Task Rebind_to_a_new_source_log_drops_a_hold_whose_prepare_never_shipped()
+    private const string ReboundPhysical = "phys-rebound";
+
+    /// <summary>
+    /// Holds a commit whose prepare (keyB) is still unread in the retired log
+    /// when the source is rebound: the terminal is consumed in the same refill
+    /// that the prepare lands in partition 0, which was read empty earlier.
+    /// </summary>
+    private static async Task<(ReplicationShipperGrain Grain, AppliedStream Stream, StubReplogShardGrain[] Rebound, Guid TxId)>
+        HoldACommitWithAnUnshippedPrepareAsync()
     {
-        // The terminal is held because keyB's prepare is unread when the
-        // source log is replaced. The retired log is no longer read, so the
-        // prepare never ships: releasing the terminal would commit the saga on
-        // the peer without keyB.
         var options = OrderingOptions(partitions: 2, batchSize: 1, pageSize: 1);
         var walEncoder = new StubWalRecordEncoder();
-        var retired = new[] { new StubReplogShardGrain(walEncoder), new StubReplogShardGrain(walEncoder) };
-        var (grain, _, feeds, stream) = CreateOrderingShipper(options, feeds: retired, walEncoder: walEncoder);
+        var rebound = new[] { new StubReplogShardGrain(walEncoder), new StubReplogShardGrain(walEncoder) };
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(Arg.Any<string>()).Returns(Tree);
+        var (grain, _, feeds, stream) = CreateOrderingShipper(
+            options, walEncoder: walEncoder, reboundFeeds: rebound, registry: registry);
         var txid = Guid.NewGuid();
         feeds[1].Append(MakeEntry("warm", ticks: 1));
         feeds[1].OnReadShipping = _ =>
@@ -343,13 +368,47 @@ public partial class ReplicationShipperGrainTests
         await grain.PumpForTestingAsync(CancellationToken.None);
         Assert.That(grain.HeldTerminalCountForTesting, Is.EqualTo(1), "precondition: the terminal is held");
 
-        await grain.NotifySourceIdentityChangedAsync("phys-new", CancellationToken.None);
+        // The alias now resolves to the new physical copy.
+        registry.ResolveAsync(Arg.Any<string>()).Returns(ReboundPhysical);
+        return (grain, stream, rebound, txid);
+    }
+
+    [Test]
+    public async Task Rebind_outside_a_saga_pause_carries_the_hold_forward_until_the_new_log_ships_its_mirrored_prepare()
+    {
+        // An online resize swaps the alias to R, whose log carries the saga's
+        // mirrored prepare. The held terminal is carried forward by transaction
+        // and released only behind that prepare - neither dropped (which would
+        // strand what the peer staged) nor released at once.
+        var (grain, stream, rebound, txid) = await HoldACommitWithAnUnshippedPrepareAsync();
+        rebound[0].Append(PreparedEntry("keyB", txid, index: 0, batchSize: 1, ticks: 5));
+
+        await grain.NotifySourceIdentityChangedAsync(ReboundPhysical, CancellationToken.None);
+        Assert.That(grain.HeldTerminalCountForTesting, Is.EqualTo(1), "the hold is carried across the rebind");
+        await grain.PumpForTestingAsync(CancellationToken.None);
+
+        AssertEveryTerminalFollowsItsPrepares(stream, new Dictionary<Guid, int> { [txid] = 1 });
+        Assert.That(grain.HeldTerminalCountForTesting, Is.Zero);
+    }
+
+    [Test]
+    public async Task Rebind_during_a_saga_pause_drops_the_holds_of_the_retired_log()
+    {
+        // A coordinated restore cuts the alias over while shipping is paused and
+        // resets both clusters to the cut: a terminal of the retired log must not
+        // cross it, and the peer's staged buckets went with its own replaced copy.
+        var (grain, stream, _, _) = await HoldACommitWithAnUnshippedPrepareAsync();
+
+        await grain.PauseShippingAsync("restore-saga", CancellationToken.None);
+        await grain.NotifySourceIdentityChangedAsync(ReboundPhysical, CancellationToken.None);
+        await grain.ResumeShippingAsync("restore-saga", CancellationToken.None);
+        await grain.PumpForTestingAsync(CancellationToken.None);
 
         Assert.Multiple(() =>
         {
-            Assert.That(grain.HeldTerminalCountForTesting, Is.Zero, "the hold is dropped with the retired log");
+            Assert.That(grain.HeldTerminalCountForTesting, Is.Zero, "the holds are dropped with the retired log");
             Assert.That(stream.Applied.SelectMany(b => b).Any(r => r.Op == MutationKind.TxCommit), Is.False,
-                "the terminal never reached the peer ahead of its prepare");
+                "no terminal of the retired log crosses the restored cut");
         });
     }
 
