@@ -134,6 +134,20 @@ TLC reported the property during its state search, before it reached the
 deadlock; the behaviour-level form is checked after the search completes, so
 the deadlock now comes first unless the check is off.
 
+`BOUNDS:` is optional: comma-separated `Name = value` assignments to bounds the
+specification declares or defines (`BOUNDS: MaxFaults = 0, MaxHlc = 1`). They are
+written into the mutant arm's cfg only, so the mutant runs on the smaller instance
+while the control arm still checks the module's own bounds. A mutant has to show
+one counterexample, not hold over the whole instance, and a temporal mutant pays
+for the full state graph before TLC reports it, so the smallest instance that
+still exhibits the violation is the cheapest honest one. The header cannot weaken
+the experiment: the control arm, which decides that the property holds on the
+base, never sees it; a bound below the violation leaves the mutant clean and fails
+the pairing gate; and a name the specification does not have, which TLC would
+silently ignore, is refused by `SpecMutationCatalogueTests`. Mutations that build
+an identical control arm (same module, target and options) share one run of it
+within a test process.
+
 ## `TypeOK` rides along in every cfg
 
 Every generated cfg checks `TypeOK` alongside the target. A mutation that

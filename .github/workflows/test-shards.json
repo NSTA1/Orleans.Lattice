@@ -87,34 +87,24 @@
         "note": "Smaller cross-cutting areas grouped into one shard."
       },
       {
-        "shard": "formal-tlc-convergence-pin",
-        "includeCategories": ["TlcShardConvergencePin"],
-        "note": "The TLC mutation gates are CPU-bound JVM runs and were 94 of the rest shard's 106 test-minutes, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). These are the two slowest Replication EventualConvergence mutants (5-6 min each)."
-      },
-      {
         "shard": "formal-tlc-convergence",
         "includeCategories": ["TlcShardConvergence"],
-        "note": "The remaining Replication EventualConvergence (temporal) mutants, about 21 test-minutes."
+        "note": "The TLC mutation gates are CPU-bound JVM runs and were 94 of the rest shard's 106 test-minutes, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, and their BOUNDS headers shrink the mutant arms, about 14 test-minutes."
       },
       {
         "shard": "formal-tlc-replication-wal",
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the WalDurability and WalMove mutants, about 20 test-minutes."
+        "note": "The other Replication mutants plus the WalDurability and WalMove mutants, about 13 test-minutes."
       },
       {
         "shard": "formal-tlc-shard-ownership",
         "includeCategories": ["TlcShardShardOwnership"],
-        "note": "ShardOwnership and ShardOwnershipRetention mutants, about 22 test-minutes."
-      },
-      {
-        "shard": "formal-tlc-atomic-backup",
-        "includeCategories": ["TlcShardAtomicBackup"],
-        "note": "AtomicCommit, AtomicCommitCrossCluster and Backup* mutants, about 15 test-minutes."
+        "note": "ShardOwnership and ShardOwnershipRetention mutants, about 14 test-minutes."
       },
       {
         "shard": "formal-tlc",
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base and variant runs of every module, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates."
+        "note": "Every other TLC case: the base and variant runs of every module, the AtomicCommit, AtomicCommitCrossCluster and Backup* mutants, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 18 test-minutes."
       },
       {
         "shard": "rest",

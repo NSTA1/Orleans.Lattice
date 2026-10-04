@@ -179,12 +179,15 @@ discovered module, and each test case is named with the module
 - `TlcModelCheckTests` (category `Tlc`): the base model holds with the
   manifest's state count, each variant configuration holds with its own count,
   and each mutation runs as a two-arm (or, with `DEADLOCK: off`, three-arm)
-  experiment.
+  experiment. A mutation's `BOUNDS:` header shrinks only the mutant arm's
+  instance; the control arm always checks the module's own bounds, and
+  mutations that build the same control share one run of it.
 - `SpecMutationCatalogueTests`: every checked property is paired, the counts
   match, `TypeOK` is checked, temporal properties sit under `PROPERTIES`, every
   mutation applies to the current base and changes something, every generated
-  cfg names its target once, and every variant assigns only names the
-  specification has.
+  cfg names its target once, every variant and every mutation `BOUNDS:` header
+  assigns only names the specification has, and only the mutant arm carries a
+  mutation's bounds.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -300,7 +303,11 @@ broken pipeline rather than a missing convenience.
 
 ## CI budget
 
-TLC time is dominated by how many TLC processes run, not by state-space size:
+TLC time is dominated by how many TLC processes run, not by state-space size,
+except for temporal mutants, which pay for the whole state graph before TLC
+reports the violation; those declare `BOUNDS:` to run on the smallest instance
+that still exhibits it (see the mutation format in
+[`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md)):
 the atomic-commit base model finishes in about six seconds on an idle machine,
 and most of each run is JVM start-up. A module costs one run for its base model,
 two per mutation (the control arm and the mutant), one more per

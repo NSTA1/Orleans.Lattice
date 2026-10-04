@@ -74,21 +74,26 @@
 
 # -- lattice, sharded --------------------------------------------------------
 #
-# The six formal-tlc-* rows are the one exception to the provenance above. They
-# are not a median of leg records. When the TLC mutation gates were split out of
-# `rest`, no leg had ever run those shards, so there was nothing to record. Each
-# figure is derived from the per-test durations in one run's rest TRX (run
-# 37215308560, 2026-10-04). That run's rest item took 29.3 min for 106
-# test-minutes, about 3.5 TLC processes at once on a 4-core runner. Each shard
-# is priced at the larger of its test-minutes / 3.5 and its single longest
-# case. The `rest` row is that run's non-TLC remainder. Replace all seven with
-# measured medians at the next refresh.
-lattice	formal-tlc-shard-ownership	deterministic	6.2
-lattice	formal-tlc-convergence	deterministic	6.1
-lattice	formal-tlc-convergence-pin	deterministic	5.7
-lattice	formal-tlc-replication-wal	deterministic	5.6
-lattice	formal-tlc-atomic-backup	deterministic	4.2
-lattice	formal-tlc	deterministic	4.1
+# The four formal-tlc-* rows are the one exception to the provenance above.
+# They are not a median of leg records. When the TLC mutation gates were split
+# out of `rest`, no leg had ever run those shards, so there was nothing to
+# record. Those first figures came from the per-test durations in one run's
+# rest TRX (run 37215308560, 2026-10-04). That run's rest item took 29.3 min
+# for 106 test-minutes, about 3.5 TLC processes at once on a 4-core runner, and
+# each shard was priced at the larger of its test-minutes / 3.5 and its single
+# longest case. The per-mutation BOUNDS headers and the per-process control memo
+# then changed the cost of every group, so each group's test-minutes were scaled
+# by the ratio its TLC cases measured locally before and after that change (two
+# full TlcModelCheckTests runs on one 4-way host, 32.8 -> 19.9 min wall-clock):
+# Replication EventualConvergence 0.43, ShardOwnership 0.65, ReplicationWal 0.66,
+# AtomicCommit/Backup 0.71, the remainder 0.54. The pin and atomic-backup shards
+# were folded into convergence and formal-tlc respectively. The `rest` row is
+# the 2026-10-04 run's non-TLC remainder. Replace all five with measured medians
+# at the next refresh.
+lattice	formal-tlc	deterministic	5.3
+lattice	formal-tlc-shard-ownership	deterministic	4.1
+lattice	formal-tlc-convergence	deterministic	4.0
+lattice	formal-tlc-replication-wal	deterministic	3.8
 lattice	bplustree	deterministic	5.0
 lattice	rest	deterministic	2.5
 lattice	bplustree	chaos	3.8
@@ -116,16 +121,12 @@ lattice	primitives	chaos	0.0
 lattice	primitives	coyote	0.0
 lattice	rest	chaos	0.0
 lattice	rest	coyote	0.0
-lattice	formal-tlc-convergence-pin	chaos	0.0
-lattice	formal-tlc-convergence-pin	coyote	0.0
 lattice	formal-tlc-convergence	chaos	0.0
 lattice	formal-tlc-convergence	coyote	0.0
 lattice	formal-tlc-replication-wal	chaos	0.0
 lattice	formal-tlc-replication-wal	coyote	0.0
 lattice	formal-tlc-shard-ownership	chaos	0.0
 lattice	formal-tlc-shard-ownership	coyote	0.0
-lattice	formal-tlc-atomic-backup	chaos	0.0
-lattice	formal-tlc-atomic-backup	coyote	0.0
 lattice	formal-tlc	chaos	0.0
 lattice	formal-tlc	coyote	0.0
 
