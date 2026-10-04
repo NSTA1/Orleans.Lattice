@@ -1116,8 +1116,13 @@ public class LatticeReplicationGrpcServiceTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
 
         var index = new ReceiverAppliedContentIndex();
-        // Receiver already holds content hash 22 for key "b".
-        index.RecordSet("tree", "b", 22UL, 64);
+        // Receiver merged exactly site-a's write of "b" at heldClock (hash 22),
+        // and its leaf still holds "b" at a newer version.
+        index.RecordSet("tree", "b", 22UL, "site-a", heldClock, 64);
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetWithVersionAsync("b", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = new byte[] { 7 }, Version = new HybridLogicalClock { WallClockTicks = 11, Counter = 0 } }));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
 
         var svc = CreateServiceWithFactory(factory, index, out _);
         var box = new ContentManifestRequestBox
@@ -1147,20 +1152,21 @@ public class LatticeReplicationGrpcServiceTests
     }
 
     [Test]
-    public async Task ExchangeContentManifest_advances_hwm_for_identical_content_newer_clock()
+    public async Task ExchangeContentManifest_does_not_elide_identical_content_at_a_newer_clock()
     {
+        // #4585: equal bytes at a newer version are a different write.
+        // Eliding it would let a concurrent write that loses to it everywhere
+        // else win at this receiver for good.
         var factory = Substitute.For<IGrainFactory>();
         var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
         var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         var newerClock = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(heldClock));
-        hwmGrain.TryAdvanceAsync("site-a", newerClock, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(true));
         factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
 
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "b", 22UL, 64);
+        index.RecordSet("tree", "b", 22UL, "site-a", heldClock, 64);
 
         var svc = CreateServiceWithFactory(factory, index, out _);
         var box = new ContentManifestRequestBox
@@ -1171,8 +1177,6 @@ public class LatticeReplicationGrpcServiceTests
                 OriginClusterId = "site-a",
                 Entries = new[]
                 {
-                    // Receiver holds identical content but the manifest clock
-                    // is newer than the recorded HWM -> metadata-only advance.
                     new ContentManifestEntry { EntryIndex = 0, Key = "b", ContentHash = 22UL, Hlc = newerClock },
                 },
             },
@@ -1182,11 +1186,94 @@ public class LatticeReplicationGrpcServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(response.Value.ExchangeSupported, Is.True);
-            Assert.That(response.Value.MissingEntryIndices, Is.Empty);
-            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(newerClock));
+            Assert.That(response.Value.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
         });
-        await hwmGrain.Received(1).TryAdvanceAsync("site-a", newerClock, Arg.Any<CancellationToken>());
+        await hwmGrain.DidNotReceiveWithAnyArgs().TryAdvanceAsync(default!, default, default);
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_does_not_elide_a_recorded_write_whose_leaf_was_lowered()
+    {
+        // #4585: a restore, purge, alias rebind or clearing bootstrap lowers
+        // the leaf behind the index's back. The leaf read is the authority.
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(HybridLogicalClock.Zero));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetWithVersionAsync("b", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = new byte[] { 7 }, Version = new HybridLogicalClock { WallClockTicks = 4, Counter = 0 } }));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+
+        var index = new ReceiverAppliedContentIndex();
+        index.RecordSet("tree", "b", 22UL, "site-a", heldClock, 64);
+
+        var svc = CreateServiceWithFactory(factory, index, out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = new[]
+                {
+                    new ContentManifestEntry { EntryIndex = 0, Key = "b", ContentHash = 22UL, Hlc = heldClock },
+                },
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext("site-a"));
+
+        Assert.That(response.Value.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
+    }
+
+    [Test]
+    public async Task ExchangeContentManifest_advances_hwm_to_a_held_write_above_it()
+    {
+        // The receiver merged site-a's write at 20 without moving its mark
+        // (for example during a bootstrap drain): eliding it advances the mark.
+        var factory = Substitute.For<IGrainFactory>();
+        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var mark = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
+        var heldClock = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
+        hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>()).Returns(Task.FromResult(mark));
+        hwmGrain.TryAdvanceAsync("site-a", heldClock, Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
+        var value = new byte[] { 7 };
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetWithVersionAsync("b", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new VersionedValue { Value = value, Version = heldClock }));
+        factory.GetGrain<ILattice>("tree").Returns(lattice);
+        var hash = ReplicationContentHash.Compute(MutationKind.Set, "b", null, value);
+
+        var index = new ReceiverAppliedContentIndex();
+        index.RecordSet("tree", "b", hash, "site-a", heldClock, 64);
+
+        var svc = CreateServiceWithFactory(factory, index, out _);
+        var box = new ContentManifestRequestBox
+        {
+            Value = new ContentManifestRequest
+            {
+                TreeName = "tree",
+                OriginClusterId = "site-a",
+                Entries = new[]
+                {
+                    new ContentManifestEntry { EntryIndex = 0, Key = "b", ContentHash = hash, Hlc = heldClock },
+                },
+            },
+        };
+
+        var response = await svc.ExchangeContentManifest(box, new TestServerCallContext("site-a"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.Value.MissingEntryIndices, Is.Empty, "equal version with equal bytes: the leaf holds this write");
+            Assert.That(response.Value.AdvancedHlc, Is.EqualTo(heldClock));
+        });
+        await hwmGrain.Received(1).TryAdvanceAsync("site-a", heldClock, Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -1,0 +1,27 @@
+# Pairs with BootstrapHandoffLosesNothing. Reproduces production before #4604:
+# the snapshot drain discards the ApplyResult, so a row the replication
+# applier defers - the coordinated-restore receive fence (#1173), an in-flight
+# duplicate (#4465), a restored copy's fence (#4593) - is neither applied nor
+# re-drained, yet the drain completes and the handoff pins the frontier past
+# it. A source write that reaches the target only through the snapshot, because
+# the stream resumes beyond it, is then neither absorbed nor on its way.
+MODULE: BootstrapHandoffLosesNothingDrainDropsDeferred
+TARGET: BootstrapHandoffLosesNothing
+CLASS: Invariant
+SUMMARY: the drain completes past rows the applier deferred, so a source write carried only by the snapshot is lost
+PERTURBS: Bootstrap
+
+--- FIND
+    /\ val' = [val EXCEPT ![BootTarget] = [k \in Keys |-> @[k] \cup val[BootSource][k]]]
+    /\ cache' = [cache EXCEPT ![BootTarget] =
+                    @ \cup {<<BootSource, k, Ver(BootSource, k)>> : k \in {j \in Keys : val[BootSource][j] # {}}}]
+--- REPLACE
+\* MUTATION: the applier defers some rows and the drain completes past them
+\* (LatticeBootstrapCoordinatorGrain ignored ApplyResult.Deferred), applying
+\* and seeding nothing for a deferred row.
+    /\ \E deferred \in SUBSET Keys :
+          /\ val' = [val EXCEPT ![BootTarget] =
+                        [k \in Keys |-> @[k] \cup (IF k \in deferred THEN {} ELSE val[BootSource][k])]]
+          /\ cache' = [cache EXCEPT ![BootTarget] =
+                          @ \cup {<<BootSource, k, Ver(BootSource, k)>> : k \in {j \in Keys \ deferred : val[BootSource][j] # {}}}]
+--- END
