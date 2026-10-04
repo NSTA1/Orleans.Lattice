@@ -314,7 +314,8 @@ fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
 re-shipped (#4508, fixed by #4553). The base models the fixed design. What
 remains outside it is a transport that loses a record, which production still
 does where the receiver acknowledges a saga record it dead-lettered (#4591) and
-where the WAL trims an entry the shipper has not read (#4534, #4579);
+where the WAL trims an entry the shipper has not read (#4534, #4579; withheld
+until the peer re-seeds since #4577, safe but not live);
 `RAllOrNothingPrepareAckedUnapplied` reproduces it and the note records it as an
 abstraction gap. A prepare the shipper dead-letters poisons its saga instead
 (#4494, fixed by #4570), which is safe but not live.

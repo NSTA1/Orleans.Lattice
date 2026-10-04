@@ -45,7 +45,8 @@ cross-cluster check is also narrower than its name:
 - It assumes the transport never loses a record. Production violates that: the
   receiver's dead-letter applier acknowledges a saga record it parked (issue
   #4591), and the WAL can trim an entry the shipper has not read (issues #4579
-  and #4534). A prepare the shipper itself dead-letters poisons its saga
+  and #4534). After such a trim the shipper withholds the peer's saga records
+  until it re-seeds (#4577). A prepare the shipper itself dead-letters poisons its saga
   instead, which is safe but leaves the saga invisible on that peer (issue
   #4494, fixed by #4570).
 - It imports a bootstrap atomically, while the receiver's drain installs the rows
