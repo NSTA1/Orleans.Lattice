@@ -37,6 +37,14 @@ public enum SagaCopyBindingGuard
 
     /// <summary>The pre-decision check re-binds without asking where the bound copy mirrors (#4369, before #4376).</summary>
     PreDecisionIgnoresMirror,
+
+    /// <summary>
+    /// The routing tier refuses a bound dispatch whenever the tree moved, and the
+    /// execute phase then re-binds, both without asking where the bound copy
+    /// mirrors (#4454 before its fix; the specification's
+    /// <c>SagaBatchOnOneCopyRebindIgnoresMirror</c>).
+    /// </summary>
+    RebindIgnoresMirror,
 }
 
 /// <summary>
@@ -66,9 +74,10 @@ public enum SagaCopyBindingAssertions
 /// may predate the swap, then checks the binding immediately before its decision.
 /// <para>
 /// Every binding decision is the real <see cref="SagaCopyBinding"/> rule: the
-/// routing tier's <see cref="SagaCopyBinding.AdmitsDispatch"/> (checked against the
-/// cached pair, then against a refreshed one), the execute phase's
-/// <see cref="SagaCopyBinding.RebindsAfterRefusal"/>, and the pre-decision
+/// routing tier's <see cref="SagaCopyBinding.AdmitsDispatch"/> against the cached
+/// pair and <see cref="SagaCopyBinding.DispatchCopy"/> against a refreshed one, the
+/// execute phase's <see cref="SagaCopyBinding.RebindsAfterRefusal"/> and
+/// <see cref="SagaCopyBinding.AfterRefusal"/>, and the pre-decision
 /// <see cref="SagaCopyBinding.BeforeDecision"/>. This is the implementation-level
 /// counterpart of the shard-ownership specification's <c>SagaPrepare</c>,
 /// <c>SagaRebindOnRefusal</c>, <c>SagaRebindBeforeDecision</c> and
@@ -83,7 +92,9 @@ public enum SagaCopyBindingAssertions
 /// A dispatch is one routing-tier call that places the whole remaining batch on
 /// one copy, as <c>ILattice.SetManyAsync</c> does, unless
 /// <c>partialDispatch</c> is set: a transient shard failure can then stop it part
-/// way, which is the open defect #4454 in the mid-dispatch re-bind.
+/// way, which is where #4454 lived - the routing tier refused the rest of the
+/// batch and the execute phase re-bound, leaving the prepares already taken on a
+/// copy that mirrors into the new one.
 /// </para>
 /// </summary>
 public sealed class SagaCopyBindingModel : ICoyoteModel
@@ -171,26 +182,30 @@ public sealed class SagaCopyBindingModel : ICoyoteModel
         void Dispatch(string cached)
         {
             // The routing tier checks its cached pair, then re-reads the registry
-            // once before refusing.
+            // once and places the batch on the copy DispatchCopy names - the bound
+            // copy itself when it mirrors into the resolved one (#4454) - or
+            // refuses.
             var copy = cached;
             var admitted = _guard == SagaCopyBindingGuard.RouterIgnoresBinding
                 || SagaCopyBinding.AdmitsDispatch(bound, copy);
             if (!admitted)
             {
-                copy = alias;
-                admitted = SagaCopyBinding.AdmitsDispatch(bound, copy);
-            }
-
-            if (!admitted)
-            {
-                // The refusal names the bound copy as the stale one.
-                if (SagaCopyBinding.RebindsAfterRefusal(bound, bound))
+                var placed = SagaCopyBinding.DispatchCopy(bound, alias, KnownMirror(bound));
+                if (placed is null)
                 {
-                    bound = alias;
-                    dispatched = 0;
+                    // The refusal names the bound copy as the stale one; the saga
+                    // resolves afresh and stays bound or re-binds.
+                    if (SagaCopyBinding.RebindsAfterRefusal(bound, bound)
+                        && SagaCopyBinding.AfterRefusal(bound, alias, KnownMirror(bound)) == SagaCopyBindingVerdict.Rebind)
+                    {
+                        bound = alias;
+                        dispatched = 0;
+                    }
+
+                    return;
                 }
 
-                return;
+                copy = placed;
             }
 
             var end = _keyCount;
@@ -215,6 +230,11 @@ public sealed class SagaCopyBindingModel : ICoyoteModel
 
         string? MirrorDestination(string copy) =>
             _swap == SagaCopyBindingSwap.ResizeFlip && copy == T ? R : null;
+
+        // Where the binding rules are told the bound copy mirrors: the truth,
+        // unless the run removes the #4454 fix.
+        string? KnownMirror(string copy) =>
+            _guard == SagaCopyBindingGuard.RebindIgnoresMirror ? null : MirrorDestination(copy);
 
         void CheckAtDecision()
         {
