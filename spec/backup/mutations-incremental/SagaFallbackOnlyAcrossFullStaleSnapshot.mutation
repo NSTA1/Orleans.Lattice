@@ -1,0 +1,16 @@
+# Pairs with SagaFallbackOnlyAcrossFull. The gate's decision snapshot does not
+# read the registry's decisions, so a saga committed before the gate reads
+# undecided, its commit terminals are unexplained, and the increment falls
+# back for a saga that never straddled the full capture.
+MODULE: SagaFallbackOnlyAcrossFullStaleSnapshot
+TARGET: SagaFallbackOnlyAcrossFull
+CLASS: Invariant
+SUMMARY: d0 is taken without the registry's decisions
+PERTURBS: GateAcquire
+
+--- FIND
+    /\ d0' = dec
+--- REPLACE
+    \* MUTATION: a stale decision snapshot.
+    /\ d0' = "none"
+--- END

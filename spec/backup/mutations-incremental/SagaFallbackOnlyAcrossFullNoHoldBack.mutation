@@ -1,0 +1,15 @@
+# Pairs with SagaFallbackOnlyAcrossFull. The increment advances its frontier
+# past an undecided saga it left out, so the next increment meets only the
+# saga's terminals and must fall back to a full backup for a saga that never
+# straddled the full capture.
+MODULE: SagaFallbackOnlyAcrossFullNoHoldBack
+TARGET: SagaFallbackOnlyAcrossFull
+CLASS: Invariant
+SUMMARY: the frontier is not held back for a left-out saga
+
+--- FIND
+NewHeads == [p \in Parts |-> IF Held /\ Window(p) # {} THEN Min(Window(p)) - 1 ELSE Len(wal[p])]
+--- REPLACE
+\* MUTATION: the frontier always advances to the drained head.
+NewHeads == [p \in Parts |-> Len(wal[p])]
+--- END

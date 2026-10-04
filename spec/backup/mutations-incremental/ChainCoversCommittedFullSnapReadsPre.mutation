@@ -1,0 +1,15 @@
+# Pairs with ChainCoversCommitted. The full capture resolves a committed saga's
+# still-pending buckets pre-saga (the #4485 defect), so a full backup whose
+# decision snapshot holds the saga committed restores it pre-saga.
+MODULE: ChainCoversCommittedFullSnapReadsPre
+TARGET: ChainCoversCommitted
+CLASS: Invariant
+SUMMARY: the full snapshot holds a committed saga pre-saga
+PERTURBS: FullSnap
+
+--- FIND
+    /\ chain' = << FullLink(pending, FALSE) >>
+--- REPLACE
+    \* MUTATION: the committed saga is captured pre-saga.
+    /\ chain' = << [FullLink(pending, FALSE) EXCEPT !.emit = {}] >>
+--- END

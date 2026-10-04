@@ -1095,14 +1095,16 @@ targets and requires a clean run. The assurance document is
 
 ### Backup and restore property catalogue (epic #4430, issue #4440)
 
-The backup area's properties are checked by four TLA+ modules under
+The backup area's properties are checked by five TLA+ modules under
 [`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
 naming the production symbols and detector tests per row. Its Coyote models
 live in the backup and replication test projects, not in `test/lattice/`, and
-drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
-`BackupChainFrontier` (origin normalisation and chain frontier, core unit suite
-only, not schedule-sensitive) and `CrossClusterSagaDecisionCore` (coordinated
-restore decision).
+drive two extracted cores: `CrossTreeFenceWindow` (backup set capture window)
+and `CrossClusterSagaDecisionCore` (coordinated restore decision). Two more
+cores have unit suites only, because they are folds that are not
+schedule-sensitive: `BackupChainFrontier` (origin normalisation and chain
+frontier) and `IncrementalSagaStaging` (how an increment resolves the sagas in
+its window, #4589).
 
 | Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
 |--------|---------------|-------------------------|-------------------------|
@@ -1110,6 +1112,8 @@ restore decision).
 | `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
 | `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
 | `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
+| `BackupIncremental` | `BackupSagaConsistent`, `CaptureStrictIsolation` | No restore of a backup chain holds part of a saga, or a write of a saga that did not commit. Models the #4589 fix. | None of its own; `LatticeBackupIncrementalSagaConsistencyTests` (red against the pre-fix collector) and `IncrementalSagaStagingTests`. |
+| `BackupIncremental` | `ChainCoversCommitted`, `SagaFallbackOnlyAcrossFull` | A link whose decision snapshot holds a saga committed restores it whole; an increment falls back to a full backup only for a saga straddling the full capture's frontier. | None; detectors in the note. |
 | `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |

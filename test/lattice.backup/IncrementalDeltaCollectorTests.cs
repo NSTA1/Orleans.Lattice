@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Wal;
 using Orleans.Serialization;
@@ -33,21 +34,28 @@ public sealed class IncrementalDeltaCollectorTests
     private IncrementalDeltaCollector MakeCollector(
         IWalSubscriber? subscriber = null,
         string? startInclusive = null,
-        string? endExclusive = null)
+        string? endExclusive = null,
+        IReadOnlyDictionary<Guid, TxStatus>? decisions = null,
+        int partitions = 1,
+        IReadOnlyList<Guid>? baseUndecided = null)
     {
         subscriber ??= Substitute.For<IWalSubscriber>();
+        decisions ??= new Dictionary<Guid, TxStatus>();
         return new IncrementalDeltaCollector(
             _serializer,
             subscriber,
             treeId: "orders",
             consumerId: "test-consumer",
-            partitions: 1,
+            partitions: partitions,
             baseOffsets: new Dictionary<int, long>(),
             startInclusive: startInclusive,
             endExclusive: endExclusive,
             mergeMode: BackupKeyMergeMode.LastWriterWins,
             baseBackupId: "base-id",
-            batchSize: 100);
+            batchSize: 100,
+            resolveDecisions: (txIds, _) => Task.FromResult<IReadOnlyDictionary<Guid, TxStatus>>(
+                txIds.Where(decisions.ContainsKey).ToDictionary(t => t, t => decisions[t])),
+            baseUndecided: baseUndecided);
     }
 
     // Helper: build a WalSubscriptionEntry with the given mutation.
@@ -228,4 +236,212 @@ public sealed class IncrementalDeltaCollectorTests
 
         Assert.That(collector.FellOffLog, Is.True);
     }
+
+    // ---------------------------------------------------------------------------
+    // Atomic writes in the delta window (issue #4589)
+    // ---------------------------------------------------------------------------
+
+    [Test]
+    public async Task An_aborted_sagas_prepared_write_is_not_captured()
+    {
+        // The #4441 review's probe: a prepared Set followed by its TxAbort.
+        var txId = Guid.NewGuid();
+        var collector = await DrainAsync(
+            decisions: new Dictionary<Guid, TxStatus> { [txId] = TxStatus.Aborted },
+            Prepared(txId, "k", index: 0, size: 1, offset: 1),
+            Terminal(txId, MutationKind.TxAbort, offset: 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.KeyDescriptors, Is.Empty,
+                "an aborted saga's prepared write must not be captured by an incremental backup");
+            Assert.That(collector.RequiresSagaFallback, Is.False);
+            Assert.That(collector.BlockedFloor, Is.Null, "an aborted saga holds nothing back");
+        });
+    }
+
+    [Test]
+    public async Task An_undecided_sagas_prepared_writes_are_left_out_and_hold_the_frontier_back()
+    {
+        var txId = Guid.NewGuid();
+        var collector = await DrainAsync(
+            decisions: new Dictionary<Guid, TxStatus>(),
+            Ordinary("before", offset: 0),
+            Prepared(txId, "a", index: 0, size: 2, offset: 1),
+            Ordinary("between", offset: 2),
+            Prepared(txId, "b", index: 1, size: 2, offset: 3),
+            Ordinary("after", offset: 4));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.KeyDescriptors.Select(d => d.Key), Is.EqualTo(new[] { "before", "between", "after" }),
+                "an undecided saga's writes are not captured; ordinary writes are");
+            Assert.That(collector.NewPartitionOffsets()[0], Is.EqualTo(1L),
+                "the next increment must resume at the undecided saga's first prepare");
+            Assert.That(collector.BlockedFloor, Is.EqualTo(Hlc(1)), "the held prepare's timestamp pins the WAL");
+            Assert.That(collector.RequiresSagaFallback, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_committed_saga_is_captured_whole_once_its_prepares_cover_the_batch()
+    {
+        var txId = Guid.NewGuid();
+        var collector = await DrainAsync(
+            decisions: new Dictionary<Guid, TxStatus> { [txId] = TxStatus.Committed },
+            Prepared(txId, "a", index: 0, size: 2, offset: 0),
+            Prepared(txId, "b", index: 1, size: 2, offset: 1),
+            Terminal(txId, MutationKind.TxCommit, offset: 2, shardCount: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.KeyDescriptors.Select(d => d.Key).OrderBy(k => k, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(collector.NewPartitionOffsets()[0], Is.EqualTo(3L), "a settled saga holds nothing back");
+            Assert.That(collector.BlockedFloor, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task A_committed_saga_whose_prepares_precede_the_window_forces_a_full_backup()
+    {
+        var txId = Guid.NewGuid();
+        var collector = await DrainAsync(
+            decisions: new Dictionary<Guid, TxStatus> { [txId] = TxStatus.Committed },
+            Prepared(txId, "b", index: 1, size: 2, offset: 0),
+            Terminal(txId, MutationKind.TxCommit, offset: 1, shardCount: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.RequiresSagaFallback, Is.True,
+                "half of a committed batch in the window cannot be captured whole by a delta");
+            Assert.That(collector.KeyDescriptors, Is.Empty, "the half batch is never emitted");
+        });
+    }
+
+    [Test]
+    public async Task An_out_of_scope_prepare_still_counts_towards_its_batch()
+    {
+        var txId = Guid.NewGuid();
+        var collector = await DrainAsync(
+            decisions: new Dictionary<Guid, TxStatus> { [txId] = TxStatus.Committed },
+            startInclusive: "m",
+            Prepared(txId, "a", index: 0, size: 2, offset: 0),
+            Prepared(txId, "z", index: 1, size: 2, offset: 1),
+            Terminal(txId, MutationKind.TxCommit, offset: 2, shardCount: 1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.RequiresSagaFallback, Is.False, "the batch is whole in the window");
+            Assert.That(collector.KeyDescriptors.Select(d => d.Key), Is.EqualTo(new[] { "z" }),
+                "only the in-scope half is emitted");
+        });
+    }
+
+    [Test]
+    public async Task A_saga_the_base_held_undecided_is_looked_up_even_with_no_record_in_the_window()
+    {
+        var committed = Guid.NewGuid();
+        var undecided = Guid.NewGuid();
+        var subscriber = Substitute.For<IWalSubscriber>();
+        subscriber.DrainAsync(Arg.Any<WalSubscriptionContext>(), Arg.Any<IWalSubscriptionHandler>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new WalDrainResult { EntriesRead = 0 }));
+
+        var collector = MakeCollector(
+            subscriber,
+            decisions: new Dictionary<Guid, TxStatus> { [committed] = TxStatus.Committed },
+            baseUndecided: new[] { committed, undecided });
+        await foreach (var _ in collector.StreamAsync(CancellationToken.None))
+        {
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(collector.RequiresSagaFallback, Is.True,
+                "a saga the base held pre-saga, committed since, cannot be captured by an empty delta");
+            Assert.That(collector.CarriedUndecided, Is.EqualTo(new[] { undecided }),
+                "a saga still undecided is handed on to the next increment");
+        });
+    }
+
+    // Drains the scripted entries through StreamAsync as one page from partition 0.
+    private async Task<IncrementalDeltaCollector> DrainAsync(
+        IReadOnlyDictionary<Guid, TxStatus> decisions,
+        params WalSubscriptionEntry[] entries) =>
+        await DrainAsync(decisions, startInclusive: null, entries);
+
+    private async Task<IncrementalDeltaCollector> DrainAsync(
+        IReadOnlyDictionary<Guid, TxStatus> decisions,
+        string? startInclusive,
+        params WalSubscriptionEntry[] entries)
+    {
+        var subscriber = Substitute.For<IWalSubscriber>();
+        var pass = 0;
+        subscriber.DrainAsync(Arg.Any<WalSubscriptionContext>(), Arg.Any<IWalSubscriptionHandler>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (pass++ > 0)
+                {
+                    return Task.FromResult(new WalDrainResult { EntriesRead = 0 });
+                }
+
+                var handler = call.ArgAt<IWalSubscriptionHandler>(1);
+                foreach (var entry in entries)
+                {
+                    handler.OnEntry(entry);
+                }
+
+                return Task.FromResult(new WalDrainResult
+                {
+                    EntriesRead = entries.Length,
+                    AdvancedOffsets = new Dictionary<int, long> { [0] = entries.Max(e => e.Offset) },
+                });
+            });
+
+        var collector = MakeCollector(subscriber, startInclusive: startInclusive, decisions: decisions);
+        await foreach (var _ in collector.StreamAsync(CancellationToken.None))
+        {
+        }
+
+        return collector;
+    }
+
+    private static HybridLogicalClock Hlc(long ticks) => new() { WallClockTicks = 1_000 + ticks };
+
+    private static WalSubscriptionEntry Ordinary(string key, long offset) =>
+        new(0, offset, new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = MutationKind.Set,
+            Key = key,
+            Value = [1],
+            Timestamp = Hlc(offset),
+            TransactionId = Guid.NewGuid(),
+        });
+
+    private static WalSubscriptionEntry Prepared(Guid txId, string key, int index, int size, long offset) =>
+        new(0, offset, new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = MutationKind.Set,
+            Key = key,
+            Value = [2],
+            Timestamp = Hlc(offset),
+            TransactionId = txId,
+            IsPrepared = true,
+            AtomicBatchIndex = index,
+            AtomicBatchSize = size,
+        });
+
+    private static WalSubscriptionEntry Terminal(Guid txId, MutationKind kind, long offset, int shardCount = 0) =>
+        new(0, offset, new LatticeMutation
+        {
+            TreeId = "orders",
+            Kind = kind,
+            Key = "0",
+            Timestamp = Hlc(offset),
+            TransactionId = txId,
+            ShardIndex = 0,
+            AtomicShardCount = shardCount,
+        });
 }
