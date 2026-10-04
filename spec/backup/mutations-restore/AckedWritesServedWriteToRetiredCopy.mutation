@@ -1,0 +1,17 @@
+# Pairs with AckedWritesServed. A write lands on the old copy after its
+# cluster cut over (a write path that kept the pre-cutover routing), so the
+# acknowledged write is lost from the copy the tree now serves.
+MODULE: AckedWritesServedWriteToRetiredCopy
+TARGET: AckedWritesServed
+CLASS: Invariant
+SUMMARY: a post-cutover write is applied to the retired copy
+PERTURBS: Write
+
+--- FIND
+       IN /\ data' = [data EXCEPT ![c][p] = @ \cup {w}]
+          /\ log' = [log EXCEPT ![c][p] = @ \cup {w}]
+--- REPLACE
+       IN \* MUTATION: the data lands on the old copy whatever the alias says.
+          /\ data' = [data EXCEPT ![c]["old"] = @ \cup {w}]
+          /\ log' = [log EXCEPT ![c]["old"] = @ \cup {w}]
+--- END

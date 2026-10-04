@@ -1,0 +1,17 @@
+# Pairs with BackupSagaConsistent. REPRODUCES CURRENT PRODUCTION (#4485): the
+# snapshot path discards the registry decisions, so a bucket still pending is
+# served pre-saga whatever was decided. A capture taken while a committed
+# saga's terminal fan-out is half done then holds one shard post-saga
+# (terminal applied) and another pre-saga (bucket pending). Confirmed by
+# execution against production; see the issue.
+MODULE: BackupSagaConsistentPendingReadsPre
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a still-pending bucket is served pre-saga regardless of the decision (#4485)
+
+--- FIND
+         THEN (IF d0[TreeOf[sh]][t] = "committed" THEN "post" ELSE "pre")
+--- REPLACE
+         \* MUTATION: the decision snapshot is never consulted.
+         THEN "pre"
+--- END

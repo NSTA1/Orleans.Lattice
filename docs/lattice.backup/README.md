@@ -117,6 +117,7 @@ The backup API facade now exposes accept-then-poll backup and restore operations
 - [Architecture](architecture.md) - the capture, incremental, restore, scheduling, and sink pipelines and the core seams they attach to.
 - [Disaster recovery](disaster-recovery.md) - the sink-is-truth model, catalog rebuild and scrub, cold restore into a fresh cluster, and periodic health monitoring.
 - [Observability](observability.md) - the `orleans.lattice.backup` meter and its instruments.
+- [Verified backup and restore](verified-backup.md) - what the backup and restore specifications check, which guarantees are still open defects, and what is not covered.
 
 ## See also
 

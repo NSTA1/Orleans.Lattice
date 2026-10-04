@@ -1,0 +1,19 @@
+# Pairs with SetCaptureCompletes, under the fairness Spec asserts. A
+# registration refused by the fence is retried instead of failing its
+# sub-saga, so a saga already registered on another member never decides,
+# its row never drains, and neither does the capture.
+MODULE: SetCaptureCompletesRefusalRetried
+TARGET: SetCaptureCompletes
+CLASS: Temporal
+SUMMARY: a fence-refused registration waits and retries instead of aborting its saga
+PERTURBS: RegisterRefused
+
+--- FIND
+    /\ Fenced(T)
+    /\ dec' = [dec EXCEPT ![t] = "aborted"]
+    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term>>
+--- REPLACE
+    /\ Fenced(T)
+    \* MUTATION: the refusal is retried; nothing aborts.
+    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term, dec>>
+--- END

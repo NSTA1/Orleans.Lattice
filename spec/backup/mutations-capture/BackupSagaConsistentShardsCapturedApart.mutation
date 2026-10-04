@@ -1,0 +1,18 @@
+# Pairs with BackupSagaConsistent. REPRODUCES CURRENT PRODUCTION (#4485):
+# nothing stops decisions while the shards are captured one after another, so
+# each shard is captured at its own moment. A shard captured before the saga
+# decided holds it pre-saga, one captured after its terminal post-saga.
+MODULE: BackupSagaConsistentShardsCapturedApart
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: no decision gate is raised, so shards are captured apart while decisions land (#4485)
+PERTURBS: GateAcquire
+
+--- FIND
+    /\ lease' = [lease EXCEPT ![T] = "gate"]
+    /\ held' = [held EXCEPT ![T] = TRUE]
+--- REPLACE
+    \* MUTATION: no gate is raised.
+    /\ UNCHANGED lease
+    /\ held' = [held EXCEPT ![T] = TRUE]
+--- END

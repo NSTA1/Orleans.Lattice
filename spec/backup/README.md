@@ -1,0 +1,117 @@
+# TLA+ specifications of backup and restore against in-flight sagas
+
+This directory holds four TLA+ modules that check the backup and restore
+protocols where they meet concurrent atomic sagas, replication, and failures.
+They are the deliverable of issue #4440, part of the formal-coverage epic #4430.
+Each module has its own TLC configuration, manifest, mutation directory and
+refinement note. The layout every module follows, how to run TLC, and why TLC
+runs in CI are described in [`spec/README.md`](../README.md); this README covers
+only what is particular to the backup area.
+
+## The four modules, and why four
+
+The area splits along the seam where the state each part needs stops
+overlapping, which also keeps every module's TLC run far inside the five-minute
+CI timeout:
+
+| Module | What it checks | Instance |
+|--------|----------------|----------|
+| [`BackupCapture`](BackupCapture.tla) | A capture racing in-flight sagas: the per-tree capture under the #4485 decision gate, and a cross-tree set's fence, drain gate, gated re-check and validation, with a lease lapse or a fault at any step. | Two trees, three shards, a single-tree and a cross-tree saga, a standalone or a set capture, two attempts. |
+| [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
+| [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it. | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes. |
+| [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
+
+Capture and restore share no state the other needs: a restore installs an image
+as one value, and whether that image is whole is the capture module's question.
+Coordinated restore and the local cutover split for the same reason: the first
+is about clusters and replication, the second about one cluster's routing.
+
+## Properties checked
+
+| Module | Property | Kind | Meaning |
+|--------|----------|------|---------|
+| `BackupCapture` | `BackupSagaConsistent` | Invariant | An accepted capture never holds part of a saga within one tree. |
+| | `SetSagaConsistent` | Invariant | An accepted cross-tree set never holds part of a saga across its members. |
+| | `SetComplete` | Invariant | An accepted capture holds every member shard. |
+| | `CaptureStrictIsolation` | Invariant | A capture never holds an uncommitted saga's writes. |
+| | `SetCaptureCompletes` | Liveness | Every capture is accepted or fails explicitly, by the protocol's own steps. |
+| `BackupProvenance` | `ProvenanceNoEmptyOrigin` | Invariant | No link names the empty origin (#2621). |
+| | `ProvenanceCoversCaptured` | Invariant | No captured write from a real origin goes unattributed. |
+| | `FrontierCoversCaptured` | Invariant | Every link's cut HLC covers every write it captured (#3758). |
+| | `ChainFrontierMonotonic` | Invariant | A chain's frontier never regresses. |
+| `BackupRestore` | `RestoreAllOrNothing` | Invariant | No cluster serves its restored copy unless every cluster voted commit and none compensated. |
+| | `RestoredCutNotReAdvanced` | Invariant | No pre-cutover write reaches a restored copy. |
+| | `RestoreAdmitsOnlyNamespace` | Invariant | A restore never installs a record outside the tenant's namespace. |
+| | `AckedWritesServed` | Invariant | A post-cutover write stays served by its author. |
+| | `RestoreConverges` | Liveness | A restore followed by resumed replication converges. |
+| `BackupCutover` | `RestoreNeverTorn` | Invariant | A reader never pairs one copy with another copy's shard map. |
+| | `CutoverServesRestored` | Invariant | Once a restore returns, every reader is served the restored copy. |
+| | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
+| | `DeleteNeverMidCutover` | Invariant | A tree is never deleted while its copies are in motion. |
+| | `RestoreReturns` | Liveness | A restore whose shadow is built eventually returns. |
+
+Every module also checks `TypeOK`. Each liveness property fails on a protocol
+defect under the fairness its module asserts, demonstrated by a mutation that
+leaves that fairness intact; see each mutation directory.
+
+## Two modules model a fix, not today's production
+
+The models specify the INTENDED design. Where production differs, a mutation
+reproduces production and the refinement note's row cites the issue:
+
+- **#4485** (`BackupCapture`): a snapshot capture, and so every full backup and
+  a cross-tree set, can hold an atomic batch torn, because each shard is
+  captured at its own moment and a still-pending bucket is served pre-saga.
+  Confirmed by execution. The module checks the approved fix, a lease-fenced
+  decision gate; `BackupSagaConsistentPendingReadsPre` and
+  `BackupSagaConsistentShardsCapturedApart` reproduce production.
+- **#4490** (`BackupRestore`): a shipper whose alias-change push was lost resumes
+  from the retired copy's log and re-advances the peer's restored cut. The
+  shipper half was confirmed by execution. The module checks a resume that
+  rebinds first; `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces
+  production.
+
+So a clean TLC run of these two modules is evidence about the design, not about
+the code running today, until those fixes land.
+
+## Saga abstraction
+
+`BackupCapture` restates the saga steps of
+[`spec/atomic-commit/AtomicCommit.tla`](../atomic-commit/AtomicCommit.tla)
+instead of instancing that module. A module in a sibling directory is not
+copied into TLC's scratch directory, so the gates could not check an
+`INSTANCE` across directories, and the capture needs per-tree local decisions
+and cross-tree delegation rows that the atomic-commit instance does not carry.
+The mapping from each restated action to its atomic-commit counterpart is a
+table in [`RefinementCapture.md`](RefinementCapture.md).
+
+## Pure cores and Coyote models
+
+| Core | Routes | Coverage |
+|------|--------|----------|
+| `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, with a fixed-design arm, a no-regression arm, an anti-vacuity witness, and a guard per rule. |
+| `BackupChainFrontier` (backup) | Origin normalisation, per-origin high-water, and both consistency cuts, in both collectors and the capture service | `BackupChainFrontierTests` (core unit suite; the rules are not schedule-sensitive). |
+| `CrossClusterSagaDecisionCore` (replication) | The coordinated restore's single global decision in `CrossClusterSagaCoordinatorGrain` | `CrossClusterSagaDecisionCoreTests`; Coyote `CoordinatedRestoreDecisionCoyoteTests`, with a fixed-design arm and a guard. |
+
+## How to run TLC
+
+From this directory, with the toolchain described in
+[how to run TLC](../README.md#how-to-run-tlc), for example:
+
+```bash
+java -cp /path/to/tla2tools.jar tlc2.TLC -config BackupCapture.cfg BackupCapture.tla
+```
+
+## Counts
+
+The modules' current totals. `SpecModuleDiscoveryTests` checks this table
+against each module's manifest, and the other Formal gates check the manifests
+against the specifications, the cfgs, the mutation catalogues, the refinement
+notes and TLC's own state counts.
+
+| Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
+|--------|------------|------------|---------|-----------|----------------|-----------------|
+| `BackupCapture` | 5 | 1 | 17 | 17 | 21 | 41,423 |
+| `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
+| `BackupRestore` | 5 | 1 | 10 | 10 | 14 | 707 |
+| `BackupCutover` | 5 | 1 | 9 | 10 | 14 | 31 |

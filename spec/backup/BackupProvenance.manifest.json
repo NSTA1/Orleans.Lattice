@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-provenance",
+  "refinement": "RefinementProvenance.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 5,
+    "properties": 0,
+    "actions": 4,
+    "mutations": 5,
+    "behaviourRows": 8,
+    "distinctStates": 2199
+  }
+}

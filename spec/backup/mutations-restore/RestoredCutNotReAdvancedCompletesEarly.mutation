@@ -1,0 +1,15 @@
+# Pairs with RestoredCutNotReAdvanced. The saga is declared complete as soon
+# as one cluster has cut over, so that cluster resumes receiving while a
+# laggard still ships its pre-restore writes.
+MODULE: RestoredCutNotReAdvancedCompletesEarly
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: global completion is observed when any cluster, not every cluster, has cut over
+PERTURBS: Complete
+
+--- FIND
+    /\ \/ rphase = "commit" /\ \A c \in Clusters : alias[c] = "new"
+--- REPLACE
+    \* MUTATION: one cutover is taken for all.
+    /\ \/ rphase = "commit" /\ \E c \in Clusters : alias[c] = "new"
+--- END
