@@ -1,0 +1,19 @@
+# Pairs with CursorNeverSkipsUnshipped. Reproduces the shipper half of #1060
+# as a standing check: the merge also skips any entry whose HLC is at or below
+# the scalar ship cursor - the highest HLC already acknowledged - and folds the
+# partition cursor past it. One partition interleaves independent per-leaf
+# clocks, so a genuinely new write routinely carries an HLC below the scalar
+# cursor and is never shipped.
+MODULE: CursorNeverSkipsUnshippedScalarHlcFilter
+TARGET: CursorNeverSkipsUnshipped
+CLASS: Invariant
+SUMMARY: skips entries at or below the scalar HLC cursor, so a new write with a lower HLC is never shipped (#1060)
+PERTURBS: ShipSkip
+
+--- FIND
+       /\ ~ShouldShip(s, wal[s][i])
+--- REPLACE
+\* MUTATION: the scalar HLC cursor is a skip criterion.
+       /\ \/ ~ShouldShip(s, wal[s][i])
+          \/ wal[s][i].h <= Max({wal[s][j].h : j \in {n \in 1..cursor[e] : ShouldShip(s, wal[s][n])}})
+--- END

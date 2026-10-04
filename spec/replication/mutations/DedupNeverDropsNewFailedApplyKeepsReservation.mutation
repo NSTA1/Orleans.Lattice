@@ -1,0 +1,26 @@
+# Pairs with DedupNeverDropsNew. An apply that fails all the way to the
+# dead-letter queue keeps its identity-cache reservation instead of rolling it
+# back (ReplicationApplier's catch removes it). The operator's replay of the
+# dead letter then hits the cache and is dropped as a duplicate of a write the
+# receiver never applied.
+MODULE: DedupNeverDropsNewFailedApplyKeepsReservation
+TARGET: DedupNeverDropsNew
+CLASS: Action
+SUMMARY: a dead-lettered apply keeps its identity reservation, so the operator's replay is dropped as a duplicate
+PERTURBS: ApplyFails
+
+--- FIND
+       /\ dlq' = [dlq EXCEPT ![x] = @ \cup {w}]
+       /\ cursor'
+--- REPLACE
+       /\ dlq' = [dlq EXCEPT ![x] = @ \cup {w}]
+\* MUTATION: the reservation taken before the failed apply is not released.
+       /\ cache' = [cache EXCEPT ![x] = @ \cup {Ident(w)}]
+       /\ cursor'
+--- END
+
+--- FIND
+       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, booted>>
+--- REPLACE
+       /\ UNCHANGED <<authored, wal, val, hwm, pinned, parking, buf, wake, booted>>
+--- END
