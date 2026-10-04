@@ -5,6 +5,7 @@ using Orleans.Lattice.Explorer.UI.Areas.Access;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Membership;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
@@ -235,6 +236,65 @@ public sealed class AccessGroupPageTests : AccessTestContext
         Assert.That(cut.FindAll("a").Single(link => link.TextContent == "Explain for this group").GetAttribute("href"),
             Is.EqualTo("access/explain?subject=ops&kind=group&view=permissions"));
     }
+
+    // The page stays mounted while its address moves to another group (#4514), so the
+    // previous group's load can finish after the current group's. Its group must not then
+    // replace the current one, or adding and removing members would act on it.
+    [Test]
+    public async Task A_late_load_for_the_previous_group_does_not_replace_the_current_group()
+    {
+        Admin.WithGroup("ledger-ops", "Ledger operations", "mallory").WithGroup("ops", "Operations", "alice");
+        var previous = Admin.Hold(nameof(FakeAuthAdmin.GetGroupAsync));
+        var cut = RenderAt<AccessGroupPage>("access/groups/ledger-ops");
+        var current = Admin.Hold(nameof(FakeAuthAdmin.GetGroupAsync));
+        Navigation.NavigateTo("access/groups/ops");
+        cut.Render();
+        current.SetResult();
+        cut.WaitUntil(() => Assert.That(Members(cut), Is.EqualTo(new[] { "alice" })));
+
+        previous.SetResult();
+
+        Assert.That(await EverShows(() => cut.Markup.Contains("mallory", StringComparison.Ordinal)), Is.False, "the previous group is never shown");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("ops"));
+            Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Is.EqualTo("Operations"));
+            Assert.That(Members(cut), Is.EqualTo(new[] { "alice" }));
+        });
+    }
+
+    [Test]
+    public async Task A_late_miss_for_the_previous_group_does_not_declare_the_current_group_not_found()
+    {
+        var notFound = 0;
+        Navigation.OnNotFound += (_, _) => Interlocked.Increment(ref notFound);
+        Admin.WithGroup("ops", "Operations", "alice");
+        var previous = Admin.Hold(nameof(FakeAuthAdmin.GetGroupAsync));
+        var cut = RenderAt<AccessGroupPage>("access/groups/missing");
+        var current = Admin.Hold(nameof(FakeAuthAdmin.GetGroupAsync));
+        Navigation.NavigateTo("access/groups/ops");
+        cut.Render();
+        current.SetResult();
+        cut.WaitUntil(() => Assert.That(Members(cut), Is.EqualTo(new[] { "alice" })));
+
+        previous.SetResult();
+
+        Assert.That(await EverShows(() => Volatile.Read(ref notFound) > 0), Is.False, "the current group is never declared not found");
+        Assert.That(Members(cut), Is.EqualTo(new[] { "alice" }));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="stale"/> holds within a second of the previous group's read
+    /// answering. That load resumes on a later turn of the renderer, which no single barrier
+    /// orders against, so its effect is looked for over a window: one that lands shows within
+    /// tens of milliseconds.
+    /// </summary>
+    private static Task<bool> EverShows(Func<bool> stale) => TestPoll.TryUntilAsync(stale, TimeSpan.FromSeconds(1));
+
+    private static string[] Members(IRenderedComponent<AccessGroupPage> cut) =>
+        cut.FindAll("section").Count < 2
+            ? []
+            : [.. cut.FindAll("section")[1].QuerySelectorAll("tbody tr").Select(row => row.QuerySelector("th")!.TextContent.Trim())];
 
     private IRenderedComponent<AccessGroupPage> Loaded()
     {

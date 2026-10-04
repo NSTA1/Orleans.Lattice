@@ -15,10 +15,11 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Access;
 /// At a tenant-rooted address whose access administration is delegated to the
 /// caller, one of the tenant's tenant-tier rules, by local id.
 /// </summary>
-public partial class AccessRulePage
+public partial class AccessRulePage : IDisposable
 {
     private const int SearchPages = 20;
 
+    private readonly ComponentLifetime _load = new();
     private ExplorerAddress? _loaded;
     private LatticeAuthorizationRule? _rule;
     private List<LatticeAuthorizationRule>? _candidates;
@@ -52,6 +53,9 @@ public partial class AccessRulePage
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     /// <inheritdoc />
+    public void Dispose() => _load.Leave();
+
+    /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
     {
         if (Equals(_loaded, Address))
@@ -60,6 +64,10 @@ public partial class AccessRulePage
         }
 
         _loaded = Address;
+
+        // Cancels the previous address's load: whatever it reads after this belongs
+        // to a rule the page no longer shows.
+        var load = _load.Renew();
         if (await _gate.ResolveAsync(TenantAccess, Scope).ConfigureAwait(true))
         {
             // One of the tenant's tenant-tier rules, by local id: its view reads it.
@@ -67,10 +75,15 @@ public partial class AccessRulePage
         }
 
         _model ??= await Catalog.GetAccessModelAsync(CancellationToken.None).ConfigureAwait(true);
-        await LoadAsync().ConfigureAwait(true);
+        if (!load.IsCancellationRequested)
+        {
+            await LoadAsync(load).ConfigureAwait(true);
+        }
     }
 
-    private async Task LoadAsync()
+    private Task RetryAsync() => LoadAsync(_load.Renew());
+
+    private async Task LoadAsync(CancellationToken load)
     {
         _failure = null;
         _rule = null;
@@ -91,8 +104,13 @@ public partial class AccessRulePage
                 // At a tenant-rooted address only that tenant's rules exist: another
                 // tenant's rule, or a cluster-wide one, is not found and never read.
                 var rule = AccessCatalog.Lists(Scope, tree)
-                    ? await Catalog.Admin.GetRuleAsync(tree, ruleId).ConfigureAwait(true)
+                    ? await Catalog.Admin.GetRuleAsync(tree, ruleId, load).ConfigureAwait(true)
                     : null;
+                if (load.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 Show(rule is not null && AccessCatalog.Lists(Scope, rule.Scope.TreeId) ? rule : null);
                 return;
             }
@@ -101,7 +119,12 @@ public partial class AccessRulePage
             var request = new AuthPageRequest { PageSize = AuthPageRequest.MaxPageSize };
             for (var page = 0; page < SearchPages; page++)
             {
-                var result = await Catalog.ListRulesAsync(Scope, request).ConfigureAwait(true);
+                var result = await Catalog.ListRulesAsync(Scope, request, load).ConfigureAwait(true);
+                if (load.IsCancellationRequested)
+                {
+                    return;
+                }
+
                 matches.AddRange(result.Entries.Where(rule => string.Equals(rule.RuleId, ruleId, StringComparison.Ordinal)));
                 if (result.NextPageToken is null)
                 {
@@ -118,6 +141,10 @@ public partial class AccessRulePage
             }
 
             Show(matches.Count == 1 ? matches[0] : null);
+        }
+        catch (Exception) when (load.IsCancellationRequested)
+        {
+            // Superseded by the next address's load, or the page was left.
         }
         catch (Exception exception) when (AccessFailure.From(exception) is { } failure)
         {
