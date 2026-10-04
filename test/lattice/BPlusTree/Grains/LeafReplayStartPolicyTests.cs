@@ -15,10 +15,10 @@ public sealed class LeafReplayStartPolicyTests
     [TestCase(true, false, false)]
     [TestCase(false, false, false)]
     [TestCase(false, false, true)]
-    public void An_anchored_cache_resumes_warm(bool rehydrated, bool cacheEmpty, bool snapshotLoadFailed)
+    public void An_anchored_cache_resumes_warm(bool rehydrated, bool cacheUnanchored, bool snapshotLoadFailed)
     {
         Assert.That(
-            LeafReplayStartPolicy.Decide(rehydrated, cacheEmpty, snapshotLoadFailed).ToString(),
+            LeafReplayStartPolicy.Decide(rehydrated, cacheUnanchored, snapshotLoadFailed).ToString(),
             Is.EqualTo(nameof(Start.Warm)));
     }
 
@@ -26,7 +26,7 @@ public sealed class LeafReplayStartPolicyTests
     public void An_absent_snapshot_over_an_empty_cache_replays_cold()
     {
         Assert.That(
-            LeafReplayStartPolicy.Decide(rehydrated: false, cacheEmpty: true, snapshotLoadFailed: false).ToString(),
+            LeafReplayStartPolicy.Decide(rehydrated: false, cacheUnanchored: true, snapshotLoadFailed: false).ToString(),
             Is.EqualTo(nameof(Start.Cold)));
     }
 
@@ -34,7 +34,7 @@ public sealed class LeafReplayStartPolicyTests
     public void A_failed_load_over_an_empty_cache_fails_closed()
     {
         Assert.That(
-            LeafReplayStartPolicy.Decide(rehydrated: false, cacheEmpty: true, snapshotLoadFailed: true).ToString(),
+            LeafReplayStartPolicy.Decide(rehydrated: false, cacheUnanchored: true, snapshotLoadFailed: true).ToString(),
             Is.EqualTo(nameof(Start.FailClosed)));
     }
 }

@@ -3131,8 +3131,13 @@ internal sealed partial class BPlusLeafGrain
             // persisted checkpoint and the cache untouched so the re-armed retry
             // sees exactly what this one saw. A cancelled load is the replay
             // going away, and leaves as a cancellation.
+            //
+            // A non-empty cache is an anchor only when it is not the partial
+            // remains of a cold rebuild that faulted part-way (issue #4467): that
+            // cache holds what the rebuild had re-read, not every row through the
+            // persisted checkpoint, so the retry must stay cold.
             var replayStart = LeafReplayStartPolicy.Decide(
-                rehydratedFromSnapshot, Cache.Count == 0, _snapshotLoadFailedThisAttempt);
+                rehydratedFromSnapshot, Cache.Count == 0 || _coldRebuildPending, _snapshotLoadFailedThisAttempt);
             if (replayStart == LeafReplayStartPolicy.Start.FailClosed)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -3141,6 +3146,25 @@ internal sealed partial class BPlusLeafGrain
             }
 
             replayCheckpointOverride = replayStart == LeafReplayStartPolicy.Start.Cold ? -1L : null;
+
+            if (rehydratedFromSnapshot)
+            {
+                // The rehydrate replaced the cache, so whatever an earlier cold
+                // attempt re-read is gone and its progress claims nothing.
+                _coldRebuildPending = false;
+                _coldRebuildEntryCheckpoints = null;
+                _coldReplayFrontierByPartition = null;
+                _cacheRebuiltFromWalStartThisActivation = false;
+            }
+
+            // The cache is anchored unless this replay is a cold rebuild, which
+            // anchors it only on converging (issue #4451). A retry of a faulted
+            // rebuild keeps the checkpoints the FIRST attempt started over: its
+            // partial cache was re-read from the WAL start against those.
+            if (replayStart == LeafReplayStartPolicy.Start.Cold && !_coldRebuildPending)
+                _coldRebuildEntryCheckpoints = SnapshotPersistedCheckpoints();
+            _coldRebuildPending = replayStart == LeafReplayStartPolicy.Start.Cold;
+            _cacheUnanchored = _coldRebuildPending;
 
             replayPermit = await AcquireReplayPermitAsync(cancellationToken);
 
@@ -3217,6 +3241,14 @@ internal sealed partial class BPlusLeafGrain
             }
 
             advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+
+            // The replay read the whole window to head, so a cold rebuild has
+            // converged: the cache now holds every row through the checkpoint,
+            // and the checkpoint is an honest coverage claim again (issues
+            // #4451, #4467).
+            _coldRebuildPending = false;
+            _coldRebuildEntryCheckpoints = null;
+            _cacheUnanchored = false;
 
             // The reset half of the cold-replay-loop streak (issue #2280). This
             // site is the exact complement of the catch below: the guarded
