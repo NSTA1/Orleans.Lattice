@@ -328,7 +328,14 @@ the undo discards it with every write it took, so a terminal the discarded copy
 refuses counts as delivered: it is neither re-sent to the copy the undo restored,
 which would land part of the batch there, nor retried until the saga stalls, and
 the saga completes
-([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). A batch therefore commits wholly on one copy - kept or
+([#4474](https://github.com/NSTA1/Orleans.Lattice/issues/4474)). When the bound copy is instead a
+completed resize's old copy and its broadcast outlives `SoftDeleteDuration`, the
+purge leaves that copy refusing every terminal; each refused terminal is
+redelivered to the resized copy - to its shard at the same index, which the old
+copy mirrored every prepared bucket into, to the shard that now owns each key, and
+to their split-forward targets - so the saga completes. The redelivered terminal
+carries no committed-values backstop: the buckets it resolves were all mirrored
+there ([#4475](https://github.com/NSTA1/Orleans.Lattice/issues/4475)). A batch therefore commits wholly on one copy - kept or
 discarded with it - and never in part on each
 ([#4358](https://github.com/NSTA1/Orleans.Lattice/issues/4358)).
 

@@ -2230,7 +2230,81 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Per-shard terminal append with deadline-bounded routing-refresh
+    /// The routing to redeliver a refused terminal through when the physical copy
+    /// that refused it is a resize's old copy whose purge has completed, or
+    /// <see langword="null"/> when it is not (issue #4475). A purged copy refuses
+    /// every terminal as a deleted tree, so a saga still bound to it - one whose
+    /// broadcast outlived <c>SoftDeleteDuration</c> - would otherwise fail on
+    /// every retry and never complete. The redirect is the copy the tree resolves
+    /// to now; when that is still the refusing copy there is nothing to redeliver
+    /// to. Asked only on a refusal.
+    /// </summary>
+    private async Task<RoutingInfo?> ResolvePurgedTerminalCopyRedirectAsync(string physicalTreeId)
+    {
+        if (!await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, physicalTreeId)) return null;
+        var refreshed = await grainFactory.GetGrain<ILattice>(state.State.TreeId).GetRoutingAsync(forceRefresh: true);
+        return string.Equals(refreshed.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal) ? null : refreshed;
+    }
+
+    /// <summary>
+    /// Redelivers the terminal a purged copy's shard refused to the copy the tree
+    /// resolves to now (issue #4475): to its shard at the same index, which the
+    /// purged shard mirrored every prepared bucket into, to the shard that now owns
+    /// each key the terminal covers, and to every split-forward target of those, so
+    /// a bucket a migration has since moved on is reached too. The redelivered
+    /// terminal carries no committed-values backstop: a purged copy had mirrored
+    /// every bucket the saga prepared on it, so each target resolves the buckets it
+    /// holds and a shard holding none treats the terminal as a no-op. Re-adding the
+    /// backstop would only write the saga's values over later writes on shards the
+    /// keys have since moved to. The terminals are made durable here, before
+    /// returning, so the caller's batched flush has nothing further to append.
+    /// </summary>
+    private async Task<WalRecord?> RedeliverTerminalFromPurgedCopyAsync(
+        string purgedCopyId,
+        int shardIndex,
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues,
+        ShardMap? passMap,
+        RoutingInfo redirect)
+    {
+        IEnumerable<string> keys;
+        if (committedValues is not null)
+        {
+            keys = committedValues.Keys;
+        }
+        else
+        {
+            var covered = new List<string>(state.State.Entries.Count);
+            foreach (var entry in state.State.Entries)
+            {
+                if (passMap is null || passMap.Resolve(entry.Key) == shardIndex)
+                    covered.Add(entry.Key);
+            }
+            keys = covered;
+        }
+
+        var seed = PurgedCopyTerminalTargets.Resolve(shardIndex, keys, redirect.Map);
+        var targets = await TerminalFanOutResolver.ResolveTransitiveAsync(
+            grainFactory, redirect.PhysicalTreeId, seed, CancellationToken.None);
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: terminal for shard {ShardIndex} of {PurgedCopyId}, a purged copy, redelivered to shards [{Targets}] of {PhysicalTreeId}.",
+            OperationKey,
+            shardIndex,
+            purgedCopyId,
+            string.Join(",", targets),
+            redirect.PhysicalTreeId);
+
+        var redelivered = new Task<WalRecord?>[targets.Count];
+        for (var i = 0; i < targets.Count; i++)
+        {
+            redelivered[i] = MarkOneShardAsync(
+                redirect.PhysicalTreeId, targets[i], transactionId, committed, committedValues: null, redirect.Map);
+        }
+        await FlushPendingTerminalsAsync(await Task.WhenAll(redelivered));
+        return null;
+    }
     /// retry. Encapsulates the stale-routing recovery so the
     /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
     /// linear. Catches both <see cref="StaleShardRoutingException"/>
@@ -2316,6 +2390,7 @@ internal sealed class AtomicWriteGrain(
         var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
         while (true)
         {
+            RoutingInfo? purgedCopyRedirect = null;
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
@@ -2344,10 +2419,18 @@ internal sealed class AtomicWriteGrain(
             }
             catch (InvalidOperationException)
             {
-                // A copy a resize undo discarded refuses as a deleted tree; any
+                // A copy a resize undo discarded refuses as a deleted tree, and a
+                // resize's old copy refuses the same way once it is purged; any
                 // other refusal of this kind keeps surfacing as before.
                 if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
-                throw;
+                purgedCopyRedirect = await ResolvePurgedTerminalCopyRedirectAsync(physicalTreeId);
+                if (purgedCopyRedirect is null) throw;
+            }
+
+            if (purgedCopyRedirect is not null)
+            {
+                return await RedeliverTerminalFromPurgedCopyAsync(
+                    physicalTreeId, shardIndex, transactionId, committed, committedValues, passMap, purgedCopyRedirect);
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
