@@ -19,8 +19,6 @@ public sealed partial class LatticeAdminGrainWalMoveTests
     {
         var operation = new RecordingOperationGrain();
         harness.Factory.GetGrain<ILatticeOperationGrain>(OperationKey, null).Returns(operation);
-        harness.Registry.UpdateWalPlacementAsync(TreeId, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<string>())
-            .Returns(ci => Task.FromResult(WalPlacementPin.Create().WithPartition((int)ci[2], (string)ci[3], (long)ci[1] + 1)));
         return operation;
     }
 
@@ -66,7 +64,7 @@ public sealed partial class LatticeAdminGrainWalMoveTests
             async () => await Tracked(harness).ExecuteWalMoveTrackedAsync(TreeId, 0, SecondaryKey, null, Ticket),
             Throws.InstanceOf<OperationCanceledException>());
 
-        await harness.Registry.DidNotReceiveWithAnyArgs().UpdateWalPlacementAsync(default!, default, default(int), default!);
+        await harness.Registry.DidNotReceiveWithAnyArgs().FlipFencedWalPlacementAsync(default!, default, default!, default!);
         Assert.Multiple(() =>
         {
             Assert.That(harness.DeactivateCalls, Is.EqualTo(1), "The fenced source is released at once.");

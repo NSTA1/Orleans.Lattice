@@ -47,6 +47,16 @@ internal sealed record WalPlacementPin
     [Id(2)] public Dictionary<int, string>? Overrides { get; init; }
 
     /// <summary>
+    /// Durable move fences, one per WAL partition that a placement move is
+    /// currently copying away from its provider (issue #4525). Changing a fence
+    /// does not bump <see cref="Version"/>: a fence is not a placement change.
+    /// <see langword="null"/> or empty means no partition is being moved. The
+    /// placement change that ends a move (<see cref="WithPartition"/> /
+    /// <see cref="WithPartitions"/>) drops the moved partitions' fences.
+    /// </summary>
+    [Id(3)] public Dictionary<int, WalMoveFence>? Fences { get; init; }
+
+    /// <summary>
     /// The default placement pin: every partition resolves to the catalog's
     /// baseline key, version <c>0</c>. Equivalent to the absence of a pin and
     /// used to seed registry rows and as the fallback for rows persisted before
@@ -66,6 +76,47 @@ internal sealed record WalPlacementPin
             return key;
         }
         return DefaultProviderKey;
+    }
+
+    /// <summary>
+    /// Returns the durable move fence held on <paramref name="partition"/>, or
+    /// <see langword="null"/> when no move is copying it.
+    /// </summary>
+    /// <param name="partition">The WAL partition index.</param>
+    public WalMoveFence? ResolveFence(int partition)
+        => Fences is { } fences && fences.TryGetValue(partition, out var fence) ? fence : null;
+
+    /// <summary>
+    /// Produces a copy of this pin with <paramref name="fence"/> held on
+    /// <paramref name="partition"/>, replacing any fence already there.
+    /// <see cref="Version"/> is unchanged.
+    /// </summary>
+    /// <param name="partition">The WAL partition being fenced.</param>
+    /// <param name="fence">The fence to hold.</param>
+    public WalPlacementPin WithFence(int partition, WalMoveFence fence)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        var fences = Fences is null
+            ? new Dictionary<int, WalMoveFence>()
+            : new Dictionary<int, WalMoveFence>(Fences);
+        fences[partition] = fence;
+        return this with { Fences = fences };
+    }
+
+    /// <summary>
+    /// Produces a copy of this pin with no fence held on
+    /// <paramref name="partition"/>. <see cref="Version"/> is unchanged.
+    /// </summary>
+    /// <param name="partition">The WAL partition to release.</param>
+    public WalPlacementPin WithoutFence(int partition)
+    {
+        if (Fences is null || !Fences.ContainsKey(partition))
+        {
+            return this;
+        }
+        var fences = new Dictionary<int, WalMoveFence>(Fences);
+        fences.Remove(partition);
+        return this with { Fences = fences.Count == 0 ? null : fences };
     }
 
     /// <summary>
@@ -94,7 +145,7 @@ internal sealed record WalPlacementPin
             overrides[partition] = providerKey;
         }
 
-        return this with
+        return this.WithoutFence(partition) with
         {
             Version = newVersion,
             Overrides = overrides.Count == 0 ? null : overrides,
@@ -118,10 +169,12 @@ internal sealed record WalPlacementPin
         var overrides = Overrides is null
             ? new Dictionary<int, string>()
             : new Dictionary<int, string>(Overrides);
+        var unfenced = this;
 
         foreach (var (partition, providerKey) in moves)
         {
             ArgumentNullException.ThrowIfNull(providerKey);
+            unfenced = unfenced.WithoutFence(partition);
             if (string.Equals(providerKey, DefaultProviderKey, StringComparison.Ordinal))
             {
                 overrides.Remove(partition);
@@ -132,7 +185,7 @@ internal sealed record WalPlacementPin
             }
         }
 
-        return this with
+        return unfenced with
         {
             Version = newVersion,
             Overrides = overrides.Count == 0 ? null : overrides,
