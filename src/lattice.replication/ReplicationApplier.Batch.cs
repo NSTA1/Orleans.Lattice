@@ -672,7 +672,7 @@ internal sealed partial class ReplicationApplier
         // saga key with a strictly-earlier source HLC and break
         // per-saga all-or-nothing visibility on the bootstrapped peer.
         // The post-drain
-        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
         // installs the HWM at the snapshot's AsOfHlc atomically. The
         // current bootstrap coordinator routes through the per-entry
         // path, so this branch is defence-in-depth for any future
@@ -1010,18 +1010,15 @@ internal sealed partial class ReplicationApplier
                     }
                     if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc, resolved.ClusterId))
                     {
-                        await ParkAsync(entry, resolved, cancellationToken).ConfigureAwait(false);
-                        // Park retains the cache reservation (mirroring
-                        // ApplyAsync's park branch), now completed: the
-                        // parked entry, when drained, routes via
-                        // ApplyPointAsync directly and bypasses the cache,
-                        // so the retained reservation continues to suppress
-                        // duplicate-emit pairs of the parked entry that
-                        // arrive while it is buffered. Release local
-                        // rollback responsibility so the catch below
-                        // does not undo the intentional retention.
-                        dedupeCache.Complete(entry);
+                        await ParkAsync(entry, cancellationToken).ConfigureAwait(false);
+                        // Mirror ApplyAsync's park branch: the durable buffer
+                        // now holds the entry and dedups its re-deliveries,
+                        // so release the shadow-forward reservation (#4464).
+                        // The park may also have drained entries and advanced
+                        // the local vector clock, so re-fetch it next time.
+                        dedupeCache.Remove(entry);
                         cacheReservedForCurrent = false;
+                        localVcDirty = true;
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         continue;
                     }
@@ -1246,7 +1243,7 @@ internal sealed partial class ReplicationApplier
 
             if (advanced)
             {
-                await DrainBufferAsync(treeId, hwmGrain, resolved, cancellationToken).ConfigureAwait(false);
+                await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
 
             return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate };
@@ -1254,7 +1251,7 @@ internal sealed partial class ReplicationApplier
 
         // Bootstrap mode: the per-origin HWM is pinned atomically at
         // the snapshot's AsOfHlc by
-        // <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+        // <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
         // after the drain completes; advancing it mid-drain would
         // suppress still-pending saga keys with strictly-earlier source
         // HLCs. Surface the pre-drain HWM so callers observe the

@@ -194,6 +194,14 @@ public class LatticeReplicationOptions
     /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>. Defaults
     /// to <see cref="DefaultCausalBufferMaxEntries"/>. Must be at
     /// least <c>1</c>.
+    /// <para>
+    /// The buffer is durable (#4464): a parked entry is persisted before it
+    /// is acknowledged to its sender, so eviction is a deliberate bound on
+    /// acknowledged entries, not a silent loss - the evicted entry is written
+    /// to the dead-letter queue before its removal is persisted, for operator
+    /// replay. Every park and drain rewrites the tree's buffer state, so a
+    /// larger cap also means a larger write per park.
+    /// </para>
     /// </summary>
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
 

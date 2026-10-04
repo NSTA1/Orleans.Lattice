@@ -35,6 +35,8 @@ public partial class ReplicationApplierTests
         public required IReplicationDeadLetterGrain Dlq { get; init; }
         public required Dictionary<string, HybridLogicalClock> HwmRows { get; init; }
         public required VersionVector Vc { get; init; }
+        public required IOptionsMonitor<LatticeReplicationOptions> Monitor { get; init; }
+        public required Fakes.FakePersistentState<CausalApplyBufferState> BufferState { get; init; }
     }
 
     private static CausalHarness CreateCausalHarness(LatticeReplicationOptions? options = null)
@@ -92,15 +94,20 @@ public partial class ReplicationApplierTests
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
 
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
+        var (_, bufferState) = CausalBufferTestWiring.Wire(factory, applier, monitor, Tree);
+
         return new CausalHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext()),
+            Applier = applier,
             Factory = factory,
             Apply = apply,
             Hwm = hwm,
             Dlq = dlq,
             HwmRows = rows,
             Vc = vc,
+            Monitor = monitor,
+            BufferState = bufferState,
         };
     }
 

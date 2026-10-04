@@ -38,7 +38,7 @@ public sealed class SnapshotStream
     /// reported a vector through
     /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>.
     /// Receivers pin this on
-    /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// once <see cref="Entries"/> has been drained, at the hand-off to
     /// incremental replication, so the causal dependency
     /// check in the apply path starts from a non-empty frontier and

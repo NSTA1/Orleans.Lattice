@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Replication;
 /// Carries the snapshot cut-point a sender cluster captures atomically
 /// with the start of a remote snapshot stream. The cut-point lets the
 /// receiver call
-/// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+/// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
 /// before draining the entry stream, so the snapshot/incremental handoff
 /// stays exactly-once even though the metadata RPC and the streaming
 /// RPC are separate transport calls.
@@ -68,7 +68,7 @@ public readonly record struct RemoteSnapshotMetadata
     /// <summary>
     /// The sender's causal-stable frontier at the moment the snapshot
     /// was captured. Receivers pin this on
-    /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// before draining the entry stream so the causal dependency check
     /// on the first incremental entry runs from a non-empty frontier.
     /// Always non-null; the snapshot of an unreplicated tree carries
