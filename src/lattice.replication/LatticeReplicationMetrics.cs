@@ -654,8 +654,8 @@ public static class LatticeReplicationMetrics
     /// Counter of <see cref="MutationKind.Set"/> entries whose value
     /// payload was elided from an outbound batch by the sender-manifest /
     /// receiver-pull-missing content-hash round trip - the receiver already
-    /// held byte-identical content for the key, so only metadata (the
-    /// high-water-mark advance) was needed and the payload never travelled.
+    /// held exactly that write (its content, origin and source HLC, with the
+    /// leaf still at that version or newer), so the payload never travelled.
     /// Incremented once per elided entry, only when
     /// <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
     /// is set and the peer advertised it can perform the exchange (the
@@ -736,7 +736,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Counter of manifest entries the receiver reported it already holds
-    /// byte-identical content for - the entries the receiver told the sender
+    /// exactly (the same write, not merely the same bytes) - the entries the receiver told the sender
     /// it does not need shipped, so the sender elides their payloads.
     /// Incremented by the count of held (non-missing) entries each exchange.
     /// Pairs with the sender-side <see cref="ShipElidedPayloads"/>: the two
@@ -751,9 +751,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of metadata-only high-water-mark advances the receiver
     /// performed during a content-hash exchange - one increment per exchange
-    /// that durably advanced the per-origin high-water-mark for an
-    /// identical-content entry carrying a newer clock (the idempotent
-    /// re-set), without the payload ever travelling. Incremented once per
+    /// that durably advanced the per-origin high-water-mark to an elided
+    /// write the receiver already held above its mark (merged without moving
+    /// it, for example by a bootstrap drain), without the payload ever
+    /// travelling. Incremented once per
     /// exchange whose durable advance succeeded, never under the default-off
     /// behaviour (a cold or empty applied-content index reports every entry
     /// as missing and performs no advance). Tagged by <see cref="TagTree"/>
