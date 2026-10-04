@@ -22,7 +22,17 @@ public partial class LatticeRegistryGrainTests
         "SetShardMapAsync", "ReassignSlotsAsync", "AllocateNextShardIndexAsync", "SetPublishEventsAsync",
         "SetHistoryRetentionAsync", "SetMaintainProjectionDigestAsync", "SetMaxCacheValueBytesAsync",
         "SetWalMaxRetainedBytesAsync", "LatchProjectionDigestPermanentlyDisabledAsync",
-        "UpdateWalPlacementAsync(single)", "UpdateWalPlacementAsync(batch)",
+        "UpdateWalPlacementAsync(single)", "UpdateWalPlacementAsync(batch)", "RaiseWalMoveFencesAsync",
+    ];
+
+    /// <summary>
+    /// The WAL move fence verbs that refuse an absent row but, on a registered row,
+    /// write only when a fence they own is present (issue #4525), so they are kept
+    /// out of the rewrite case of <see cref="NonCreateVerbs"/>.
+    /// </summary>
+    private static readonly string[] FenceOwnerVerbs =
+    [
+        "ReleaseWalMoveFenceAsync", "FlipFencedWalPlacementAsync",
     ];
 
     private static Task InvokeNonCreateVerb(LatticeRegistryGrain g, string verb, string id) => verb switch
@@ -38,8 +48,23 @@ public partial class LatticeRegistryGrainTests
         "LatchProjectionDigestPermanentlyDisabledAsync" => g.LatchProjectionDigestPermanentlyDisabledAsync(id),
         "UpdateWalPlacementAsync(single)" => g.UpdateWalPlacementAsync(id, 0, 0, "dedicated"),
         "UpdateWalPlacementAsync(batch)" => g.UpdateWalPlacementAsync(id, 0, [(0, "dedicated")]),
+        "RaiseWalMoveFencesAsync" => g.RaiseWalMoveFencesAsync(id, 0, [0], "move-a", TimeSpan.FromMinutes(1), renew: false),
+        "ReleaseWalMoveFenceAsync" => g.ReleaseWalMoveFenceAsync(id, 0, "move-a", onlyIfExpired: false),
+        "FlipFencedWalPlacementAsync" => g.FlipFencedWalPlacementAsync(id, 0, [(0, "dedicated")], "move-a"),
         _ => throw new ArgumentOutOfRangeException(nameof(verb), verb, null),
     };
+
+    [TestCaseSource(nameof(FenceOwnerVerbs))]
+    public void Fence_owner_verb_refuses_an_absent_row_and_writes_nothing(string verb)
+    {
+        var (grain, tree) = CreateGrain();
+        tree.GetAsync("gone").Returns(Task.FromResult<byte[]?>(null));
+
+        var ex = Assert.ThrowsAsync<LatticeTreeNotRegisteredException>(() => InvokeNonCreateVerb(grain, verb, "gone"));
+
+        Assert.That(ex!.TreeId, Is.EqualTo("gone"));
+        tree.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+    }
 
     [TestCaseSource(nameof(NonCreateVerbs))]
     public void Non_create_verb_refuses_an_absent_row_and_writes_nothing(string verb)

@@ -154,6 +154,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly ILogger<LatticeReplicationGrpcService> _logger;
     private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
     private readonly ILatticeReplicationContext? _replicationContext;
+    private readonly Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? _options;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -193,7 +194,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ReceiverAppliedContentIndex appliedContentIndex,
         ILogger<LatticeReplicationGrpcService> logger,
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
-        ILatticeReplicationContext? replicationContext = null)
+        ILatticeReplicationContext? replicationContext = null,
+        Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -211,6 +213,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _logger = logger;
         _dictionaryProvider = dictionaryProvider;
         _replicationContext = replicationContext;
+        _options = options;
     }
 
     /// <summary>
@@ -395,6 +398,26 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // origin and poison that stream's cursor.
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
 
+        // A sender that lost records to a WAL trim before shipping them asks
+        // this receiver to re-seed past an export epoch (#4534). The origin was
+        // just verified against the caller, so the bootstrap source is the
+        // authenticated sender. The answer is echoed on whichever ack follows.
+        long? bootstrapEpoch = null;
+        if (long.TryParse(
+                ReadHeader(context, LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader),
+                System.Globalization.NumberStyles.Integer,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var reseedAfter))
+        {
+            bootstrapEpoch = await ReplicationReseedResponder.RespondAsync(
+                _grainFactory,
+                request.TreeName,
+                request.OriginClusterId,
+                reseedAfter,
+                _options?.Get(request.TreeName).AutoBootstrapOnFallOffLog ?? true,
+                _logger).ConfigureAwait(false);
+        }
+
         var entries = request.Entries;
 
         // Time the apply call so the flow-control policy can shape
@@ -546,6 +569,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     HighestAppliedHlc = result.HighWaterMark,
                     BlockedAtHlc = blockedAtHlc,
                     PauseForMs = ReceiveFenceDeferPauseMs,
+                    BootstrapEpoch = bootstrapEpoch,
                     SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
                     AdvertisedDictionaryIds = advertisedDictionaryIds,
                     AdvertisedDictionaries = CompressionDictionaryAdvertisement.Build(_dictionaryProvider),
@@ -562,6 +586,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 BlockedAtHlc = blockedAtHlc,
                 SuggestedBatchSize = hint.SuggestedBatchSize,
                 PauseForMs = hint.PauseForMs,
+                BootstrapEpoch = bootstrapEpoch,
                 // Advertise the maximum framing wire version this
                 // receiver can decode so a sender that has opted into
                 // wire-version negotiation can observe this peer's

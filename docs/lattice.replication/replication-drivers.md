@@ -726,6 +726,21 @@ equal `LatticeOptions.WalPartitions` so the shipper reads every
 partition the commit-log writer fans across (see
 [`ReplogPartitions`](configuration.md#replogpartitions)).
 
+### Forced gap: a peer taken off the log
+
+A `WalRetention` ceiling trims the write-ahead log past a lagging consumer by design, so it can remove records the shipper has not yet delivered to its peer. Skipping the trimmed prefix is harmless for plain writes, but not for a saga: if the trimmed record was one of a saga's prepares and its terminal is still retained, the terminal reaches the peer without it, the receiver commits the saga and drains its other keys, and the lost key is missing - a torn saga ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A shipper cannot even name the transactions it lost.
+
+The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** (offsets are dense, and only a trim removes them). On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
+
+- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible;
+- **asks the peer to re-seed** on every push and liveness probe. The gRPC transport sends the recorded epoch in the `x-lattice-replication-reseed-after` call header. The receiver, having verified the caller's origin, starts a full bootstrap from that sender when it has not completed one from an export with a greater epoch and none is running (governed by `AutoBootstrapOnFallOffLog`), and echoes the epoch of its last completed one in `ReplicationAck.BootstrapEpoch`.
+
+Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. The shipper then clears the marker, rewinds every partition to its lowest retained entry, and resumes: the export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them. A range-scoped re-replay never advances the echoed epoch.
+
+While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
+
+A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
+
 ### Deferred cursor persistence
 
 Cursor advances are amortised across `ShipCursorWriteInterval`
@@ -785,6 +800,39 @@ which point the next flush re-reports the new frontier through the
 recovered registry. Operators monitoring the WAL GC trim frontier
 should expect this lag to clear on the next post-outage ack rather
 than immediately when the registry recovers.
+
+### Per-partition read positions hold the WAL (issue #4579)
+
+The HLC cursor alone does not protect what the shipper has not read. It is
+the HLC of the last entry shipped in merge order, and a WAL partition is not
+HLC-ordered in offset: a silo whose clock trails, or a merge that keeps its
+source stamp, can put an entry the shipper
+has not read at an HLC at or below the cursor it has already reported. Once
+the owning leaf checkpoints past such an entry, nothing else holds it, so a
+GC pass could trim it unshipped.
+
+The shipper is therefore also an offset-reading WAL consumer:
+
+- Before its first read of a physical log it registers with that log's
+  durable consumer set, so a GC pass on any silo, and after a restart, asks
+  it where it is.
+- It answers with its durable `PartitionCursors`, which a held saga terminal
+  already caps. A position is raised only after the write that made it
+  durable. It is lowered before the next read when the in-memory cursors drop
+  (an alias rebind, a rewind).
+- A registered shipper that has acknowledged nothing answers 0 for every
+  partition, so it holds the whole log instead of racing the GC.
+- On an alias rebind it registers with the new physical log first and only
+  then withdraws from the old one. It answers nothing for a log it no longer
+  reads.
+
+The GC refuses every entry at or above the lowest position any registered
+consumer reports for that partition, however the HLC clauses read. Only the
+`WalRetention` TTL ceiling trims past it, and the shipper then sees the gap
+on its next read. A stalled or removed peer's shipper therefore holds the WAL
+at its last durable position until the TTL ceiling applies. A peer whose
+shipper has never activated is not yet a consumer; it starts from a snapshot
+bootstrap.
 
 ### Graceful deactivation
 

@@ -88,4 +88,64 @@ internal sealed class BootstrapCoordinatorState
     /// is never <see langword="null"/> at pin time.
     /// </summary>
     [Id(6)] public VersionVector CausalStableFrontier { get; set; } = new();
+
+    /// <summary>
+    /// The source's export epoch of the snapshot the current (or last) run
+    /// drained (issue #4534); <c>0</c> from a source that does not number
+    /// its exports. Legacy state decodes to <c>0</c>.
+    /// </summary>
+    [Id(7)] public long SnapshotExportEpoch { get; set; }
+
+    /// <summary>
+    /// Per source cluster, the export epoch of the last full bootstrap that
+    /// reached <see cref="LatticeBootstrapState.LiveIncremental"/> (issue
+    /// #4534). Echoed on replication acknowledgements so a sender that took
+    /// this receiver off the log knows it has been re-seeded. Legacy state
+    /// decodes to an empty map.
+    /// </summary>
+    [Id(8)] public Dictionary<string, long> CompletedExportEpochs { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether this coordinator has armed the tree's receiver bootstrap read
+    /// fence (issue #4526) and not yet lifted it. Recorded before the fence is
+    /// armed, so a crash part-way through arming still lifts it.
+    /// </summary>
+    [Id(9)] public bool ReadFenceArmed { get; set; }
+
+    /// <summary>
+    /// The physical tree the read fence was armed on, or <see langword="null"/>
+    /// when none is armed.
+    /// </summary>
+    [Id(10)] public string? FencedPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The routed shard indices of <see cref="FencedPhysicalTreeId"/> the read
+    /// fence was armed on, or <see langword="null"/> when none is armed.
+    /// </summary>
+    [Id(11)] public int[]? FencedShardIndices { get; set; }
+
+    /// <summary>
+    /// Whether a drain has applied at least one snapshot entry since the read
+    /// fence was armed and before it completed: the tree may hold a partial
+    /// import, so the fence must stay up until a later drain completes. Recorded
+    /// before the first entry is applied.
+    /// </summary>
+    [Id(12)] public bool ImportApplied { get; set; }
+
+    /// <summary>
+    /// Snapshot entries applied by the current drain attempt. Progress
+    /// reporting only; reset when an attempt starts.
+    /// </summary>
+    [Id(13)] public long EntriesApplied { get; set; }
+
+    /// <summary>
+    /// Automatic re-drives of a bootstrap that failed after applying part of an
+    /// import, since the bootstrap was kicked off. Drives the backoff.
+    /// </summary>
+    [Id(14)] public int RedriveAttempts { get; set; }
+
+    /// <summary>
+    /// The UTC tick at or after which a failed, fenced bootstrap is re-driven.
+    /// </summary>
+    [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
 }
