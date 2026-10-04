@@ -129,9 +129,9 @@ residual exactly, as `Residual`, and #4549 owns it.
 
 ## Production defects this module found
 
-Writing the module turned up three defects. The module checks the intended
-design, and each defect stands as a mutation that reproduces the production
-shape, kept after the fix lands as the check that reintroducing it is caught:
+The module checks the intended design, and each production defect it
+reproduces stands as a mutation of the production shape, kept after the fix
+lands as the check that reintroducing it is caught:
 
 - #4463, fixed by #4476 - the bootstrap pin installed a drop floor that
   discarded writes the snapshot did not hold
@@ -146,6 +146,10 @@ shape, kept after the fix lands as the check that reintroducing it is caught:
 - #4465, fixed by #4477 - a duplicate of an entry still in flight was
   acknowledged, so an aborted first delivery was lost
   (`CursorNeverSkipsUnshippedDuplicateOfParkingAcked`).
+- #4504, fixed by #4544 - a snapshot bootstrap shipped no deletes, so a
+  receiver re-bootstrapped in place after the source trimmed its log past a
+  delete kept the deleted key's old value
+  (`EventualConvergenceSnapshotDropsDeletes`).
 
 [`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
 fixes.
@@ -157,14 +161,8 @@ fixes.
   the re-bootstrap companion).
 - #4549 - the residual of #4537: a reaped delete of a key the receiver holds
   under another origin.
-- #4504 - a snapshot bootstrap never ships a delete: the export skips a
-  tombstoned key and the drain does not clear the receiver's copy. A receiver
-  re-bootstrapped in place after the source trimmed its log past a delete
-  keeps the deleted key's old value forever
-  (`EventualConvergenceSnapshotDropsDeletes`). The module checks the design
-  that carries tombstones; the mutation is current production.
-  [`Refinement.md`](Refinement.md#territory-owned-by-other-open-issues) marks
-  the rows it touches.
+[`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md#territory-owned-by-other-open-issues)
+marks the rows they touch.
 
 ## How to run TLC
 
