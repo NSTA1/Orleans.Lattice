@@ -32,8 +32,10 @@ CONSTANTS a, b, c, k1, k2
 (* two-cluster cycle the cycle-break must cut), and both ship to c, a      *)
 (* receive-only cluster. a -> b -> c is a multi-hop path production        *)
 (* deliberately does not use: b never re-ships a's writes, so c takes them *)
-(* from a directly. c may also bootstrap, once, from a snapshot of b. k1   *)
-(* is a last-writer-wins key and k2 a grow-only-counter key.               *)
+(* from a directly. c may also bootstrap, once, from a snapshot of b,      *)
+(* including in place over a copy it already holds. k1 is a                *)
+(* last-writer-wins key, which b may also delete, and k2 a                 *)
+(* grow-only-counter key.                                                  *)
 (***************************************************************************)
 Clusters == {a, b, c}
 Writers == {a, b}
@@ -47,6 +49,7 @@ MaxWrites == 2
 MaxFaults == 1
 BootSource == b
 BootTarget == c
+BootEdge == <<BootSource, BootTarget>>
 FaultSite == c
 
 Max(S) == IF S = {} THEN 0 ELSE CHOOSE m \in S : \A n \in S : n <= m
@@ -57,11 +60,15 @@ Max(S) == IF S = {} THEN 0 ELSE CHOOSE m \in S : \A n \in S : n <= m
 (* may carry one causal dependency: a foreign origin and the HLC of that   *)
 (* origin the author had applied (production's WalRecord.VectorClock, a    *)
 (* frontier the application stamps). NoDep is the null frontier of an      *)
-(* ordinary local write.                                                   *)
+(* ordinary local write. A delete of a last-writer-wins key is a write     *)
+(* whose del flag is set: production's tombstone, an LwwValue that merges  *)
+(* by its HLC like any other write. Only BootSource deletes, and only a    *)
+(* key its replica holds (deleting an absent key changes no replica): the  *)
+(* case a snapshot bootstrap must carry (#4504), in a small instance.      *)
 (***************************************************************************)
 NoDep == [o |-> c, h |-> 0]
 DepDomain == {NoDep} \cup [o : Writers, h : Hlcs]
-Writes == [o : Writers, k : Keys, h : Hlcs, d : DepDomain]
+Writes == [o : Writers, k : Keys, h : Hlcs, d : DepDomain, del : BOOLEAN]
 Idents == Writers \X Keys \X Hlcs
 Ident(w) == <<w.o, w.k, w.h>>
 
@@ -105,7 +112,8 @@ LwwTop(x, S) == CHOOSE w \in S : \A v \in S : LwwLeq(x, v, w)
 
 ValueAt(x, k, S) ==
     IF Mode(k) = "lww"
-    THEN IF S = {} THEN [h |-> 0, o |-> c] ELSE [h |-> LwwTop(x, S).h, o |-> LwwTop(x, S).o]
+    THEN IF S = {} THEN [h |-> 0, o |-> c, del |-> FALSE]
+         ELSE [h |-> LwwTop(x, S).h, o |-> LwwTop(x, S).o, del |-> LwwTop(x, S).del]
     ELSE [o \in Writers |-> Max({w.h : w \in {v \in S : v.o = o}})]
 
 (* The highest HLC merged into x's replica of k: the leaf's version stamp. *)
@@ -136,6 +144,7 @@ DepsOk(x, w) ==
 ShouldShip(s, w) == w.o = s
 
 DepChoices(o) == {NoDep} \cup {[o |-> p, h |-> hwm[o][p]] : p \in {q \in Writers \ {o} : hwm[o][q] > 0}}
+DelChoices(o, k) == IF o = BootSource /\ Mode(k) = "lww" /\ val[o][k] # {} THEN BOOLEAN ELSE {FALSE}
 
 Merged(x, w) == [val EXCEPT ![x][w.k] = @ \cup {w}]
 Logged(x, w) ==
@@ -188,7 +197,8 @@ Author(o, k, h, d) ==
     /\ Cardinality(authored) < MaxWrites
     /\ h > Ver(o, k)
     /\ d \in DepChoices(o)
-    /\ LET w == [o |-> o, k |-> k, h |-> h, d |-> d]
+    /\ \E del \in DelChoices(o, k) :
+       LET w == [o |-> o, k |-> k, h |-> h, d |-> d, del |-> del]
        IN /\ authored' = authored \cup {w}
           /\ val' = [val EXCEPT ![o][k] = @ \cup {w}]
           /\ wal' = [wal EXCEPT ![o] = Append(@, w)]
@@ -433,7 +443,8 @@ Restart(x) ==
 (* production caller reports a vector to the WAL cursor registry, so       *)
 (* GetCausalStableAsync returns null and the frontier is the source's own  *)
 (* HWM vector, which carries no coordinate for the source itself. The      *)
-(* export streams every live row, the drain applies them at BootTarget     *)
+(* export streams every row, tombstones included (the design; see below), *)
+(* the drain applies them at BootTarget                                   *)
 (* under LatticeBootstrapApplyContext - the floor is bypassed and the HWM  *)
 (* does not advance, but each row still passes through the identity cache, *)
 (* stamped with the SOURCE as its origin and the row's version HLC - and   *)
@@ -461,6 +472,17 @@ Restart(x) ==
 (* EventualConvergencePinRegressesVector), and re-arms a drain, because    *)
 (* the pin can satisfy a parked entry's dependency (mutation               *)
 (* EventualConvergencePinSkipsDrain).                                      *)
+(*                                                                         *)
+(* The bootstrap may run in place over a copy BootTarget already holds,    *)
+(* and BootSource may have trimmed its log past BootTarget's cursor first: *)
+(* that is what makes LatticeFallOffLogDetector request it. The stream    *)
+(* then resumes at the trim point t, any position from the cursor to the   *)
+(* log's end, and the entries in between reach BootTarget only through the *)
+(* snapshot. So the snapshot must carry every row BootSource holds,        *)
+(* tombstones included: production's export skips a tombstoned key and    *)
+(* the drain does not clear the receiver's copy, so a delete behind the    *)
+(* trim point is never delivered (#4504, mutation                          *)
+(* EventualConvergenceSnapshotDropsDeletes).                               *)
 (***************************************************************************)
 Bootstrap ==
     /\ ~booted
@@ -474,7 +496,8 @@ Bootstrap ==
        IN /\ hwm' = [hwm EXCEPT ![BootTarget] = [o \in Writers |-> Max({@[o], front[o]})]]
           /\ pinned' = [pinned EXCEPT ![BootTarget] = [o \in Writers |-> 0]]
     /\ wake' = [wake EXCEPT ![BootTarget] = @ \/ buf[BootTarget] # {}]
-    /\ UNCHANGED <<authored, wal, cursor, parking, buf, dlq, faults>>
+    /\ \E t \in cursor[BootEdge]..Len(wal[BootSource]) : cursor' = [cursor EXCEPT ![BootEdge] = t]
+    /\ UNCHANGED <<authored, wal, parking, buf, dlq, faults>>
 
 (***************************************************************************)
 (* A fully quiesced state has an explicit stuttering successor so natural  *)

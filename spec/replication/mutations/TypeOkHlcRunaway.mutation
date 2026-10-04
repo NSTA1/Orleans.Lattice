@@ -9,8 +9,8 @@ SUMMARY: stamps a write with an HLC beyond the declared domain, so TypeOK fires
 PERTURBS: Author
 
 --- FIND
-    /\ LET w == [o |-> o, k |-> k, h |-> h, d |-> d]
+       LET w == [o |-> o, k |-> k, h |-> h, d |-> d, del |-> del]
 --- REPLACE
 \* MUTATION: the stamped HLC runs ahead of the chosen one.
-    /\ LET w == [o |-> o, k |-> k, h |-> h + Cardinality(authored), d |-> d]
+       LET w == [o |-> o, k |-> k, h |-> h + Cardinality(authored), d |-> d, del |-> del]
 --- END

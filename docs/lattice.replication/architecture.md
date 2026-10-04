@@ -214,7 +214,10 @@ a mutation that makes it fail, so none holds vacuously.
 Writing the specification found three production defects, each now fixed and
 kept as a mutation that reproduces it: a bootstrap pin that discarded writes
 (#4463), a causal buffer that could strand or lose parked entries (#4464), and
-a duplicate of an in-flight entry that was acknowledged and lost (#4465).
+a duplicate of an in-flight entry that was acknowledged and lost (#4465). One
+gap is still open and is modelled the same way: a snapshot bootstrap ships no
+deletes, so a receiver re-bootstrapped in place after the source trimmed its
+log past a delete keeps the deleted key's old value (#4504).
 
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is

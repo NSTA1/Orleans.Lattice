@@ -30,7 +30,7 @@ replication says nothing about it.
   rises above everything merged into it, and nothing relates two leaves'
   clocks, so an origin's HLCs are not monotonic in delivery order - the
   condition behind #1060. A write may carry a causal dependency on a foreign
-  origin's frontier.
+  origin's frontier. A last-writer-wins write may be a delete (a tombstone).
 - **The shipper.** A per-edge cursor over the source's WAL, which also holds
   the writes the source applied from peers. The local-origin cycle-break skips
   those (`ShipSkip`); any entry above the cursor may be sent, re-sent and
@@ -42,7 +42,11 @@ replication says nothing about it.
   buffer entries (`ApplyFails`, `Evict`) and operator replay (`Replay`); a
   receiver restart that loses volatile state (`Restart`).
 - **Bootstrap** of one cluster from a snapshot of another, and the stream
-  handoff the pin establishes (`Bootstrap`).
+  handoff the pin establishes (`Bootstrap`). The bootstrap may run in place
+  over a copy the receiver already holds, after the source trimmed its log
+  past the receiver's cursor, which is when the fall-off detector requests
+  one: the stream resumes at the trim point, and what lay behind it arrives
+  only in the snapshot.
 - **Merge modes** as join-homomorphisms from the set of merged writes:
   last-writer-wins and a grow-only counter.
 - **The transport** loses, duplicates, reorders and delays. A partition is a
@@ -52,7 +56,8 @@ The instance has three clusters: a and b author and ship to each other (a
 cycle) and to c, which only receives; a -> b -> c is a multi-hop path
 production deliberately does not use. c may bootstrap once from b and is the
 only fault site. Two keys (one per merge mode), at most two writes, HLCs up to
-2 and one environment fault bound it.
+2 and one environment fault bound it. Only b deletes, and only a key it
+holds.
 
 ## Properties checked
 
@@ -118,6 +123,17 @@ shape, kept after the fix lands as the check that reintroducing it is caught:
 [`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
 fixes.
 
+## Open production gaps
+
+- #4504 - a snapshot bootstrap never ships a delete: the export skips a
+  tombstoned key and the drain does not clear the receiver's copy. A receiver
+  re-bootstrapped in place after the source trimmed its log past a delete
+  keeps the deleted key's old value forever
+  (`EventualConvergenceSnapshotDropsDeletes`). The module checks the design
+  that carries tombstones; the mutation is current production.
+  [`Refinement.md`](Refinement.md#territory-owned-by-other-open-issues) marks
+  the rows it touches.
+
 ## How to run TLC
 
 From this directory, with the pinned `tla2tools.jar` (v1.7.4) and a JDK:
@@ -133,8 +149,8 @@ two-arm experiment, in CI; see [the spec README](../README.md#ci-decision).
 ## Last checked
 
 On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
-`Replication.cfg` held with deadlock checking on, over 228,266 distinct states
-(1,171,757 generated) at a complete-search depth of 17. Every property in
+`Replication.cfg` held with deadlock checking on, over 241,332 distinct states
+(1,309,271 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
 generated) at a depth of 16.
 
@@ -149,5 +165,5 @@ This table is the one place this directory states them; see
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `Replication` | 4 | 3 | 11 | 17 | 16 | 228,266 |
+| `Replication` | 4 | 3 | 11 | 18 | 16 | 241,332 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
