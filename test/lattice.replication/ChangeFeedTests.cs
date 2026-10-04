@@ -8,7 +8,7 @@ using Orleans.Lattice.Replication.Grains;
 namespace Orleans.Lattice.Replication.Tests;
 
 [TestFixture]
-public class ChangeFeedTests
+public partial class ChangeFeedTests
 {
     private const string Tree = "tree";
     private const string LocalCluster = "site-a";

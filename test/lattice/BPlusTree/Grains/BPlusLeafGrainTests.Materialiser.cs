@@ -711,16 +711,52 @@ public partial class BPlusLeafGrainTests
     public void Materialiser_honours_cancellation_during_replay()
     {
         // Cancellation responsiveness: a token cancelled before
-        // activation must surface as OperationCanceledException, not
-        // silently complete the replay.
+        // activation must surface as a cancellation, not silently
+        // complete the replay.
+        //
+        // Since #2871 the replay runs on the barrier's own token, which the
+        // harness cancels only after the activation hook returns, while the
+        // replay itself starts on a thread-pool continuation after the
+        // barrier's yield. The cancel therefore lands at an arbitrary point of
+        // the replay: before the snapshot rehydrate's check (an
+        // OperationCanceledException), or at the replay permit gate, whose
+        // SemaphoreSlim.WaitAsync answers an already-cancelled token with a
+        // TaskCanceledException - an OperationCanceledException too, and every
+        // production catch site catches the base type. So the assertion admits
+        // the whole family, and the head read parks until its token is
+        // cancelled so a replay the harness has not yet cancelled cannot
+        // finish first. Once released, the replay must notice the cancellation
+        // itself: the read returns normally, so a replay that ignored it would
+        // apply k1 and complete.
         var entry = new CommitLogSliceEntry(1, BuildCommittedSet("k1", Encoding.UTF8.GetBytes("v1")));
         var coord = BuildCoordinator(head: 2, entry);
-        var (grain, _, _, _) = CreateGrainWithMaterialiser(coord);
+        coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(call => ParkUntilCancelled(call.ArgAt<CancellationToken>(0)));
+        var (grain, state, _, _) = CreateGrainWithMaterialiser(coord);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
 
-        Assert.ThrowsAsync<OperationCanceledException>(async () => await ActivateAsync(grain, cts.Token));
+        Assert.CatchAsync<OperationCanceledException>(async () => await ActivateAsync(grain, cts.Token));
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.CacheForTest.TryGetRow("k1", out _), Is.False,
+                "the cancelled replay must not have applied the entry.");
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.LessThan(1L),
+                "the cancelled replay must not have advanced the checkpoint.");
+        });
+
+        static async Task<long> ParkUntilCancelled(CancellationToken token)
+        {
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(30), token);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+
+            return 2L;
+        }
     }
 
     [Test]

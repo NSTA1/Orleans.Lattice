@@ -775,13 +775,22 @@ public interface ILattice : IGrainWithStringKey
     /// to follow an unwind that outlasted the call. Retrying while an undo is
     /// pending is acknowledged again rather than refused.
     /// </para>
+    /// <para>
+    /// <b>Replicated trees.</b> A replicated tree cannot be undone once its alias
+    /// has swapped onto the resized copy: writes that copy took may already have
+    /// been shipped to a peer, and cross-cluster shipping never retracts them, so
+    /// the undo would discard them on this cluster only. Resize the tree again,
+    /// back to its previous sizing, instead. An undo before the swap is
+    /// unaffected.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the call before the undo is accepted, or stops waiting for an accepted undo to finish; an accepted undo still runs to completion.</param>
     /// <exception cref="InvalidOperationException">
     /// Thrown if no resize exists to undo (the message names the most recent
     /// resize when it was already undone, so a retry after success is not read as a
     /// failure), or if the accepted unwind could not be applied - for example
-    /// because the old tree has already been purged.
+    /// because the old tree has already been purged, or because the tree is
+    /// replicated and its alias has already swapped onto the resized copy.
     /// </exception>
     Task UndoResizeAsync(CancellationToken cancellationToken = default);
 
@@ -949,7 +958,10 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if no resize operation is in progress for this tree -
     /// either the most recent resize has completed or no resize has ever been initiated.
-    /// Answers without waiting for an in-flight resize phase.
+    /// Answers without waiting for an in-flight resize phase. A completed resize
+    /// reports <c>true</c> only once it has released the tree's alias reservation,
+    /// so a <see cref="DeleteTreeAsync"/> issued as soon as this returns
+    /// <c>true</c> is not refused as an alias operation in progress.
     /// </summary>
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 

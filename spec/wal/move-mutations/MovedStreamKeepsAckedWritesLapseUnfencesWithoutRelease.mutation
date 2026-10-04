@@ -1,0 +1,20 @@
+# Pairs with MovedStreamKeepsAckedWrites. When the lease lapses the source
+# activation simply stops refusing appends, without releasing the durable fence
+# in the registry first, so the flip - which finds the fence still held - goes
+# ahead and discards the writes it acknowledged meanwhile. The base serves
+# unfenced only after the release, which the flip's compare-and-swap observes.
+MODULE: MovedStreamKeepsAckedWritesLapseUnfencesWithoutRelease
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: a lapsed lease unfences the source without releasing the durable fence, so a flip still succeeds
+PERTURBS: LeaseLapse
+
+--- FIND
+    /\ lapsed' = TRUE
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, afence, moves, crashes, coordCrashes>>
+--- REPLACE
+\* MUTATION: the activation serves unfenced as soon as the lease lapses.
+    /\ lapsed' = TRUE
+    /\ afence' = FALSE
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, moves, crashes, coordCrashes>>
+--- END

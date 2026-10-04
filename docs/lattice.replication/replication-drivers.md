@@ -356,6 +356,14 @@ operator alias change - the shipper must reset those cursors and re-ship from
 the new physical log start, or it would keep tailing the retired identity's
 WAL. An online reshard changes the tree's shard map, not its alias, so it
 does not trigger a rebind.
+A resize of a replicated tree cannot be undone after its alias swap
+([#4518](https://github.com/NSTA1/Orleans.Lattice/issues/4518)): writes the
+resized copy took may already have shipped, and last-writer-wins shipping
+never retracts them, so the rebind back to the old copy would leave them on
+the peer while this cluster discards them. An undo before the swap rebinds
+nothing, because the shipper never left the old copy. To return a replicated tree to its old
+shape, resize it again, back to its previous sizing: unlike an undo, a
+resize discards no write, so the clusters stay in agreement.
 
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the
@@ -380,6 +388,41 @@ A lost notification (observer fault, or a shipper deactivated across the swap)
 therefore degrades to poll-driven detection bounded by that interval rather
 than a permanent mis-binding - it never reintroduces a per-tick registry read
 on an idle tree.
+
+The backstop is not enough after a coordinated restore. The restore saga
+pauses shipping, cuts the alias over to the restored copy, and resumes
+shipping at global completion. A paused shipper does not re-resolve, and the
+backstop interval counts from the last resolve, which may be moments before
+the pause. If the push was lost, a resumed shipper would keep draining the
+retired log and carry a pre-restore write onto the peer's restored copy,
+re-advancing the restored cut for good (issue #4490). So `ResumeShippingAsync`
+forces the first tick after the resume to resolve the source identity, and to
+rebind with a cursor reset if it moved, before that tick reads or sends
+anything. A shipper reactivated during the pause resolves first anyway.
+
+A rebind also decides what happens to the saga terminals the shipper holds
+from the retired log (see [Saga terminal hold](#saga-terminal-hold)):
+
+- **A rebind made while shipping was paused by a saga**, or found by the
+  resolve that follows the resume, is a coordinated restore. Such a rebind
+  **drops** the holds. Both clusters were reset to the cut: a saga before the
+  cut is settled by each side's restored copy, a terminal after it must not
+  cross the cut, and every bucket the peer staged from the retired log went
+  with the copy its own cutover replaced.
+- **Any other rebind** (a resize, its undo, a schema remediation, an operator
+  alias change) **carries** each hold forward by transaction. A carried hold
+  waits for the new log's prepare tally or tail barrier, so it cannot overtake
+  a prepare the new copy mirrored. It also cannot strand the buckets the peer
+  already staged from the retired log.
+
+Two residuals apply to carried holds:
+
+- A prepare written to the retired copy before an online resize began
+  forwarding is not in the new copy's log (#4455). A hold carried past it
+  still releases on the new log's tail barrier.
+- A resize undo discards the writes the new copy accepted after the swap. A
+  terminal held from that copy for a saga bound to it is released on the old
+  copy's log, which the peer then applies (#4474).
 
 This event-driven inversion closes two problems the former per-tick registry
 resolve had at once: the idle-only registry read load (an otherwise-quiet link
@@ -611,17 +654,16 @@ A held terminal is never stranded:
   passed by the acknowledged frontier like any other sequence.
 - The tail barrier needs only acknowledgements of entries that exist.
 - A rebind to a new source log (an alias swap) stops reading the retired
-  log. A hold whose prepares are already acknowledged ships. Any other hold
-  is dropped with a warning: its unshipped prepares are abandoned with the
-  retired log, so releasing it would commit the saga on the peer without
-  them.
+  log. After a coordinated restore the holds are dropped, and otherwise they
+  are carried forward to the new log (see
+  [Source-identity rebind](#source-identity-rebind)).
 
 Two cases release without the guarantee:
 
 - A prepare routed to the dead-letter queue (an encode failure) counts as
   acknowledged. Its terminal is still released, with a warning naming the
   transaction, and the peer serves the saga without that key until the
-  entry is replayed.
+  entry is replayed (#4494).
 - The hold assumes every key of the saga is replicated. A `KeyFilter` or
   `KeyPrefixes` that drops some of a saga's prepares yields an
   all-or-nothing view over the replicated subset only. That is the filter's

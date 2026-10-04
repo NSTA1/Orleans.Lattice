@@ -1,0 +1,25 @@
+# Pairs with BackupSagaConsistent (the requested
+# DelegatedVerdictCachedUnderGate). A reader resolving a delegated txid under
+# the gate caches the coordinator's verdict as a local decision after the
+# snapshot was taken, so the terminal fan-out may apply on one shard while
+# another still resolves the saga against the snapshot, where it has no local
+# decision and reads pre-saga.
+MODULE: BackupSagaConsistentDelegatedVerdictCachedUnderGate
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a delegated verdict is cached as a local decision while the gate is held
+PERTURBS: CacheVerdict
+
+--- FIND
+CacheVerdict(t, T) ==
+    /\ CrossTree(t)
+    /\ dec[t] # "inflight"
+    /\ deleg[t][T]
+    /\ ~Gated(T)
+--- REPLACE
+CacheVerdict(t, T) ==
+    /\ CrossTree(t)
+    /\ dec[t] # "inflight"
+    /\ deleg[t][T]
+    \* MUTATION: caching is not suppressed under the gate.
+--- END

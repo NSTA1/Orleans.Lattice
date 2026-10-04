@@ -60,7 +60,8 @@ internal sealed class TreeResizeGrain(
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeResizeState> state,
     [PersistentState("tree-resize-undo", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeResizeUndoState> undoIntent)
+    IPersistentState<TreeResizeUndoState> undoIntent,
+    ILatticeReplicationContext? replicationContext = null)
     : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
 {
     private string TreeId => Context.GrainId.Key.ToString()!;
@@ -79,7 +80,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private readonly record struct DurableResize(
         bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId,
-        ResizePhase Phase, int CopyShardCount)
+        ResizePhase Phase, int CopyShardCount, string? AliasReservationId)
     {
         public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
     }
@@ -109,7 +110,8 @@ internal sealed class TreeResizeGrain(
     private DurableResize CaptureResize() => new(
         state.State.InProgress, state.State.Complete, state.State.OperationId,
         state.State.OldPhysicalTreeId, state.State.SnapshotTreeId,
-        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount);
+        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount,
+        state.State.AliasReservationId);
 
     private DurableIntent CaptureIntent() => new(
         undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
@@ -151,9 +153,21 @@ internal sealed class TreeResizeGrain(
     /// <inheritdoc />
     /// <remarks>
     /// A completed resize whose undo has been accepted still has work outstanding,
-    /// so the keepalive keeps the phase loop armed until the unwind lands.
+    /// so the keepalive keeps the phase loop armed until the unwind lands. So does
+    /// a completed resize that still holds the tree's alias reservation, which a
+    /// completion interrupted before its release leaves behind: the next phase
+    /// tick releases it (issue #4527).
     /// </remarks>
-    protected override bool InProgress => state.State.InProgress || UndoPending;
+    protected override bool InProgress =>
+        state.State.InProgress || UndoPending || HoldsReservationAfterCompletion;
+
+    /// <summary>
+    /// <see langword="true"/> when no resize is running or unwinding but the
+    /// persisted state still holds the tree's alias reservation - left by a
+    /// completion interrupted between persisting itself and releasing it.
+    /// </summary>
+    private bool HoldsReservationAfterCompletion =>
+        !state.State.InProgress && state.State.AliasReservationId is not null && _undoRunning == 0;
 
     /// <summary>
     /// <see langword="true"/> while an accepted undo still names the current
@@ -613,6 +627,60 @@ internal sealed class TreeResizeGrain(
         await CompleteCoordinatorAsync();
     }
 
+    /// <summary>
+    /// Refuses the after-swap unwind of a replicated tree whose alias names the
+    /// resized copy, and otherwise records, before anything is armed, that this
+    /// operation's unwind has been cleared. A replicated tree cannot be moved back
+    /// once the resized copy has served it: the shipper has been tailing that
+    /// copy's log, so writes it took may already be on a peer, and cross-cluster
+    /// shipping is last-writer-wins and never retracts them, so the undo would
+    /// discard them here and leave them there (issue #4518). The refusal is an
+    /// <see cref="InvalidOperationException"/> raised before any compensation, so
+    /// the intent is withdrawn with the reason and the alias still names the
+    /// resized copy. The decision is taken once per operation and persisted: a
+    /// retried unwind that may already have armed the resized copy must finish
+    /// whatever the tree's replication says by then, or routed traffic would be
+    /// refused by a copy the alias still names. A swap the alias has not taken,
+    /// or one an earlier attempt already moved back, needs no decision.
+    /// </summary>
+    private async Task ClearUnwindForReplicationAsync(string operationId, TreeRegistryEntry logicalBefore, string snapshotTreeId)
+    {
+        if (!string.Equals(logicalBefore.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal)
+            || string.Equals(undoIntent.State.UnwindClearedOperationId, operationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (replicationContext?.ResolveMergeMode(TreeId) is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot undo the resize of replicated tree '{TreeId}' after its alias swap: writes the resized copy "
+                + "took may already have been shipped to a peer, and the undo cannot retract them there. "
+                + $"Resize the tree again, back to its previous sizing (MaxLeafKeys {state.State.OldRegistryEntry?.MaxLeafKeys}, "
+                + $"MaxInternalChildren {state.State.OldRegistryEntry?.MaxInternalChildren}), instead.");
+        }
+
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            var previous = undoIntent.State.UnwindClearedOperationId;
+            undoIntent.State.UnwindClearedOperationId = operationId;
+            try
+            {
+                await WriteUndoIntentAsync();
+            }
+            catch
+            {
+                undoIntent.State.UnwindClearedOperationId = previous;
+                throw;
+            }
+        }
+        finally
+        {
+            _undoIntentGate.Release();
+        }
+    }
+
     private async Task ExecuteUndoAsync()
     {
         _undoRunning++;
@@ -814,6 +882,8 @@ internal sealed class TreeResizeGrain(
         var logicalBefore = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
 
+        await ClearUnwindForReplicationAsync(opId, logicalBefore, snapshotTreeId);
+
         // Defensively abort any snapshot activation that may have been
         // resurrected by crash recovery - a no-op when the snapshot has
         // already completed or when the opId no longer matches.
@@ -977,7 +1047,18 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     protected internal override async Task ProcessNextPhaseAsync()
     {
-        if (!state.State.InProgress && !UndoPending) return;
+        if (!state.State.InProgress && !UndoPending)
+        {
+            // A completion interrupted before it released the tree's alias
+            // reservation (issue #4527): release it, then retire the loop.
+            if (HoldsReservationAfterCompletion)
+            {
+                await ReleaseAliasAsync();
+                await CompleteCoordinatorAsync();
+            }
+
+            return;
+        }
 
         try
         {
@@ -1394,8 +1475,13 @@ internal sealed class TreeResizeGrain(
 
         await PublishResizeCompletedAsync();
 
-        await CompleteCoordinatorAsync();
+        // Release the alias reservation before retiring the coordinator, so the
+        // keepalive reminder that CompleteCoordinatorAsync unregisters is still
+        // armed if the release is interrupted: InProgress stays true while a
+        // completed resize holds the reservation, and the next phase tick
+        // releases it (issue #4527).
         await ReleaseAliasAsync();
+        await CompleteCoordinatorAsync();
     }
 
     private async Task ReserveAliasAsync()
@@ -1434,10 +1520,25 @@ internal sealed class TreeResizeGrain(
     /// <remarks>
     /// Answers from the resize state as last persisted: this read is interleaved,
     /// and a completion a phase has applied in memory but not yet durably written
-    /// may still be reverted, which would make completion non-monotonic.
+    /// may still be reverted, which would make completion non-monotonic. A
+    /// completed resize is not idle while its persisted state still holds the
+    /// tree's alias reservation (issue #4527): completion is persisted before the
+    /// reservation is released, and reporting idle in between let a caller's
+    /// delete or alias change be refused as "alias operation in progress" by a
+    /// resize that had already reported itself complete. The reservation is
+    /// persisted before it is taken and cleared only after it is released, so
+    /// once this answers idle the completion's reservation is gone. The
+    /// reservation an undo of a completed resize takes is not counted, so such an
+    /// undo leaves the resize reading complete, as documented.
     /// </remarks>
-    public Task<bool> IsIdleAsync() =>
-        Task.FromResult(!DurableResizeState.InProgress);
+    public Task<bool> IsIdleAsync()
+    {
+        var durable = DurableResizeState;
+        var completionHoldsReservation = durable is { Complete: true, AliasReservationId: not null }
+            && !DurableUndoPending
+            && _undoRunning == 0;
+        return Task.FromResult(!durable.InProgress && !completionHoldsReservation);
+    }
 
     /// <summary>
     /// How long <see cref="HoldsShardMigrationsAsync"/> waits for one old-copy

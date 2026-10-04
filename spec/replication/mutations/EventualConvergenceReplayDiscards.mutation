@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence. The operator's replay removes the dead
+# letter without applying it, so a write that failed into the dead-letter
+# queue never reaches the replica.
+MODULE: EventualConvergenceReplayDiscards
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: replaying a dead letter discards it instead of applying it
+PERTURBS: Replay
+
+--- FIND
+
+          /\ val' = Merged(x, r)
+--- REPLACE
+
+\* MUTATION: the replayed entry is not merged.
+          /\ val' = val
+--- END

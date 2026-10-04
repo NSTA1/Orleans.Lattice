@@ -614,6 +614,14 @@ internal sealed partial class ReplicationShipperGrain(
     private bool _sourceIdentityResolved;
 
     /// <summary>
+    /// Set by <see cref="ResumeShippingAsync"/> and cleared by the next source
+    /// identity resolve: an alias move that resolve finds was made while
+    /// shipping was paused by a saga (a coordinated restore), which decides
+    /// what happens to held saga terminals of the retired log (#4490).
+    /// </summary>
+    private bool _resolvePendingAfterSagaPause;
+
+    /// <summary>
     /// Wall-clock time of the last source-identity resolve or event-driven
     /// rebind, measured on <see cref="_cursorFlushClock"/>. The gated per-tick
     /// refresh (<see cref="MaybeRefreshSourceIdentityAsync"/>) reads the registry
@@ -833,6 +841,17 @@ internal sealed partial class ReplicationShipperGrain(
         Logger.LogInformation(
             "{Context}: shipping resumed after cross-cluster saga {SagaId}.",
             LogContext, sagaId);
+
+        // A saga that paused shipping can have moved the source alias while the
+        // shipper was idle (a coordinated restore cuts over to the restored copy),
+        // and the alias-change push is best-effort. Force the first tick after the
+        // resume to re-resolve the source identity, and rebind with a cursor reset
+        // if it moved, before its first read or send: shipping on from the retired
+        // log would carry pre-restore records onto the peer's restored copy
+        // (#4490). The backstop interval alone does not cover this, because it
+        // measures from the last resolve, which may be moments before the pause.
+        _sourceIdentityResolved = false;
+        _resolvePendingAfterSagaPause = true;
 
         // Re-arm the pump so the resume takes effect on the next tick rather
         // than waiting a full keepalive period.
@@ -1491,11 +1510,7 @@ internal sealed partial class ReplicationShipperGrain(
         // It does not drop saga terminals (issue #2324), because on a
         // replicated tree WalCommitLogWriter stamps the configured cluster id
         // onto any record that arrives without an origin, terminals included.
-        if (string.IsNullOrEmpty(entry.OriginClusterId))
-        {
-            return false;
-        }
-
+        //
         // Tombstone-reap envelopes are emitted by the per-leaf
         // `CompactTombstonesAsync` path to durably record a local
         // structural cleanup (physically remove a tombstone or expired
@@ -1515,11 +1530,7 @@ internal sealed partial class ReplicationShipperGrain(
         // carry the mutation category (`Category`), but `Op` alone
         // identifies a tombstone-reap envelope, so the filter keys on
         // `Op` directly.
-        if (entry.Op == MutationKind.Tombstone)
-        {
-            return false;
-        }
-
+        //
         // Cycle-break: only ship entries authored by the *local*
         // cluster. Under the WAL-as-sole-durability-boundary contract,
         // the per-shard WAL also captures entries installed by
@@ -1537,7 +1548,10 @@ internal sealed partial class ReplicationShipperGrain(
         // "don't ship a peer its own writes back" rule because
         // `_peerClusterId != options.ClusterId` is a wire-shape
         // invariant on every replication peer.
-        if (!string.Equals(entry.OriginClusterId, options.ClusterId, StringComparison.Ordinal))
+        //
+        // All three clauses are the pure ReplicationShipEligibility.IsShipEligible, the rule the
+        // replication TLA+ module and Coyote models check.
+        if (!ReplicationShipEligibility.IsShipEligible(entry.OriginClusterId, entry.Op, options.ClusterId))
         {
             return false;
         }
@@ -2663,10 +2677,11 @@ internal sealed partial class ReplicationShipperGrain(
                 TallyPrepare(in winningRecord, minPartition, winningShipping.Sequence, options);
             }
 
-            if (_legacyCursorMigrationPending
-                && !isPreparedAtomicBatch
-                && winningRecord.Timestamp != HybridLogicalClock.Zero
-                && winningRecord.Timestamp.CompareTo(state.State.Cursor) <= 0)
+            if (ReplicationShipEligibility.IsBelowLegacyScalarCursor(
+                    _legacyCursorMigrationPending,
+                    isPreparedAtomicBatch,
+                    winningRecord.Timestamp,
+                    state.State.Cursor))
             {
                 continue;
             }
@@ -4231,6 +4246,8 @@ internal sealed partial class ReplicationShipperGrain(
         _walTreeId = physical;
         _sourceIdentityResolved = true;
         _lastSourceIdentityResolveUtc = _cursorFlushClock.GetUtcNow().UtcDateTime;
+        var followsSagaPause = _resolvePendingAfterSagaPause || state.State.AdminPauseSagaId is not null;
+        _resolvePendingAfterSagaPause = false;
 
         var bound = state.State.BoundPhysicalTreeId;
         if (string.IsNullOrEmpty(bound))
@@ -4261,7 +4278,7 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.PartitionCursors.Clear();
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
-        ResetTerminalHoldsForNewSource();
+        ResetTerminalHoldsForNewSource(followsSagaPause);
         await state.WriteStateAsync();
 
         if (_partitionGrainCache.Length >= partitions)

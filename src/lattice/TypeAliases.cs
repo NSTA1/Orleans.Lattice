@@ -260,6 +260,9 @@ internal static class TypeAliases
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
 
+    /// <summary>Alias for the refusal a purged physical copy gives an unrouted call (issue #4503).</summary>
+    internal const string LatticeTreePurged = "ol.ltp";
+
     // Restore shadow-cutover - retained-previous-tree redirect primitive
     internal const string RetainedRedirectState = "ol.rrs";
 
@@ -267,6 +270,9 @@ internal static class TypeAliases
     internal const string RangeDeleteResult = "ol.rdr";
     internal const string LeafDeleteResult = "ol.ldr";
     internal const string ShardRangeDeletePage = "ol.srd";
+
+    /// <summary>Alias for one bounded batch of a shard's range clock probe (issue #4530).</summary>
+    internal const string ShardRangeClockPage = "ol.src";
 
     // Work-bounded shard count batch (issue 1971).
     // Note "ol.scp" is NOT free - Orleans.Lattice.Scaling.ComputePressure owns
@@ -337,6 +343,10 @@ internal static class TypeAliases
     internal const string TxRegistryState = "ol.txr";
     internal const string TxRegistryHighWaterState = "ol.txh";
     internal const string TxRegistryWriteFailed = "ol.txf";
+    internal const string TxDecisionGateRefused = "ol.dgx";
+    internal const string TxDecisionGateRefusal = "ol.dgk";
+    internal const string TxRegistryCaptureGateMode = "ol.dgm";
+    internal const string SnapshotDecisionGate = "ol.dgs";
     internal const string LatticeStateWriteFailed = "ol.swf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";

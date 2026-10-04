@@ -497,7 +497,7 @@ Run it with blame-hang (a 3-minute per-test timeout names and aborts a hanging t
 
 **Scope Tier 4 to the fixtures your change can plausibly break, not reflexively to whole projects.** CI re-runs the full non-chaos suite for every matched package on the PR anyway, so a second full local run of the same project buys nothing but wall-clock. The local pass exists to catch *your* mistake before it costs a CI cycle - so run the fixtures you touched (and their nearest neighbours) first, and widen only when the change is broad enough that you genuinely cannot predict the blast radius. A test-only or single-grain change is usually well served by a `--filter "FullyQualifiedName~<Fixture>"` pass plus the hygiene filter; a change to a widely-referenced core type warrants the whole project. When you are unsure of the blast radius, `repocontext_related <path>` lists the indexed dependents and covering test types for a file, which is a cheaper way to size the run than guessing.
 
-**Catching cross-project breakage is CI's job, not the local dev loop's.** On every PR, CI runs the non-chaos suite (plus the `Chaos` and `AzureStorageEmulator` suites) of every package the change can reach - the changed packages, every package that project-references them, and `lattice.dashboards` always; a shared or root change fans out to every package - so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
+**Catching cross-project breakage is CI's job, not the local dev loop's.** On every PR, CI runs the non-chaos suite (plus the `Chaos` and `AzureStorageEmulator` suites) of every package the change can reach - the changed packages, every package that project-references them, and `lattice.dashboards` always; a shared or root change fans out to every package - so an `Orleans.Lattice` change that broke `Orleans.Lattice.Replication.Tests` is caught there. One exception, by base: a **member pull request into an integration branch** (base `*/epic/**`) runs the deterministic tier only - the `Chaos` and `Coyote` tiers are skipped, the TLC fixtures in the deterministic tier still run, and every guard and the `content-gates` job still run. Those tiers run on that integration branch's push lane after each member merge and on its pull request into `main`, which skips nothing, as does every pull request into `main` or `release/**`; `.github/workflows/tier-scope.py` owns the rule, the run summary lists what was not run, and `CiMemberPullRequestTieringTests` pins both directions. So a chaos or Coyote regression in a member surfaces on the bucket, not on the member - run the relevant chaos or Coyote fixtures locally when your change touches what they exercise. Only run the full cross-solution `dotnet test` (no project arg) locally when you have deliberately made a cross-cutting change to the core public surface that you expect to ripple through downstream projects - and even then, prefer running just the specific downstream test projects you expect to be affected.
 
 **Exception: the repository-wide gates scan every package, and they do not all live in one test project.** The scoping rule above is correct for ordinary tests and structurally blind to these. Seventeen fixtures below are repository-wide, so a per-package pre-PR run passes green while the gate your change actually broke never runs at all. Fifteen resolve the repository root and scan **all of `src/`** irrespective of which package they sit in, directly or through a shared scanner helper. Two are recorded instead of detected: `MetricDocArmArityTests` is repository-wide by reflection over the live meters and contains no `src` path at all, and `DashboardHistogramQuantileTests` reads `src/` only through the shared `DeclaredInstruments` registry, which the detector does not attribute to it because the fixture never resolves the repository root itself. That is why "scans `src/`" is not by itself the membership rule. Note the set is defined by the **concern** (instruments), not by a directory: they are spread across `test/lattice/`, `test/lattice.dashboards/`, and `test/lattice.api.telemetry/`, so treating `test/lattice/` as the boundary reproduces the very blindness this exception exists to correct. `RepositoryWideGateEnrolmentTests` computes this population from source and fails if the table, or either count above, drifts from it. It also checks the third column, within the limits of what prose allows: **a backticked PascalCase word in that column is read as a claim that the symbol exists in the fixture the row names**, and is verified against that fixture's source, so a rename cannot leave the description quietly false. A cell claiming its gate reads `src/` is checked against the computed scanner population. Note that the recorded non-scanners are load-bearing for the distinction between the three spelled counts above: the total and the "must also run these" count are compared against the row count, while the scanner count is compared against rows *minus* the recorded non-scanners. Those three were numerically equal for most of this table's history, so the differing denominator was invisible to every earlier reader - and if the recorded non-scanners were ever removed they would collapse back to equal, inviting the next person to re-derive the wrong rule from the evidence in front of them. The rest of the cell is prose and is not machine-checked - if you write a description carrying no backticked symbol, nothing verifies it.
 
@@ -704,7 +704,7 @@ on these small bounded models, and no required check may depend on it.
 These tests are tagged `[Category("Coyote")]`. They use no Orleans cluster, so
 they are fast and deterministic, but they are held out of the default dev loop
 (Tier 2) and the CI matrix's `deterministic` tier, and run as their own tier -
-opt-in locally, and the separate `coyote` tier in CI. Run them explicitly with:
+opt-in locally, and the separate `coyote` tier in CI (skipped on a member pull request into an integration branch, and run on that branch's push lane and its pull request into `main`; see `tier-scope.py`). Run them explicitly with:
 
 ```powershell
 dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Coyote"
@@ -852,6 +852,12 @@ core unit-test suite both execute):**
   `TerminalArrivalTallyTests` rather than by a Coyote model. The
   count arithmetic is extracted; the dedup of *which* source shards have arrived
   stays in the grain (see documented exclusions below).
+- Cross-tree receiver barrier - `CrossTreeReceiverBarrier` (completeness over the
+  frozen wait set, the single commit-iff-all verdict, and the wait-set match in
+  `LatticeCrossTreeReceiverGrain.NotifyTerminalAsync`); model
+  `CrossTreeReceiverBarrierModel`, unit suite `CrossTreeReceiverBarrierTests`.
+  `TerminalArrivalTally.IsUngated` (the legacy no-count path) is driven by
+  `CrossClusterReceiverTallyModel` alongside the rest of that core.
 
 **Documented exclusions (a decision deliberately left in the grain, with why it
 is safe):**
@@ -951,6 +957,57 @@ recorded as out-of-scope. The wall-clock, real-RPC, grain-local synchronous-stat
 and trivial-adapter concerns the models deliberately do not encode remain listed
 under the Phase 5 "Documented exclusions" above; this phase adds no new exclusion.
 
+### Cross-cluster property catalogue (issue #4436)
+
+The replicated half of the protocol has its own TLA+ module,
+`spec/atomic-commit/AtomicCommitCrossCluster.tla`, and its own properties, all of
+them claims about the **receiver**. None of the catalogue above covers a
+receiver, and nothing here covers the origin. The receiver-side cores are
+`TerminalArrivalTally` (including `IsUngated`, the legacy path) and
+`CrossTreeReceiverBarrier`; their Coyote models are
+`CrossClusterReceiverTallyModel` and `CrossTreeReceiverBarrierModel`, tested by
+`CrossClusterReceiverCoyoteTests`, whose guards each require a violation of one
+named property by its tag in Coyote's bug report.
+
+| TLA+ property | Plain-language property | Core | Encoding (model + assertion) | Guard test (proves non-vacuous) |
+|---------------|-------------------------|------|------------------------------|---------------------------------|
+| `RAllOrNothing` | A receiver reader never sees one key of a replicated saga post-saga and another pre-saga, within a tree or across trees. | `TerminalArrivalTally`, `CrossTreeReceiverBarrier`, `AtomicVisibilityGate` | Both models assert `[RAllOrNothing]` at every reader probe. | `Unstamped_terminals_on_a_multi_shard_saga_split_the_receiver`, `A_tally_final_on_its_first_terminal_splits_the_receiver`, `A_terminal_overtaking_its_prepare_splits_the_receiver` (#4480 as it stood before the shipper's terminal hold), `A_barrier_deciding_on_its_first_arrival_splits_the_receiver`, `Notifying_the_barrier_before_registering_the_delegation_splits_the_receiver`, `An_undialled_delegation_read_as_in_flight_splits_the_receiver` (reproduces #4448). |
+| `RStrictIsolation` | The receiver never surfaces a saga the origin did not commit. | `AtomicVisibilityGate`, `TxRegistryDecisionCore` | Both models assert `[RStrictIsolation]` at every reader probe, over committed and aborted sagas. | None of its own in Coyote; the TLA+ mutation `RStrictIsolationTerminalOutcomeIgnored` and the production detectors in `spec/atomic-commit/RefinementCrossCluster.md` carry it. |
+| `RLinearizedTerminals` | A receiver leaf applies only the outcome its registry recorded, after it was recorded. | `TxRegistryDecisionCore`, `MigrationTerminalCore` | Structural in both models: the fan-out reads the recorded decision. | TLA+ only (`RLinearizedTerminalsFanOutAppliesCommit`). |
+| `DelegationsDisjoint` | No registry holds both delegation rows for one txid. | Registry registration guard (grain-local) | Not encoded in Coyote: the check is `TxRegistryGrain.ThrowIfWouldCoexist`, pinned by `TxRegistryGrainTests`' delegation-disjointness partial. | TLA+ only (`DelegationsDisjointRegistryAdmitsForeignClaim`). |
+| `RMonotonicVisibility` | A replicated committed value, once served on the receiver, is never served pre-saga again. | `MigrationTerminalCore`, `AtomicVisibilityGate` | Implied by the per-probe `[RAllOrNothing]` and the drained-end `[RCommittedEventuallyVisible]` in both models; not asserted separately. | TLA+ only (`RMonotonicVisibilityFanOutDiscardsCommittedBucket`). |
+| `RCommittedEventuallyVisible` | Under at-least-once delivery every replicated committed saga is eventually materialised on every receiver leaf. | Tally, barrier, `MigrationTerminalCore` | Both models assert `[RCommittedEventuallyVisible]` once the stream drains (bounded progress). | TLA+ only (`RCommittedEventuallyVisiblePrepareNotShipped`, `RCommittedEventuallyVisibleFinalizeSkipsFanOut`). |
+| `RNoStrandedPrepare` | Every bucket the receiver stages is eventually consumed by the saga's terminal. | `MigrationTerminalCore` and the late-prepare refusal | Both models assert `[RNoStrandedPrepare]` once the stream drains. | `A_leaf_staging_a_prepare_that_trails_its_terminal_strands_it`. |
+
+Every property above is also paired with mutations of the TLA+ module under
+`spec/atomic-commit/mutations-cross-cluster/`, which is where the properties
+without a Coyote guard of their own are shown able to fail.
+
+### Property catalogue: plain replication (issue #4438)
+
+The replication module, `spec/replication/Replication.tla` (with its companion
+`ReplicationCausalDelivery.tla`), checks plain, non-saga cross-cluster
+replication; sagas carried over replication are out of its scope (#4436). Its
+decisions run in production through two pure cores, `ReplicationShipEligibility`
+and `ReplicationReceiveDedup`, and three Coyote models in
+`test/lattice.replication/Coyote/` execute them. Every guard test removes one
+fix and requires each reported violation to carry its own property's label
+(`AssertViolationOf`), so a guard cannot pass on a neighbouring assertion. Each
+model also has an `Exploration_reaches_*` probe proving the exploration reaches
+the state its guard depends on. Spec actions and properties are mapped to
+production detectors, each proven red by perturbing production, in
+`spec/replication/Refinement.md`.
+
+| TLA+ property | Plain-language property | Core | Encoding (model + assertion) | Guard test (proves non-vacuous) | Net-new vs cited |
+|---------------|-------------------------|------|------------------------------|---------------------------------|------------------|
+| `NoRelay` | A cluster ships only writes it authored; a write applied from a peer is never re-shipped. | `ReplicationShipEligibility.IsShipEligible` | `ReplicationCycleBreakModel` asserts every delivered write's origin is the sender or the receiver. | `Without_the_ship_filter_a_cluster_relays_a_peers_write` in `ReplicationConvergenceCoyoteTests`. | Net-new. |
+| `NoReflection` | A cluster never applies its own write received back from a peer. | `ReplicationReceiveDedup.IsOwnOrigin` | `ReplicationCycleBreakModel` asserts no receiver applies an entry of its own origin. | `Without_the_receiver_guard_an_echoed_own_write_is_applied`. | Net-new. |
+| `CursorNeverSkipsUnshipped` | The shipper's cursor never passes an entry the peer has not received; the scalar HLC cursor is not a skip criterion (#1060). | `ReplicationShipEligibility.IsBelowLegacyScalarCursor` | `ReplicationShipCursorModel` asserts every consumed entry was shipped. | `Scalar_cursor_filter_skips_an_unshipped_write`. | Net-new. |
+| `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
+| `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
+| `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
+| `ReconcileDeletesOnlyDeleted` | An in-place re-bootstrap turns an export's absence into a delete only where the source really deleted the key (`ReplicationReBootstrap.tla`, the reconcile of a reaped delete). | None yet: the reconcile is #4537. | TLA+ only. | Not applicable until #4537 extracts the decision. | TLA+ only. |
+
 ### WAL durability property catalogue (epic #4430, issue #4432)
 
 The WAL durability lifecycle has a TLA+ specification of its own, `spec/wal/`
@@ -975,15 +1032,17 @@ reported under that fix's own assertion tag, not merely some violation.
 | `ReadPositionHonest` | A leaf's read position never passes an owned acknowledged write it does not hold. | `WalShippingWatermark`, `WalFallOffCore` | `[ReadPositionHonest]` after every step. | None: the defects that violated it (#4450, #4467) lived in grain glue the model replaces with the intended design; both are fixed, and their production detectors are named in `spec/wal/Refinement.md`. | Net-new. |
 | `ShippingNeverSkips` | No reader passes an append still in flight. | `WalShippingWatermark` | `[ShippingNeverSkips]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(ReaderIgnoresWatermark)`. | Net-new end to end; cited from `WalShippingWatermarkModel`. |
 | `OffsetContiguity` | No acknowledged offset is reissued. | `WalOffsetAllocationCore` | `WalOffsetContiguityModel` (shard crashes are outside the lifecycle model). | `WalOffsetContiguityCoyoteTests.Split_read_advance_hands_two_appends_the_same_offset`. | Cited. |
-| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. | Net-new. |
+| `RecoveryNeverFallsOffLog` | No leaf latches `LeafProjectionStaleException`. | `WalFallOffCore` | `[RecoveryNeverFallsOffLog]` after every step. | None: its former defect (#4456) needs a shard crash, which the lifecycle model leaves out; the fix is pinned by `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`. Its two-fault sibling #4523 (fixed) is reached only by the TLA+ `TwoFaults` variant configuration. | Net-new. |
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
+| `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | Not encoded in Coyote. | `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
 | `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
-| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. | Cited. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is TLA+ only. | Cited. |
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
+| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
 
 **Gap analysis.** Five WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
@@ -994,10 +1053,12 @@ table says so rather than borrowing one:
 - `EveryAckedWriteMaterialised`;
 - `ReclamationEventuallyAdvances`.
 
-`SnapshotCoverageMonotonic` and `StreamEventuallyComplete` are not encoded in
-Coyote at all. The TLA+ catalogue pairs every one of them with a firing mutation.
-The four defects the model found (#4450, #4451, #4456, #4467) are fixed, and their
-mutations in `spec/wal/` are now ordinary regression checks.
+`SnapshotCoverageMonotonic`, `ReleaseBackedBySnapshot`, `StreamEventuallyComplete` and
+`FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
+every one of them with a firing mutation. The four defects the model found (#4450,
+#4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
+regression checks. The review (#4433) found #4523 (fixed) and #4525 (open: a standing mutation in
+`spec/wal/` and gap rows in its refinement note until its fix lands).
 
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
@@ -1006,8 +1067,9 @@ specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
 (routing, the operations, the saga's binding) and `ShardOwnershipRetention`
 (the registry's mask and retirement, late forwarded prepares and leaf
 reactivation, over a saga bound across a split and a resize). The seam between
-them, and what composing them would add, is described in that directory's
-README; coverage of one module is not coverage of the other. Three ownership
+them is described in that directory's README: each module's CI gate covers
+only that module, and their composition was checked once, clean, but is too
+large to gate. Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1016,20 +1078,48 @@ encoding is listed where one exists.
 
 | TLA+ property | Module | Plain-language property | Coyote encoding | Guard tests (prove non-vacuous) |
 |---------------|--------|-------------------------|-----------------|---------------------------------|
-| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`. |
+| `UniqueOwner` | `ShardOwnership` | Every routing pair any router may hold is refused for a key or reaches its one owner. | `ResizeFenceModel` asserts the old copy is never served once the alias has moved, deciding whether a stale routed call is served through `ResizeFence.AdmitsBoundSaga`, so the core's refusal arm is what is checked. | `Flipping_before_fencing_serves_the_old_copy`, `Lifting_the_fence_after_a_flip_that_landed_serves_the_old_copy`, `A_fence_that_admits_a_stale_routed_call_serves_the_old_copy`. |
 | `NoKeyLost` | both | The owner holds every acknowledged value. | TLA+ only. | Mutations, e.g. `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow`. |
-| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`. |
-| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`; `Mid_dispatch_rebind_strands_partial_prepares_issue_4454` characterises the open #4454. |
-| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
+| `NoResurrection` | both | No read through any pair returns a value older than one acknowledged. | `ResizeFenceModel`'s stale-read assertion covers the flip form, through the core's refusal of an unbound or foreign-bound routed call. | `Flipping_before_fencing_is_caught_only_by_the_stale_read_assertion`, `A_fence_that_admits_a_stale_routed_call_is_caught_only_by_the_stale_read_assertion`. |
+| `SagaBatchOnOneCopy` | `ShardOwnership` | A committed saga's buckets sit only on its bound copy and the copy it mirrors into. It constrains copies, not shards: the router ignoring the binding on its own (#4358) is caught by `AtomicOnOwner` in the TLA+ module, not by this property. | `SagaCopyBindingModel` asserts the batch is whole on the bound copy and absent elsewhere, that the bound copy at the decision is one the undo does not discard, and that a refused saga makes bounded progress; `ResizeFenceModel` asserts the fenced copy admits its bound batch whole. | `A_router_that_ignores_the_binding_leaves_the_bound_copy_without_the_batch`, `A_pre_decision_check_that_ignores_the_mirror_strands_the_batch_on_the_old_copy`, `A_pre_decision_check_that_always_stays_bound_decides_on_a_copy_the_undo_discards`, `A_refusal_that_never_rebinds_stops_the_saga_making_progress`, `A_fence_that_refuses_the_bound_saga_leaves_a_partial_batch_on_the_old_copy`, `A_mid_dispatch_rebind_that_ignores_the_mirror_strands_partial_prepares` (#4454 before #4521). |
+| `AtomicOnOwner` | both | A fresh reader sees the batch on every key or none. | TLA+ only. | Mutations, e.g. `AtomicOnOwnerRouterIgnoresBinding` (#4358 on its own) and `AtomicOnOwnerDiscardedCopyTerminalRedirects`. |
 | `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
-| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
+| (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
 `..._only_the_..._assertion_fires`) that disables exactly the assertion it
 targets and requires a clean run. The assurance document is
 [`docs/lattice/verified-shard-ownership.md`](../../docs/lattice/verified-shard-ownership.md).
+
+### Backup and restore property catalogue (epic #4430, issue #4440)
+
+The backup area's properties are checked by four TLA+ modules under
+[`spec/backup/`](../../spec/backup/README.md), each with its own refinement note
+naming the production symbols and detector tests per row. Its Coyote models
+live in the backup and replication test projects, not in `test/lattice/`, and
+drive three extracted cores: `CrossTreeFenceWindow` (backup set capture window),
+`BackupChainFrontier` (origin normalisation and chain frontier, core unit suite
+only, not schedule-sensitive) and `CrossClusterSagaDecisionCore` (coordinated
+restore decision).
+
+| Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
+|--------|---------------|-------------------------|-------------------------|
+| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) are the detectors. |
+| `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
+| `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
+| `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
+| `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
+| `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
+| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
+| `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
+
+What these do not cover - the participant fence timer, a batch in flight across
+a whole cutover, reader atomicity across set members, in-place and cold
+restores, resharded trees, and the receiver side (#4480) - is listed in each
+module's refinement note and in
+[`docs/lattice.backup/verified-backup.md`](../../docs/lattice.backup/verified-backup.md).
 
 ## Browser UI tier
 
@@ -1130,7 +1220,7 @@ step of its own: `test/lattice/Formal/TlcModelCheckTests.cs` (`[Category("Tlc")]
 checks every module's specification and a mutant generated from each definition
 in its mutation directory (`spec/<area>/mutations/`), so every property has to
 demonstrate that it can go red. It
-rides the test fan-out in the `deterministic` tier; every CI test leg provisions a
+rides the test fan-out in the `deterministic` tier, so it runs on member pull requests into an integration branch too (they skip only the `coyote` and `chaos` tiers); every CI test leg provisions a
 Temurin 17 runtime and a digest-pinned `tla2tools.jar` first, and
 `CiTlaToolchainProvisioningTests` requires every workflow that runs .NET tests to
 provision the same toolchain or carry a `# tla-toolchain: not-required - <reason>`
@@ -1230,8 +1320,11 @@ was disabled on precisely the diff shape it was written for.
 
 All of them except `FaultPathBankingContractTests` (see its row) and
 `UiCategoryHygieneTests`, whose browser project the filter below excludes, now
-run in a dedicated `content-gates` job that carries **no `if:` and no
-`needs:`**, so it executes on every pull request and cannot be skipped. It builds
+run in a dedicated `content-gates` job that carries **no condition a pull request
+can trip**, so it executes on every pull request and cannot be skipped there. Its
+only `needs:` is the push-only `classify` job and its only `if:` reads that job's
+member-push flag, which is empty on every pull request; it skips only on a push to
+a member branch, where `build-and-test` does not run either. It builds
 the solution once and runs
 
 ```text
@@ -1243,6 +1336,6 @@ and rejects `skipped` by name, because Actions treats a skipped dependency as
 non-blocking - which is the same defect one level up. Two guards keep it honest:
 `run-text-gates.py` fails the job if the run executed no tests, or no tests for
 any one of the three families, and `CiContentGateWiringTests` fails the build if
-the job acquires a condition, drops out of the required check's `needs:`, starts
+the job acquires any other condition, the classifier stops being push-only, the job drops out of the required check's `needs:`, starts
 accepting `skipped`, stops selecting a fixture that exists in a gate directory, or
 lets an exclusion remove one.

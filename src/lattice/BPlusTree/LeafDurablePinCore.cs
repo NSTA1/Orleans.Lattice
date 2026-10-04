@@ -12,9 +12,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// never take one back, so this rule is the whole of the leaf's say over how far
 /// the GC may trim. Its invariants, each pinned by <c>LeafDurablePinCoreTests</c>:
 /// a pin that authorises trimming never exceeds the PERSISTED checkpoint (issue
-/// #3476) nor, for a leaf that has applied a write, the durable snapshot coverage;
-/// and a partition whose committed prefix has no durable copy but the WAL keeps
-/// the Zero block pin.
+/// #3476) nor the durable snapshot coverage (for a never-written leaf too, since
+/// issues #4456 and #4523); and a partition whose committed prefix has no durable
+/// copy but the WAL keeps the Zero block pin.
 /// </para>
 /// </summary>
 internal static class LeafDurablePinCore
@@ -87,18 +87,26 @@ internal static class LeafDurablePinCore
         // never the current one: an over-report can never be withdrawn and every
         // replay starts from the persisted offset (#3476).
         //
-        // Bounded by coverageOffset when the leaf holds a snapshot (issue #4456).
-        // A never-written leaf can hold an empty snapshot below X; trimming past
-        // that snapshot's coverage would make the next activation rehydrate it and
-        // latch stale over a prefix it never owned. With no coverage the release
-        // stays at X: a cold activation replays under the -1 sentinel, and after the
-        // #2404 reset a partition the snapshot does not cover reads from -1 too, so
-        // neither can fall off the log.
+        // Bounded by coveredOffset (issue #4456), and released ONLY under durable
+        // snapshot coverage (issue #4523). A release is a trim entitlement the
+        // pin store can never take back, and a durable snapshot below it can
+        // appear later: a cold rebuild's capture or #2280 bank claims only its
+        // re-read frontier, and the next activation rehydrates that snapshot,
+        // restarts from its coverage and latches stale over a prefix the leaf
+        // never owned. With the release bounded by coverage, every trim
+        // entitlement this leaf publishes is backed by a snapshot the store keeps
+        // monotone, so no later snapshot can sit below it. Without coverage the
+        // partition keeps the block; a never-written leaf with a persisted
+        // checkpoint is proven checkpointed, so its next capture (the drive's,
+        // the deactivation barrier's or the zero-coverage repair's) stamps the
+        // checkpoint and the release follows it.
         if (releaseNeverWrittenScannedThrough && !hasLiveData && persistedCheckpoint >= 0)
         {
-            return new LeafDurablePinDecision(
-                LeafDurablePinKind.ReleaseNeverWritten,
-                coveredOffset >= 0 ? Math.Min(persistedCheckpoint, coveredOffset) : persistedCheckpoint);
+            return coveredOffset >= 0
+                ? new LeafDurablePinDecision(
+                    LeafDurablePinKind.ReleaseNeverWritten,
+                    Math.Min(persistedCheckpoint, coveredOffset))
+                : new LeafDurablePinDecision(LeafDurablePinKind.Block, -1L);
         }
 
         // Data-bearing partition, or a durably-checkpointed partition whose cache

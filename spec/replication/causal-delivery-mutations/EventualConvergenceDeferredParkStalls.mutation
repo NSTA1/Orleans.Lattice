@@ -1,0 +1,30 @@
+# Pairs with EventualConvergence in ReplicationCausalDelivery. Option B for
+# #4464: a parked entry is not acknowledged until it can be applied, and a
+# re-delivery of a buffered entry is deferred too. The shipper backs off and
+# re-ships the same entry, so its whole line stalls behind it. With shipping
+# order free to differ from authoring order, b ships b2 (depending on a1)
+# ahead of b1 and a ships a2 (depending on b1) ahead of a1: each stalled head
+# holds back the other's dependency, and the receiver never converges.
+# Fairness is unchanged: this is a protocol defect, not a starved action.
+MODULE: EventualConvergenceDeferredParkStalls
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: withholding the ack for a parked entry stalls its shipper, and a cross-origin dependency cycle deadlocks the receiver
+PERTURBS: Deliver
+DEADLOCK: off
+
+--- FIND
+       /\ \/ /\ w \in applied \cup buf
+--- REPLACE
+\* MUTATION: a buffered entry's re-delivery is deferred, not acknowledged.
+       /\ \/ /\ w \in applied
+--- END
+
+--- FIND
+             /\ wake' = TRUE
+             /\ cursor' = [cursor EXCEPT ![s] = i]
+--- REPLACE
+             /\ wake' = TRUE
+\* MUTATION: the parked entry is not acknowledged; the shipper stalls on it.
+             /\ UNCHANGED cursor
+--- END

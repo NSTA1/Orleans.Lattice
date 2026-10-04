@@ -2531,6 +2531,32 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// The copy <paramref name="boundPhysicalTreeId"/> mirrors every mutation it
+    /// takes into - the destination of an online resize whose source it is - or
+    /// <see langword="null"/> when it mirrors nowhere. Asked of the shard the
+    /// batch's first key routes to; every shard of a resize source mirrors to the
+    /// same destination. A failed probe answers <see langword="null"/>, so the
+    /// dispatch is refused as it would be without one. Reached only when a bound
+    /// saga's tree has moved off its bound copy.
+    /// </summary>
+    private async Task<string?> BoundCopyMirrorDestinationAsync(
+        string boundPhysicalTreeId, ShardMap shardMap, List<KeyValuePair<string, byte[]>> entries)
+    {
+        var shardIndex = entries.Count > 0 ? shardMap.Resolve(entries[0].Key) : 0;
+        try
+        {
+            return await GetShardGrainByIndex(boundPhysicalTreeId, shardIndex).GetMirrorDestinationAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Could not ask bound copy {Bound} of tree {TreeId} where it mirrors; refusing the bound dispatch.",
+                boundPhysicalTreeId, TreeId);
+            return null;
+        }
+    }
+
     private async Task<string?> SetManyAsyncCore(
         List<KeyValuePair<string, byte[]>> entries,
         KeyValuePair<string, object?> stageTagTree,
@@ -2554,7 +2580,24 @@ internal sealed partial class LatticeGrain(
                 (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true);
                 if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
                 {
-                    return physicalTreeId;
+                    // The tree really has moved. The batch still belongs on the
+                    // bound copy when that copy mirrors into the one the tree
+                    // moved to - an online resize's source after its flip - since
+                    // its fence admits the saga and it mirrors every prepare, so
+                    // the batch lands whole on both copies (issue #4454). The map
+                    // addresses the bound copy's shards too: a resize copies its
+                    // source's map index for index, and holds every migration
+                    // while the source mirrors (#4452).
+                    var dispatchCopy = SagaCopyBinding.DispatchCopy(
+                        boundPhysicalTreeId,
+                        physicalTreeId,
+                        await BoundCopyMirrorDestinationAsync(boundPhysicalTreeId!, shardMap, entries));
+                    if (dispatchCopy is null)
+                    {
+                        return physicalTreeId;
+                    }
+
+                    physicalTreeId = dispatchCopy;
                 }
             }
         }
@@ -3452,12 +3495,24 @@ internal sealed partial class LatticeGrain(
         // resolution at the receiver agrees with the producer for every
         // key in the range.
         //
+        // A locally authored delete's stamp is ticked past the highest clock
+        // of every leaf it covers, not just this silo's wall time (issue
+        // #4530): a leaf clock pushed ahead by a future-dated merged or
+        // replicated row, or by clock skew between silos, would otherwise
+        // out-rank it, and the acknowledged delete would sort below a row or a
+        // decided saga's prepare already on the leaf - invisible at once and
+        // lost to the saga's terminal. The same rule stamps a saga terminal
+        // (ComputeTerminalHlcAsync).
+        //
         // Nested DeleteRange (a user-level DeleteRange invoked from
         // inside a saga or split coordinator that already pinned an
         // override) keeps the outer override - the producer's authoring
-        // frontier dominates and the inner walk inherits it.
+        // frontier dominates and the inner walk inherits it. So does a
+        // replicated or idempotency-keyed delete, whose stamp is the
+        // source's or the caller's contract.
         var existingOverride = LatticeHlcOverrideContext.Current;
-        var issueHlc = existingOverride ?? HybridLogicalClock.Tick(default);
+        var issueHlc = existingOverride
+            ?? await IssueDominatingRangeDeleteHlcAsync(physicalTreeId, physicalShards, startInclusive, endExclusive, cancellationToken);
         using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
 
         // Fan out to all physical shards in parallel - any may contain keys in the range.
@@ -3517,6 +3572,67 @@ internal sealed partial class LatticeGrain(
             // against a shard from a build with a different notion of progress.
             if (string.CompareOrdinal(next, from) <= 0)
                 return total;
+
+            from = next;
+        }
+    }
+
+    /// <summary>
+    /// Issues a locally authored range delete's stamp: a tick past the highest
+    /// clock of every leaf the delete covers on every shard the map routes to,
+    /// probed in parallel (issue #4530). A leaf's clock has merged the stamp of
+    /// every row and prepared bucket it holds, so the delete sorts above
+    /// everything already written in its range - including a decided saga's
+    /// prepares - wherever the leaf's clock stands against this silo's wall time.
+    /// A write that lands on a covered leaf after its probe is concurrent with
+    /// the delete, so either order is a valid linearisation.
+    /// </summary>
+    private async Task<HybridLogicalClock> IssueDominatingRangeDeleteHlcAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken)
+    {
+        var probes = new Task<HybridLogicalClock>[physicalShards.Count];
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
+            probes[i] = DrainShardRangeClockAsync(shard, startInclusive, endExclusive, cancellationToken);
+        }
+
+        await Task.WhenAll(probes);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = HybridLogicalClock.Zero;
+        for (var i = 0; i < probes.Length; i++)
+        {
+            if (probes[i].Result > max) max = probes[i].Result;
+        }
+
+        return HybridLogicalClock.Tick(max);
+    }
+
+    private static async Task<HybridLogicalClock> DrainShardRangeClockAsync(
+        IShardRootGrain shard,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken)
+    {
+        var max = HybridLogicalClock.Zero;
+        var from = startInclusive;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cursor = from;
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.GetRangeClockBoundedAsync(cursor, endExclusive));
+            if (page.MaxClock > max) max = page.MaxClock;
+
+            // As for the delete: stop on completion, or on a resume key that does
+            // not advance.
+            if (page.ResumeFromInclusive is not { } next || string.CompareOrdinal(next, from) <= 0)
+                return max;
 
             from = next;
         }
@@ -4885,9 +5001,14 @@ internal sealed partial class LatticeGrain(
     /// that catch a domain exception <i>by its own type</i> are unaffected and
     /// remain the correct way to handle one deliberately.
     /// </para>
+    /// <para>
+    /// <see cref="LatticeTreePurgedException"/> is the one domain fault these
+    /// clauses still absorb: it means a call reached a purged physical copy, and
+    /// refreshing the cached alias is exactly the remedy (issue #4503).
+    /// </para>
     /// </summary>
     private bool TryInvalidateStaleAlias(Exception fault) =>
-        fault is not ILatticeDomainFault && TryInvalidateStaleAlias();
+        (fault is not ILatticeDomainFault || fault is LatticeTreePurgedException) && TryInvalidateStaleAlias();
 
     /// <summary>
     /// Invalidates the cached <see cref="ShardMap"/> so the next routing call

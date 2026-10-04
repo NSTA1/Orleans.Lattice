@@ -1,0 +1,19 @@
+# Pairs with RMonotonicVisibility. The receiver's post-gate fan-out consumes a
+# committed bucket without materialising it. Before the fan-out the key is
+# served post-saga through the gate (a pending bucket under a committed
+# registry); afterwards the bucket is gone and the projection never received
+# the write, so the same key is served pre-saga.
+MODULE: RMonotonicVisibilityFanOutDiscardsCommittedBucket
+TARGET: RMonotonicVisibility
+CLASS: Temporal
+SUMMARY: the receiver fan-out drops a committed bucket without draining it into the projection
+PERTURBS: ReceiverFanOut
+
+--- FIND
+            /\ rproj' = IF rdec[TreeOf(k)] = "committed" /\ rpend[k] = "pending"
+                        THEN [rproj EXCEPT ![k] = "post"]
+                        ELSE rproj
+--- REPLACE
+\* MUTATION: the commit discards the bucket instead of draining it.
+            /\ rproj' = rproj
+--- END

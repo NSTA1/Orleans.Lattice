@@ -52,12 +52,28 @@ before calling `AddLatticeReplication`.
   after every snapshot entry has been applied, so the causal
   dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
-- **Tombstoned and expired keys are not emitted.** Only live entries
-  reach the receiver through the committed projection; the tombstone
-  state is reconstructed from the incremental WAL after the snapshot
-  completes. The one exception is an in-flight saga's prepared delete,
-  which ships as a prepared row with `IsTombstone` set (see
+- **Deletes ship as committed tombstone rows.** The committed
+  projection carries live keys only, so the default provider ends the
+  export with a tombstone pass: every key a source leaf still holds as a
+  tombstone ships as a row with `IsTombstone` set and `IsPrepared`
+  clear, stamped with the tombstone's own HLC, and the bootstrap drain
+  applies it as a delete. Without it a receiver that bootstraps in place
+  over an existing copy - a peer that fell off the log and is
+  re-bootstrapped by the fall-off detector, or an operator re-seed over
+  existing data - kept the old value of every key the source deleted
+  while it was behind, permanently, because the delete's WAL record is
+  behind the source's trim point and the incremental stream never
+  delivers it (#4504). Last-writer-wins resolves a tombstone row against
+  a live row for the same key by HLC, so a delete older than a value the
+  receiver wrote later does not apply. A tombstone the source has already
+  reaped (tombstone compaction physically removes it after
+  `TombstoneGracePeriod`) cannot ship; that residual is tracked as #4537.
+  An in-flight saga's prepared delete ships as a prepared row with
+  `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **Expired keys are not emitted.** The committed projection reads an
+  expired key as absent; the receiver's copy carries the same absolute
+  expiry, so it expires there too.
 - **A live key's TTL is carried.** Every exported row - a
   committed-projection row as well as a prepared saga row - carries the
   source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so on
@@ -587,12 +603,13 @@ Any state -> Failed         (any thrown exception; restart is a fresh BootstrapA
   applier has no HLC floor gate; exact identity dedup and idempotent
   per-key merge make the snapshot/incremental boundary safe regardless of
   overlap.
-- **Tombstones in custom providers are skipped.** Committed
-  (non-prepared) snapshot entries whose `Value` is `null` (not emitted
-  by the default provider, but permissible from a host-supplied
-  `ISnapshotProvider`) are skipped rather than applied as deletes, as
-  are prepared rows with an empty `TransactionId`. A prepared row with
-  `IsTombstone` set is applied as a prepared delete.
+- **Committed tombstone rows apply as deletes.** A committed
+  (non-prepared) row with `IsTombstone` set is applied as a delete at
+  the row's HLC, and a prepared row with `IsTombstone` set as a prepared
+  delete. A committed row whose `Value` is `null` and which does not set
+  `IsTombstone` (not emitted by the default provider, but permissible
+  from a host-supplied `ISnapshotProvider`) is skipped, as is a prepared
+  row with an empty `TransactionId`.
 - **Per-tree merge mode is honoured on bootstrap.** Every
   `WalRecord` emitted by the bootstrap drain is stamped with the
   merge mode `ILatticeMergeModeResolver` resolves for the tree - the
@@ -710,7 +727,8 @@ subset.
 
 The export operates in two passes against a single frozen view of the
 producer's tree-wide transaction-registry decisions, unioned across every
-registry shard of the tree:
+registry shard of the tree, followed by the tombstone pass described under
+[Semantics](#semantics):
 
 1. **Prepared rows pass (runs first).** Walks every shard's leaf
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
@@ -812,14 +830,71 @@ reader. Two cases still ship as prepared rows:
 - An `Indeterminate` saga with no stored verdict, such as a cross-tree
   delegation whose coordinator could not be reached.
 - A saga whose row has already been purged reads as absent. Its export
-  carries the split the source itself serves (#2318).
+  carries the split the source itself serves (#4508).
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the
 leaf scan's pending-transaction read step - which honors
 the frozen registry scope - so the receiver observes the post-saga
-value directly without a separate prepared/terminal round trip. The
+value directly without a separate prepared/terminal round trip. A
+bucket of such a saga that the terminal has not yet drained is also
+emitted as a committed row by the prepared rows pass, because the scan
+need not enumerate a key held only in a pending bucket. The
 same applies in reverse for `Aborted`: the prepared mutation is
 correctly dropped from the committed pass and not shipped as a
-prepared row.
+prepared row. A `Committed` saga's pending **delete** is the exception
+to the fold: the committed pass reads the deleted key as absent and
+emits nothing, so the prepared rows pass ships it itself as a committed
+tombstone row (`IsTombstone` set, `IsPrepared` clear, at the prepare's
+HLC). Otherwise a receiver re-bootstrapping over a copy that still held
+the key would keep its older value beside the saga's other keys (#4504).
+
+**Decision rows: pre-cut saga records re-shipped after the bootstrap.**
+The source shipper resumes from its own per-partition cursors after a
+bootstrap. A peer that fell off the log resumes from the oldest entry
+the source still retains, which can sit below the snapshot's cut. A
+saga's prepares and its terminals live in different partitions, each
+trimmed to its own floor. So the stream can re-ship a prepare from
+before the cut whose terminal was already trimmed (#4482). Staged on
+the receiver, that prepare would wait in a pending bucket for a
+terminal that never comes.
+
+The export therefore ends with one **decision row** per saga the
+source still stores a decision for. A decision row has no key or
+value; it carries the transaction id and `SettledDecision` (`true` for
+a commit). An aged-out row is resolved to its recorded verdict first,
+whether or not it has a resident bucket. The drain records each
+outcome in the receiver's transaction registry and does not forget
+it. Re-shipping a long retained tail can outlast the receiver's
+decision retention, and a prepare arriving after the row was purged
+would strand again. The receiver cannot yet observe the stream passing
+the export's cut, which is what would make retiring the row safe, so
+it retains one registry row per saga the source stored at the export
+([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524) tracks
+retiring them).
+
+The receiver then settles a replicated prepare against any decision
+its registry already holds, instead of staging it (the read uses the
+recorded verdict behind an aged-out row):
+
+- A commit is applied as a committed write at the prepare's source
+  clock. Last-writer-wins keeps it below any newer write on the key,
+  and it is a no-op over the snapshot row.
+- An abort is dropped.
+
+A receiver that predates the decision slot sees a row with no value
+that is neither prepared nor a tombstone, which its drain skips.
+
+One residual remains: a saga whose decision the source has already
+purged cannot be exported. A pre-cut prepare of such a saga, retained
+in the source's log past its decision retention with its terminal's
+partition trimmed, can still strand on a bootstrapped receiver (#4508).
+
+**Visibility while the drain runs.** Atomic visibility on the
+receiver is guaranteed from `LiveIncremental` onward. While the
+bootstrap is in `ApplyingSnapshot`, the receiver keeps serving reads
+and the drain installs committed rows one at a time, so a reader can
+observe some of a saga's keys before the rest. The decision rows and
+the settle above keep their outcome atomic once the import completes;
+they do not make the import itself atomic.
 
