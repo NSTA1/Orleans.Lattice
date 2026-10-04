@@ -664,6 +664,14 @@ internal sealed class AtomicWriteGrain(
                 throw;
             }
         }
+        catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+        {
+            // Issue #4485: a backup set's fence refused the delegation. Not a
+            // retryable park blip - RunSagaAsync rolls this sub-saga back so it
+            // votes Failed. Nothing was persisted (the registration precedes the
+            // paused-phase write), so there is nothing to revert.
+            throw;
+        }
         catch (LatticeStateWriteFailedException conflict) when (conflict.Conflict)
         {
             // The paused-phase persist lost an ETag check (issue #3572): this
@@ -2462,7 +2470,24 @@ internal sealed class AtomicWriteGrain(
             // partial cross-tree view is ever observable.
             if (state.State.ExternalAuthorityKey is { } authorityKey)
             {
-                await ParkPreparedAsync(authorityKey);
+                try
+                {
+                    await ParkPreparedAsync(authorityKey);
+                }
+                catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+                {
+                    // Issue #4485: a cross-tree-consistent backup set is fencing
+                    // this tree's registry, so this sub-saga cannot register.
+                    // Retrying the park would hold every sibling participant's
+                    // delegation open for the fence's whole life and starve the
+                    // set's drain. Roll this sub-saga back instead (the Compensate
+                    // path records the abort and drops the staged buckets, then
+                    // throws), so it votes Failed and its coordinator aborts.
+                    await EnterCompensateAsync(
+                        "a cross-tree-consistent backup set capture is fencing this tree's saga decision registry; retry the cross-tree atomic write once the capture completes.");
+                    await RunSagaAsync();
+                }
+
                 return;
             }
 
@@ -2630,6 +2655,37 @@ internal sealed class AtomicWriteGrain(
 
         Logger.LogInformation(
             "Atomic-write saga {OperationKey}: rolled back because {Reason}.",
+            OperationKey, reason);
+    }
+
+    /// <summary>
+    /// Moves an executed-but-undecided saga to
+    /// <see cref="AtomicWritePhase.Compensate"/> with <paramref name="reason"/> as
+    /// its failure message and persists the move, restoring the prior phase if
+    /// the persist fails. The caller then drives the Compensate path.
+    /// </summary>
+    private async Task EnterCompensateAsync(string reason)
+    {
+        var prevPhase = state.State.Phase;
+        var prevFailureMessage = state.State.FailureMessage;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        state.State.Phase = AtomicWritePhase.Compensate;
+        state.State.FailureMessage = reason;
+        state.State.RetriesOnCurrentStep = 0;
+        try
+        {
+            await WriteSagaStateAsync("park-fenced-to-compensate");
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.FailureMessage = prevFailureMessage;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            throw;
+        }
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: rolled back because {Reason}",
             OperationKey, reason);
     }
 
