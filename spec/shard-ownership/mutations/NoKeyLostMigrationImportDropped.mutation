@@ -1,4 +1,4 @@
-# Pairs with NoKeyLost. Reproduces current production (#4564): a cross-shard
+# Pairs with NoKeyLost. Reproduces production before #4564 was fixed (#4600): a cross-shard
 # migration import (MergeManyAsync with isCrossShardMigration) is dropped
 # whenever the destination already holds a non-migrated row, whatever the
 # stamps. Once the split's sweep has resolved a decided saga at the destination
