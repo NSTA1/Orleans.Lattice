@@ -37,7 +37,7 @@ internal static class LatticeSystemTreeBoundary
     /// replication ambient <see cref="RequestContext"/> entry is
     /// cleared for the lifetime of the returned scope and restored on
     /// dispose. Safe to nest; disposal is idempotent. Returns
-    /// <see cref="EmptyDisposable.Instance"/> when no user-saga context
+    /// <see cref="NoOpDisposable.Instance"/> when no user-saga context
     /// is active to avoid the per-call allocation on the foreground
     /// fast path.
     /// </summary>
@@ -64,7 +64,7 @@ internal static class LatticeSystemTreeBoundary
             && atomicShardCount is null
             && applyOffset is null)
         {
-            return EmptyDisposable.Instance;
+            return NoOpDisposable.Instance;
         }
 
         RequestContext.Remove(LatticeEventConstants.TransactionIdRequestContextKey);
@@ -77,12 +77,6 @@ internal static class LatticeSystemTreeBoundary
         RequestContext.Remove(LatticeEventConstants.ApplyOffsetRequestContextKey);
 
         return new Scope(txId, prepared, origin, hlcOverride, vectorClock, atomicBatch, atomicShardCount, applyOffset);
-    }
-
-    private sealed class EmptyDisposable : IDisposable
-    {
-        public static readonly EmptyDisposable Instance = new();
-        public void Dispose() { }
     }
 
     private sealed class Scope(

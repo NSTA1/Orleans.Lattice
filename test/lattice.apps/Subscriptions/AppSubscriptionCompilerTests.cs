@@ -208,10 +208,10 @@ public sealed class AppSubscriptionCompilerTests
     {
         var requested = new LatticeScope(LatticeScopeKind.Tree, "a/billing/invoices");
 
-        Assert.That(AppSubscriptionScopeCoverage.IsCovered(requested, [null!]), Is.False);
-        Assert.That(AppSubscriptionScopeCoverage.IsCovered(requested, [new LatticeScope(LatticeScopeKind.Tree, LatticeScope.ClusterWideTreeId)]), Is.False);
-        Assert.That(AppSubscriptionScopeCoverage.IsCovered(requested, [TreeException("a/billing/invoices")]), Is.True);
-        Assert.That(AppSubscriptionScopeCoverage.IsCovered(
+        Assert.That(AppScopeCoverage.IsCovered(requested, [null!]), Is.False);
+        Assert.That(AppScopeCoverage.IsCovered(requested, [new LatticeScope(LatticeScopeKind.Tree, LatticeScope.ClusterWideTreeId)]), Is.False);
+        Assert.That(AppScopeCoverage.IsCovered(requested, [TreeException("a/billing/invoices")]), Is.True);
+        Assert.That(AppScopeCoverage.IsCovered(
             new LatticeScope(LatticeScopeKind.Key, "a/billing/invoices", "k"),
             [new LatticeScope(LatticeScopeKind.Key, "a/billing/invoices", "k")]), Is.True);
     }

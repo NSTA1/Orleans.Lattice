@@ -1,6 +1,5 @@
 using Grpc.Core;
-using Microsoft.Extensions.DependencyInjection;
-using Orleans.Serialization;
+using static Orleans.Lattice.Api.Apps.Grpc.LatticeAppsGrpcUnaryMethods;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
@@ -24,22 +23,16 @@ internal sealed class LatticeAppsGrpcMethods
     public LatticeAppsGrpcMethods(IServiceProvider serializers)
     {
         ArgumentNullException.ThrowIfNull(serializers);
-        Install = Create<AppInstallRequest, AppLifecycleResult>(nameof(Install), serializers);
-        Enable = Create<AppsSlugRequest, AppLifecycleResult>(nameof(Enable), serializers);
-        Disable = Create<AppsSlugRequest, AppLifecycleResult>(nameof(Disable), serializers);
-        Uninstall = Create<AppsSlugRequest, AppLifecycleResult>(nameof(Uninstall), serializers);
-        List = Create<AppsEmptyRequest, AppCatalog>(nameof(List), serializers);
-        Describe = Create<AppsDescribeRequest, AppsDescribeResponse>(nameof(Describe), serializers);
-        GetConsent = Create<AppsSlugRequest, AppsConsentResponse>(nameof(GetConsent), serializers);
-        UpdateConsent = Create<AppConsentUpdate, AppConsentReport>(nameof(UpdateConsent), serializers);
-        GetCapabilities = Create<AppsEmptyRequest, LatticeAppsCapabilities>(nameof(GetCapabilities), serializers);
-        GetAuthScheme = Create<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(nameof(GetAuthScheme), serializers);
-        UpdateRoleBindings = Create<AppRoleBindingsUpdate, AppRoleBindingsReport>(nameof(UpdateRoleBindings), serializers);
+        Install = Unary<AppInstallRequest, AppLifecycleResult>(ServiceName, nameof(Install), serializers);
+        Enable = Unary<AppsSlugRequest, AppLifecycleResult>(ServiceName, nameof(Enable), serializers);
+        Disable = Unary<AppsSlugRequest, AppLifecycleResult>(ServiceName, nameof(Disable), serializers);
+        Uninstall = Unary<AppsSlugRequest, AppLifecycleResult>(ServiceName, nameof(Uninstall), serializers);
+        List = Unary<AppsEmptyRequest, AppCatalog>(ServiceName, nameof(List), serializers);
+        Describe = Unary<AppsDescribeRequest, AppsDescribeResponse>(ServiceName, nameof(Describe), serializers);
+        GetConsent = Unary<AppsSlugRequest, AppsConsentResponse>(ServiceName, nameof(GetConsent), serializers);
+        UpdateConsent = Unary<AppConsentUpdate, AppConsentReport>(ServiceName, nameof(UpdateConsent), serializers);
+        GetCapabilities = Unary<AppsEmptyRequest, LatticeAppsCapabilities>(ServiceName, nameof(GetCapabilities), serializers);
+        GetAuthScheme = Unary<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(ServiceName, nameof(GetAuthScheme), serializers);
+        UpdateRoleBindings = Unary<AppRoleBindingsUpdate, AppRoleBindingsReport>(ServiceName, nameof(UpdateRoleBindings), serializers);
     }
-
-    private static Method<TRequest, TResponse> Create<TRequest, TResponse>(string name, IServiceProvider serializers)
-        where TRequest : class where TResponse : class
-        => new(MethodType.Unary, ServiceName, name,
-            LatticeAppsGrpcMarshallers.Create(serializers.GetRequiredService<Serializer<TRequest>>()),
-            LatticeAppsGrpcMarshallers.Create(serializers.GetRequiredService<Serializer<TResponse>>()));
 }

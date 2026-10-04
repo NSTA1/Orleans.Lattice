@@ -1,6 +1,5 @@
 using Grpc.Core;
-using Microsoft.Extensions.DependencyInjection;
-using Orleans.Serialization;
+using static Orleans.Lattice.Api.Apps.Grpc.LatticeAppsGrpcUnaryMethods;
 
 namespace Orleans.Lattice.Api.Apps.Grpc;
 
@@ -8,6 +7,9 @@ internal sealed class LatticeAppWorkspaceGrpcMethods
 {
     public const string ServiceName = "orleans.lattice.api.apps.workspace";
     public const string ServicePrefix = "/" + ServiceName + "/";
+
+    // The asset-carrying methods are bounded in both directions; the rest ride the service limit.
+    private const int MaxAssetBytes = LatticeAppsGrpcMarshallers.MaxAssetMessageBytes;
 
     public Method<AppsEmptyRequest, AppsWorkspaceListResponse> ListMyApps { get; }
     public Method<AppsSlugRequest, AppsWorkspaceDescribeResponse> DescribeMyApp { get; }
@@ -17,22 +19,9 @@ internal sealed class LatticeAppWorkspaceGrpcMethods
     public LatticeAppWorkspaceGrpcMethods(IServiceProvider serializers)
     {
         ArgumentNullException.ThrowIfNull(serializers);
-        ListMyApps = Create<AppsEmptyRequest, AppsWorkspaceListResponse>(nameof(ListMyApps), serializers);
-        DescribeMyApp = Create<AppsSlugRequest, AppsWorkspaceDescribeResponse>(nameof(DescribeMyApp), serializers);
-        GetIcon = Create<AppsSlugRequest, AppsIconResponse>(nameof(GetIcon), serializers, LatticeAppsGrpcMarshallers.MaxAssetMessageBytes);
-        GetUiAsset = Create<AppsUiAssetRequest, AppsUiAssetResponse>(nameof(GetUiAsset), serializers, LatticeAppsGrpcMarshallers.MaxAssetMessageBytes);
-    }
-
-    private static Method<TRequest, TResponse> Create<TRequest, TResponse>(
-        string name, IServiceProvider serializers, int? maxMessageBytes = null)
-        where TRequest : class where TResponse : class
-    {
-        var request = serializers.GetRequiredService<Serializer<TRequest>>();
-        var response = serializers.GetRequiredService<Serializer<TResponse>>();
-        return maxMessageBytes is { } max
-            ? new(MethodType.Unary, ServiceName, name,
-                LatticeAppsGrpcMarshallers.CreateBounded(request, max), LatticeAppsGrpcMarshallers.CreateBounded(response, max))
-            : new(MethodType.Unary, ServiceName, name,
-                LatticeAppsGrpcMarshallers.Create(request), LatticeAppsGrpcMarshallers.Create(response));
+        ListMyApps = Unary<AppsEmptyRequest, AppsWorkspaceListResponse>(ServiceName, nameof(ListMyApps), serializers);
+        DescribeMyApp = Unary<AppsSlugRequest, AppsWorkspaceDescribeResponse>(ServiceName, nameof(DescribeMyApp), serializers);
+        GetIcon = BoundedUnary<AppsSlugRequest, AppsIconResponse>(ServiceName, nameof(GetIcon), serializers, MaxAssetBytes, MaxAssetBytes);
+        GetUiAsset = BoundedUnary<AppsUiAssetRequest, AppsUiAssetResponse>(ServiceName, nameof(GetUiAsset), serializers, MaxAssetBytes, MaxAssetBytes);
     }
 }
