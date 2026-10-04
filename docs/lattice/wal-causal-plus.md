@@ -19,8 +19,8 @@
 >   `CausalBufferMaxBytes`, overflow routed to the dead-letter queue) and retried
 >   as later applies advance the local clock. Unlike section 6, the per-origin
 >   high-water mark is not a duplicate-drop gate for steady-state writes:
->   re-delivery is filtered by a snapshot-pinned causal floor, a shadow-forward
->   identity cache, and per-key last-writer-wins idempotence. See
+>   re-delivery is filtered by a shadow-forward identity cache and per-key
+>   last-writer-wins idempotence. See
 >   [Replication apply](../lattice.replication/replication-apply.md).
 > - **Causal-stable GC clause (section 7)** - implemented in the core WAL GC:
 >   once any consumer reports a vector frontier through the vector overload of
@@ -422,7 +422,7 @@ Every item in the completeness wave is constrained by the same rules that bound 
 - **Append-only, monotonic, durable.** No item rewrites a WAL entry, no item changes offset semantics, no item changes the commit point.
 - **No cross-shard locks in apply.** The shadow-forward receiver-side dedupe cache is held per tree, and nothing in the apply path takes a cross-shard lock. The producer ships the causal frontier straight from the leaf's WAL append, so there is no separate in-memory producer-side cache to coordinate.
 - **Wire-additive only.** The new structural-rewrite and shadow-forward `[Id]` slots have decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode, and apply exactly as entries whose slots are empty.
-- **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf, and entries at or below a snapshot-pinned causal floor are dropped up front. The per-origin high-water mark is not a drop criterion for steady-state writes.
+- **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf. Neither the per-origin high-water mark nor a legacy snapshot floor is a drop criterion for steady-state point writes.
 
 ### 12.2.1 Atomic multi-key write shipped mechanism
 

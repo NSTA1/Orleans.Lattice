@@ -18,7 +18,7 @@ public readonly record struct ApplyResult
     /// <summary>
     /// <c>true</c> when the receiver merged the entry onto the local
     /// tree; <c>false</c> when the entry was filtered out as a
-    /// re-delivery by the pinned-floor gate or recent exact-identity cache, or
+    /// re-delivery by the recent exact-identity cache, or
     /// rejected as inapplicable (for example, an entry whose
     /// <see cref="WalRecord.OriginClusterId"/> matches the local
     /// cluster id and would therefore loop locally).

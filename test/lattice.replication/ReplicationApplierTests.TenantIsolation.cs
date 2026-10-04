@@ -65,7 +65,6 @@ public partial class ReplicationApplierTests
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         factory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(dlq);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());

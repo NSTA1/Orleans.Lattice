@@ -151,7 +151,8 @@ public partial class BootstrapCausalHandoffTests
 
     /// <summary>
     /// Load 13: a mixed sequence interleaving (a) below-frontier
-    /// HWM-deduped entries, (b) above-frontier-with-satisfied-deps
+    /// entries (applied idempotently - the pin is not a drop floor,
+    /// #4463), (b) above-frontier-with-satisfied-deps
     /// directly-applied entries, (c) above-frontier-with-unsatisfied-
     /// deps parked entries, and (d) the satisfier that drains the
     /// parked tail - all on a single applier instance - must produce
@@ -164,7 +165,7 @@ public partial class BootstrapCausalHandoffTests
         var frontier = Vector((OriginA, Hlc(100)), (OriginB, Hlc(200)));
         await h.Hwm.PinSnapshotAsync(Hlc(100), frontier, CancellationToken.None);
 
-        // Below-frontier dedup (origin-A @ 50, dominated by diagonal 100).
+        // Below-frontier (origin-A @ 50, below diagonal 100).
         var below = SetEntry("k-below", Hlc(50), OriginA, Vector((OriginA, Hlc(50))));
         var belowResult = await h.Applier.ApplyAsync(below);
 
@@ -182,8 +183,8 @@ public partial class BootstrapCausalHandoffTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(belowResult.Applied, Is.False, "Below-frontier entry must dedup.");
-            Assert.That(belowResult.HighWaterMark, Is.EqualTo(Hlc(100)), "Dedup reports the pinned diagonal.");
+            Assert.That(belowResult.Applied, Is.True, "Below-frontier entry must apply.");
+            Assert.That(belowResult.HighWaterMark, Is.EqualTo(Hlc(100)), "The pinned diagonal does not regress.");
 
             Assert.That(directResult.Applied, Is.True, "Direct-apply entry must apply.");
             Assert.That(directResult.HighWaterMark, Is.EqualTo(Hlc(150)));
@@ -196,10 +197,10 @@ public partial class BootstrapCausalHandoffTests
             Assert.That(h.Parked, Is.Empty, "Mixed clean sequence must not engage the DLQ.");
         });
 
-        // Apply grain receives exactly three calls: direct, satisfier, and the drained park.
+        // Apply grain receives exactly four calls: below, direct, satisfier, and the drained park.
+        await h.Apply.Received(1).ApplySetAsync("k-below", Arg.Any<byte[]>(), Hlc(50), OriginA, null, 0);
         await h.Apply.Received(1).ApplySetAsync("k-direct", Arg.Any<byte[]>(), Hlc(150), OriginA, null, 0);
         await h.Apply.Received(1).ApplySetAsync("k-sat", Arg.Any<byte[]>(), Hlc(500), OriginB, null, 0);
         await h.Apply.Received(1).ApplySetAsync("k-park", Arg.Any<byte[]>(), Hlc(160), OriginA, null, 0);
-        await h.Apply.DidNotReceive().ApplySetAsync("k-below", Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<string>(), Arg.Any<VersionVector?>(), Arg.Any<long>());
     }
 }

@@ -47,21 +47,20 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task<HybridLogicalClock> GetAsync(string originClusterId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the <em>snapshot-pinned causal floor</em> entry for the
+    /// Returns the legacy <em>snapshot-pinned floor</em> entry for the
     /// <c>(this tree, <paramref name="originClusterId"/>)</c> pair, or
-    /// <see cref="HybridLogicalClock.Zero"/> when no snapshot has been
-    /// pinned for that origin. This is the frontier established by the
-    /// most recent <see cref="PinSnapshotAsync"/> and is written
-    /// <em>only</em> by a snapshot pin - never advanced by steady-state
-    /// <see cref="TryAdvanceAsync"/>. The receiver treats an entry as a
-    /// duplicate (and drops it) only when its source HLC is at or below
-    /// this floor, because that is the sole per-origin threshold below
-    /// which every entry is provably contained in a pinned snapshot.
-    /// The incrementally-advanced diagonal from
-    /// <see cref="GetAsync(string, CancellationToken)"/> is NOT a valid
-    /// drop threshold: the per-origin HLC is non-monotonic in
-    /// WAL-append order, so a below-diagonal entry to a distinct key is
-    /// routinely a genuinely-new write (#1060).
+    /// <see cref="HybridLogicalClock.Zero"/> when none is stored.
+    /// <para>
+    /// The receiver no longer uses a pinned floor as a drop threshold
+    /// (#4463): no single HLC per origin is downward-closed over what a
+    /// snapshot holds, so dropping point writes at or below one silently
+    /// discarded writes the snapshot never contained. This build never
+    /// reads the floor, and <see cref="PinSnapshotAsync"/> clears any floor
+    /// an earlier build persisted. The method is retained so a silo still
+    /// on an earlier build can call it during a rolling upgrade; it reads
+    /// <see cref="HybridLogicalClock.Zero"/> (drop nothing) once a pin by
+    /// this build has landed.
+    /// </para>
     /// </summary>
     /// <param name="originClusterId">
     /// The origin cluster id whose pinned-floor entry to read. Must be
@@ -102,8 +101,11 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// bootstrap-snapshot handoff: a newly-bootstrapped peer pins the
     /// vector to the snapshot's causal-stable frontier, then resumes
     /// incremental replication from that pinned frontier with
-    /// exactly-once apply guarantees across the snapshot / incremental
-    /// boundary. The <paramref name="asOfHlc"/> argument carries the
+    /// idempotent apply across the snapshot / incremental
+    /// boundary. Installs no drop floor and clears any floor an earlier
+    /// build persisted (see <see cref="GetPinnedFloorAsync"/>); duplicate
+    /// deliveries across the boundary are absorbed by the receiver's
+    /// identity cache and idempotent per-key merge. The <paramref name="asOfHlc"/> argument carries the
     /// snapshot's authoring HLC (the <c>as-of</c> HLC the snapshot
     /// scan was produced at) for diagnostic and protocol purposes; it
     /// is preserved in the call shape so a future bootstrap protocol
