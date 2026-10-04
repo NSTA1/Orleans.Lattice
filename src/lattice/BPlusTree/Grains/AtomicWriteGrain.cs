@@ -2797,10 +2797,15 @@ internal sealed class AtomicWriteGrain(
     /// <summary>
     /// Called when the routing tier refused the prepared batch because the
     /// logical tree no longer resolves to the bound copy (issue #4358). Resolves
-    /// the routing afresh and, when the tree has indeed moved, re-binds the saga
-    /// to the copy it resolves to now so the batch is re-dispatched there.
-    /// Returns <see langword="false"/> when the fresh routing still names the
-    /// bound copy, leaving the failure to the ordinary retry path.
+    /// the routing afresh and applies <see cref="SagaCopyBinding.AfterRefusal"/>:
+    /// when the tree has moved to a copy the bound copy mirrors into, the saga
+    /// stays bound and the dispatch is retried, which the routing tier then places
+    /// on the bound copy (issue #4454) - re-binding part way would leave the
+    /// prepares already taken on the bound copy for a resize undo to re-expose;
+    /// otherwise the saga re-binds to the copy the tree resolves to now so the
+    /// batch is re-dispatched there. Returns <see langword="false"/> when the
+    /// fresh routing still names the bound copy, leaving the failure to the
+    /// ordinary retry path.
     /// </summary>
     private async Task<bool> TryRebindToResolvedCopyAsync()
     {
@@ -2809,9 +2814,19 @@ internal sealed class AtomicWriteGrain(
         {
             routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
                 .GetRoutingAsync(forceRefresh: true);
-            if (string.Equals(routing.PhysicalTreeId, state.State.BoundPhysicalTreeId, StringComparison.Ordinal))
+            var bound = state.State.BoundPhysicalTreeId!;
+            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
             {
                 return false;
+            }
+
+            if (SagaCopyBinding.AfterRefusal(bound, routing.PhysicalTreeId, await BoundCopyMirrorDestinationAsync(bound))
+                == SagaCopyBindingVerdict.StayBound)
+            {
+                Logger.LogInformation(
+                    "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Bound} to {Current}, which the bound copy mirrors into, while its batch was being dispatched; staying bound and dispatching the rest onto the bound copy.",
+                    OperationKey, state.State.TreeId, bound, routing.PhysicalTreeId);
+                return true;
             }
 
             var prevBound = state.State.BoundPhysicalTreeId;

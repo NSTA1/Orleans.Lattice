@@ -2531,6 +2531,32 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// The copy <paramref name="boundPhysicalTreeId"/> mirrors every mutation it
+    /// takes into - the destination of an online resize whose source it is - or
+    /// <see langword="null"/> when it mirrors nowhere. Asked of the shard the
+    /// batch's first key routes to; every shard of a resize source mirrors to the
+    /// same destination. A failed probe answers <see langword="null"/>, so the
+    /// dispatch is refused as it would be without one. Reached only when a bound
+    /// saga's tree has moved off its bound copy.
+    /// </summary>
+    private async Task<string?> BoundCopyMirrorDestinationAsync(
+        string boundPhysicalTreeId, ShardMap shardMap, List<KeyValuePair<string, byte[]>> entries)
+    {
+        var shardIndex = entries.Count > 0 ? shardMap.Resolve(entries[0].Key) : 0;
+        try
+        {
+            return await GetShardGrainByIndex(boundPhysicalTreeId, shardIndex).GetMirrorDestinationAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Could not ask bound copy {Bound} of tree {TreeId} where it mirrors; refusing the bound dispatch.",
+                boundPhysicalTreeId, TreeId);
+            return null;
+        }
+    }
+
     private async Task<string?> SetManyAsyncCore(
         List<KeyValuePair<string, byte[]>> entries,
         KeyValuePair<string, object?> stageTagTree,
@@ -2554,7 +2580,24 @@ internal sealed partial class LatticeGrain(
                 (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true);
                 if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
                 {
-                    return physicalTreeId;
+                    // The tree really has moved. The batch still belongs on the
+                    // bound copy when that copy mirrors into the one the tree
+                    // moved to - an online resize's source after its flip - since
+                    // its fence admits the saga and it mirrors every prepare, so
+                    // the batch lands whole on both copies (issue #4454). The map
+                    // addresses the bound copy's shards too: a resize copies its
+                    // source's map index for index, and holds every migration
+                    // while the source mirrors (#4452).
+                    var dispatchCopy = SagaCopyBinding.DispatchCopy(
+                        boundPhysicalTreeId,
+                        physicalTreeId,
+                        await BoundCopyMirrorDestinationAsync(boundPhysicalTreeId!, shardMap, entries));
+                    if (dispatchCopy is null)
+                    {
+                        return physicalTreeId;
+                    }
+
+                    physicalTreeId = dispatchCopy;
                 }
             }
         }

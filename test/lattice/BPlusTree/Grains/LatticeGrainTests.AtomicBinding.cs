@@ -35,6 +35,37 @@ public partial class LatticeGrainTests
             && key.StartsWith(physicalTreeId + "/", StringComparison.Ordinal));
 
     [Test]
+    public async Task SetManyAsync_under_a_saga_binding_places_the_batch_on_a_bound_copy_that_mirrors_into_the_resolved_one()
+    {
+        // Issue #4454: the tree flipped to a resize's destination, and the bound
+        // copy is that resize's source, which mirrors everything into it. The rest
+        // of the batch belongs on the bound copy - whose fence admits the saga -
+        // not refused back to a saga that would then re-bind and leave the
+        // prepares already taken behind.
+        var (grain, factory, registry) = CreateGrainWithRegistry(BindingAlias);
+        registry.ResolveAsync(BindingAlias).Returns(Task.FromResult(OtherCopy));
+        var shardRoot = SetupShardRoot(factory);
+        shardRoot.GetMirrorDestinationAsync().Returns(Task.FromResult<string?>(OtherCopy));
+        SetupCompactionGrain(factory, BindingAlias);
+        var seenByShard = new List<string?>();
+        shardRoot.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            seenByShard.Add(LatticeAtomicBindingContext.Current);
+            return Task.CompletedTask;
+        });
+
+        await SetManyBoundAsync(grain, BoundCopy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(seenByShard, Is.Not.Empty, "the batch must be dispatched, not refused");
+            Assert.That(seenByShard, Is.All.EqualTo(BoundCopy), "the bound copy's shards are told the batch is theirs");
+            Assert.That(ShardResolutionsFor(factory, OtherCopy), Is.Zero,
+                "the batch must not be placed on the copy the bound copy mirrors into");
+        });
+    }
+
+    [Test]
     public void SetManyAsync_under_a_saga_binding_refuses_a_tree_that_moved_off_the_bound_copy()
     {
         var (grain, factory, registry) = CreateGrainWithRegistry(BindingAlias);
