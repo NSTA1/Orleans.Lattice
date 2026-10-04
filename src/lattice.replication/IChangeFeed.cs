@@ -75,7 +75,10 @@ public interface IChangeFeed
     /// to resume from per-partition offsets). Entries are emitted in HLC ascending
     /// order; ties are broken by the order in which the merge consumes
     /// them across partitions and is therefore unspecified - consumers
-    /// must treat the feed as a multiset under equal HLCs.
+    /// must treat the feed as a multiset under equal HLCs. Saga terminals
+    /// (<see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>)
+    /// are the exception: they follow every other entry of the call, so a
+    /// terminal is never emitted ahead of a prepare it resolves.
     /// <para>
     /// The enumeration takes a snapshot of the WAL at call time and
     /// completes once that snapshot is exhausted. To pick up entries
@@ -134,7 +137,8 @@ public interface IChangeFeed
     /// read - an exclusive lower bound on already-consumed offsets).
     /// Entries are emitted in <see cref="HybridLogicalClock"/>
     /// ascending order (the per-call merge sorts by HLC for caller
-    /// convenience), but the filter is offset-based so a low-HLC entry
+    /// convenience; saga terminals follow every other entry of the call, as
+    /// on the HLC overload), but the filter is offset-based so a low-HLC entry
     /// that arrives after a higher-HLC entry on the same partition is
     /// yielded rather than silently dropped.
     /// <para>
