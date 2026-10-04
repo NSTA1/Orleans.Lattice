@@ -304,7 +304,9 @@ each kept as a standing mutation in
 overtakes its shard's prepare (#4480, now fixed by the shipper's terminal hold,
 whose detectors the note cites), a bootstrap over a stranded origin prepare
 (#4481), and pre-cut saga records re-shipped after a bootstrap (#4482); the
-last two remain gap rows.
+last two remain gap rows. A fourth, filed later, is the residual of #4482's
+intended txid dedupe: a re-shipped prepare whose saga's decision the origin
+has already purged (#4508).
 The snapshot read paths' handling of an undiallable delegation (#4448) is
 reproduced on the receiver the same way.
 
@@ -325,4 +327,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 20 | 20 | 8,727 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 21 | 20 | 8,727 |

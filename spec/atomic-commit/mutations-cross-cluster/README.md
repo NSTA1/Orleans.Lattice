@@ -41,6 +41,7 @@ transport assumption or its read view already does.
 | `RNoStrandedPrepareShipperDropsTerminal` | `RNoStrandedPrepare` | Temporal | `OriginBroadcast` | one source shard's terminal is never replicated (the #2324 class) |
 | `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged |
 | `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | retained pre-cut saga records are shipped again after a bootstrap (#4482) |
+| `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `Bootstrap`, `DeliverPrepare` | with the #4482 dedupe in place, a pre-cut prepare re-shipped for a saga whose decision the origin purged is still staged (#4508) |
 | `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` | `RNoStrandedPrepare` | Temporal (`DEADLOCK: off`) | `OriginPrepare`, `DeliverTerminal` | a terminal waits on every prepare the saga wrote, one of which is never shipped, so it is never released |
 
 Every mutant but one is deadlock-free: run with a cfg naming only `TypeOK` and
@@ -82,7 +83,7 @@ reading the code the refinement note maps.
 | `DelegationsDisjoint` | The registry's coexistence check on the foreign claim. | None: the claim is enabled for the whole window the authoring row exists. |
 | `RMonotonicVisibility` | The fan-out drains a committed bucket into the projection. | A late orphan on a reactivated receiver leaf, which the module does not model (#4445's mechanism): **blindly inexpressible**, recorded as an abstraction gap. |
 | `RCommittedEventuallyVisible` | At-least-once delivery, the tally, the barrier and the fan-out. | None. Stated over materialisation so that a dial fault lasting forever, which production also allows, does not make it unfalsifiable-by-construction. |
-| `RNoStrandedPrepare` | Late prepares are refused, and the handoff after a bootstrap is exactly-once. | A retained pre-cut prepare re-shipped after its terminal was trimmed: **blindly inexpressible** (#4482). |
+| `RNoStrandedPrepare` | Late prepares are refused, and the handoff after a bootstrap is exactly-once. | A retained pre-cut prepare re-shipped after its terminal was trimmed: **blindly inexpressible** (#4482). The txid dedupe intended for #4482 closes it only while the origin still stores the saga's decision; once the decision is purged the same cell is reached again (#4508), kept as a standing mutation and a gap row. |
 
 **Bounded-out.** The instance has two source shards (or two trees) and one
 touched-shard count per saga, so the tally's upward merge of a raised count - a

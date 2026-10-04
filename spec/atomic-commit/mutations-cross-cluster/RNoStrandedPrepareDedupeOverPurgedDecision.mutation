@@ -1,0 +1,50 @@
+# Pairs with RNoStrandedPrepare, and reproduces issue #4508, the residual of
+# #4482's intended fix. The fix is applied: the export ships a decision row for
+# every saga the origin still stores, an aged-out one resolved by its recorded
+# verdict, and the receiver's prepare seam dedupes against it - materialised
+# on Committed, dropped on Aborted, staged only while the saga is undecided.
+# Pre-cut records are still re-shipped. What remains is a saga whose decision
+# row the origin has already PURGED: the export carries no verdict for it, the
+# receiver has nothing to dedupe against, and a retained prepare whose terminal
+# was trimmed is staged with no terminal behind it. With the purged branch
+# removed (snap0 for a forgotten saga is its recorded verdict only) the same
+# change is clean on every property.
+MODULE: RNoStrandedPrepareDedupeOverPurgedDecision
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: with the #4482 dedupe in place, a pre-cut prepare re-shipped for a saga whose decision the origin purged is still staged with no terminal
+PERTURBS: Bootstrap, DeliverPrepare
+
+--- FIND
+    /\ \E snap \in Snap0 :
+         /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
+         /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
+    /\ outbox' = {}
+    /\ rconn' = TRUE
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, registryVars, barrierVars>>
+--- REPLACE
+    /\ \E snap \in Snap0 :
+         /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
+         /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
+\* MUTATION: the export's decision row is recorded on the receiver.
+         /\ rdec' = [rdec EXCEPT !["A"] = IF snap \in {"committed", "aborted"} THEN snap ELSE rdec["A"]]
+\* MUTATION: any pre-cut record still retained is shipped again.
+    /\ outbox' \in SUBSET outbox
+    /\ rconn' = TRUE
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, barrierVars>>
+--- END
+--- FIND
+    /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars>>
+--- REPLACE
+\* MUTATION: a prepare is deduped by txid against the recorded decision.
+    /\ rpend' = IF rterm[m.key] = "none" /\ rdec[TreeOf(m.key)] = "inflight" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF rdec[TreeOf(m.key)] = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars>>
+--- END
+--- FIND
+    IF forgotten[T] THEN {"indeterminate", "inflight"} ELSE {Origin!RegistryView(T)}
+--- REPLACE
+\* MUTATION: a stored aged-out row exports its recorded verdict; a purged one exports nothing.
+    IF forgotten[T] THEN {decision[T], "inflight"} ELSE {Origin!RegistryView(T)}
+--- END

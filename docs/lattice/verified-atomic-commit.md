@@ -39,8 +39,8 @@ are its own. The cross-cluster check is also narrower than its name: it assumes 
 source shard's terminal reaches the receiver after that shard's prepares, which
 the shipper's terminal hold provides (issue #4480), and it reaches no stranded
 origin prepare at a bootstrap (issue #4481) and no re-shipped pre-cut record
-(issue #4482). Those two departures are recorded as defects with a standing
-mutation each, not covered. The receiver's integration tests and the cross-cluster chaos suites
+(issue #4482), nor one whose saga's decision the origin has purged (issue #4508).
+Those departures are recorded as defects with a standing mutation each, not covered. The receiver's integration tests and the cross-cluster chaos suites
 in `test/lattice.replication/` remain the evidence for the deployed system
 (issue #2324).
 
