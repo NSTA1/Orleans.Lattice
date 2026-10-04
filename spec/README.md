@@ -114,7 +114,7 @@ these columns, one row per module in the directory:
 ```markdown
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |
+| `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
 ```
 
 `SpecModuleDiscoveryTests` checks it against the manifest. It is the one place a

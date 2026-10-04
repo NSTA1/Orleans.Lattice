@@ -85,7 +85,7 @@ over whole behaviours; the last three are liveness properties):
 | `MonotonicVisibility` | Once a key has been observed post-saga it is never observed pre-saga at any later state (even across a reshard, or while the registry declines to report the decision). Going hidden is not a reversion, but it cannot launder one: post, then hidden, then pre is a violation, which is why the property is stated over the behaviour rather than over one step. |
 | `RevisionMonotonic` | The registry revision counter never decreases. |
 | `Termination` | Every saga terminates (under weak fairness of saga progress). Fails on a protocol defect under that fairness, not only without it. |
-| `EveryCommittedKeyReadable` | Every committed saga's keys are eventually all materialised at their post-saga value on their own leaf. Not entailed by any invariant; for a committed saga it coincides with `NoStrandedPrepare` (see its comment in the spec). |
+| `EveryCommittedKeyReadable` | Every committed saga's keys are eventually all materialised at their post-saga value on their own leaf, and served post-saga from then on, whatever the registry reports and whatever late orphan bucket lands (issue #4428). Not entailed by any invariant; for a committed saga it coincides with `NoStrandedPrepare` (see its comment in the spec). |
 | `NoStrandedPrepare` | Every participant of a decided saga eventually applies the saga's terminal. The only one of the three liveness properties that sees an aborted saga's stranded bucket. |
 
 All three liveness properties fail on protocol defects under the fairness the
@@ -276,4 +276,4 @@ This table is the one place this directory states them; see
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `AtomicCommit` | 7 | 6 | 8 | 20 | 17 | 31,684 |
+| `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
