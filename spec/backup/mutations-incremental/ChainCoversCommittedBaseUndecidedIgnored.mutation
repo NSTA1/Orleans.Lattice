@@ -1,0 +1,15 @@
+# Pairs with ChainCoversCommitted. The increment looks up only the sagas whose
+# records reach its window. A saga undecided at the full base, all of whose
+# prepares precede the base's frontier, commits; before its terminals land an
+# increment holds it committed in d0 yet restores it pre-saga.
+MODULE: ChainCoversCommittedBaseUndecidedIgnored
+TARGET: ChainCoversCommitted
+CLASS: Invariant
+SUMMARY: the sagas the base held as undecided are not looked up
+
+--- FIND
+Tracked == InWindow \/ Last.und
+--- REPLACE
+\* MUTATION: the base's undecided sagas are not tracked.
+Tracked == InWindow
+--- END
