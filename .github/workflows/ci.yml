@@ -92,6 +92,108 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # CLASSIFY. The only job that runs on a push to a MEMBER branch.
+  #
+  # A member branch (`<type>/epic/<bucket>-<item>`) matches the `'*/epic/**'`
+  # push filter exactly as its bucket does, and no branch filter can tell the
+  # two apart (see the step comment below), so a member push still CREATES a
+  # run. What this job decides is that the run costs one small job and nothing
+  # else: every other job either needs this one and excludes a member push in
+  # its own condition, or needs a job that does. A member push therefore runs no
+  # plan, no content gates, no test leg and no aggregate - its own pull request
+  # run already gates the same commit.
+  #
+  # Push-only, at the job level. On a pull request this job is SKIPPED before a
+  # runner is requested, so its output is the empty string, every downstream
+  # `!= 'true'` comparison holds, and nothing on the pull-request path waits on
+  # it. That is the property that lets `content-gates` carry a condition and
+  # still be unskippable on a pull request: the only input to its condition is
+  # a flag that a pull request cannot set. `CiContentGateWiringTests` pins both
+  # halves.
+  #
+  # If this job FAILS on a push, its output is empty and the downstream jobs
+  # run as for an integration branch. The failure direction is a redundant run,
+  # never a skipped one.
+  # ---------------------------------------------------------------------------
+  classify:
+    name: Classify pushed ref
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    outputs:
+      push_is_member: ${{ steps.pushref.outputs.member }}
+
+    steps:
+      # Only the remote's heads are read. `fetch-depth: 0` is required of every
+      # checkout in this file (see `CiChangeDetectionDiffFormTests`), so the
+      # history is fetched TREELESS (`filter: tree:0`) and only `.github` is
+      # checked out: commits only, which is a small fraction of a full clone.
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          filter: tree:0
+          sparse-checkout: .github
+
+      # The integration-branch push filter `'*/epic/**'` CANNOT distinguish a
+      # bucket from one of its members, and no glob can. The convention names a
+      # bucket `<type>/epic/<bucket-slug>` and each member
+      # `<type>/epic/<bucket-slug>-<item-slug>` - a HYPHEN, not a slash, because
+      # git stores a branch as a file at `refs/heads/<name>` and so cannot hold
+      # both `refs/heads/X` and `refs/heads/X/y`. That rule is what makes the two
+      # shapes textually identical to a branch filter: both are three segments,
+      # and `*` does not match `/`.
+      #
+      # Left unhandled, this lane therefore fires a FULL matrix (all packages,
+      # via the no-match fallback) on every push to every member branch, on top
+      # of the pull-request run that already gates that member. Member pushes are
+      # the dominant CI volume during an epic, so that is a large cost for a run
+      # which duplicates a lane that already exists.
+      #
+      # The discriminator is derived from the naming convention rather than
+      # guessed: this ref is a MEMBER if some OTHER branch on the remote is a
+      # proper prefix of it followed by `-`, which is exactly the shape the
+      # convention mandates. Pure git, no API call and no extra token scope.
+      #
+      # Residual false positive, stated rather than hidden: two buckets whose
+      # slugs differ only by a `-<suffix>` would classify the longer as a member
+      # of the shorter. The failure direction is a skipped advisory run, never a
+      # blocked merge, and it is visible in the step's own output.
+      - name: Classify the pushed integration ref
+        id: pushref
+        if: github.event_name == 'push'
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          member=false
+          parent=""
+
+          while read -r _sha ref; do
+            branch="${ref#refs/heads/}"
+
+            # A proper prefix, and the very next character is the `-` separator.
+            case "$BRANCH" in
+              "$branch"-*)
+                if [ "$branch" != "$BRANCH" ]; then
+                  member=true
+                  parent="$branch"
+                fi
+                ;;
+            esac
+          done < <(git ls-remote --heads origin)
+
+          echo "member=$member" >> "$GITHUB_OUTPUT"
+          echo "parent=$parent" >> "$GITHUB_OUTPUT"
+
+          if [ "$member" = "true" ]; then
+            echo "Pushed ref '$BRANCH' extends integration branch '$parent'; treating it as a member."
+          else
+            echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
+          fi
+
+
+  # ---------------------------------------------------------------------------
   # PLAN. The guards, the change detection, the package selection, and the
   # bin-packing that turns that selection into parallel legs. Cheap (about a
   # minute) because it compiles nothing: the legs build what they need.
@@ -102,6 +204,12 @@ jobs:
   # ---------------------------------------------------------------------------
   plan:
     name: Plan
+    needs: classify
+    # `!cancelled()` because `classify` is SKIPPED on every pull request, and a
+    # job whose dependency was skipped is itself skipped unless its condition
+    # says otherwise. On a pull request the flag is empty, so this always runs;
+    # it is false only on a push the classifier identified as a member branch.
+    if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
     runs-on: ubuntu-latest
 
     # Job-level scopes REPLACE the workflow-level block rather than adding to
@@ -136,9 +244,13 @@ jobs:
       # deliberate no-op into a workflow-level error.
       legs: ${{ steps.matrix.outputs.legs || '[]' }}
       leg_count: ${{ steps.matrix.outputs.leg_count || '0' }}
-      # Empty on pull_request (the classifier step does not run) and on any
-      # non-member push, so only a member push can suppress the aggregate.
-      push_is_member: ${{ steps.pushref.outputs.member }}
+      # Which tiers this run executes (tier-scope.py). `skipped_tiers` is empty
+      # for every run except a member pull request into an integration branch,
+      # and the `build-and-test` verdict refuses a non-empty value on a pull
+      # request into `main` or a release line.
+      tier_scope: ${{ steps.tierscope.outputs.scope }}
+      skipped_tiers: ${{ steps.tierscope.outputs.skipped_tiers }}
+      tier_reason: ${{ steps.tierscope.outputs.reason }}
 
     steps:
       - uses: actions/checkout@v5
@@ -1110,64 +1222,6 @@ jobs:
       # The `else` arm's stated reason used to be "no test-relevant files
       # changed", and a samples-only change took it. That premise was false
       # whenever the changed file WAS the body of a test, which is the whole of
-      # The integration-branch push filter `'*/epic/**'` CANNOT distinguish a
-      # bucket from one of its members, and no glob can. The convention names a
-      # bucket `<type>/epic/<bucket-slug>` and each member
-      # `<type>/epic/<bucket-slug>-<item-slug>` - a HYPHEN, not a slash, because
-      # git stores a branch as a file at `refs/heads/<name>` and so cannot hold
-      # both `refs/heads/X` and `refs/heads/X/y`. That rule is what makes the two
-      # shapes textually identical to a branch filter: both are three segments,
-      # and `*` does not match `/`.
-      #
-      # Left unhandled, this lane therefore fires a FULL matrix (all packages,
-      # via the no-match fallback) on every push to every member branch, on top
-      # of the pull-request run that already gates that member. Member pushes are
-      # the dominant CI volume during an epic, so that is a large cost for a run
-      # which duplicates a lane that already exists.
-      #
-      # The discriminator is derived from the naming convention rather than
-      # guessed: this ref is a MEMBER if some OTHER branch on the remote is a
-      # proper prefix of it followed by `-`, which is exactly the shape the
-      # convention mandates. Pure git, no API call and no extra token scope.
-      #
-      # Residual false positive, stated rather than hidden: two buckets whose
-      # slugs differ only by a `-<suffix>` would classify the longer as a member
-      # of the shorter. The failure direction is a skipped advisory run, never a
-      # blocked merge, and it is visible in the step's own output.
-      - name: Classify the pushed integration ref
-        id: pushref
-        if: github.event_name == 'push'
-        env:
-          BRANCH: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-
-          member=false
-          parent=""
-
-          while read -r _sha ref; do
-            branch="${ref#refs/heads/}"
-
-            # A proper prefix, and the very next character is the `-` separator.
-            case "$BRANCH" in
-              "$branch"-*)
-                if [ "$branch" != "$BRANCH" ]; then
-                  member=true
-                  parent="$branch"
-                fi
-                ;;
-            esac
-          done < <(git ls-remote --heads origin)
-
-          echo "member=$member" >> "$GITHUB_OUTPUT"
-          echo "parent=$parent" >> "$GITHUB_OUTPUT"
-
-          if [ "$member" = "true" ]; then
-            echo "Pushed ref '$BRANCH' extends integration branch '$parent'; treating it as a member."
-          else
-            echo "Pushed ref '$BRANCH' extends no existing branch; treating it as an integration branch."
-          fi
-
       # #2653: the reason did not merely fail to select a leg, it asserted that
       # there was nothing to select, so the hole could not be read off the run's
       # own output. Every arm below now states something that is actually
@@ -1181,7 +1235,6 @@ jobs:
           WORKFLOWS: ${{ steps.filter.outputs.workflows }}
           VERSION_ONLY: ${{ steps.verbump.outputs.version_only }}
           SAMPLE_DEPENDENTS: ${{ steps.sampledeps.outputs.found }}
-          PUSH_IS_MEMBER: ${{ steps.pushref.outputs.member }}
         run: |
           set -euo pipefail
 
@@ -1192,10 +1245,10 @@ jobs:
           # final `else` - declining to test the very branch the lane exists to
           # test, while reporting a reason ("nothing changed outside
           # documentation") that is not something the run checked.
-          if [ "$EVENT" = "push" ] && [ "$PUSH_IS_MEMBER" = "true" ]; then
-            run_tests=false
-            reason="member branch push: this ref extends an integration branch, so it is a member and its own pull request into that branch already gates it"
-          elif [ "$EVENT" = "push" ]; then
+          #
+          # A push reaching this job is never a member push: the `classify`
+          # job's flag keeps this whole job off a member branch.
+          if [ "$EVENT" = "push" ]; then
             run_tests=true
             reason="integration branch push (#2972): the bucket's combined state is evaluated in full, via an empty changed-path list and the selector's no-match fallback"
           elif [ "$VERSION_ONLY" = "true" ]; then
@@ -1408,9 +1461,43 @@ jobs:
       # makespan floor of the whole matrix until it was split).
       # The shard set is an ordered first-match-wins partition with a trailing
       # complement, so every test is claimed exactly once and none is dropped.
+      # TIERED GATING FOR MEMBER PULL REQUESTS. A pull request whose base is an
+      # integration branch (`*/epic/**`) skips the two exploration-dominated
+      # tiers, Coyote and chaos; every other run - a pull request into `main` or
+      # `release/**`, and the integration branch's own push lane - skips
+      # nothing. tier-scope.py owns the rule and its rationale, including why
+      # the TLC fixtures are kept; this step only feeds it the event.
+      #
+      # Nothing a member skips is lost. Its commits reach `main` only through
+      # the integration branch, whose push lane runs every tier after each
+      # member merge and whose pull request into `main` is the fully gated
+      # required check. What is lost is attribution: a Coyote or chaos
+      # regression surfaces on the bucket rather than on the member that
+      # introduced it.
+      #
+      # Unconditional, and outside the `run_tests` gate, so the decision and
+      # its reason are on every run's summary - a skip that is not announced
+      # reads as a pass.
+      - name: Decide the test tier scope
+        id: tierscope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/tier-scope.py \
+            --event "$EVENT" \
+            --base-ref "$BASE_REF" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary-file "$GITHUB_STEP_SUMMARY"
+
       - name: Plan the test matrix
         id: matrix
         if: steps.gate.outputs.run_tests == 'true'
+        env:
+          SKIPPED_TIERS: ${{ steps.tierscope.outputs.skipped_tiers }}
+          TIER_REASON: ${{ steps.tierscope.outputs.reason }}
+          MAX_LEGS: ${{ steps.tierscope.outputs.max_legs }}
         run: |
           set -euo pipefail
 
@@ -1427,7 +1514,9 @@ jobs:
             --seeded /tmp/seeded-packages.txt \
             --shards .github/workflows/test-shards.json \
             --durations .github/workflows/test-durations.tsv \
-            --max-legs 10 \
+            --max-legs "$MAX_LEGS" \
+            --skip-tiers "$SKIPPED_TIERS" \
+            --skip-reason "$TIER_REASON" \
             --output-matrix /tmp/matrix.json \
             --report-file "$GITHUB_STEP_SUMMARY"
 
@@ -1461,8 +1550,18 @@ jobs:
     name: Samples, reference architecture, apps, benchmark
     needs: plan
     runs-on: ubuntu-latest
+    # `!cancelled() && needs.plan.result == 'success'` rather than the implicit
+    # `success()`, and the difference is not cosmetic. The implicit check
+    # covers every ANCESTOR job, not only `plan`, and `classify` is an ancestor
+    # that is skipped on every pull request - so the implicit form would skip
+    # this job on every pull request. Naming `plan`'s result keeps the real
+    # dependency (and so the member-push skip, which skips `plan`) without
+    # inheriting the classifier's pull-request skip. The `test` job carries the
+    # same pair of terms for the same reason.
     if: >-
-      github.event_name == 'pull_request'
+      !cancelled()
+      && needs.plan.result == 'success'
+      && github.event_name == 'pull_request'
       && (needs.plan.outputs.refArch == 'true'
           || needs.plan.outputs.apps == 'true'
           || needs.plan.outputs.benchmark_changed == 'true'
@@ -1919,7 +2018,11 @@ jobs:
     # An empty matrix is a valid plan, not a failure: it is what a docs-only or
     # version-bump-only change produces. The `build-and-test` gate below still
     # runs and still reports, so the required check never goes missing.
-    if: needs.plan.outputs.leg_count != '0'
+    #
+    # `!cancelled() && needs.plan.result == 'success'` replaces the implicit
+    # `success()`, which would also read the `classify` job's pull-request skip
+    # through `plan` and skip every leg; see the note on `extras`.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.leg_count != '0' }}
     runs-on: ubuntu-latest
 
     strategy:
@@ -2135,7 +2238,9 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # CONTENT GATES. Unconditional by construction - no `needs:`, no `if:`.
+  # CONTENT GATES. Unconditional on every pull request, by construction. Its
+  # one condition reads only the push-only member flag (see the job's own
+  # comment), which a pull request cannot set.
   #
   # Every gate that polices TEXT rather than code is an ordinary NUnit test:
   # the formal refinement fixtures (`test/lattice/Formal/`, which read
@@ -2155,11 +2260,14 @@ jobs:
   #      request touching only `src/lattice.explorer/**` plus `spec/**/*.md`
   #      never selects `lattice`, so the formal fixtures still do not run.
   #
-  # Hence: no condition of any kind on this job. That is not belt-and-braces,
-  # it is the fix. A conditional job can be SKIPPED, and a skipped job is
-  # non-blocking in Actions by default - which is the very defect being closed
-  # here, reintroduced one level up. `build-and-test` accepts only `success`
-  # from this job, never `skipped`, so the two halves cannot drift apart.
+  # Hence: no condition on this job that a pull request can trip. That is not
+  # belt-and-braces, it is the fix. A conditional job can be SKIPPED, and a
+  # skipped job is non-blocking in Actions by default - which is the very
+  # defect being closed here, reintroduced one level up. `build-and-test`
+  # accepts only `success` from this job, never `skipped`, so the two halves
+  # cannot drift apart. The single exception is a push to a MEMBER branch,
+  # where `build-and-test` itself does not run, so there is no check for a
+  # skip to turn green.
   #
   # Cost: one restore, one solution build, one filtered test pass. Measured on
   # a real ubuntu-latest run: 24s restore, 148s build, 97s tests, about 4m50s
@@ -2189,6 +2297,17 @@ jobs:
   # ---------------------------------------------------------------------------
   content-gates:
     name: Content gates (formal, hygiene, docs)
+    # The ONE condition this job may carry, and it cannot skip it on a pull
+    # request. `classify` is push-only, so on every pull request it is skipped
+    # and its flag is empty; `!cancelled()` stops that skip propagating, and
+    # the comparison holds. The job is therefore skipped only on a push the
+    # classifier identified as a member branch, where nothing reports a check
+    # (`build-and-test` is suppressed by the same flag) and the member's own
+    # pull request runs this job in full. `CiContentGateWiringTests` pins the
+    # exact condition, the single dependency, and the classifier's push-only
+    # guard, so nothing else can be added here.
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
     runs-on: ubuntu-latest
 
     env:
@@ -2289,23 +2408,23 @@ jobs:
   # ---------------------------------------------------------------------------
   build-and-test:
     name: build-and-test
-    needs: [plan, extras, test, content-gates]
+    needs: [classify, plan, extras, test, content-gates]
     # `always()` so a docs-only change still reports, per the note above.
     #
     # The second term suppresses this aggregate on a member push, and it is a
     # correctness term rather than a cost one. The push lane cannot be kept off
     # member branches by glob (`*/epic/**` matches both a bucket and its
     # `<bucket>-<item>` members), so it starts, classifies the ref, and skips
-    # the test legs. Without this term the aggregate would then run with every
-    # leg skipped and publish `build-and-test: success` - a check asserting a
-    # build and a test run when neither happened, on the same commit sha as the
-    # member's own pull request, where it is indistinguishable from that pull
-    # request's real result. A skipped job reports `skipped`, which does not
-    # read as a pass.
+    # every other job. Without this term the aggregate would then run with
+    # everything skipped and publish `build-and-test: success` - a check
+    # asserting a build and a test run when neither happened, on the same
+    # commit sha as the member's own pull request, where it is
+    # indistinguishable from that pull request's real result. A skipped job
+    # reports `skipped`, which does not read as a pass.
     #
-    # An empty `push_is_member` (a pull request, or a failed plan) does not
-    # match, so every path that should report still reports.
-    if: always() && needs.plan.outputs.push_is_member != 'true'
+    # An empty `push_is_member` (a pull request, or a failed classifier) does
+    # not match, so every path that should report still reports.
+    if: always() && needs.classify.outputs.push_is_member != 'true'
     runs-on: ubuntu-latest
 
     steps:
@@ -2367,6 +2486,11 @@ jobs:
       # assumed. It is inspected separately below, and only `success` passes.
       - name: Verdict
         env:
+          CLASSIFY: ${{ needs.classify.result }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          SKIPPED_TIERS: ${{ needs.plan.outputs.skipped_tiers }}
+          TIER_REASON: ${{ needs.plan.outputs.tier_reason }}
           PLAN: ${{ needs.plan.result }}
           EXTRAS: ${{ needs.extras.result }}
           TEST: ${{ needs.test.result }}
@@ -2377,10 +2501,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "plan=$PLAN extras=$EXTRAS test=$TEST content-gates=$CONTENT_GATES legs=$LEG_COUNT"
+          echo "classify=$CLASSIFY plan=$PLAN extras=$EXTRAS test=$TEST content-gates=$CONTENT_GATES legs=$LEG_COUNT skipped-tiers=${SKIPPED_TIERS:-none}"
 
           ok=true
-          for pair in "plan:$PLAN" "extras:$EXTRAS" "test:$TEST"; do
+          for pair in "classify:$CLASSIFY" "extras:$EXTRAS" "test:$TEST"; do
             name="${pair%%:*}"
             result="${pair#*:}"
             case "$result" in
@@ -2388,6 +2512,31 @@ jobs:
               *) echo "::error::Upstream job '${name}' reported '${result}'."; ok=false ;;
             esac
           done
+
+          # Success only, like `content-gates` below: `plan` carries every guard
+          # step (branch name, trailers, author identity, closing keywords, the
+          # bucket closing list, the self-tests), so a skipped plan is a run
+          # whose guards never ran. On a pull request it cannot be skipped by
+          # its own condition; this makes that a checked fact.
+          case "$PLAN" in
+            success) ;;
+            *) echo "::error::Upstream job 'plan' reported '${PLAN}'. It carries every guard step and must succeed on every run that reports."; ok=false ;;
+          esac
+
+          # Tiered gating (tier-scope.py) may skip tiers ONLY on a member pull
+          # request into an integration branch. A pull request into `main` or
+          # a release line, and the integration-branch push lane, must run
+          # every tier; a non-empty skip list there is a broken rule, not a
+          # policy, and fails the required check rather than passing quietly.
+          case "$EVENT:$BASE_REF" in
+            pull_request:main|pull_request:release/*) tiers_may_skip=false ;;
+            pull_request:*/epic/*) tiers_may_skip=true ;;
+            *) tiers_may_skip=false ;;
+          esac
+          if [ -n "$SKIPPED_TIERS" ] && [ "$tiers_may_skip" != "true" ]; then
+            echo "::error::Tiers '${SKIPPED_TIERS}' were skipped on a ${EVENT} run with base '${BASE_REF:-none}'. Only a member pull request into an integration branch may skip tiers; this run must be fully gated."
+            ok=false
+          fi
 
           # Success only. `skipped` is named explicitly so the failure says what
           # actually went wrong rather than reporting an unexpected state.
@@ -2427,6 +2576,22 @@ jobs:
               echo "ran the formal, hygiene, and docs-snippet fixtures, so this"
               echo "green means those gates passed - not that any package's own"
               echo "test suite was executed."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Say plainly which tiers did NOT run. A green check here asserts
+          # nothing about them, and the summary and the run page must not let
+          # a skip read as a pass.
+          if [ -n "$SKIPPED_TIERS" ]; then
+            echo "::notice title=Test tiers skipped::${SKIPPED_TIERS//,/, } not run: ${TIER_REASON}."
+            {
+              echo "### Test tiers NOT run: ${SKIPPED_TIERS//,/, }"
+              echo ""
+              echo "Reason: ${TIER_REASON}."
+              echo ""
+              echo "This green covers the tiers that ran and every guard and content"
+              echo "gate. It asserts nothing about the tiers above, which run on the"
+              echo "integration branch's push lane and on its pull request into main."
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
