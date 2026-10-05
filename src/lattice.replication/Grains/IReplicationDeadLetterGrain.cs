@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Grains;
 
@@ -74,5 +75,14 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
 
     /// <summary>Returns the parked entry with the supplied id, or <c>null</c> when no such entry is parked.</summary>
     Task<DeadLetterEntry?> TryGetAsync(long entryId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether the queue holds a parked write of <paramref name="originClusterId"/>
+    /// at <paramref name="timestamp"/> (issue #4586). An entry counts as held from
+    /// its durable enqueue until its durable removal. Interleaves, so the origin
+    /// frontier grain can ask while this grain waits on it.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken);
 }
 

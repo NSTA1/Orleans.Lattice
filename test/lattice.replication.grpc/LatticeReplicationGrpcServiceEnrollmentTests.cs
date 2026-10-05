@@ -261,7 +261,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
         // OriginClusterId. Letting a peer declare a third cluster's origin lets
         // it poison that stream's cursor and suppress anti-entropy repair.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
         var svc = CreateService(factory, EnrolledOnly());
         var box = new ContentManifestRequestBox
@@ -282,7 +282,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     public async Task ExchangeContentManifest_accepts_an_origin_that_matches_the_stamped_header()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
@@ -311,7 +311,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
         // gate but no gate at all - a peer could enumerate a third cluster's
         // replication cursor simply by not stamping itself.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
@@ -385,7 +385,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
         // The cursor is per-origin state; reading it back for an origin other than
         // the caller's own discloses a third cluster's replication position.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
         var svc = CreateService(factory, EnrolledOnly());
         var box = new PeerHighWaterMarkRequestBox
@@ -406,7 +406,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     public async Task GetPeerHighWaterMark_accepts_an_origin_that_matches_the_stamped_header()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
@@ -432,7 +432,7 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
         // carries no authenticated origin, so it may not read back a
         // per-origin replication cursor it merely names.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>(EnrolledTree).Returns(hwmGrain);
