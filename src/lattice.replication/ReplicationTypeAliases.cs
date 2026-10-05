@@ -30,6 +30,12 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-origin HWM persistent state class.</summary>
     internal const string ReplicationHighWaterMarkState = "olr.hs";
 
+    /// <summary>Alias for the bootstrap drop floor persisted on the high-water-mark state (issue #4549).</summary>
+    internal const string ReplicationBootstrapFloor = "olr.hf";
+
+    /// <summary>Alias for the high-water-mark grain's per-origin admission read (issue #4549).</summary>
+    internal const string ReplicationApplyAdmission = "olr.hm";
+
     // Inbound apply pipeline
 
     /// <summary>Alias for the apply-result return value.</summary>

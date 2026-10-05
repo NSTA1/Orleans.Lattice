@@ -453,7 +453,20 @@ internal sealed partial class ReplicationApplier(
             }
 
             var hwmGrain = GetHwmGrain(entry.TreeId);
-            var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+            var admission = await hwmGrain.GetAdmissionAsync(entry.OriginClusterId!, cancellationToken);
+            var hwm = admission.HighWaterMark;
+
+            // Bootstrap drop floor (#4549): the tree's last full bootstrap
+            // already reflects every write of this origin stamped below the
+            // source's low watermark at export open and not held there, so a
+            // late delivery of one is acknowledged without being merged; merged,
+            // a write the source has since deleted and reaped would come back.
+            // The drain's own rows are exempt.
+            if (!LatticeBootstrapApplyContext.IsActive && admission.Drops(entry.Timestamp))
+            {
+                outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm };
+            }
 
             // There is NO per-origin HLC drop threshold for point writes -
             // neither the incrementally-advanced diagonal nor a

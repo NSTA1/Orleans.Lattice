@@ -200,11 +200,87 @@ internal sealed class ReplicationHighWaterMarkGrain(
     }
 
     /// <inheritdoc />
-    public Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken)
+    public async Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _applied.Clear();
-        return Task.CompletedTask;
+
+        // The bootstrap drop floor vouches for the tree's contents, so it goes
+        // with them (issue #4549); a failure propagates, so the replacement does
+        // not happen with the floor still in force.
+        if (state.State.BootstrapFloor is not null)
+        {
+            await ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ReplicationApplyAdmission> GetAdmissionAsync(string originClusterId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var hwm = state.State.Vector.GetClock(originClusterId);
+        if (state.State.BootstrapFloor is not { } floor)
+        {
+            return Task.FromResult(new ReplicationApplyAdmission
+            {
+                HighWaterMark = hwm,
+                HeldBelowFloor = Array.Empty<HybridLogicalClock>(),
+            });
+        }
+
+        var (lowWatermark, held) = floor.For(originClusterId);
+        return Task.FromResult(new ReplicationApplyAdmission
+        {
+            HighWaterMark = hwm,
+            BootstrapFloor = lowWatermark,
+            HeldBelowFloor = held,
+        });
+    }
+
+    /// <inheritdoc />
+    public async Task SetBootstrapFloorAsync(
+        IReadOnlyDictionary<string, HybridLogicalClock> lowWatermarks,
+        IReadOnlyDictionary<string, HybridLogicalClock[]> held,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(lowWatermarks);
+        ArgumentNullException.ThrowIfNull(held);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var previous = state.State.BootstrapFloor;
+        state.State.BootstrapFloor = ReplicationBootstrapFloor.From(lowWatermarks, held);
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.BootstrapFloor = previous;
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task ClearBootstrapFloorAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var previous = state.State.BootstrapFloor;
+        if (previous is null)
+        {
+            return;
+        }
+
+        state.State.BootstrapFloor = null;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.BootstrapFloor = previous;
+            throw;
+        }
     }
 
     /// <inheritdoc />

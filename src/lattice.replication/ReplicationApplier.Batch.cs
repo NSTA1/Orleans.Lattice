@@ -698,7 +698,8 @@ internal sealed partial class ReplicationApplier
         }
 
         var hwmGrain = GetHwmGrain(treeId);
-        var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
+        var floorAdmission = await hwmGrain.GetAdmissionAsync(origin!, cancellationToken).ConfigureAwait(false);
+        var hwm = floorAdmission.HighWaterMark;
 
         // Bootstrap-drain mode: receiver-side bootstrap replay opens a
         // <see cref="LatticeBootstrapApplyContext"/> scope around the
@@ -1010,6 +1011,14 @@ internal sealed partial class ReplicationApplier
                 // for the full rationale; the same conditions apply on the
                 // batched per-entry pass.
                 var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
+
+                // Bootstrap drop floor (#4549): see ApplyAsync. The run's
+                // admission read covers every entry of its single origin.
+                if (!bootstrapMode && floorAdmission.Drops(entry.Timestamp))
+                {
+                    outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
+                    continue;
+                }
 
                 // Shadow-forward dedupe cache: suppress the duplicate-emit
                 // pair that structural rewrites (split / merge) generate

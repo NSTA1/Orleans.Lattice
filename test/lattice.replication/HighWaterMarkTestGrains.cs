@@ -29,6 +29,14 @@ internal static class HighWaterMarkTestGrains
             .Returns(call => (bool)call[3]
                 ? hwm.TryAdvanceAsync((string)call[0], (HybridLogicalClock)call[1], (CancellationToken)call[4])
                 : Task.FromResult(false));
+        // The applier reads the high-water mark through the admission read
+        // (issue #4549); route it to GetAsync so a stubbed mark keeps working.
+        hwm.GetAdmissionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(async call => new ReplicationApplyAdmission
+            {
+                HighWaterMark = await hwm.GetAsync((string)call[0], (CancellationToken)call[1]),
+                HeldBelowFloor = Array.Empty<HybridLogicalClock>(),
+            });
         return hwm;
     }
 

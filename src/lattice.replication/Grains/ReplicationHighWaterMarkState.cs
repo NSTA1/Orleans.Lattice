@@ -65,4 +65,13 @@ internal sealed class ReplicationHighWaterMarkState
     /// Bounded by operator discards; never pruned.
     /// </summary>
     [Id(2)] public Dictionary<string, HashSet<HybridLogicalClock>> Lost { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The bootstrap drop floor the tree holds (issue #4549), or
+    /// <see langword="null"/> when it holds none. Installed from a full
+    /// bootstrap's export, cleared with the tree's applied identities on every
+    /// replacement of its contents. Legacy state decodes to
+    /// <see langword="null"/>, which drops nothing.
+    /// </summary>
+    [Id(3)] public ReplicationBootstrapFloor? BootstrapFloor { get; set; }
 }
