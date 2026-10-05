@@ -786,6 +786,10 @@ internal sealed partial class ViewMaintainerGrain
         int partitions,
         CancellationToken cancellationToken)
     {
+        // Register as an offset consumer of this log before probing its heads, and
+        // publish the captured floors before the source scan, so a WAL GC pass on
+        // any silo holds every entry the resumed tail will need (issue #4584).
+        await EnsureReadRegisteredAsync(walTreeId);
         var capturedOffsets = new Dictionary<int, long>(Math.Max(0, partitions));
         if (partitions <= 0)
         {
@@ -798,6 +802,7 @@ internal sealed partial class ViewMaintainerGrain
             capturedOffsets[0] = ResumeFloor(
                 await commitLogReader.GetHeadOffsetAsync(walTreeId, 0, cancellationToken),
                 0);
+            PublishReadPositions(walTreeId, capturedOffsets);
             return capturedOffsets;
         }
 
@@ -812,6 +817,7 @@ internal sealed partial class ViewMaintainerGrain
             capturedOffsets[partition] = ResumeFloor(heads[partition], partition);
         }
 
+        PublishReadPositions(walTreeId, capturedOffsets);
         return capturedOffsets;
 
         long ResumeFloor(long head, int partition)

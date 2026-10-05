@@ -52,6 +52,10 @@ internal sealed partial class ViewMaintainerGrain
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
+        // Hold every entry of this log the view has not durably consumed against
+        // the WAL GC on every silo, before reading it (issue #4584).
+        await EnsureReadRegisteredAsync(walTreeId);
+
         // Tail the source WAL through the shared subscriber (identical mechanics
         // to the filter path); the handler folds each applicable entry into the
         // contribution buffer and stages atomic-batch members. PinWal is false:
@@ -155,7 +159,9 @@ internal sealed partial class ViewMaintainerGrain
 
         if (offsetsAdvanced || applied > 0)
         {
+            LowerReadPositions(walTreeId, state.State.AppliedOffsets);
             await state.WriteStateAsync();
+            PublishReadPositions(walTreeId, state.State.AppliedOffsets);
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
