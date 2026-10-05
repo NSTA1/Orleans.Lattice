@@ -1072,13 +1072,15 @@ ordinary regression checks too.
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
 Key ownership across adaptive split, reshard, online resize and undo is
-specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
+specified by two core TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
 (routing, the operations, the saga's binding) and `ShardOwnershipRetention`
 (the registry's mask and retirement, late forwarded prepares and leaf
 reactivation, over a saga bound across a split and a resize). The seam between
 them is described in that directory's README: each module's CI gate covers
-only that module, and their composition was checked once, clean, but is too
-large to gate. Two companion modules sit beside them: `ShardOwnershipCrdt`
+only that module, and their composition (every action of both, all their
+properties) is clean but too large to gate; it does not combine
+`ShardOwnership`'s stamps and migrated rows with a retention event. Two
+companion modules sit beside them: `ShardOwnershipCrdt`
 (CRDT-mode keys) and `ShardOwnershipCutover`, which checks a saga bound to the
 previous copy across a shadow-cutover restore and its revert and found #4689
 (fixed). Three ownership
