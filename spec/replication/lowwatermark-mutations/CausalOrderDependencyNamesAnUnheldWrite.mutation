@@ -1,0 +1,16 @@
+# Pairs with CausalOrder. b names a dependency it does not hold. The dependency semantics (#4586) are
+# that a dependency names one write the author held; a named write that does not exist is below S
+# vacuously and is released.
+MODULE: CausalOrderDependencyNamesAnUnheldWrite
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a dependent names a write its author never held, which no watermark or identity can vouch for
+PERTURBS: AuthorB
+BOUNDS: NParts = 1
+
+--- FIND
+    /\ Len(bdeps) < BWrites /\ t \in aCom
+--- REPLACE
+    \* MUTATION: any HLC.
+    /\ Len(bdeps) < BWrites /\ t \in Hlcs
+--- END

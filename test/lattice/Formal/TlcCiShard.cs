@@ -42,7 +42,11 @@ internal static class TlcCiShard
     /// <summary>The mutants of every ShardOwnership* module.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
 
-    /// <summary>The ReplicationReBootstrap mutants.</summary>
+    /// <summary>
+    /// The mutants of the replication companion modules (every Replication*
+    /// module but the main one: ReplicationReBootstrap, ReplicationLowWatermark,
+    /// ReplicationCausalDelivery), and their variant configurations.
+    /// </summary>
     public const string ReBootstrap = "TlcShardReBootstrap";
 
     /// <summary>The mutants and variant configurations of every AtomicCommit* module.</summary>
@@ -72,7 +76,7 @@ internal static class TlcCiShard
                 : ReplicationWal;
         }
 
-        if (string.Equals(name, "ReplicationReBootstrap", StringComparison.Ordinal))
+        if (IsReplicationCompanion(name))
         {
             return ReBootstrap;
         }
@@ -105,8 +109,17 @@ internal static class TlcCiShard
         ArgumentNullException.ThrowIfNull(module);
         ArgumentNullException.ThrowIfNull(variant);
 
+        if (IsReplicationCompanion(module.Name))
+        {
+            return ReBootstrap;
+        }
+
         return module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? Atomic : null;
     }
+
+    private static bool IsReplicationCompanion(string name) =>
+        name.StartsWith("Replication", StringComparison.Ordinal)
+        && !string.Equals(name, "Replication", StringComparison.Ordinal);
 
     /// <summary>
     /// Adds <see cref="Of"/>'s category to a mutation case whose arguments are

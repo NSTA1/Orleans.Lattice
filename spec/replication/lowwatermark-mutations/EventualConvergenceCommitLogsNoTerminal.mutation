@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence. A saga commits at the origin without logging its terminal, so the
+# receiver, which holds a prepared write invisible until its terminal lands, never applies it, and the
+# watermark stays clamped below the prepare.
+MODULE: EventualConvergenceCommitLogsNoTerminal
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a committed saga ships no terminal, so its write never becomes visible at the receiver
+PERTURBS: CommitA
+BOUNDS: NParts = 1, Sagas = TRUE
+
+--- FIND
+    /\ alog' = [alog EXCEPT ![p] = Append(@, [k |-> "term", h |-> h])]
+--- REPLACE
+    \* MUTATION: no terminal is logged.
+    /\ UNCHANGED alog
+--- END

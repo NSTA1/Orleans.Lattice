@@ -63,7 +63,8 @@ public sealed class TlcCiShardTests
     [TestCase("ShardOwnershipRetention", "", TlcCiShard.ShardOwnership)]
     [TestCase("AtomicCommitCrossCluster", "", TlcCiShard.Atomic)]
     [TestCase("BackupCapture", "", TlcCiShard.Backup)]
-    [TestCase("ReplicationCausalDelivery", "", null)]
+    [TestCase("ReplicationCausalDelivery", "", TlcCiShard.ReBootstrap)]
+    [TestCase("ReplicationLowWatermark", "", TlcCiShard.ReBootstrap)]
     public void A_mutation_routes_to_its_modules_shard(string moduleName, string mutationPrefix, string? expected)
     {
         var module = Module(moduleName);
@@ -73,19 +74,35 @@ public sealed class TlcCiShardTests
     }
 
     [Test]
-    public void Only_an_AtomicCommit_variant_leaves_the_catch_all()
+    public void A_module_no_group_names_stays_in_the_catch_all()
+    {
+        var replication = Module("Replication");
+        var unknown = replication with { Name = "SomeFutureModule" };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(TlcCiShard.Of(unknown, replication.LoadMutations()[0]), Is.Null);
+            Assert.That(TlcCiShard.OfVariant(unknown, "Any"), Is.Null);
+        });
+    }
+
+    [Test]
+    public void Only_an_AtomicCommit_or_a_replication_companion_variant_leaves_the_catch_all()
     {
         var variants = SpecModuleCatalogue.Repository()
             .SelectMany(module => module.Manifest.Variants.Keys.Select(variant => (module, variant)))
             .ToList();
         Assert.That(variants.Where(v => v.module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal)), Is.Not.Empty);
-        Assert.That(variants.Where(v => !v.module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal)), Is.Not.Empty);
+        Assert.That(variants.Where(v => v.module.Name == "ReplicationLowWatermark"), Is.Not.Empty);
+        Assert.That(variants.Where(v => !v.module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) && !v.module.Name.StartsWith("Replication", StringComparison.Ordinal)), Is.Not.Empty);
 
         Assert.Multiple(() =>
         {
             foreach (var (module, variant) in variants)
             {
-                var expected = module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? TlcCiShard.Atomic : null;
+                var expected = module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal)
+                    ? TlcCiShard.Atomic
+                    : module.Name.StartsWith("Replication", StringComparison.Ordinal) ? TlcCiShard.ReBootstrap : null;
                 Assert.That(TlcCiShard.OfVariant(module, variant), Is.EqualTo(expected), $"{module.Name}.{variant}");
             }
         });
