@@ -413,6 +413,59 @@ public partial class BPlusLeafGrainTests
             "a delayed marker routed to the sibling for a key the donor's terminal settled does not gate it");
     }
 
+    /// <summary>
+    /// The window the shard-ownership model raised: the leaf mutation surface is
+    /// [AlwaysInterleave], so a terminal for a moved key can land on the donor
+    /// after the sibling adopted the birth witnesses but while the donor still
+    /// declares the moved range. The donor settles the key and records the
+    /// witness locally. The witness must still reach the sibling, durably,
+    /// before the donor's narrowed span can persist - otherwise a reactivated
+    /// sibling installs a late unstamped marker and gates the key.
+    /// </summary>
+    [Test]
+    public async Task A_terminal_landing_on_the_donor_during_the_split_transfer_still_reaches_the_siblings_witness()
+    {
+        var siblingState = new FakePersistentState<LeafNodeState>();
+        var (realSibling, siblingSidecar) = CreateGuidKeyedGrain(siblingState);
+        var sibling = CreateSplitSiblingStub();
+        sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
+            .Returns(c => realSibling.InitializeSiblingAsync(c.Arg<SiblingInitialization>()));
+
+        var donorState = new FakePersistentState<LeafNodeState>();
+        var donor = CreateGrain(donorState, siblingStub: sibling);
+        await donor.SetAsync("m", Encoding.UTF8.GetBytes("1"));
+        await donor.SetAsync("z", Encoding.UTF8.GetBytes("2"));
+        var txid = Guid.NewGuid();
+
+        var interleaved = false;
+        async Task<SplitResult?> InterleaveTerminalAsync()
+        {
+            if (!interleaved)
+            {
+                interleaved = true;
+                await donor.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
+            }
+
+            return null;
+        }
+
+        sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()).Returns(_ => InterleaveTerminalAsync());
+
+        ArmInterruptedSplit(donorState, sibling, splitKey: "m");
+        await donor.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        Assert.That(interleaved, Is.True, "precondition: the terminal interleaved with the transfer");
+        Assert.That(donor.IsTerminalWitnessed(txid, "z"), Is.True, "precondition: the donor settled the moved key");
+        Assert.That(siblingSidecar.Holds(txid, "z"), Is.True,
+            "the witness for a key the donor settled during the transfer reaches the sibling's sidecar");
+
+        var (reactivated, _) = CreateGuidKeyedGrain(siblingState, siblingSidecar);
+        SeedMigratedRowAt(reactivated, "z", [9], new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 });
+        await reactivated.MarkSagaShadowAsync(txid, ["z"]);
+        Assert.That(await ReadUnderAsync(reactivated, "z", txid, TxStatus.Committed), Is.EqualTo(new byte[] { 9 }),
+            "a late unstamped marker on the reactivated sibling must not gate the key");
+    }
+
     [Test]
     public async Task The_witness_is_pruned_only_once_the_registry_reads_its_saga_as_absent()
     {

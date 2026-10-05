@@ -172,6 +172,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         var sourceLeaf = Substitute.For<IBPlusLeafGrain>();
         sourceLeaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         sourceLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+        StubLocalPrepareLookup(sourceLeaf);
         sourceFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(sourceLeaf);
         sourceFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
 

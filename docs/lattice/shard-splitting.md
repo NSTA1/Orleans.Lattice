@@ -470,24 +470,21 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   the key (issue
   [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)):
 
-  - Each leaf keeps a durable record of the keys each saga's terminal
-    settled on it, written with the leaf's projection checkpoint, rebuilt
-    by replay after that checkpoint, carried to a split sibling for the
-    keys that move, and dropped once the registry no longer reports the
-    saga. A leaf does not install, carry across its own split, or gate on
-    a marker for a key that record names. The record is held to a fixed
-    byte budget per leaf: past it, the leaf asks the registry about every
-    entry at once, and only if that cannot free enough does it evict the
-    oldest sagas' entries, with a warning. An evicted key falls back to the
-    gate above, so a late marker for it makes reads decline until the
-    registry retires the saga - never serve a torn batch.
-  - The marker also carries the saga's original prepare stamp whenever
-    the prepare is a marked last-writer-wins write, and the gate serves a
+  - The marker carries the saga's original prepare stamp whenever the
+    prepare is a marked last-writer-wins write, and the gate serves a
     migrated row stamped at or above it: such a row is the saga's own
     value or a later write, so serving it never tears the batch. A row
-    below that stamp is the pre-saga value and stays gated. A marker
-    without a marked stamp (a CRDT delta, a resize copy, or an install
-    from an older silo) relies on the record alone.
+    below that stamp is the pre-saga value and stays gated.
+  - For every key a terminal settled without such a stamp - a CRDT fold,
+    an unmarked prepare, a backstop that carried no stamp - and every key
+    an abort discarded, the leaf keeps a durable record per saga and key,
+    in a sidecar row of its own rather than in its state row. The record
+    is written before any state write that could move the leaf's
+    projection checkpoint past the terminal (the write-ahead log holds it
+    until then), carried to a split sibling for the keys that move, and
+    dropped only once the registry no longer reports the saga. A leaf
+    does not install, carry across its own split, or gate on a marker for
+    a key that record names.
 
   A saga
   whose decision has aged out of

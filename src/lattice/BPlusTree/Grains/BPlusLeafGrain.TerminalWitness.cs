@@ -244,6 +244,43 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Whether <paramref name="current"/> names a (saga, key) pair that
+    /// <paramref name="sent"/> does not.
+    /// </summary>
+    private static bool HasWitnessNotIn(AppliedTerminalWitness[]? current, AppliedTerminalWitness[]? sent)
+    {
+        if (current is not { Length: > 0 })
+            return false;
+        if (sent is not { Length: > 0 })
+            return true;
+
+        var known = new Dictionary<Guid, HashSet<string>>();
+        foreach (var witness in sent)
+        {
+            if (!known.TryGetValue(witness.TransactionId, out var keys))
+            {
+                keys = new HashSet<string>(StringComparer.Ordinal);
+                known[witness.TransactionId] = keys;
+            }
+
+            keys.UnionWith(witness.Keys);
+        }
+
+        foreach (var witness in current)
+        {
+            if (!known.TryGetValue(witness.TransactionId, out var keys))
+                return true;
+            foreach (var key in witness.Keys)
+            {
+                if (!keys.Contains(key))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Adopts a split donor's witnesses for the keys this sibling receives, as
     /// pending changes that the sibling's birth write makes durable. A union, so
     /// a recovery-path re-call is idempotent; the entries are copied, never
