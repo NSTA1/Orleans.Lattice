@@ -38,8 +38,11 @@ shard with the same index; a last-writer-wins merge on the destination
 reconciles a mirrored write with the drain's copy of the same key. Typed CRDT
 deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors
 built on them) and bulk appends (`BulkAppendChunkAsync` and the streaming
-`BulkLoadAsync` extension) are not mirrored, so one that reaches a source shard
-after the copy has read past the key it writes does not reach the destination.
+`BulkLoadAsync` extension) are mirrored as the rows they left on the source.
+When a mirrored or drained CRDT row meets a CRDT row the destination holds of
+its own - one it folded from a mirrored saga terminal - the destination joins
+the two states rather than keeping only the last-writer-wins winner
+([#4618](https://github.com/NSTA1/Orleans.Lattice/issues/4618)).
 
 Atomic-write sagas are carried over whole. Once every source shard is
 mirroring, and before any entry is drained, the snapshot also copies the

@@ -1086,6 +1086,9 @@ internal sealed partial class ShardRootGrain(
                 // Issue #4613: mirror the post-fold row to the split target, as
                 // SetAsync does for a plain write.
                 await ForwardLocalCrdtWriteToShadowIfNeededAsync(key);
+                // Issue #4618: and to an online resize's destination, at this
+                // copy's own stamp, joined there with the destination's row.
+                await MirrorAppliedRowsAsync([key]);
                 return result.Version;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1334,10 +1337,9 @@ internal sealed partial class ShardRootGrain(
     /// <see cref="SetManyAsync"/>, routed with the same bucket-by-leaf,
     /// dispatch-in-parallel, promote-splits-sequentially shape.
     /// <para>
-    /// Deliberately does <b>not</b> shadow-forward: the single-key CRDT path
-    /// (<c>TraverseForCrdtApplyAsync</c>) does not either, so the batch stays
-    /// per-key indistinguishable from N single-key applies rather than
-    /// inventing a forwarding contract the CRDT surface does not otherwise have.
+    /// Mirrors exactly as N single-key applies would: the post-fold rows to an
+    /// adaptive split's target (issue #4613) and to an online resize's
+    /// destination (issue #4618).
     /// </para>
     /// </summary>
     /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
@@ -1371,6 +1373,7 @@ internal sealed partial class ShardRootGrain(
             }
 
             await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
+            await MirrorAppliedRowsAsync(DistinctKeys(deltas));
             return;
         }
 
@@ -1442,6 +1445,7 @@ internal sealed partial class ShardRootGrain(
         }
 
         await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
+        await MirrorAppliedRowsAsync(DistinctKeys(deltas));
     }
 
     /// <summary>
