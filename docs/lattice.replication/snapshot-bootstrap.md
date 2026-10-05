@@ -52,22 +52,57 @@ before calling `AddLatticeReplication`.
   after every snapshot entry has been applied, so the causal
   dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
-- **Deletes ship as committed tombstone rows.** The committed
-  projection carries live keys only, so the default provider ends the
-  export with a tombstone pass: every key a source leaf still holds as a
-  tombstone ships as a row with `IsTombstone` set and `IsPrepared`
-  clear, stamped with the tombstone's own HLC, and the bootstrap drain
-  applies it as a delete. Without it a receiver that bootstraps in place
-  over an existing copy - a peer that fell off the log and is
-  re-bootstrapped by either the receiver-side local detector or the
-  sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key the source deleted
-  while it was behind, permanently, because the delete's WAL record is
-  behind the source's trim point and the incremental stream never
-  delivers it (#4504). Last-writer-wins resolves a tombstone row against
-  a live row for the same key by HLC, so a delete older than a value the
-  receiver wrote later does not apply. A tombstone the source has already
-  reaped (tombstone compaction physically removes it after
-  `TombstoneGracePeriod`) cannot ship; that residual is tracked as #4537.
+- **Deletes ship as committed tombstone rows, then reaped source deletes
+  reconcile.** The committed projection carries live keys only, so the
+  default provider ends the export with a tombstone pass: every key a
+  source leaf still holds as a tombstone ships as a row with
+  `IsTombstone` set and `IsPrepared` clear, stamped with the tombstone's
+  own HLC, and the bootstrap drain applies it as a delete. Without it a
+  receiver that bootstraps in place over an existing copy - a peer that
+  fell off the log and is re-bootstrapped by either the receiver-side local
+  detector or the sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key
+  the source deleted while it was behind, permanently, because the
+  delete's WAL record is behind the source's trim point and the
+  incremental stream never delivers it (#4504).
+
+  A source tombstone can be physically reaped after
+  `TombstoneGracePeriod`, so an in-place drain also pre-captures the
+  receiver's live source-origin, non-expiring rows before opening the
+  export. The sender carries a source-generation tuple at export open and
+  close: physical tree id, shard-map version, lineage token, soft-delete
+  epoch, and deletion state. After the drain, for every pre-captured
+  source-origin key that the whole-tree export did not carry as a live,
+  tombstone, or prepared row, the coordinator synthesises a delete at the
+  captured HLC. The HLC is not advanced: the last-writer-wins merge makes
+  a tombstone win an equal-HLC tie, while any receiver write with a newer
+  HLC still wins.
+
+  The reconcile is deliberately fail-safe. It runs only for unscoped,
+  last-writer-wins exports whose open and close generation match, whose
+  source was not deleted or purging at either end, and whose lineage
+  matches the receiver's durable aligned-lineage record for that source.
+  A bootstrap records that alignment when the receiver held no row of the
+  source's origin when the import began (tombstones and expiring rows
+  included; the receiver's own and third-origin rows do not count), and it
+  reconciles in that same import. A receiver that cannot prove alignment
+  that way - it was never aligned, or the source's lineage has since
+  changed (a restore, a revert, or an alias moved to another tree) -
+  adopts the export's lineage when every source-origin key it held was
+  carried by the export, because there is then nothing it could wrongly
+  delete; otherwise it skips, counted as `skipped_never_aligned` or
+  `skipped_lineage_mismatch`, and keeps every key.
+
+  An unknown generation (a sender that predates generations), a generation
+  that moved during the export, or a deleted or purging source records a
+  durable owed retry. Maintenance re-enters the normal full bootstrap path
+  with a fresh pre-capture and every gate run again, so an upgraded sender
+  reconciles on its first retry. Owed retries back off exponentially from
+  one minute to a six-hour cap, so a sender that never reports a
+  generation does not re-bootstrap the tree on every tick. Source-origin
+  keys carrying an expiry are not captured because they expire on their
+  own, and receiver-local or third-origin stale keys remain the residual
+  tracked by #4549.
+
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).

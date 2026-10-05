@@ -25,7 +25,7 @@ The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cl
 
 The histogram is intentionally not recorded for:
 
-- **`MutationKind.DeleteRange`** - a range delete applies through the range path, which records no lag sample: its single issue HLC stamps a whole key range rather than one point write (and a legacy range-delete entry written before that HLC was pinned carries `HybridLogicalClock.Zero`, which would read as a multi-decade lag).
+- **`MutationKind.DeleteRange`** - a range delete applies through the range path, which records no lag sample: its issue HLC stamps a whole key range rather than one point write (and a legacy range-delete entry written before that HLC was pinned carries `HybridLogicalClock.Zero`, which would read as a multi-decade lag).
 - **Deduplicated or deferred deliveries** - an entry suppressed by the shadow-forward identity cache or deferred by a restore saga's receive fence never reaches the merge step, so reporting lag would conflate "applied" and "filtered" samples.
 - **Local-origin entries** - the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
 - **Source HLC equal to `Zero`** - protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
@@ -287,7 +287,7 @@ Operators monitor them together:
 The canonical applier records the highest source HLC applied so far per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
 
 - **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
-- **For point operations only** (`Set` / `Delete`). `DeleteRange` is excluded, because its single issue HLC covers a whole key range rather than a point write - it neither records a violation nor overwrites the recorded HLC.
+- **For point operations only** (`Set` / `Delete`). `DeleteRange` is excluded, because its issue HLC covers a whole key range rather than a point write - it neither records a violation nor overwrites the recorded HLC.
 
 A violation **does not change apply behaviour**: the entry is still applied, and the high-water-mark advance is a monotonic no-op for it because the running maximum is already higher. Read the counter as a rate against `wal.entries_shipped` rather than alerting on `rate > 0`: a steady low rate reflects ordinary per-leaf interleaving, while a step change on one `(tree, origin)` pair points at a sender or transport path that has started reordering deliveries. Operators triage by joining the `tree` and `origin` tags against the producer-side topology.
 
@@ -315,6 +315,7 @@ The receiver-side bootstrap coordinator emits the following instruments tracking
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` (`ms`) | `tree`, `origin`, `outcome` | Recorded once per terminal phase transition. `outcome` is `live` or `failed`; `timed_out` is published as a constant but not emitted today (see below). |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `tree`, `origin` | Incremented by 1 each time the bootstrap drain catches a classified-transient transport fault and consumes one slot of the configured `LatticeReplicationOptions.BootstrapTransientRetry` budget. A bootstrap that completes on its first drain attempt records zero on this counter; a bootstrap that exhausts the budget and pivots to `Failed` records `MaxAttempts - 1` (one per consumed retry slot). |
 | `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `tree` | Incremented by 1 each time an operator force-lifts the read fence a failed bootstrap left over a partial import, through `ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync` (see [Read fence during the drain](snapshot-bootstrap.md#read-fence-during-the-drain)). Each increment opens a window in which reads may observe a partial import, so any non-zero value is an alert. Recorded only when a lift happens. |
+| `orleans.lattice.replication.bootstrap.reconcile` | `Counter<long>` (`{pass}`) | `tree`, `origin`, `outcome` | Incremented once per delete-reconcile decision after an in-place bootstrap drain. Outcomes are `reconciled`, `skipped_scoped`, `skipped_unstable`, `skipped_deleted`, `skipped_unknown`, `skipped_lineage_mismatch`, `skipped_never_aligned`, `skipped_not_lww`, `aligned`, and `owed_retry`. `aligned` is a receiver adopting the source's lineage because the export carried every source-origin key it held; `owed_retry` is emitted beside the unknown, unstable or deleted skip that records a durable retry. A sustained `skipped_lineage_mismatch` or `skipped_never_aligned` rate means reaped source deletes are not being reconciled on that receiver. |
 
 The `origin` tag carries the source cluster id supplied at kickoff (`BootstrapAsync(treeName, sourceClusterId, ...)`), matching the tag dimensionality used by the per-origin fall-off-the-log counters so dashboards can join the two without a separate keying.
 
@@ -434,6 +435,7 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.bootstrap.duration` | `Histogram<double>` | `ms` | `tree`, `origin`, `outcome` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.transient_retries` | `Counter<long>` | `{retry}` | `tree`, `origin` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | `Counter<long>` | `{lift}` | `tree` | [Bootstrap instruments](#bootstrap-instruments) |
+| `orleans.lattice.replication.bootstrap.reconcile` | `Counter<long>` | `{pass}` | `tree`, `origin`, `outcome` | [Bootstrap instruments](#bootstrap-instruments) |
 | `orleans.lattice.replication.digest_probe.compared` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer`, `outcome` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.digest_probe.mismatch` | `Counter<long>` | `{comparison}` | `tree`, `shard`, `peer` | [Digest probe](anti-entropy-digest-probe.md#observability) |
 | `orleans.lattice.replication.merkle_walk.localised` | `Counter<long>` | `{leaf}` | `tree`, `depth` | [Merkle walk](anti-entropy-merkle-walk.md#observability) |

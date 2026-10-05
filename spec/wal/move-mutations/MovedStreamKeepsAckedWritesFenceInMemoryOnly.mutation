@@ -12,18 +12,18 @@ SUMMARY: the fence is in-memory only and the flip is unguarded, so a re-activate
 PERTURBS: ShardCrash, MoveSwitch
 
 --- FIND
-    /\ afence' = (dfence /\ ~lapsed)
+    /\ afence' = (dfence # NoMove /\ ~lapsed)
 --- REPLACE
 \* MUTATION: the new activation does not know about any fence.
     /\ afence' = FALSE
 --- END
 
 --- FIND
-    /\ move = "copied"
-    /\ dfence
-    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move[m] = "copied"
+    /\ dfence = m
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
 --- REPLACE
 \* MUTATION: the flip's compare-and-swap checks only the placement version.
-    /\ move = "copied"
-    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move[m] = "copied"
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
 --- END

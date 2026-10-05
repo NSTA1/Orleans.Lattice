@@ -6,8 +6,11 @@
     "invariants": 5,
     "properties": 2,
     "actions": 13,
-    "mutations": 17,
+    "mutations": 18,
     "behaviourRows": 18,
     "distinctStates": 1617
+  },
+  "variants": {
+    "TwoMoves": { "distinctStates": 16225 }
   }
 }

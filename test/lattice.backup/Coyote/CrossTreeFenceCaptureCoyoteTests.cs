@@ -88,13 +88,33 @@ public sealed class CrossTreeFenceCaptureCoyoteTests
             new CrossTreeFenceCaptureModel(CrossTreeFenceRulesRemoved.Recheck | ReobserveBoth, lapse: false));
 
     /// <summary>
+    /// Iteration budget of <see cref="Without_the_recheck_and_reobservation_a_lost_fence_admits_a_torn_set"/>.
+    /// </summary>
+    /// <remarks>
+    /// Sized from the measured per-run detection rate p: runs to the first
+    /// violation over 40 seeded explorations found it 40 times in 12,984 runs,
+    /// p ~ 0.0031. The torn set needs the lapse at the gate and then four saga
+    /// steps (both registrations, the commit decision and one finalize) to win
+    /// the race against the gate's acquire, so it is rare. At the default 1000
+    /// runs it is missed with probability (1 - p)^1000 ~ 4.6%, which is the CI
+    /// flake this budget removes: at 10000 runs the miss probability is
+    /// ~ e^-31, and ~ 6e-10 even at the lower 95% bound of p (~ 0.0021).
+    /// Exploration stops at the first violation, so the expected cost is
+    /// ~ 1/p ~ 325 runs. The other two violation-seeking cases are safe at the
+    /// default 1000: the drain guard's p ~ 0.031 (miss ~ 2e-14) and the
+    /// witness's p ~ 0.16 (miss ~ 2e-76).
+    /// </remarks>
+    private const int LapseGuardIterations = 10_000;
+
+    /// <summary>
     /// Guard: with the re-check and both re-observation clauses removed, a
     /// registration a lost fence admitted is captured torn.
     /// </summary>
     [Test]
     public void Without_the_recheck_and_reobservation_a_lost_fence_admits_a_torn_set() =>
         CoyoteModelHarness.AssertViolationFoundInSomeExploredRun(
-            new CrossTreeFenceCaptureModel(CrossTreeFenceRulesRemoved.Recheck | ReobserveBoth));
+            new CrossTreeFenceCaptureModel(CrossTreeFenceRulesRemoved.Recheck | ReobserveBoth),
+            LapseGuardIterations);
 
     /// <summary>
     /// Guard: with every rule removed, even a held fence lets a saga registered

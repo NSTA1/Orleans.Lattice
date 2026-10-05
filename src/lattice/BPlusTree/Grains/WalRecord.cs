@@ -496,5 +496,20 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(28)] public bool IsMigrated { get; init; }
+
+    /// <summary>
+    /// Whether the record's stamp was carried from a write that was already
+    /// appended - set by the commit-log writer when the producer stamped the
+    /// record under a <see cref="LatticeHlcOverrideContext"/> that is not marked
+    /// as freshly minted (issue #4586). A carried stamp is exempt from the WAL
+    /// partition's clock floor, because the identity it names was first appended
+    /// fresh at a lower offset. Only the appending partition reads it.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store: a record
+    /// authored before the slot existed decodes as <see langword="false"/>, and an
+    /// older decoder skips the unknown id.
+    /// </para>
+    /// </summary>
+    [Id(29)] public bool IsCarriedStamp { get; init; }
 }
 

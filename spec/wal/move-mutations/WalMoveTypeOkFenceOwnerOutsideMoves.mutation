@@ -1,0 +1,17 @@
+# Pairs with TypeOK in WalMove. The durable fence is raised under an identity
+# that is not one of the declared moves, so the fence's owner leaves its domain;
+# only the well-typedness check reports it.
+MODULE: WalMoveTypeOkFenceOwnerOutsideMoves
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the durable fence is raised under an identity outside the declared moves
+PERTURBS: MoveFence
+
+--- FIND
+    /\ move' = [move EXCEPT ![m] = "fenced"]
+    /\ dfence' = m
+--- REPLACE
+\* MUTATION: a move is started under an identity outside the declared moves.
+    /\ move' = [move EXCEPT ![m] = "fenced"]
+    /\ dfence' = "unknown-move"
+--- END

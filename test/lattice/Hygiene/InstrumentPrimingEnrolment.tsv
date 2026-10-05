@@ -115,6 +115,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackEntries	op
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackSkipped	unresolved	reason=dimension reason: unrecognised value expression: LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(rea...
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackTriggered	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (tree)
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapReadFenceForceLifted	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeName)
+src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapReconcile	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapTransientRetries	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#CoalesceBytesElided	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#CoalesceDeltasMerged	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
@@ -402,6 +403,7 @@ src/lattice/LatticeMetrics.cs#WalAppendBatchEntries	unresolved	reason=dimension 
 src/lattice/LatticeMetrics.cs#WalAppendDispatchTimeouts	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (optionsResolver.GetMetricTreeId(stamped.TreeId))
 src/lattice/LatticeMetrics.cs#WalAppendDispatched	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (optionsResolver.GetMetricTreeId(stamped.TreeId))
 src/lattice/LatticeMetrics.cs#WalAppendDrainReleases	unresolved	reason=single-value domain partition -> [partition]; likely under-resolved, not a constant
+src/lattice/LatticeMetrics.cs#WalAppendFloorRefusals	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (metricTreeId)
 src/lattice/LatticeMetrics.cs#WalAppendInFlight	unresolved	reason=dimension wal_partitions: no declaration found for walPartitions
 src/lattice/LatticeMetrics.cs#WalAppendPendingDispatches	open	open=partition, tenant, tree; open dimension: tree carries a runtime identifier (optionsResolver.GetMetricTreeId(stamped.TreeId))
 src/lattice/LatticeMetrics.cs#WalAppendProviderDuration	unresolved	reason=dimension wal_partitions: no declaration found for walPartitions

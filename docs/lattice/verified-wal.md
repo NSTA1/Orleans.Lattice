@@ -154,7 +154,8 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   with every property at one fault and, through a second configuration, with every
   safety property at two;
 - `WalMove.tla`, a shard move with a durable fence, a shard crash and the loss of
-  its coordinator.
+  its coordinator, and, through a second configuration, two moves contending for the
+  same stream (one taking over the other's lapsed fence).
 
 It follows the pattern of the atomic-commit specification: every property and every
 action has a mutation that makes a property fire, and a refinement note maps each

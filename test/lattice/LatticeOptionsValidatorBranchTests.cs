@@ -58,7 +58,22 @@ public class LatticeOptionsValidatorBranchTests
         yield return Case("WalReplaySliceBudget", o => o.WalReplaySliceBudget = 0);
         yield return Case("WalAdmissionSaturationWaitBudget", o => o.WalAdmissionSaturationWaitBudget = NegOne);
         yield return Case("WalThrottledAdmissionPace", o => o.WalThrottledAdmissionPace = NegOne);
+        yield return Case("ReplicationClockFloorLag", o => o.ReplicationClockFloorLag = TimeSpan.FromMilliseconds(999));
+        yield return Case("ReplicationClockFloorLag", o => o.ReplicationClockFloorLag = TimeSpan.FromDays(1) + TimeSpan.FromTicks(1));
         yield return Case("StarvationDriveBudget", o => o.StarvationDriveBudget = TimeSpan.Zero);
+    }
+
+    [Test]
+    public void ReplicationClockFloorLag_defaults_to_a_minute_and_accepts_its_bounds()
+    {
+        var validator = new LatticeOptionsValidator();
+        Assert.Multiple(() =>
+        {
+            Assert.That(new LatticeOptions().ReplicationClockFloorLag, Is.EqualTo(TimeSpan.FromSeconds(60)),
+                "issue #4586: an idempotency key stays usable for at least this long, so the default is at least a minute");
+            Assert.That(validator.Validate(null, new LatticeOptions { ReplicationClockFloorLag = TimeSpan.FromSeconds(1) }).Succeeded, Is.True);
+            Assert.That(validator.Validate(null, new LatticeOptions { ReplicationClockFloorLag = TimeSpan.FromDays(1) }).Succeeded, Is.True);
+        });
     }
 
     [Test]
