@@ -1,0 +1,16 @@
+# Pairs with RestoredCutNotReAdvanced. The born-closed copy without the admission
+# epoch: a delivery admitted before the pause that lands after the lift opened
+# the restored copy is applied to it.
+MODULE: RestoredCutNotReAdvancedAdmissionEpochIgnored
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: the seam checks only that the copy is closed, not the admission epoch
+PERTURBS: Land
+
+--- FIND
+          IN \/ p \in closed[d]
+             \/ r.ep < floor[d][p]
+--- REPLACE
+          IN \* MUTATION: closed only.
+             p \in closed[d]
+--- END

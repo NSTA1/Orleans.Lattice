@@ -1,0 +1,15 @@
+# Pairs with RestoredCutNotReAdvanced. The park re-reads the fence but only checks
+# it is unpaused: a delivery admitted before the pause and parked after the lift
+# takes the fresh epoch and drains onto the restored copy.
+MODULE: RestoredCutNotReAdvancedParkKeepsStaleAdmission
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: a park after the lift re-stamps a delivery admitted before the pause
+PERTURBS: Park
+
+--- FIND
+       IN IF ~recvOn[d] \/ r.ep < epoch[d]
+--- REPLACE
+       IN \* MUTATION: the admission epoch is not compared.
+          IF ~recvOn[d]
+--- END

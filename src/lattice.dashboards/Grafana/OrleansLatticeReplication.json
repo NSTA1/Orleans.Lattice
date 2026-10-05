@@ -1544,6 +1544,56 @@
       ]
     },
     {
+      "id": 4593,
+      "title": "Coordinated restore: closed restored copies (age, s) and deferred applies (rate)",
+      "description": "Issue #4593. A coordinated restore closes its restored physical copy for inbound replication before the alias swap and opens it when the saga's fence lifts. Age series (orleans.lattice.restore.copy_receive_closed_age, left axis, seconds): how long each closed copy on each silo has been closed, by physical tree; absent when no copy is closed. Alarm when any age exceeds the expected cutover-to-completion span: the saga has not observed global completion and every replicated write to that tree is being deferred. Rate series (orleans.lattice.restore.copy_receive_fenced, right axis): replication applies deferred because they routed to a closed copy, by logical tree; a burst during a restore is expected, a rate that persists after the restore is a copy stuck closed.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 211
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byFrameRefID",
+              "options": "B"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "ops"
+              },
+              {
+                "id": "custom.axisPlacement",
+                "value": "right"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (tree) (orleans_lattice_restore_copy_receive_closed_age_seconds{cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "closed {{tree}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (tree) (rate(orleans_lattice_restore_copy_receive_fenced_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "deferred {{tree}}"
+        }
+      ]
+    },    {
       "id": 64,
       "title": "Coordinated restore: saga compensations (rate by cause)",
       "description": "Rate of coordinated-restore compensations (rollbacks), split by cause (orleans.lattice.replication.saga.compensations). vote-abort = a coordinator-driven rollback after at least one participant voted abort (an all-or-nothing rollback of every prepared cluster); coordinator-loss = a participant's own cutover-fence-expiry auto-compensation after the coordinator decision never arrived. A non-zero coordinator-loss series is the operator-actionable signal that a coordinator cluster is being lost mid-saga and the bounded fence timer is the only thing preventing a leaked prepared restore.",

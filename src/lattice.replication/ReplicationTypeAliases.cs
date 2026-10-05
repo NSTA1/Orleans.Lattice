@@ -264,6 +264,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
     internal const string TreeReceiveFenceState = "olr.ft";
 
+    /// <summary>Alias for <see cref="ReceiveFenceObservation"/> (issue #4593).</summary>
+    internal const string ReceiveFenceObservation = "olr.fo";
+
     // Runtime per-tree replication configuration (the sys-replication-config
     // CRDT tree). The composite OR-Map value record carrying a tree's
     // enablement flag and declared wire merge mode.

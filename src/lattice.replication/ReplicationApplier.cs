@@ -326,16 +326,26 @@ internal sealed partial class ReplicationApplier(
             // same entry once the fence lifts on global completion. The gate is
             // fronted by a short in-memory cache so this is not a per-entry grain
             // call.
-            if (_receiveGate is not null
-                && await _receiveGate.IsReceivePausedAsync(entry.TreeId, cancellationToken).ConfigureAwait(false))
+            //
+            // The answer carries the fence's epoch, and the admitted entry is
+            // stamped with it (issue #4593): a restored copy refuses an entry
+            // admitted under an epoch older than its restore's pause, so a
+            // stale cached answer can never carry a pre-cutover write onto it.
+            if (_receiveGate is not null)
             {
-                outcome = LatticeReplicationMetrics.OutcomeDedup;
-                return new ApplyResult
+                var observed = await _receiveGate.ObserveAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+                if (observed.Paused)
                 {
-                    Applied = false,
-                    HighWaterMark = HybridLogicalClock.Zero,
-                    Deferred = true,
-                };
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult
+                    {
+                        Applied = false,
+                        HighWaterMark = HybridLogicalClock.Zero,
+                        Deferred = true,
+                    };
+                }
+
+                ReplicationAdmissionEpoch.Stamp(entry.TreeId, observed.Epoch);
             }
 
             // Defence-in-depth: tombstone-reap envelopes
@@ -662,6 +672,17 @@ internal sealed partial class ReplicationApplier(
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
             }
+            catch (CopyReceiveFencedException)
+            {
+                // Issue #4593: the apply routed to a restored copy whose receive
+                // fence a coordinated restore still holds closed (its alias swap
+                // ran after this entry passed the cached receive gate). Defer it
+                // like the receive fence, so the sender re-ships it once the
+                // restore's fence lifts and opens the copy.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
             catch
             {
                 cache.Remove(entry);
@@ -816,7 +837,29 @@ internal sealed partial class ReplicationApplier(
     private async Task ParkAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry).ConfigureAwait(false);
+
+        // Issue #4593: a parked entry is acknowledged and drained later, so the
+        // fence is re-read UNCACHED now. An entry a stale cached answer admitted
+        // while the fence is in fact paused, or admitted under an epoch a pause
+        // has since superseded, is deferred instead of parked - the sender
+        // re-ships it and a fresh admission stamps it again - so a parked entry
+        // always carries the epoch current when it was parked. The drain stamps
+        // that epoch, so a restored copy refuses an entry parked before its
+        // restore's pause.
+        long admissionEpoch = 0;
+        if (_receiveGate is not null)
+        {
+            var fence = await grainFactory.GetGrain<ITreeReceiveFenceGrain>(entry.TreeId).ObserveAsync().ConfigureAwait(false);
+            var superseded = ReplicationAdmissionEpoch.TryGet(out _, out var admittedUnder) && admittedUnder < fence.Epoch;
+            if (fence.Paused || superseded)
+            {
+                throw new CopyReceiveFencedException(entry.TreeId, entry.TreeId, admittedBeforeRestore: superseded);
+            }
+
+            admissionEpoch = fence.Epoch;
+        }
+
+        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry, admissionEpoch).ConfigureAwait(false);
         _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
 
@@ -851,9 +894,12 @@ internal sealed partial class ReplicationApplier(
     /// <see cref="ApplyAsync"/> does. Throws on failure; the grain dead-letters
     /// the entry.
     /// </summary>
-    internal async Task ApplyDrainedEntryAsync(WalRecord entry, CancellationToken cancellationToken)
+    internal async Task ApplyDrainedEntryAsync(WalRecord entry, long admissionEpoch, CancellationToken cancellationToken)
     {
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+
+        // Issue #4593: the drained entry carries the epoch it was parked under.
+        ReplicationAdmissionEpoch.Stamp(entry.TreeId, admissionEpoch);
         var resolved = options.Get(entry.TreeId);
         await ApplyPointAsync(entry).ConfigureAwait(false);
         RecordApplyLag(entry);

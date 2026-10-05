@@ -730,6 +730,11 @@ public class LatticeMicroBenchmarks
         // fan-out on the legacy key without a thrown NotSupportedException.
         _grainFactory.RouteByString<ITxRegistryHighWaterGrain>(static _ => BenchTxRegistryHighWaterGrain.Instance);
 
+        // Issue #4593: every replication apply checks the receive fence of the
+        // physical copy it routes to. The bench never runs a coordinated restore,
+        // so every copy is open with no minimum admission epoch.
+        _grainFactory.RouteByString<ICopyReceiveFenceGrain>(static _ => BenchCopyReceiveFenceGrain.Instance);
+
         // Cross-tree atomic-write coordinator route: a real
         // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
         // IReminderRegistry as the per-tree sub-sagas (keepalive +
@@ -4636,4 +4641,28 @@ internal sealed class BenchTxRegistryHighWaterGrain : ITxRegistryHighWaterGrain
 
     /// <inheritdoc />
     public Task<int> RaiseShardHighWaterAsync(int shardCount) => Task.FromResult(shardCount);
+}
+
+/// <summary>
+/// Receive fence stub for the microbench (issue #4593): every physical copy is
+/// open and has no minimum admission epoch, because the bench never runs a
+/// coordinated restore. Closing or opening a copy is unsupported.
+/// </summary>
+internal sealed class BenchCopyReceiveFenceGrain : ICopyReceiveFenceGrain
+{
+    /// <summary>The shared instance returned for every physical copy.</summary>
+    public static readonly BenchCopyReceiveFenceGrain Instance = new();
+
+    private static readonly Task<CopyReceiveFenceStatus> Open = Task.FromResult(new CopyReceiveFenceStatus());
+
+    /// <inheritdoc />
+    public Task CloseAsync(string sagaId, long minAdmissionEpoch) =>
+        throw new NotSupportedException("The microbench never closes a restored copy.");
+
+    /// <inheritdoc />
+    public Task OpenAsync(string sagaId) =>
+        throw new NotSupportedException("The microbench never opens a restored copy.");
+
+    /// <inheritdoc />
+    public Task<CopyReceiveFenceStatus> GetStatusAsync() => Open;
 }
