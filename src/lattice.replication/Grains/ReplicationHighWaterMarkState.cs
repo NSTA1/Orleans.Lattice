@@ -55,4 +55,14 @@ internal sealed class ReplicationHighWaterMarkState
     /// </para>
     /// </summary>
     [Id(1)] public VersionVector PinnedFloor { get; set; } = new();
+
+    /// <summary>
+    /// Writes of each origin that this tree acknowledged without applying and
+    /// then lost for good (#4603): an operator discarded the dead-lettered
+    /// entry. A write in this set can never become visible here, so an entry
+    /// that depends on one is never released - it is dead-lettered with
+    /// reason <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/>.
+    /// Bounded by operator discards; never pruned.
+    /// </summary>
+    [Id(2)] public Dictionary<string, HashSet<HybridLogicalClock>> Lost { get; set; } = new(StringComparer.Ordinal);
 }

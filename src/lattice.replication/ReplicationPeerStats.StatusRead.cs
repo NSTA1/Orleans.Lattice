@@ -63,7 +63,7 @@ public partial class ReplicationPeerStats
             }
 
             long entries, bytes, errors, inFlight;
-            DateTimeOffset? lastContact, reseedSince;
+            DateTimeOffset? lastContact, reseedSince, deadLetterFullSince;
             lock (kv.Value)
             {
                 entries = kv.Value.EntriesBehind;
@@ -72,6 +72,7 @@ public partial class ReplicationPeerStats
                 errors = kv.Value.ConsecutiveErrors;
                 lastContact = kv.Value.LastContactTimestamp;
                 reseedSince = kv.Value.ReseedRequiredSince;
+                deadLetterFullSince = kv.Value.DeadLetterFullSince;
             }
 
             // Floor at zero - see Snapshot() for the non-monotonic wall-clock rationale.
@@ -83,6 +84,7 @@ public partial class ReplicationPeerStats
                 key.Tree, key.Peer, key.Direction, entries, bytes, errors, elapsed, inFlight)
             {
                 ReseedRequiredSeconds = reseedSince is { } since ? Math.Max(0d, (now - since).TotalSeconds) : null,
+                DeadLetterFullSeconds = deadLetterFullSince is { } full ? Math.Max(0d, (now - full).TotalSeconds) : null,
             };
             selected.Insert(FindInsertIndex(selected, key), row);
             if (selected.Count > limit)
