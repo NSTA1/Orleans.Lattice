@@ -247,13 +247,14 @@ not read as coverage of another:
   companion module's, which keeps the split, the resize and the undo they act
   through but not the reshard, the refused flip, the undo before a flip, the
   re-binds or stale writers. Their composition adds every action this module
-  has to the companion and was re-measured on the current modules: clean
-  against all fifteen properties of both, this module's four included, at
-  680,740 distinct states, depth 29, 12 min 53 s on two workers. That is the
-  measured cost of composing the two modules and why it is not a CI gate. It
-  does not carry this module's stamps or migrated rows, which the companion
-  lacks, so a stamp or import defect together with a retention event is the
-  seam still unchecked (see the README's account of the seam).
+  has to the companion (680,740 distinct states, depth 29, 12 min 53 s on two
+  workers). A further composition adds this module's stamps and migrated rows,
+  so a stamp or import defect together with a retention event is checked too.
+  It is clean against all fifteen properties of both, this module's four
+  included, at 813,771 distinct states, depth 29, 19 min 08 s on two workers,
+  and this module's stamp and import mutations still go red in it. That is the
+  measured cost of composing the two modules and why it is not a CI gate (see
+  the README's account of the seam).
 - **Alias cutovers other than a resize.** A shadow-cutover restore and its
   revert move the alias against a bound saga, and the companion module
   `ShardOwnershipCutover` checks them
