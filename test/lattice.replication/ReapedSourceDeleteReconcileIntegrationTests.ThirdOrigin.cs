@@ -322,6 +322,93 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
     }
 
     [Test]
+    public async Task A_third_origin_orphan_above_the_watermark_owes_a_retry_that_reconciles_it_once_the_watermark_passes()
+    {
+        const string tree = "rsdr-4549-owed-above";
+        const string key = "third-above-watermark";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync("anchor", new byte[] { 1 });
+        await BootstrapSiteBAsync(tree);
+
+        // The source applies C's write and deletes the key, but its watermark for
+        // C, read when the export opened, is still below the write.
+        var written = PastHlc(5);
+        Assert.That((await ApplyFromSiteCAsync(_siteA, tree, key, written)).Applied, Is.True, "precondition");
+        Assert.That((await ApplyFromSiteCAsync(_siteB, tree, key, written)).Applied, Is.True, "precondition");
+        await siteA.DeleteAsync(key);
+        await ReapSourceTombstonesAsync(tree);
+
+        await RebootstrapSiteBAsync(tree, SiteCFrontier(PastHlc(6)));
+        Assert.That(await siteB.GetAsync(key), Is.EqualTo(ThirdValue),
+            "precondition: above the watermark, this export cannot prove the source deleted it");
+
+        // The watermark has since passed the write; the owed retry settles it.
+        _openFrontier = SiteCFrontier(HybridLogicalClock.Tick(written));
+        try
+        {
+            await DriveSiteBAsync(tree, c => c.RetryOwedReconcileAsync(SiteAClusterId));
+        }
+        finally
+        {
+            _openFrontier = null;
+        }
+
+        Assert.That(await siteB.GetAsync(key), Is.Null,
+            "the orphan must not survive for ever: it was owed a retry, and the retry reconciles it");
+    }
+
+    [Test]
+    public async Task A_source_row_taken_during_the_drain_that_the_export_lacks_blocks_alignment()
+    {
+        const string tree = "rsdr-4549-realign-mid-drain";
+        const string stale = "old-lineage-row";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync("anchor", new byte[] { 1 });
+
+        // The receiver holds no source row when the import begins. Mid-drain it
+        // takes a source-origin row the export does not carry, as an entry the
+        // source shipped under an older lineage before a restore would be.
+        Task<ApplyResult> delivery = null!;
+        _onDrainStarted = async () =>
+        {
+            using (ExecutionContext.SuppressFlow())
+            {
+                delivery = Task.Run(() => Applier(_siteB).ApplyAsync(new WalRecord
+                {
+                    TreeId = tree,
+                    Op = MutationKind.Set,
+                    Key = stale,
+                    Value = new byte[] { 7 },
+                    Timestamp = PastHlc(5),
+                    OriginClusterId = SiteAClusterId,
+                }));
+            }
+
+            await delivery;
+        };
+        try
+        {
+            await BootstrapSiteBAsync(tree);
+        }
+        finally
+        {
+            _onDrainStarted = null;
+        }
+
+        Assert.That((await delivery).Applied, Is.True, "precondition: the row landed during the drain");
+
+        // A later pass must not vouch for it: the source never deleted it.
+        await BootstrapSiteBAsync(tree);
+
+        Assert.That(await siteB.GetAsync(stale), Is.EqualTo(new byte[] { 7 }),
+            "aligning over a row the export lacked would let the next pass delete a value the source never deleted");
+    }
+
+    [Test]
     public async Task A_frontier_read_under_another_lineage_installs_no_floor_and_reconciles_nothing()
     {
         const string tree = "rsdr-4549-lineage";

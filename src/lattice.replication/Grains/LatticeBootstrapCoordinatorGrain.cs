@@ -1229,6 +1229,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             alignedLineage == Guid.Empty ? null : alignedLineage,
             state.State.HeldNoSourceRowsAtImportStart,
             preCapture.SourceEntries.Keys.Any(key => !carriedKeys.Contains(key)),
+            await AnySourceRowAbsentFromExportAsync(treeName, sourceClusterId, carriedKeys, mergeMode, cancellationToken)
+                .ConfigureAwait(true),
             mergeMode);
 
         RecordBootstrapReconcile(treeName, sourceClusterId, decision.Outcome);
@@ -1399,6 +1401,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         var doomed = new HashSet<(string Key, HybridLogicalClock Timestamp)>();
         var staleSagas = new HashSet<(GrainId Leaf, Guid TransactionId)>();
+        var orphanAboveWatermark = false;
         bool Doomed(string key, string? rowOrigin, HybridLogicalClock timestamp, long expiresAtTicks, LatticeMergeMode mode)
         {
             if (expiresAtTicks != 0 || mode != LatticeMergeMode.LwwRegister || carriedKeys.Contains(key))
@@ -1408,8 +1411,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
             // A local write is stored without an origin; the source keys it by this cluster's id.
             var origin = string.IsNullOrEmpty(rowOrigin) ? localClusterId : rowOrigin;
-            return !string.Equals(origin, sourceClusterId, StringComparison.Ordinal)
-                && BootstrapForeignDeleteReconcile.ShouldDelete(frontier, origin, timestamp);
+            if (string.Equals(origin, sourceClusterId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            switch (BootstrapForeignDeleteReconcile.Classify(frontier, origin, timestamp))
+            {
+                case ForeignOrphanVerdict.Delete:
+                    return true;
+                case ForeignOrphanVerdict.Owed:
+                    orphanAboveWatermark = true;
+                    return false;
+                default:
+                    return false;
+            }
         }
 
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
@@ -1490,7 +1506,63 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 treeName, sourceClusterId, doomed.Count, staleSagas.Count);
         }
 
+        // An orphan at or above its origin's watermark may be a write the source
+        // applied during the export and then deleted, or one still on its way
+        // there, so this export proves nothing about it. The watermark rises as
+        // delivery proceeds, so the reconcile is owed a retry that settles it.
+        if (orphanAboveWatermark)
+        {
+            state.State.ReconcileOwedBySource[sourceClusterId] = true;
+        }
+
         await hwm.FinalizeBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Whether, now the drain is over, the receiver holds a live, non-expiring
+    /// source-origin row whose key the export did not carry (issue #4549). Such a
+    /// row reached the receiver during the drain - after a source restore it may
+    /// be from an older lineage - so the receiver may not align with the export's
+    /// lineage over it.
+    /// </summary>
+    private async Task<bool> AnySourceRowAbsentFromExportAsync(
+        string treeName,
+        string sourceClusterId,
+        HashSet<string> carriedKeys,
+        LatticeMergeMode mergeMode,
+        CancellationToken cancellationToken)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
+                {
+                    if (entry.ExpiresAtTicks == 0
+                        && (entry.MergeMode ?? mergeMode) == LatticeMergeMode.LwwRegister
+                        && string.Equals(entry.OriginClusterId, sourceClusterId, StringComparison.Ordinal)
+                        && !carriedKeys.Contains(entry.Key))
+                    {
+                        return true;
+                    }
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+
+        return false;
     }
 
     private async Task EnsureTreeRegisteredAsync(string treeName)

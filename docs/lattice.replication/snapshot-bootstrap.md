@@ -90,7 +90,13 @@ before calling `AddLatticeReplication`.
   adopts the export's lineage when every source-origin key it held was
   carried by the export, because there is then nothing it could wrongly
   delete; otherwise it skips, counted as `skipped_never_aligned` or
-  `skipped_lineage_mismatch`, and keeps every key.
+  `skipped_lineage_mismatch`, and keeps every key. Every alignment - this
+  one and the one a receiver that held no source row records - also
+  needs a scan at the end of the drain to find no live, non-expiring
+  source-origin row the export lacks (#4549). A source-origin row that
+  arrived during the drain, perhaps one the source shipped under an older
+  lineage before a restore, is absent from the pre-capture; aligning over
+  it would let a later pass delete a value the source never deleted.
 
   An unknown generation (a sender that predates generations), a generation
   that moved during the export, or a deleted or purging source records a
@@ -145,7 +151,12 @@ before calling `AddLatticeReplication`.
   prepare matching the same test belongs to a saga the source had already
   decided - one still open there is exported as prepared rows - so its
   bucket on that leaf is discarded, durably, and its later commit
-  installs nothing. The reconcile needs a stable generation like the
+  installs nothing. A row of another origin the export lacks whose write
+  is at or above `S(o)` - or of an origin the frontier carries no
+  watermark for - proves nothing: the source may have applied it during
+  the export and then deleted it, or not have received it yet. It is kept
+  and the reconcile is owed a retry, which settles it once the watermark
+  has risen past it. The reconcile needs a stable generation like the
   source-origin reconcile, but not the aligned-lineage record: the
   frontier itself proves the source applied the write. A stable close
   then makes the floor final, and from then on a delivery below it is

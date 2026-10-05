@@ -78,7 +78,7 @@ public class BootstrapDeleteReconcileTests
     {
         var unknownOpen = Decide(openGeneration: Generation(lineage: null, useLineage: false));
         var missingClose = BootstrapDeleteReconcile.Decide(
-            false, Generation(), null, Lineage, false, false, LatticeMergeMode.LwwRegister);
+            false, Generation(), null, Lineage, false, false, false, LatticeMergeMode.LwwRegister);
 
         Assert.Multiple(() =>
         {
@@ -144,6 +144,26 @@ public class BootstrapDeleteReconcileTests
         });
     }
 
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    public void Decide_never_aligns_over_a_source_row_taken_during_the_drain_that_the_export_lacks(bool useAlignedLineage, bool heldNoSourceRows)
+    {
+        var decision = Decide(
+            alignedLineage: Guid.Parse("33333333-3333-3333-3333-333333333333"),
+            useAlignedLineage: useAlignedLineage,
+            heldNoSourceRows: heldNoSourceRows,
+            orphaned: false,
+            orphanedAtEnd: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.RecordAlignedLineage, Is.False,
+                "an old-lineage row taken mid-drain would otherwise be vouched for, and later deleted");
+            Assert.That(decision.ShouldReconcile, Is.False);
+        });
+    }
+
     [Test]
     public void Decide_non_lww_tree_skips_reconcile()
     {
@@ -173,7 +193,8 @@ public class BootstrapDeleteReconcileTests
         bool useAlignedLineage = true,
         bool heldNoSourceRows = false,
         bool orphaned = true,
-        LatticeMergeMode mergeMode = LatticeMergeMode.LwwRegister) =>
+        LatticeMergeMode mergeMode = LatticeMergeMode.LwwRegister,
+        bool orphanedAtEnd = false) =>
         BootstrapDeleteReconcile.Decide(
             isScopedExport,
             openGeneration ?? Generation(),
@@ -181,6 +202,7 @@ public class BootstrapDeleteReconcileTests
             useAlignedLineage ? alignedLineage ?? Lineage : null,
             heldNoSourceRows,
             orphaned,
+            orphanedAtEnd,
             mergeMode);
 
     private static SnapshotSourceGeneration Generation(

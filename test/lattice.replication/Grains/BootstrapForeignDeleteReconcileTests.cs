@@ -87,6 +87,22 @@ public class BootstrapForeignDeleteReconcileTests
     }
 
     [Test]
+    public void Classify_owes_a_retry_for_an_orphan_at_or_above_the_watermark_or_of_an_unknown_origin()
+    {
+        var frontier = Frontier(held: At(50));
+        Assert.Multiple(() =>
+        {
+            Assert.That(BootstrapForeignDeleteReconcile.Classify(frontier, Origin, At(99)), Is.EqualTo(ForeignOrphanVerdict.Delete));
+            Assert.That(BootstrapForeignDeleteReconcile.Classify(frontier, Origin, At(50)), Is.EqualTo(ForeignOrphanVerdict.Keep), "held");
+            Assert.That(BootstrapForeignDeleteReconcile.Classify(frontier, Origin, At(100)), Is.EqualTo(ForeignOrphanVerdict.Owed),
+                "the source may have applied it during the export and deleted it; a later watermark settles it");
+            Assert.That(BootstrapForeignDeleteReconcile.Classify(frontier, Origin, At(150)), Is.EqualTo(ForeignOrphanVerdict.Owed));
+            Assert.That(BootstrapForeignDeleteReconcile.Classify(frontier, "site-d", At(1)), Is.EqualTo(ForeignOrphanVerdict.Owed),
+                "no watermark for the origin: the export proves nothing about it");
+        });
+    }
+
+    [Test]
     public void ShouldDelete_ignores_a_zero_low_watermark()
     {
         var frontier = new SnapshotSourceFrontier

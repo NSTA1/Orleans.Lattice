@@ -69,17 +69,34 @@ internal static class BootstrapForeignDeleteReconcile
     /// source performed: the source had applied the write before the export
     /// opened.
     /// </summary>
-    public static bool ShouldDelete(SnapshotSourceFrontier frontier, string origin, HybridLogicalClock timestamp)
+    public static bool ShouldDelete(SnapshotSourceFrontier frontier, string origin, HybridLogicalClock timestamp) =>
+        Classify(frontier, origin, timestamp) == ForeignOrphanVerdict.Delete;
+
+    /// <summary>
+    /// Classifies the receiver's live row of <paramref name="origin"/> stamped
+    /// <paramref name="timestamp"/> whose key the export lacks: a delete the
+    /// source performed (below the origin's watermark, not held); held at the
+    /// source, so kept; or at or above the watermark - or of an origin the
+    /// frontier has no watermark for - so this export proves nothing and the
+    /// reconcile is owed a retry once the watermark has risen past it.
+    /// </summary>
+    public static ForeignOrphanVerdict Classify(SnapshotSourceFrontier frontier, string origin, HybridLogicalClock timestamp)
     {
         ArgumentNullException.ThrowIfNull(frontier);
-        if (string.IsNullOrEmpty(origin)
-            || !frontier.LowWatermarks.TryGetValue(origin, out var lowWatermark)
+        if (string.IsNullOrEmpty(origin))
+        {
+            return ForeignOrphanVerdict.Keep;
+        }
+
+        if (!frontier.LowWatermarks.TryGetValue(origin, out var lowWatermark)
             || lowWatermark == HybridLogicalClock.Zero
             || timestamp.CompareTo(lowWatermark) >= 0)
         {
-            return false;
+            return ForeignOrphanVerdict.Owed;
         }
 
-        return !frontier.Held.TryGetValue(origin, out var held) || Array.IndexOf(held, timestamp) < 0;
+        return frontier.Held.TryGetValue(origin, out var held) && Array.IndexOf(held, timestamp) >= 0
+            ? ForeignOrphanVerdict.Keep
+            : ForeignOrphanVerdict.Delete;
     }
 }
