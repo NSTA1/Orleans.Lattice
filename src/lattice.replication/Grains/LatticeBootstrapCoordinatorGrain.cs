@@ -860,6 +860,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             return;
         }
 
+        // Issue #4549: a tree that has never been written is registered by the
+        // drain's first write, and registering it stamps its lineage, which
+        // resets the tree's applied identities and with them the bootstrap drop
+        // floor. Register it now, before the tree frontier's epoch is captured and
+        // the floor installed, so neither is reset mid-drain.
+        await EnsureTreeRegisteredAsync(treeName).ConfigureAwait(true);
+
         // Resolve the per-tree merge mode once up-front. The resolver
         // is O(1) (a cached dictionary read in the default
         // ConfiguredLatticeMergeModeResolver implementation) and the
@@ -943,7 +950,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // recorded: from here on a failure keeps the tree fenced and re-drives
         // the bootstrap until a drain completes, so the floor never outlives an
         // abandoned import.
-        var floorInstalled = await InstallBootstrapFloorAsync(treeName, snapshot, cancellationToken).ConfigureAwait(true);
+        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, cancellationToken).ConfigureAwait(true);
 
         // Lazy-initialise the duration anchor on resume after a silo
         // failover: TryInitiateBootstrapAsync set it on kickoff, but a
@@ -1284,32 +1291,70 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// when it opened (issue #4549), or clears any earlier floor when the export
     /// carries none read under its opening lineage. Returns whether a floor is
     /// in force for this drain.
+    /// <para>
+    /// The floor starts provisional, so a delivery below it is deferred until the
+    /// import closes stable. The install bumps the tree's floor epoch; the epoch
+    /// is raised in the tree registry and every shard root is armed with it, which
+    /// returns once each has finished the writes it admitted under an older epoch
+    /// and refuses any later one. So no write admitted before the install lands
+    /// after the reconcile scan. The source's own origin is never floored: its
+    /// writes are re-shipped in offset order with their deletes.
+    /// </para>
     /// </summary>
     private async Task<bool> InstallBootstrapFloorAsync(
         string treeName,
+        string sourceClusterId,
         SnapshotStream snapshot,
         CancellationToken cancellationToken)
     {
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
-        if (BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
+        if (!BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
         {
-            var frontier = snapshot.OpenFrontier!;
-            await hwm.SetBootstrapFloorAsync(frontier.LowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
-            return true;
+            await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+            return false;
         }
 
-        await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
-        return false;
+        var frontier = snapshot.OpenFrontier!;
+        var lowWatermarks = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        foreach (var (origin, lowWatermark) in frontier.LowWatermarks)
+        {
+            if (!string.Equals(origin, sourceClusterId, StringComparison.Ordinal))
+            {
+                lowWatermarks[origin] = lowWatermark;
+            }
+        }
+
+        var epoch = await hwm.SetBootstrapFloorAsync(lowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
+
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        await registry.RaiseReplicationFloorEpochAsync(physicalTreeId, epoch).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        var arms = new List<Task>();
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            arms.Add(_grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}")
+                .ArmReplicationFloorEpochAsync(epoch));
+        }
+
+        await Task.WhenAll(arms).ConfigureAwait(true);
+        return true;
     }
 
     /// <summary>
-    /// Deletes the receiver's live rows of origins other than the source whose
-    /// keys the export lacks and whose writes the source had applied before the
-    /// export opened (issue #4549). Scanned after the drain, so every write
-    /// applied before the floor was installed is seen; a later one below the
-    /// floor was dropped. A floor installed for an export that turned out
-    /// unstable is cleared: the reconcile owes a retry for it, and the retry
-    /// installs a fresh one.
+    /// Deletes the receiver's rows of origins other than the source whose keys
+    /// the export lacks and whose writes the source had applied before the
+    /// export opened (issue #4549), then makes the floor final. Pending saga
+    /// prepares are covered too: the stale saga's bucket on that leaf is
+    /// discarded, so its later commit installs nothing. Scanned after the
+    /// shards were armed, so every write admitted before the floor was installed
+    /// is seen, and every later one below the floor was deferred. A floor
+    /// installed for an export that turned out unstable is cleared instead, so
+    /// the deferred deliveries apply when re-shipped, and the reconcile owes a
+    /// retry that installs a fresh one.
     /// </summary>
     private async Task ReconcileForeignDeletesAsync(
         string treeName,
@@ -1325,12 +1370,11 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             return;
         }
 
+        var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
         if (!BootstrapForeignDeleteReconcile.IsEligible(
                 snapshot.OpenFrontier, snapshot.OpenGeneration, snapshot.CloseGeneration, mergeMode))
         {
-            await _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName)
-                .ClearBootstrapFloorAsync(cancellationToken)
-                .ConfigureAwait(true);
+            await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
             state.State.ReconcileOwedBySource[sourceClusterId] = true;
             Logger.LogWarning(
                 "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the source tree changed during the export, so the "
@@ -1347,7 +1391,26 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
                 LatticeConstants.DefaultShardCount);
-        var doomed = new List<(string Key, HybridLogicalClock Timestamp)>();
+        var allSlots = new int[shardMap.VirtualShardCount];
+        for (var i = 0; i < allSlots.Length; i++)
+        {
+            allSlots[i] = i;
+        }
+
+        var doomed = new HashSet<(string Key, HybridLogicalClock Timestamp)>();
+        var staleSagas = new HashSet<(GrainId Leaf, Guid TransactionId)>();
+        bool Doomed(string key, string? rowOrigin, HybridLogicalClock timestamp, long expiresAtTicks, LatticeMergeMode mode)
+        {
+            if (expiresAtTicks != 0 || mode != LatticeMergeMode.LwwRegister || carriedKeys.Contains(key))
+            {
+                return false;
+            }
+
+            // A local write is stored without an origin; the source keys it by this cluster's id.
+            var origin = string.IsNullOrEmpty(rowOrigin) ? localClusterId : rowOrigin;
+            return !string.Equals(origin, sourceClusterId, StringComparison.Ordinal)
+                && BootstrapForeignDeleteReconcile.ShouldDelete(frontier, origin, timestamp);
+        }
 
         foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
         {
@@ -1360,22 +1423,20 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
                 foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
                 {
-                    if (entry.ExpiresAtTicks != 0
-                        || (entry.MergeMode ?? mergeMode) != LatticeMergeMode.LwwRegister
-                        || carriedKeys.Contains(entry.Key))
+                    if (Doomed(entry.Key, entry.OriginClusterId, entry.Timestamp, entry.ExpiresAtTicks, entry.MergeMode ?? mergeMode))
                     {
-                        continue;
+                        doomed.Add((entry.Key, entry.Timestamp));
                     }
+                }
 
-                    // A local write is stored without an origin; the source keys it by this cluster's id.
-                    var origin = string.IsNullOrEmpty(entry.OriginClusterId) ? localClusterId : entry.OriginClusterId;
-                    if (string.Equals(origin, sourceClusterId, StringComparison.Ordinal)
-                        || !BootstrapForeignDeleteReconcile.ShouldDelete(frontier, origin, entry.Timestamp))
+                foreach (var pending in await leaf.GetPendingMutationsForSlotsAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(true))
+                {
+                    if (pending.TransactionId != Guid.Empty
+                        && !pending.IsTombstone
+                        && Doomed(pending.Key, pending.OriginClusterId, pending.Timestamp, pending.ExpiresAtTicks, pending.Mode))
                     {
-                        continue;
+                        staleSagas.Add((leafId.Value, pending.TransactionId));
                     }
-
-                    doomed.Add((entry.Key, entry.Timestamp));
                 }
 
                 leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
@@ -1406,12 +1467,39 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             }
         }
 
-        if (doomed.Count > 0)
+        // A pending prepare the export lacks belongs to a saga the source had
+        // already decided: a saga still open there is exported as prepared rows.
+        // The export carries its outcome, so the bucket is stale. It is dropped,
+        // durably, rather than shadowed by a tombstone: an unmarked replicated
+        // prepare is superseded only by a row stamped strictly above it, so a
+        // tombstone at its stamp would not hide it, and one above could beat a
+        // legitimate later write.
+        foreach (var (leafId, transactionId) in staleSagas)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
+                .DiscardPendingTransactionAsync(transactionId)
+                .ConfigureAwait(true);
+        }
+
+        if (doomed.Count > 0 || staleSagas.Count > 0)
         {
             Logger.LogWarning(
-                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' deleted {Count} row(s) of other origins that the source "
-                + "had applied and then deleted before the export",
-                treeName, sourceClusterId, doomed.Count);
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' deleted {Count} row(s) and discarded {Sagas} stale saga "
+                + "bucket(s) of other origins that the source had applied and then deleted before the export",
+                treeName, sourceClusterId, doomed.Count, staleSagas.Count);
+        }
+
+        await hwm.FinalizeBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    private async Task EnsureTreeRegisteredAsync(string treeName)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        if (!await registry.ExistsAsync(physicalTreeId).ConfigureAwait(true))
+        {
+            await registry.RegisterAsync(physicalTreeId).ConfigureAwait(true);
         }
     }
 

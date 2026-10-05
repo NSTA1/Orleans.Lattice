@@ -27,6 +27,19 @@ internal readonly record struct ReplicationApplyAdmission
     [Id(2)] public HybridLogicalClock[] HeldBelowFloor { get; init; }
 
     /// <summary>
+    /// The tree's bootstrap drop-floor epoch, which the applier stamps on the
+    /// write it admits so a shard root can refuse a write admitted before a later
+    /// floor was installed. <c>0</c> when no floor was ever installed.
+    /// </summary>
+    [Id(3)] public long FloorEpoch { get; init; }
+
+    /// <summary>
+    /// Whether the floor is provisional: its import has not yet closed against a
+    /// stable source, so a delivery below it is deferred rather than dropped.
+    /// </summary>
+    [Id(4)] public bool FloorProvisional { get; init; }
+
+    /// <summary>
     /// Whether a delivery of the origin's write at <paramref name="timestamp"/>
     /// is below the floor and not held, so it is dropped.
     /// </summary>

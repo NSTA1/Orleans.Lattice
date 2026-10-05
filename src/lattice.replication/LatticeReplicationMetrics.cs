@@ -146,6 +146,15 @@ public static class LatticeReplicationMetrics
     public const string OutcomeBootstrapFloorDropped = "bootstrap-floor-dropped";
 
     /// <summary>
+    /// Apply-duration outcome for a point write or saga prepare deferred by the
+    /// tree's bootstrap drop floor (#4549): either below a floor whose import has
+    /// not yet closed against a stable source, or refused by a shard armed with a
+    /// floor installed after the entry was admitted. Not acknowledged, so the
+    /// sender re-ships it and the re-delivery is admitted against the floor.
+    /// </summary>
+    public const string OutcomeBootstrapFloorDeferred = "bootstrap-floor-deferred";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was suppressed by the
     /// per-tree shadow-forward dedupe cache because an identity tuple
     /// (<c>(originClusterId, timestamp, key, op)</c>) matching this

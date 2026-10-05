@@ -1,4 +1,7 @@
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.Replication.Grains;
+using Orleans.Runtime;
 using Orleans.TestingHost;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -134,8 +137,10 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         var late = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, key, written);
         Assert.Multiple(async () =>
         {
-            Assert.That(inDrain!.Value.Applied, Is.False, "a write below the floor arriving mid-drain is dropped");
+            Assert.That(inDrain!.Value.Applied, Is.False, "a write below the floor arriving mid-drain is not merged");
+            Assert.That(inDrain.Value.Deferred, Is.True, "while the import is open the floor is provisional, so it defers");
             Assert.That(late.Applied, Is.False, "the floor stays in force after the drain");
+            Assert.That(late.Deferred, Is.False, "the import closed stable, so the re-shipped write is dropped");
             Assert.That(await siteB.GetAsync(key), Is.Null,
                 "the in-flight write must not resurrect a key the source deleted and reaped");
         });
@@ -192,22 +197,128 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         await siteA.DeleteAsync(key);
         await ReapSourceTombstonesAsync(tree);
 
+        var lateWrite = PastHlc(4);
+        ApplyResult? inDrain = null;
         await RebootstrapSiteBAsync(
             tree,
             SiteCFrontier(PastHlc(3)),
             async () =>
             {
+                inDrain = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, late, lateWrite);
                 await siteA.DeleteTreeAsync();
                 await siteA.RecoverTreeAsync();
             });
 
-        var afterwards = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, late, PastHlc(4));
+        // The sender re-ships the write the drain deferred.
+        var reShipped = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, late, lateWrite);
         Assert.Multiple(async () =>
         {
             Assert.That(await siteB.GetAsync(key), Is.EqualTo(ThirdValue), "an unstable export must not infer deletes");
-            Assert.That(afterwards.Applied, Is.True, "the floor of an unstable export is cleared, so it drops nothing");
-            Assert.That(await siteB.GetAsync(late), Is.EqualTo(ThirdValue));
+            Assert.That(inDrain?.Deferred, Is.True,
+                "below the floor while the import was open: deferred, never acknowledged as dropped");
+            Assert.That(reShipped.Applied, Is.True, "the floor of an unstable export is cleared, so the re-shipped write applies");
+            Assert.That(await siteB.GetAsync(late), Is.EqualTo(ThirdValue),
+                "a third-origin write below the floor during an unstable drain is kept, not lost");
         });
+    }
+
+    [Test]
+    public async Task A_write_admitted_before_the_floor_and_arriving_after_the_scan_is_refused_then_dropped()
+    {
+        const string tree = "rsdr-4549-straddler";
+        const string key = "third-straddler";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync("anchor", new byte[] { 1 });
+        await BootstrapSiteBAsync(tree);
+
+        // C's write reached the source, which deleted the key and reaped it. The
+        // copy bound for the receiver was admitted there before the floor existed
+        // and stalls past the whole re-bootstrap.
+        var written = PastHlc(5);
+        Assert.That((await ApplyFromSiteCAsync(_siteA, tree, key, written)).Applied, Is.True, "precondition");
+        await siteA.DeleteAsync(key);
+        await ReapSourceTombstonesAsync(tree);
+        var admittedUnder = (await _siteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree)
+            .GetAdmissionAsync(SiteCClusterId)).FloorEpoch;
+
+        await RebootstrapSiteBAsync(tree, SiteCFrontier(HybridLogicalClock.Tick(written)));
+
+        Exception? refusal = null;
+        RequestContext.Clear();
+        ReplicationFloorAdmission.Stamp(admittedUnder);
+        try
+        {
+            await _siteB.Client.GetGrain<IReplicationApplyGrain>(tree)
+                .ApplySetAsync(key, ThirdValue, written, SiteCClusterId, null, 0);
+        }
+        catch (Exception ex)
+        {
+            refusal = ex;
+        }
+        finally
+        {
+            RequestContext.Clear();
+        }
+
+        var reShipped = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, key, written);
+        Assert.Multiple(async () =>
+        {
+            Assert.That(refusal, Is.InstanceOf<ReplicationFloorAdmissionStaleException>(),
+                "every shard was armed with the floor's epoch before the scan, so the straddler is refused at the shard");
+            Assert.That(reShipped.Applied, Is.False);
+            Assert.That(reShipped.Deferred, Is.False, "the re-shipped delivery is admitted against the floor and dropped");
+            Assert.That(await siteB.GetAsync(key), Is.Null, "the straddler must not resurrect the key after the scan");
+        });
+    }
+
+    [Test]
+    public async Task A_pending_prepare_below_the_floor_whose_terminal_commits_after_the_scan_does_not_resurrect_the_key()
+    {
+        const string tree = "rsdr-4549-pending-prepare";
+        const string key = "third-prepared";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync("anchor", new byte[] { 1 });
+        await BootstrapSiteBAsync(tree);
+
+        // C's single-key saga is staged on the receiver; the source applied it,
+        // committed it, then deleted and reaped the key, so the export lacks it.
+        var txid = Guid.NewGuid();
+        var prepared = PastHlc(5);
+        var staged = await Applier(_siteB).ApplyAsync(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = key,
+            Value = ThirdValue,
+            Timestamp = prepared,
+            OriginClusterId = SiteCClusterId,
+            TransactionId = txid,
+            IsPrepared = true,
+            AtomicBatchSize = 1,
+            AtomicBatchIndex = 0,
+        });
+        Assert.That(staged.Applied, Is.True, "precondition: the prepare is staged");
+        Assert.That(await siteB.GetAsync(key), Is.Null, "precondition: a staged prepare is not visible");
+
+        await RebootstrapSiteBAsync(tree, SiteCFrontier(HybridLogicalClock.Tick(prepared)));
+
+        await Applier(_siteB).ApplyAsync(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.TxCommit,
+            Key = "0",
+            ShardIndex = 0,
+            Timestamp = PastHlc(4),
+            OriginClusterId = SiteCClusterId,
+            TransactionId = txid,
+        });
+
+        Assert.That(await siteB.GetAsync(key), Is.Null,
+            "the stale saga's bucket was discarded, so its commit installs nothing");
     }
 
     [Test]

@@ -226,6 +226,7 @@ internal sealed class ReplicationHighWaterMarkGrain(
             {
                 HighWaterMark = hwm,
                 HeldBelowFloor = Array.Empty<HybridLogicalClock>(),
+                FloorEpoch = state.State.FloorEpoch,
             });
         }
 
@@ -235,11 +236,13 @@ internal sealed class ReplicationHighWaterMarkGrain(
             HighWaterMark = hwm,
             BootstrapFloor = lowWatermark,
             HeldBelowFloor = held,
+            FloorEpoch = state.State.FloorEpoch,
+            FloorProvisional = floor.Provisional,
         });
     }
 
     /// <inheritdoc />
-    public async Task SetBootstrapFloorAsync(
+    public async Task<long> SetBootstrapFloorAsync(
         IReadOnlyDictionary<string, HybridLogicalClock> lowWatermarks,
         IReadOnlyDictionary<string, HybridLogicalClock[]> held,
         CancellationToken cancellationToken)
@@ -249,7 +252,9 @@ internal sealed class ReplicationHighWaterMarkGrain(
         cancellationToken.ThrowIfCancellationRequested();
 
         var previous = state.State.BootstrapFloor;
+        var previousEpoch = state.State.FloorEpoch;
         state.State.BootstrapFloor = ReplicationBootstrapFloor.From(lowWatermarks, held);
+        state.State.FloorEpoch = previousEpoch + 1;
         try
         {
             await state.WriteStateAsync().ConfigureAwait(true);
@@ -257,6 +262,30 @@ internal sealed class ReplicationHighWaterMarkGrain(
         catch
         {
             state.State.BootstrapFloor = previous;
+            state.State.FloorEpoch = previousEpoch;
+            throw;
+        }
+
+        return state.State.FloorEpoch;
+    }
+
+    /// <inheritdoc />
+    public async Task FinalizeBootstrapFloorAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (state.State.BootstrapFloor is not { Provisional: true } floor)
+        {
+            return;
+        }
+
+        floor.Provisional = false;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            floor.Provisional = true;
             throw;
         }
     }

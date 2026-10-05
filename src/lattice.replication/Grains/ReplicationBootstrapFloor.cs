@@ -37,6 +37,14 @@ internal sealed class ReplicationBootstrapFloor
     [Id(1)] public Dictionary<string, HashSet<HybridLogicalClock>> Held { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
+    /// Whether the import that installed the floor has yet to close against a
+    /// stable source. While it has not, a delivery below the floor is deferred,
+    /// not dropped: the import may turn out unstable, and a dropped delivery is
+    /// acknowledged to its sender and never re-sent.
+    /// </summary>
+    [Id(2)] public bool Provisional { get; set; } = true;
+
+    /// <summary>
     /// Builds a floor from an export's per-origin low watermarks and held
     /// writes, or returns <see langword="null"/> - no floor, which drops
     /// nothing - when the export carries no watermark or exceeds a bound.

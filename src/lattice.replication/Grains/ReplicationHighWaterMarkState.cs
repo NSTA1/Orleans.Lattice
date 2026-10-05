@@ -74,4 +74,11 @@ internal sealed class ReplicationHighWaterMarkState
     /// <see langword="null"/>, which drops nothing.
     /// </summary>
     [Id(3)] public ReplicationBootstrapFloor? BootstrapFloor { get; set; }
+
+    /// <summary>
+    /// The highest bootstrap drop-floor epoch installed on this tree (issue
+    /// #4549). Bumped by every install and never lowered, so a write admitted
+    /// before an install carries an older epoch than every shard enforces after it.
+    /// </summary>
+    [Id(4)] public long FloorEpoch { get; set; }
 }

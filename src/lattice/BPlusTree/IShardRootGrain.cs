@@ -2012,6 +2012,18 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task SetBootstrapReadFenceAsync(bool fenced);
 
     /// <summary>
+    /// Raises the bootstrap drop-floor epoch this shard enforces (issue #4549)
+    /// and returns once every replicated write it admitted under an older epoch
+    /// has finished its leaf merge. From then on it refuses a replicated write
+    /// stamped with an older epoch with
+    /// <see cref="ReplicationFloorAdmissionStaleException"/>. The epoch is not
+    /// lowered; it lives in this activation, and a later activation reads it
+    /// from the tree registry, which the caller raises first.
+    /// </summary>
+    /// <param name="epoch">The floor epoch to enforce.</param>
+    Task ArmReplicationFloorEpochAsync(long epoch);
+
+    /// <summary>
     /// Reports whether this shard's receiver bootstrap read fence is armed
     /// (issue #4526).
     /// </summary>

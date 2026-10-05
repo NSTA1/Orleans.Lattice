@@ -912,6 +912,21 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task RaiseReplicationFloorEpochAsync(string treeId, long epoch)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentOutOfRangeException.ThrowIfNegative(epoch);
+
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(RaiseReplicationFloorEpochAsync));
+        if (existing.ReplicationFloorEpoch >= epoch)
+        {
+            return;
+        }
+
+        // The lineage is unchanged, so no lineage observer is told.
+        await UpdateAsync(treeId, existing with { ReplicationFloorEpoch = epoch });
+    }
+
     public async Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);

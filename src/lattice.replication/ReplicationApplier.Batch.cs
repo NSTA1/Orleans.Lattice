@@ -378,6 +378,19 @@ internal sealed partial class ReplicationApplier
                 Deferred = true,
             };
         }
+        catch (ReplicationFloorAdmissionStaleException)
+        {
+            // Issue #4549: a bootstrap drop floor was installed after the run was
+            // admitted, and its shard is armed against it. Defer the run; the
+            // sender re-ships it and the re-delivery is admitted against the floor.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
         catch
         {
             RecordInboundContact(entries[startInclusive], success: false);
@@ -720,6 +733,13 @@ internal sealed partial class ReplicationApplier
         // verbatim.
         var bootstrapMode = LatticeBootstrapApplyContext.IsActive;
 
+        // Bootstrap drop floor (#4549): see ApplyAsync. The run's writes carry
+        // the floor epoch they were admitted under.
+        if (!bootstrapMode)
+        {
+            ReplicationFloorAdmission.Stamp(floorAdmission.FloorEpoch);
+        }
+
         // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
         // race scenario it closes). The cache instance is fetched once
         // per run. On apply failure the reservation is rolled back via
@@ -755,6 +775,7 @@ internal sealed partial class ReplicationApplier
         // dead-letter queue is full (#4603). The run then reports Deferred, so
         // the sender keeps its cursor and re-ships rather than lose the entry.
         var deferDeadLetterFull = false;
+        var deferBelowProvisionalFloor = false;
 
         // Pending batched LWW Set/Delete items. Items pass classification
         // (not range delete, not dedup'd, not causally parked) and are
@@ -1016,6 +1037,20 @@ internal sealed partial class ReplicationApplier
                 // admission read covers every entry of its single origin.
                 if (!bootstrapMode && floorAdmission.Drops(entry.Timestamp))
                 {
+                    if (floorAdmission.FloorProvisional)
+                    {
+                        // Not acknowledged: the run is re-shipped, and the
+                        // re-delivery is admitted against the settled floor.
+                        deferBelowProvisionalFloor = true;
+                        if (entry.IsPrepared && entry.TransactionId != Guid.Empty)
+                        {
+                            (deferredSagaPrepares ??= new HashSet<Guid>()).Add(entry.TransactionId);
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
+                        continue;
+                    }
+
                     outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
                     continue;
                 }
@@ -1344,7 +1379,7 @@ internal sealed partial class ReplicationApplier
                 await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
 
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull || deferBelowProvisionalFloor };
         }
 
         // Bootstrap mode: the per-origin HWM is pinned atomically at
@@ -1354,7 +1389,7 @@ internal sealed partial class ReplicationApplier
         // suppress still-pending saga keys with strictly-earlier source
         // HLCs. Surface the pre-drain HWM so callers observe the
         // canonical pre-pin frontier.
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull || deferBelowProvisionalFloor };
     }
 
     /// <summary>

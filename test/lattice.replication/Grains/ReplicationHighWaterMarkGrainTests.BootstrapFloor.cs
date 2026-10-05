@@ -65,6 +65,53 @@ public partial class ReplicationHighWaterMarkGrainTests
     }
 
     [Test]
+    public async Task Every_install_bumps_a_durable_floor_epoch_the_admission_carries()
+    {
+        var state = new FakePersistentState<ReplicationHighWaterMarkState>();
+        IReplicationHighWaterMarkGrain grain = CreateGrain(state);
+
+        var fresh = (await grain.GetAdmissionAsync(OriginA)).FloorEpoch;
+        var first = await grain.SetBootstrapFloorAsync(Watermarks((OriginA, Hlc(100))), Held());
+        await grain.ClearBootstrapFloorAsync();
+        var second = await grain.SetBootstrapFloorAsync(Watermarks((OriginA, Hlc(100))), Held());
+        var carried = (await grain.GetAdmissionAsync(OriginB)).FloorEpoch;
+        var restarted = (await ((IReplicationHighWaterMarkGrain)CreateGrain(state)).GetAdmissionAsync(OriginA)).FloorEpoch;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(fresh, Is.Zero);
+            Assert.That(first, Is.EqualTo(1));
+            Assert.That(second, Is.EqualTo(2), "a clear never lowers the epoch");
+            Assert.That(carried, Is.EqualTo(2), "every origin's admission carries it, floored or not");
+            Assert.That(restarted, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task A_floor_is_provisional_until_finalized_and_finalizing_is_durable()
+    {
+        var state = new FakePersistentState<ReplicationHighWaterMarkState>();
+        IReplicationHighWaterMarkGrain grain = CreateGrain(state);
+
+        await grain.SetBootstrapFloorAsync(Watermarks((OriginA, Hlc(100))), Held());
+        var installed = await grain.GetAdmissionAsync(OriginA);
+        await grain.FinalizeBootstrapFloorAsync();
+        var finalized = await grain.GetAdmissionAsync(OriginA);
+        var restarted = await ((IReplicationHighWaterMarkGrain)CreateGrain(state)).GetAdmissionAsync(OriginA);
+        await grain.ClearBootstrapFloorAsync();
+        await grain.FinalizeBootstrapFloorAsync();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(installed.FloorProvisional, Is.True, "an import that has not closed defers below its floor");
+            Assert.That(finalized.FloorProvisional, Is.False);
+            Assert.That(finalized.Drops(Hlc(50)), Is.True);
+            Assert.That(restarted.FloorProvisional, Is.False);
+            Assert.That((await grain.GetAdmissionAsync(OriginA)).Drops(Hlc(50)), Is.False, "finalizing no floor is a no-op");
+        });
+    }
+
+    [Test]
     public async Task ResetAppliedIdentitiesAsync_clears_the_floor_durably()
     {
         var state = new FakePersistentState<ReplicationHighWaterMarkState>();

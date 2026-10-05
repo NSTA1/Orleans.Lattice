@@ -202,15 +202,26 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// source's applied low watermark at export open and the writes below it the
     /// source held without applying. Installed before the drain applies anything,
     /// so no delivery the export already reflects lands meanwhile. An empty or
-    /// out-of-bounds export installs no floor.
+    /// out-of-bounds export installs no floor. The floor starts provisional - a
+    /// delivery below it is deferred - until <see cref="FinalizeBootstrapFloorAsync"/>.
+    /// Every install bumps the tree's floor epoch, which it returns.
     /// </summary>
     /// <param name="lowWatermarks">Per origin, the source's applied low watermark at export open.</param>
     /// <param name="held">Per origin, the writes the source held without applying.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task SetBootstrapFloorAsync(
+    /// <returns>The tree's new floor epoch.</returns>
+    Task<long> SetBootstrapFloorAsync(
         IReadOnlyDictionary<string, HybridLogicalClock> lowWatermarks,
         IReadOnlyDictionary<string, HybridLogicalClock[]> held,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the tree's provisional bootstrap drop floor final, durably (issue
+    /// #4549): its import closed against a stable source, so from now on a
+    /// delivery below it is dropped. A no-op when there is no provisional floor.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task FinalizeBootstrapFloorAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Removes the tree's bootstrap drop floor, durably (issue #4549).</summary>
     /// <param name="cancellationToken">Cancellation token.</param>

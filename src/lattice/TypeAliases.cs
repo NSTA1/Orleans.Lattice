@@ -867,6 +867,9 @@ internal static class TypeAliases
     /// <summary>Alias for the closed-copy replication apply refusal.</summary>
     internal const string CopyReceiveFenced = "ol.qfx";
 
+    /// <summary>Alias for the stale replication floor-admission refusal (issue #4549).</summary>
+    internal const string ReplicationFloorAdmissionStale = "ol.rae";
+
     /// <summary>Alias for the per-physical-copy receive fence status.</summary>
     internal const string CopyReceiveFenceStatus = "ol.qft";
 }
