@@ -1156,7 +1156,14 @@ A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's
 [replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
 withholds it whole (#4533). A pending bucket the receiver staged for it
-before a re-seed is cleared by that re-seed's drain (below). A saga the
+before a re-seed is cleared by that re-seed's drain (below). Any other
+full bootstrap clears one too (#4692) - a tree re-added to replication,
+which must come back holding no leftover bucket from the origin, among
+them - but only for a saga that was already pending from the origin when
+the export opened and that the export neither carries in flight nor
+decides. The sender holds nothing back during such a bootstrap, so a saga
+staged after the export opened is not stale: its terminal is still to
+come, and it keeps its bucket. A saga the
 source still knows but cannot settle (an `Indeterminate` row with no
 recorded verdict) ships as a value-less row that names it with no
 `SettledDecision`, so the receiver does not take it for a purged one;
