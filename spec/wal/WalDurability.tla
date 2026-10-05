@@ -50,6 +50,11 @@ Offs == 0..(MaxOff - 1)
 Owner == (0 :> l1) @@ (1 :> l1) @@ (2 :> l1)
 MaxFaults == 1
 
+\* Whether the environment may destroy a leaf's durable snapshot (storage loss
+\* or an operator deletion, issue #4634). FALSE in the base; the SnapshotLoss
+\* variant configuration sets it.
+SnapshotLoss == FALSE
+
 \* The "no snapshot" sentinel for snapshot coverage; -1 is a real coverage
 \* claim ("a snapshot exists and covers no offset").
 NoSnap == -2
@@ -88,6 +93,11 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*                                                                         *)
 (* Durable pin store (per leaf, merged by monotone max):                   *)
 (*  pinOff[l] the highest offset the leaf has ever published, -1 none.     *)
+(*  hadSnap[l] the leaf row's durable record that the leaf has held        *)
+(*            snapshot coverage (LeafNodeState.SnapshotCoveredPartitions,   *)
+(*            issue #4634): written before any pin that relies on it, so it *)
+(*            travels with the pin variables. Tracked only under            *)
+(*            SnapshotLoss.                                                 *)
 (*  pinHlc[l] "zero" while only Zero-frontier pins were published (a       *)
 (*            block pin), "clock" once a real frontier was.                *)
 (*                                                                         *)
@@ -95,14 +105,14 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
-          pinOff, pinHlc, faults
+          pinOff, pinHlc, hadSnap, faults
 
 walVars  == <<next, inflight, durable, tail, acked>>
 leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
-pinVars  == <<pinOff, pinHlc>>
+pinVars  == <<pinOff, pinHlc, hadSnap>>
 vars == <<next, inflight, durable, tail, acked,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
-          pinOff, pinHlc, faults>>
+          pinOff, pinHlc, hadSnap, faults>>
 
 Pos == -1..(MaxOff - 1)
 
@@ -125,6 +135,7 @@ TypeOK ==
    /\ stale \in [Leaves -> BOOLEAN]
    /\ pinOff \in [Leaves -> Pos]
    /\ pinHlc \in [Leaves -> {"zero", "clock"}]
+   /\ hadSnap \in [Leaves -> BOOLEAN]
    /\ faults \in 0..MaxFaults
 
 (***************************************************************************)
@@ -189,6 +200,7 @@ Init ==
     \* (SeedDurableMaterialiserBlockPinAsync), before any write reaches it.
     /\ pinOff = [l \in Leaves |-> -1]
     /\ pinHlc = [l \in Leaves |-> "zero"]
+    /\ hadSnap = [l \in Leaves |-> FALSE]
     /\ faults = 0
 
 (***************************************************************************)
@@ -371,6 +383,11 @@ PublishPin(l) ==
     /\ up[l]
     /\ ~stale[l]
     /\ ClockLive(l) \/ (cache[l] = {} /\ stCp[l] >= 0)
+    \* Issue #4634: the record that the leaf holds snapshot coverage reaches the
+    \* leaf row before the pin that may license a trim behind that snapshot.
+    /\ hadSnap' = IF SnapshotLoss
+                  THEN [hadSnap EXCEPT ![l] = @ \/ cov[l] # NoSnap]
+                  ELSE hadSnap
     /\ LET safe == IF stCp[l] < cov[l] THEN stCp[l] ELSE cov[l]
        IN IF ~ClockLive(l)
           THEN MergePin(l, "zero", NeverWrittenRelease(l))
@@ -431,9 +448,18 @@ LeafStop(l) ==
 (***************************************************************************)
 FallsOff(cp) == cp >= 0 /\ tail > cp + 1
 
+\* Issue #4634: a leaf whose snapshot existed and is now gone fails closed
+\* (ActivateLoadFail) instead of starting cold, whatever the persisted
+\* checkpoint and whatever the WAL's tail reads. The tail is not enough: the pin
+\* store keeps the trim entitlement the vanished snapshot licensed and cannot
+\* lower it, so a cold rebuild that starts while the tail is still 0 can have
+\* its prefix trimmed under it before it reads it.
+SnapshotVanished(l) == snapCov[l] = NoSnap /\ hadSnap[l]
+
 Activate(l) ==
     /\ ~up[l]
     /\ ~stale[l]
+    /\ ~SnapshotVanished(l)
     /\ IF snapCov[l] # NoSnap
        THEN /\ cache' = [cache EXCEPT ![l] = snapRows[l]]
             /\ rp' = [rp EXCEPT ![l] = snapCov[l]]
@@ -476,8 +502,25 @@ Activate(l) ==
 ActivateLoadFail(l) ==
     /\ ~up[l]
     /\ ~stale[l]
-    /\ snapCov[l] # NoSnap
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
     /\ UNCHANGED vars
+
+(***************************************************************************)
+(* SnapshotVanish(l): the environment destroys a leaf's durable snapshot   *)
+(* (storage loss, an operator deletion; issue #4634). It costs a fault and *)
+(* is enabled only under SnapshotLoss. The leaf's live coverage and its    *)
+(* published pin are untouched: nothing tells the leaf.                    *)
+(***************************************************************************)
+SnapshotVanish(l) ==
+    /\ SnapshotLoss
+    /\ snapCov[l] # NoSnap
+    /\ faults < MaxFaults
+    /\ snapCov' = [snapCov EXCEPT ![l] = NoSnap]
+    /\ snapRows' = [snapRows EXCEPT ![l] = {}]
+    /\ faults' = faults + 1
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ UNCHANGED pinVars
 
 (***************************************************************************)
 (* ReplayFaultRearm(l): an active leaf's cold rebuild faults part-way (a   *)
@@ -509,6 +552,7 @@ Next ==
     \/ \E l \in Leaves : Activate(l)
     \/ \E l \in Leaves : ActivateLoadFail(l)
     \/ \E l \in Leaves : ReplayFaultRearm(l)
+    \/ \E l \in Leaves : SnapshotVanish(l)
 
 (***************************************************************************)
 (* Fairness: the protocol's own steps are weakly fair - appends complete,  *)

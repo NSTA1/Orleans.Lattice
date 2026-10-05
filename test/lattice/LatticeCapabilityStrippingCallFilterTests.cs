@@ -40,6 +40,7 @@ public sealed class LatticeCapabilityStrippingCallFilterTests
         LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
         LatticeEventConstants.NewLeafIntentRequestContextKey,
+        LatticeEventConstants.CrdtJoinMergeRequestContextKey,
     ];
 
     [TearDown]

@@ -397,7 +397,18 @@ internal sealed partial class ShardRootGrain
         ThrowIfDeleted();
         ThrowIfRetired();
         await AdmitPurgedCopyForBulkWriteAsync();
-        if (state.State.LastCompletedBulkOperationId == operationId) return;
+
+        // Issue #4618: an online resize mirrors the rows a bulk append stored
+        // here to its destination. A retry of an append that already completed
+        // (or whose graft it resumes) mirrors by reading its rows back, so a
+        // crash between the apply and its mirror is covered by the caller's
+        // same-operation retry.
+        if (state.State.LastCompletedBulkOperationId == operationId)
+        {
+            await MirrorAppliedRowsAsync(DistinctKeys(sortedEntries), joinCrdt: false);
+            return;
+        }
+
         RecordWrite(sortedEntries.Count);
 
         if (state.State.PendingBulkGraft is not null)
@@ -405,12 +416,18 @@ internal sealed partial class ShardRootGrain
             if (state.State.PendingBulkGraft.OperationId == operationId)
             {
                 await CompleteBulkGraftAsync();
+                await MirrorAppliedRowsAsync(DistinctKeys(sortedEntries), joinCrdt: false);
                 return;
             }
             await CompleteBulkGraftAsync();
         }
 
         if (sortedEntries.Count == 0) return;
+
+        // The stamped rows, kept only while a resize mirror is active.
+        var mirrored = TryGetShadowTarget() is null
+            ? null
+            : new Dictionary<string, LwwValue<byte[]>>(sortedEntries.Count, StringComparer.Ordinal);
 
         // A bulk load writes data, so its seed may register a tree that has no
         // row (issue #4219); see PrepareForWriteAsync.
@@ -444,12 +461,14 @@ internal sealed partial class ShardRootGrain
                 batch[sortedEntries[idx].Key] = LwwValue<byte[]>.Create(sortedEntries[idx].Value, clock);
             }
             await rightmostLeaf.MergeEntriesAsync(batch);
+            CollectMirroredRows(mirrored, batch);
         }
 
         if (idx >= sortedEntries.Count)
         {
             state.State.LastCompletedBulkOperationId = operationId;
             await WriteShardStateAsync();
+            await MirrorBulkAppendAsync(mirrored, sortedEntries);
             return;
         }
 
@@ -481,6 +500,7 @@ internal sealed partial class ShardRootGrain
                 await newLeaf.SetShardIndexAsync(MyShardIndex);
             }
             await newLeaf.MergeEntriesAsync(batch);
+            CollectMirroredRows(mirrored, batch);
 
             if (prevNewLeafId is not null)
             {
@@ -503,6 +523,36 @@ internal sealed partial class ShardRootGrain
         await WriteShardStateAsync();
 
         await CompleteBulkGraftAsync();
+        await MirrorBulkAppendAsync(mirrored, sortedEntries);
+    }
+
+    private static void CollectMirroredRows(
+        Dictionary<string, LwwValue<byte[]>>? mirrored,
+        Dictionary<string, LwwValue<byte[]>> batch)
+    {
+        if (mirrored is null)
+            return;
+
+        foreach (var (key, row) in batch)
+            mirrored[key] = row;
+    }
+
+    /// <summary>
+    /// Mirrors a bulk append's stamped rows to an online resize's destination
+    /// (issue #4618). Rows are mirrored only once the append has completed here,
+    /// so the destination never holds a row this copy has not stored. A mirror
+    /// that became active while the append ran reads the rows back.
+    /// </summary>
+    private Task MirrorBulkAppendAsync(
+        Dictionary<string, LwwValue<byte[]>>? mirrored,
+        List<KeyValuePair<string, byte[]>> sortedEntries)
+    {
+        if (mirrored is not null)
+            return MirrorRowsAsync(mirrored, joinCrdt: false);
+
+        return TryGetShadowTarget() is null
+            ? Task.CompletedTask
+            : MirrorAppliedRowsAsync(DistinctKeys(sortedEntries), joinCrdt: false);
     }
 
     /// <summary>

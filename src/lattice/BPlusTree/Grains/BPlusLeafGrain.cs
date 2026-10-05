@@ -4338,7 +4338,10 @@ internal sealed partial class BPlusLeafGrain(
                 ? ArrayPool<WalRecord>.Shared.Rent(entries.Count)
                 : new WalRecord[entries.Count];
         }
-        if (isCrossShardMigration && entries.Count > 0)
+        // A split's migration import joins CRDT rows (issue #4613), and so does a
+        // resize or snapshot mirror or drain that opts in (issue #4618).
+        var joinCrdt = isCrossShardMigration || LatticeCrdtJoinMergeContext.Current;
+        if (joinCrdt && entries.Count > 0)
             accepted = new List<KeyValuePair<string, LwwValue<byte[]>>>(entries.Count);
 
         try
@@ -4376,7 +4379,7 @@ internal sealed partial class BPlusLeafGrain(
             // (terminal-FIRST on a fresh leaf, migration-SECOND with
             // an inverted HLC).
             LwwValue<byte[]> toStore;
-            if (isCrossShardMigration
+            if (joinCrdt
                 && Cache.TryGetRow(key, out var existing)
                 && TryJoinMigratedCrdtRow(key, existing, incoming, out var joined, out var joinedMode))
             {
@@ -4470,9 +4473,9 @@ internal sealed partial class BPlusLeafGrain(
         // on the non-migration path every entry survives unchanged and
         // we iterate `entries` directly to avoid the per-batch work
         // list allocation.
-        if (isCrossShardMigration)
+        if (accepted is not null)
         {
-            if (accepted is { Count: > 0 })
+            if (accepted.Count > 0)
             {
                 for (var i = 0; i < accepted.Count; i++)
                 {

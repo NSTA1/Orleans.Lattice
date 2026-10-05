@@ -155,6 +155,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     private readonly ILatticeCompressionDictionaryProvider? _dictionaryProvider;
     private readonly ILatticeReplicationContext? _replicationContext;
     private readonly Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? _options;
+    private readonly IReplicationTopology? _topology;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -183,7 +184,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <paramref name="replicationContext"/> supplies the local per-tree
     /// replication enrollment used by the peer-read gate on the probe,
     /// content-manifest, and high-water-mark RPCs; when it is absent that gate
-    /// has no enrollment signal and fails closed.
+    /// has no enrollment signal and fails closed. The optional
+    /// <paramref name="topology"/> names the configured peers whose shipped
+    /// applied low watermark this receiver accepts (issue #4586); when it is
+    /// absent none is accepted.
     /// </summary>
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethod method,
@@ -195,7 +199,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ILogger<LatticeReplicationGrpcService> logger,
         ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
         ILatticeReplicationContext? replicationContext = null,
-        Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null)
+        Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>? options = null,
+        IReplicationTopology? topology = null)
     {
         ArgumentNullException.ThrowIfNull(method);
         ArgumentNullException.ThrowIfNull(applier);
@@ -214,6 +219,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         _dictionaryProvider = dictionaryProvider;
         _replicationContext = replicationContext;
         _options = options;
+        _topology = topology;
     }
 
     /// <summary>
@@ -354,6 +360,53 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             + "a peer may only act on its own origin."));
     }
 
+    /// <summary>
+    /// Records the applied low watermark the authenticated sender shipped as
+    /// the <see cref="LatticeReplicationGrpcMetadataNames.SourceFrontierHeader"/>
+    /// call header on its tree frontier, and returns the frontier epoch to
+    /// acknowledge (issue #4586 part 2b). Called only after the caller's origin
+    /// is authenticated. The header is wire input and fails closed: it is read
+    /// only for a tree enrolled here and an origin that is a configured peer,
+    /// parsed strictly, and otherwise ignored, so the batch vouches for nothing.
+    /// A tree not enrolled here reports nothing and creates no frontier. A
+    /// failure to reach the frontier reports nothing (<see langword="null"/>),
+    /// which a sender never reads as a lineage change.
+    /// </summary>
+    private async Task<Guid?> ObserveSourceFrontierAsync(ServerCallContext context, string treeName, string originClusterId)
+    {
+        if (_replicationContext?.ResolveMergeMode(treeName) is null)
+        {
+            return null;
+        }
+
+        ReplicationSourceFrontier? shipped = null;
+        if (_topology?.CurrentPeers.Contains(originClusterId) == true
+            && ReplicationSourceFrontier.TryParse(
+                GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceFrontierHeader),
+                out var parsed))
+        {
+            shipped = parsed;
+        }
+
+        try
+        {
+            return await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+                .ObserveAsync(originClusterId, shipped, context.CancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Recording the applied low watermark of origin {Origin} for tree {Tree} failed; the ack reports no frontier epoch.",
+                originClusterId, treeName);
+            return null;
+        }
+    }
+
     /// <inheritdoc />
     public override async Task<ReplicationAckBox> Push(ReplicationBatchEnvelopeBox requestBox, ServerCallContext context)
     {
@@ -400,6 +453,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 _logger).ConfigureAwait(false);
         }
 
+        // Record the sender's applied low watermark, if it shipped one, and learn
+        // the frontier epoch every ack below reports (#4586 part 2b).
+        var receiverLineage = await ObserveSourceFrontierAsync(
+            context, request.TreeName, request.OriginClusterId).ConfigureAwait(false);
+
         var entries = request.Entries;
 
         // A saga record from a sender this receiver is re-seeding is a straggler
@@ -418,6 +476,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     Accepted = false,
                     HighestAppliedHlc = HybridLogicalClock.Zero,
                     BootstrapEpoch = bootstrapEpoch,
+                    ReceiverLineage = receiverLineage,
                     SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
                 },
             };
@@ -573,6 +632,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     BlockedAtHlc = blockedAtHlc,
                     PauseForMs = ReceiveFenceDeferPauseMs,
                     BootstrapEpoch = bootstrapEpoch,
+                    ReceiverLineage = receiverLineage,
                     SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
                     AdvertisedDictionaryIds = advertisedDictionaryIds,
                     AdvertisedDictionaries = CompressionDictionaryAdvertisement.Build(_dictionaryProvider),
@@ -590,6 +650,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 SuggestedBatchSize = hint.SuggestedBatchSize,
                 PauseForMs = hint.PauseForMs,
                 BootstrapEpoch = bootstrapEpoch,
+                ReceiverLineage = receiverLineage,
                 // Advertise the maximum framing wire version this
                 // receiver can decode so a sender that has opted into
                 // wire-version negotiation can observe this peer's

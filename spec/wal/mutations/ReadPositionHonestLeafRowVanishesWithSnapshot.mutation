@@ -1,0 +1,37 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4654 (open): the leaf row
+# is lost with the snapshot, so the record of held snapshot coverage goes too,
+# and the leaf's cold start replays a WAL the GC trimmed under the snapshot.
+# This perturbs the environment's fault, not the protocol; it stands until a
+# durable record outside the leaf row survives the loss.
+MODULE: ReadPositionHonestLeafRowVanishesWithSnapshot
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the leaf row's record vanishes with the snapshot, so the cold start replays a trimmed WAL
+PERTURBS: SnapshotVanish
+
+--- FIND
+    /\ faults' = faults + 1
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ UNCHANGED pinVars
+--- REPLACE
+\* MUTATION: the leaf row's record is lost too.
+    /\ faults' = faults + 1
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
+    /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
+    /\ UNCHANGED <<pinOff, pinHlc>>
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the snapshot vanishes and its leaf stops: two faults.
+MaxFaults == 2
+--- END

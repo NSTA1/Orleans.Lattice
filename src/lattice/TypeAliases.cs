@@ -842,6 +842,12 @@ internal static class TypeAliases
     /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
     internal const string WalOffsetConsumerRegistryState = "ol.wcs";
 
+    /// <summary>
+    /// Alias for the WAL trim watermark capability marker grain interface, which a
+    /// silo hosts when its WAL providers persist the trim watermark (issue #4621).
+    /// </summary>
+    internal const string IWalTrimWatermarkSupportGrain = "ol.wtw";
+
     // Producer clock floor (issue #4586). A replicated tree's WAL partition
     // refuses a fresh local write stamped below its durable, published floor,
     // so a shipper's low watermark is downward-closed.

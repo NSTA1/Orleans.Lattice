@@ -215,8 +215,11 @@ internal sealed partial class ReplicationShipperGrain
 
         for (var p = 0; p < Math.Max(partitions, horizon.Length); p++)
         {
+            // A partition never consumed has no cursor and sits at offset 0, so
+            // an empty partition (horizon 0) never holds the filter open.
             var bound = p < horizon.Length ? horizon[p] : 0L;
-            if (!state.State.PartitionCursors.TryGetValue(p, out var cursor) || cursor < bound)
+            var cursor = state.State.PartitionCursors.TryGetValue(p, out var consumed) ? consumed : 0L;
+            if (cursor < bound)
             {
                 return;
             }
@@ -280,6 +283,7 @@ internal sealed partial class ReplicationShipperGrain
         }
 
         _replayVerdicts[record.TransactionId] = true;
+        ForgetFrontierPrepare(record.TransactionId);
         var horizon = state.State.ReplayFilterHorizon!;
         var next = await ReadNextSequencesAsync(Math.Max(partitions, horizon.Length));
         for (var p = 0; p < next.Length; p++)

@@ -127,6 +127,11 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// asserting it could re-create a leaf whose row was lost as an empty one. Only
     /// the paths that create leaves may assert it.
     /// </para>
+    /// <para>
+    /// The CRDT-join merge marker is included because a leaf honours it to join
+    /// an incoming CRDT row into its own instead of resolving last-writer-wins
+    /// (issue #4618); only the resize and snapshot mirror and drain may assert it.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -145,6 +150,7 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.PreparedRouteRequestContextKey,
         LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
         LatticeEventConstants.NewLeafIntentRequestContextKey,
+        LatticeEventConstants.CrdtJoinMergeRequestContextKey,
     ];
 
     /// <inheritdoc />

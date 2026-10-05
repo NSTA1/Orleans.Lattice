@@ -319,6 +319,16 @@ public static class LatticeEventConstants
     internal const string OriginalPrepareStampsRequestContextKey = "ol.prep.stamp";
 
     /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key that marks a whole-row
+    /// merge whose CRDT rows the destination leaf joins into its own rather than
+    /// resolving last-writer-wins: the online-resize and online-snapshot mirror
+    /// of a source's applied rows, and that copy's drain (issue #4618). Internal
+    /// - set through <see cref="LatticeCrdtJoinMergeContext"/>, and stripped
+    /// from external clients.
+    /// </summary>
+    internal const string CrdtJoinMergeRequestContextKey = "ol.crdt.join";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to communicate the WAL
     /// offset of the mutation currently being driven through
     /// <c>ILeafProjection.Apply</c>. The replay coordinator stamps the

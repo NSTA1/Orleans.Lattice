@@ -968,6 +968,7 @@ internal sealed partial class ReplicationShipperGrain(
             // applied before a later fold would be raised past the retained
             // saga records it exists to re-ship (#4534).
             await MaybeClearReseedAsync();
+            await RefreshSourceFrontierAsync(options);
         }
     }
 
@@ -1245,6 +1246,7 @@ internal sealed partial class ReplicationShipperGrain(
         CancellationToken cancellationToken)
     {
         var sourceHlc = _drainBuffer[^1].Timestamp;
+        var sagaDelta = CaptureSagaFrontierDelta();
 
         // Content-hash payload elision (opt-in, default off). When enabled
         // and the peer can perform the exchange, advertise a per-entry
@@ -1264,6 +1266,7 @@ internal sealed partial class ReplicationShipperGrain(
             // of them and advanced its HWM via the exchange). Advance the
             // sender cursor past the drained range and finish the tick
             // without shipping an empty batch.
+            ApplySagaFrontierDelta(sagaDelta);
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
             state.State.ConsecutiveFailures = 0;
@@ -1342,6 +1345,7 @@ internal sealed partial class ReplicationShipperGrain(
             // entries can never be shipped in their current form. Quarantine the
             // batch and take the peer off the log, durably, before the cursor
             // moves past it, so a re-seed delivers its writes (#4614).
+            await NoteSkippedBatchAsync();
             await QuarantineUnencodableBatchAsync(_partitionMaxReadSeq, _partitionAdvanced, _drainBuffer.Count, ex);
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
@@ -1359,6 +1363,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                SourceFrontier = _currentFrontier,
                 // Payload is empty on the framing path - the
                 // transport consumes EncodedEnvelope. Bytes-only
                 // transports that need a serialised form are not
@@ -1403,6 +1408,7 @@ internal sealed partial class ReplicationShipperGrain(
         // which the producer must not trim.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
@@ -1429,6 +1435,8 @@ internal sealed partial class ReplicationShipperGrain(
             advancedTo = sourceHlc;
         }
 
+        ApplySagaFrontierDelta(sagaDelta);
+        NoteSourceFrontierDelivered(_currentFrontier);
         RetireTerminalHolds(_mergeBatchId);
         await AdvanceCursorAsync(advancedTo, options, cancellationToken);
         // Successful round-trip resets the backoff counter.
@@ -1890,7 +1898,8 @@ internal sealed partial class ReplicationShipperGrain(
         bool HitBatchCap,
         long LaunchTimestamp,
         bool Elided = false,
-        long BatchId = 0);
+        long BatchId = 0,
+        SagaFrontierDelta? Sagas = null);
 
     /// <summary>
     /// Bounded sender-side pipelining path. Maintains a window of up to
@@ -2018,6 +2027,7 @@ internal sealed partial class ReplicationShipperGrain(
                 var entryCount = _drainBuffer.Count;
                 var hitBatchCap = entryCount >= maxPerBatch;
                 var sourceHlc = _drainBuffer[^1].Timestamp;
+                var sagaDelta = CaptureSagaFrontierDelta();
                 var maxReadSnapshot = SnapshotPartitionMaxReadSeq();
                 var advancedSnapshot = SnapshotPartitionAdvanced();
 
@@ -2049,7 +2059,7 @@ internal sealed partial class ReplicationShipperGrain(
                     });
                     inFlight.Enqueue(new InFlightShipBatch(
                         elidedAck, sourceHlc, maxReadSnapshot, advancedSnapshot,
-                        entryCount, 0L, hitBatchCap, Stopwatch.GetTimestamp(), Elided: true, BatchId: batchId));
+                        entryCount, 0L, hitBatchCap, Stopwatch.GetTimestamp(), Elided: true, BatchId: batchId, Sagas: sagaDelta));
                     shippedAny = true;
                     _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
@@ -2110,6 +2120,7 @@ internal sealed partial class ReplicationShipperGrain(
                         TreeName = _treeName,
                         OriginClusterId = options.ClusterId,
                         ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                        SourceFrontier = _currentFrontier,
                         Payload = ReadOnlyMemory<byte>.Empty,
                         Envelope = null,
                         EncodedEnvelope = encodedEnvelope,
@@ -2130,7 +2141,7 @@ internal sealed partial class ReplicationShipperGrain(
 
                 inFlight.Enqueue(new InFlightShipBatch(
                     sendTask, sourceHlc, maxReadSnapshot, advancedSnapshot, entryCount, byteCount, hitBatchCap, launchTimestamp,
-                    BatchId: batchId));
+                    BatchId: batchId, Sagas: sagaDelta));
                 shippedAny = true;
                 _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
@@ -2173,6 +2184,7 @@ internal sealed partial class ReplicationShipperGrain(
             // a re-seed delivers its writes and the stream never stalls (#4614).
             if (!failed && encodeFailure is not null)
             {
+                await NoteSkippedBatchAsync();
                 await QuarantineUnencodableBatchAsync(failedMaxReadSeq, failedAdvanced, _drainBuffer.Count, encodeFailure);
                 RetireTerminalHolds(failedBatchId);
                 await AdvanceCursorPipelinedAsync(
@@ -2258,6 +2270,7 @@ internal sealed partial class ReplicationShipperGrain(
             // The real ManifestExchanges / ShipElidedPayloads counters were
             // already emitted inside TryElideViaManifestExchangeAsync, so the
             // elision is still observable.
+            ApplySagaFrontierDelta(batch.Sagas);
             RetireTerminalHolds(batch.BatchId);
             await AdvanceCursorPipelinedAsync(
                 batch.SourceHlc, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
@@ -2286,6 +2299,7 @@ internal sealed partial class ReplicationShipperGrain(
         // leg, ahead of the pipelined cursor advance below.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
@@ -2300,6 +2314,8 @@ internal sealed partial class ReplicationShipperGrain(
             advancedTo = batch.SourceHlc;
         }
 
+        ApplySagaFrontierDelta(batch.Sagas);
+        NoteSourceFrontierDelivered(_currentFrontier);
         RetireTerminalHolds(batch.BatchId);
         await AdvanceCursorPipelinedAsync(
             advancedTo, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
@@ -3427,12 +3443,14 @@ internal sealed partial class ReplicationShipperGrain(
         var page = await grain
             .ReadShippingAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
             ;
+        NoteClockFloor(partition, page.ClockFloor, page.ClockFloorOffset);
         if (page.Entries.Count == 0)
         {
             _partitionPages[partition] = null;
             return;
         }
-        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition]
+            && await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken))
         {
             // A trim removed records this shipper never delivered (#4534).
             await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
@@ -3442,6 +3460,20 @@ internal sealed partial class ReplicationShipperGrain(
         _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
     }
+
+    /// <summary>
+    /// Whether a shipping read that jumped past <paramref name="requested"/> did
+    /// so because a trim removed it, rather than because the offset is a hole that
+    /// was never written (issue #4621). Offsets are not dense: a flush abandoned at
+    /// its deadline that never lands leaves a permanent hole the allocator has
+    /// already moved past. The shard's trusted trim watermark separates the two;
+    /// without one (a provider that keeps none, or a silo in the cluster that
+    /// predates it) every jump is treated as a trim, which re-seeds the peer
+    /// needlessly at worst and never skips a trim silently.
+    /// </summary>
+    private static async Task<bool> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
+        => await grain.GetTrimWatermarkAsync(cancellationToken) is not { } trimmedThrough
+            || trimmedThrough >= requested;
 
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the
@@ -3502,7 +3534,7 @@ internal sealed partial class ReplicationShipperGrain(
             _lastSuccessfulContactUtc = now;
             return;
         }
-        if (now - _lastSuccessfulContactUtc < options.LivenessProbeInterval)
+        if (now - _lastSuccessfulContactUtc < options.LivenessProbeInterval && !SourceFrontierHeartbeatDue())
         {
             return;
         }
@@ -3557,6 +3589,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                SourceFrontier = _currentFrontier,
                 Payload = ReadOnlyMemory<byte>.Empty,
                 Envelope = null,
                 EncodedEnvelope = encodedEnvelope,
@@ -3577,12 +3610,15 @@ internal sealed partial class ReplicationShipperGrain(
         // shipped value for as long as the link stays quiet.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return;
         }
+
+        NoteSourceFrontierDelivered(_currentFrontier);
 
         // Successful probe: stamp last-contact and refresh the
         // outbound peer-stats success/backlog gauges. Receiver-side
@@ -4298,6 +4334,7 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
         ResetTerminalHoldsForNewSource(followsSagaPause);
+        DiscardClockFloors();
         // Quarantined sequences belong to the retired log (#4614).
         ClearEncodeQuarantine();
         // The new log is shipped from its start: a replay with no snapshot (#4533).

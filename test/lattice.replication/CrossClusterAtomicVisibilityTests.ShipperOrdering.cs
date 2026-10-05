@@ -85,7 +85,8 @@ public partial class CrossClusterAtomicVisibilityTests
         ReplicationPeerStats? peerStats = null,
         Action<IGrainFactory>? configureFactory = null,
         FakePersistentState<ReplicationShipperState>? state = null,
-        Action<LatticeReplicationOptions>? configureOptions = null)
+        Action<LatticeReplicationOptions>? configureOptions = null,
+        ILatticeMergeModeResolver? modeResolver = null)
     {
         var options = new LatticeReplicationOptions
         {
@@ -114,7 +115,7 @@ public partial class CrossClusterAtomicVisibilityTests
             context, Substitute.For<IReminderRegistry>(), NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, Substitute.For<IReplicationBatchEncoder>(), walEncoder,
             Substitute.For<IWalCursorRegistry>(), factory, state ?? new FakePersistentState<ReplicationShipperState>(),
-            peerStats ?? new ReplicationPeerStats(), Substitute.For<ILatticeMergeModeResolver>(),
+            peerStats ?? new ReplicationPeerStats(), modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         shipper.InitializeForTesting(tree, TwoSiteClusterFixture.SiteBClusterId);
         return shipper;

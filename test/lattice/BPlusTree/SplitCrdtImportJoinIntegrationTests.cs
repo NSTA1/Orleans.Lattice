@@ -86,14 +86,21 @@ public sealed class SplitCrdtImportJoinIntegrationTests
         byte[] sagaState,
         byte[] sagaDelta,
         byte[] nonAtomicDelta,
-        bool terminalFirst)
+        bool terminalFirst,
+        bool destinationAhead = false)
     {
         var lattice = _cluster.Client.GetGrain<ILattice>(tree);
         await lattice.ApplyCrdtDeltaAsync("seed", mode, nonAtomicDelta);
         var txid = Guid.NewGuid();
         var apply = _cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+
+        // With the destination ahead, the saga's stamps sit an hour past the
+        // source's clock, so the destination's terminal fold strictly dominates
+        // every row the source stamps for the key.
+        var prepareStamp = destinationAhead ? Hlc(DateTimeOffset.UtcNow.AddHours(1).UtcTicks) : Hlc(5_000);
+        var terminalStamp = Hlc(prepareStamp.WallClockTicks + 100);
         await apply.ApplyPreparedSetAsync(
-            key, sagaState, Hlc(5_000), Origin, sourceVectorClock: null,
+            key, sagaState, prepareStamp, Origin, sourceVectorClock: null,
             expiresAtTicks: 0, txid, atomicBatchSize: 1, atomicBatchIndex: 0,
             delta: sagaDelta, mode: mode);
 
@@ -104,7 +111,7 @@ public sealed class SplitCrdtImportJoinIntegrationTests
             await split.SplitAsync(SourceShard);
 
             async Task TerminalAsync() =>
-                await apply.ApplyTxTerminalAsync(txid, committed: true, SourceShard, Hlc(5_100), Origin);
+                await apply.ApplyTxTerminalAsync(txid, committed: true, SourceShard, terminalStamp, Origin);
             async Task NonAtomicAsync() =>
                 await lattice.ApplyCrdtDeltaAsync(key, mode, nonAtomicDelta);
 
@@ -162,6 +169,14 @@ public sealed class SplitCrdtImportJoinIntegrationTests
     [TestCase(true, TestName = "An_OR_set_keeps_the_saga_and_the_non_atomic_add_across_a_split_terminal_first")]
     [TestCase(false, TestName = "An_OR_set_keeps_the_saga_and_the_non_atomic_add_across_a_split_add_first")]
     public async Task An_OR_set_keeps_the_saga_and_the_non_atomic_add_across_a_split(bool terminalFirst)
+        => await AssertOrSetKeepsBothAddsAsync(terminalFirst, destinationAhead: false);
+
+    [TestCase(true, TestName = "An_OR_set_keeps_both_adds_across_a_split_with_the_destination_fold_ahead_terminal_first")]
+    [TestCase(false, TestName = "An_OR_set_keeps_both_adds_across_a_split_with_the_destination_fold_ahead_add_first")]
+    public async Task An_OR_set_keeps_both_adds_across_a_split_with_the_destination_fold_ahead(bool terminalFirst)
+        => await AssertOrSetKeepsBothAddsAsync(terminalFirst, destinationAhead: true);
+
+    private async Task AssertOrSetKeepsBothAddsAsync(bool terminalFirst, bool destinationAhead)
     {
         var tree = $"split-orset-{Guid.NewGuid():N}";
         var key = MovedKey("os");
@@ -179,7 +194,8 @@ public sealed class SplitCrdtImportJoinIntegrationTests
             JsonLatticeSerializer<OrSet>.Default.Serialize(sagaState),
             JsonLatticeSerializer<OrSetDelta>.Default.Serialize(saga),
             JsonLatticeSerializer<OrSetDelta>.Default.Serialize(Add("y", "B")),
-            terminalFirst);
+            terminalFirst,
+            destinationAhead);
 
         var set = JsonLatticeSerializer<OrSet>.Default.Deserialize((await lattice.GetAsync(key))!);
         Assert.Multiple(() =>
