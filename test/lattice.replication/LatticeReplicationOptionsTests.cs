@@ -331,6 +331,10 @@ public class LatticeReplicationOptionsTests
         Assert.That(LatticeReplicationOptions.DefaultMaxApplyRetries, Is.EqualTo(5));
 
     [Test]
+    public void DefaultSagaDeferralTimeout_is_fifteen_minutes() =>
+        Assert.That(LatticeReplicationOptions.DefaultSagaDeferralTimeout, Is.EqualTo(TimeSpan.FromMinutes(15)));
+
+    [Test]
     public void DefaultDeadLetterQueueCapacity_is_one_thousand() =>
         Assert.That(LatticeReplicationOptions.DefaultDeadLetterQueueCapacity, Is.EqualTo(1000));
 
@@ -339,6 +343,13 @@ public class LatticeReplicationOptionsTests
     {
         var opts = new LatticeReplicationOptions();
         Assert.That(opts.MaxApplyRetries, Is.EqualTo(LatticeReplicationOptions.DefaultMaxApplyRetries));
+    }
+
+    [Test]
+    public void New_instance_has_default_saga_deferral_timeout()
+    {
+        var opts = new LatticeReplicationOptions();
+        Assert.That(opts.SagaDeferralTimeout, Is.EqualTo(LatticeReplicationOptions.DefaultSagaDeferralTimeout));
     }
 
     [Test]
@@ -353,6 +364,13 @@ public class LatticeReplicationOptionsTests
     {
         var opts = new LatticeReplicationOptions { MaxApplyRetries = 7 };
         Assert.That(opts.MaxApplyRetries, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void SagaDeferralTimeout_is_settable()
+    {
+        var opts = new LatticeReplicationOptions { SagaDeferralTimeout = TimeSpan.FromSeconds(30) };
+        Assert.That(opts.SagaDeferralTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
     }
 
     [Test]

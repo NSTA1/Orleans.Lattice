@@ -408,6 +408,8 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.wal.recovery.torn_tail_records` | counter (`{record}`) | `tree`, `shard`, `tenant` | WAL records discarded by activation-time recovery |
 | `orleans.lattice.replication.dead_letter.enqueued` | counter (`{entry}`) | `tree`, `reason`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.dead_letter.removed` | counter (`{entry}`) | `tree`, `reason`, `tenant` | Dead-letter queue churn |
+| `orleans.lattice.replication.apply.saga_deferred` | counter (`{entry}`) | `tree`, `origin`, `tenant` | Dead-letter queue churn |
+| `orleans.lattice.replication.apply.saga_poisoned` | counter (`{saga}`) | `tree`, `origin`, `outcome`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.shipper.saga_poisoned` | counter (`{saga}`) | `tree`, `peer`, `outcome`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter (`{entry}`) | `tree`, `origin`, `tenant` | Apply correctness violations (rate). Diagnostic, not a correctness alarm: source HLCs are stamped per leaf, so a new write to a different key routinely applies below the highest HLC already applied for its origin (issue #1060), and a non-zero rate is expected; the entry is still applied |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | counter (`{entry}`) | `tree`, `tenant` | Apply correctness violations (rate) |

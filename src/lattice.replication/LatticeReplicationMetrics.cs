@@ -208,7 +208,7 @@ public static class LatticeReplicationMetrics
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
     /// <see cref="ReasonModeMismatch"/>, <see cref="ReasonForeignTenant"/>,
     /// <see cref="ReasonTenantOffline"/>, <see cref="ReasonSuspendedTenant"/>,
-    /// and <see cref="ReasonUnknown"/>.
+    /// <see cref="ReasonPoisonedSaga"/>, and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
 
@@ -806,6 +806,41 @@ public static class LatticeReplicationMetrics
             description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
 
     /// <summary>
+    /// Counter of inbound saga records (a prepare, or a TxCommit / TxAbort
+    /// terminal) the receiver deferred instead of dead-lettering after
+    /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> failed applies
+    /// (#4591). A parked saga record would be acknowledged, letting the sender
+    /// release the saga's terminal and the receiver commit it torn, so the
+    /// record is deferred: the sender keeps and re-ships it, and the stream from
+    /// that origin for that tree waits until the failure clears. Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagOrigin"/>. A sustained rate is a
+    /// stalled link that needs the cause fixed or the tree re-bootstrapped; the
+    /// error log names the transaction.
+    /// </summary>
+    public static readonly Counter<long> SagaApplyDeferred =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.saga_deferred", unit: "{entry}",
+            description: "Inbound saga records deferred instead of dead-lettered after exhausting the apply retry budget, tagged by tree and origin.");
+
+    /// <summary>
+    /// Counter of sagas the receiver poisoned after a deferred prepare exceeded
+    /// <see cref="LatticeReplicationOptions.SagaDeferralTimeout"/> or after a
+    /// host-trusted operator requested poison through
+    /// <see cref="ILatticeReplicationDeadLetters.PoisonSagaAsync"/>. Tagged by
+    /// <see cref="TagTree"/>, <see cref="TagOrigin"/>, and
+    /// <see cref="TagOutcome"/>:
+    /// <see cref="OutcomeReceiverSagaPoisonedTimeout"/> when the timeout poison
+    /// was recorded, <see cref="OutcomeReceiverSagaPoisonedOperator"/> when the
+    /// operator poison was recorded,
+    /// <see cref="OutcomeReceiverSagaPoisonRefusedDecided"/> when the receiver's
+    /// transaction registry already carried a terminal decision, and
+    /// <see cref="OutcomeReceiverSagaPoisonRefusedFull"/> when the bounded
+    /// poison set was full and the caller kept deferring fail-closed.
+    /// </summary>
+    public static readonly Counter<long> ReceiverSagaPoisoned =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.saga_poisoned", unit: "{saga}",
+            description: "Receiver-side poisoned sagas, tagged by tree, origin and outcome (timeout/operator/refused_decided/refused_full).");
+
+    /// <summary>
     /// Counter of sagas the outbound shipper poisoned for a peer because a
     /// prepare of the saga was parked on the dead-letter queue instead of
     /// shipped (#4494). Tagged by <see cref="TagTree"/>, <see cref="TagPeer"/>
@@ -841,6 +876,34 @@ public static class LatticeReplicationMetrics
     /// shipped so the peer never commits the saga without the lost write.
     /// </summary>
     public const string ReasonPoisonedSaga = "poisoned_saga";
+
+    /// <summary>Canonical name of the <see cref="ReceiverSagaPoisoned"/> counter.</summary>
+    public const string ReceiverSagaPoisonedName = "orleans.lattice.replication.apply.saga_poisoned";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// timeout of a deferred prepare recorded receiver-side poison.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedTimeout = "timeout";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// host-trusted operator request recorded receiver-side poison.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedOperator = "operator";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// poison was refused because the receiver registry already recorded a
+    /// terminal decision for the transaction.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonRefusedDecided = "refused_decided";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// poison was refused because the bounded durable poison set is full.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonRefusedFull = "refused_full";
 
     // --- Per-peer observable gauges ----------------------------------------------
     //

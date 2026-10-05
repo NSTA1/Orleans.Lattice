@@ -877,6 +877,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
+    /// Drops every in-memory pending mutation for <paramref name="transactionId"/>
+    /// on this leaf without recording a transaction-registry decision and
+    /// without surfacing prepared values. Used by receiver re-seed settlement to
+    /// clear stale prepared buckets before a full export restages any still
+    /// in-flight saga rows from the origin.
+    /// </summary>
+    Task DiscardPendingTransactionAsync(Guid transactionId);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
     /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
     /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.

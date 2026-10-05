@@ -71,6 +71,7 @@ The core WAL - its partition grains, commit-log writer, and garbage collector - 
 | Option | Type | Default |
 |---|---|---|
 | [`MaxApplyRetries`](#maxapplyretries) | `int` | 5 |
+| [`SagaDeferralTimeout`](#sagadeferraltimeout) | `TimeSpan` | 15 minutes |
 | [`DeadLetterQueueCapacity`](#deadletterqueuecapacity) | `int` | 1000 |
 | [`CausalBufferMaxEntries`](#causalbuffermaxentries) | `int` | 1024 |
 | [`CausalBufferMaxBytes`](#causalbuffermaxbytes) | `long` | 16 MiB |
@@ -202,6 +203,10 @@ Maximum pending WAL batches per partition. Raising it increases pipeline depth a
 ### `MaxApplyRetries`
 
 Retry budget before a poison inbound entry is moved to the dead-letter queue. Raise only when failures are usually transient.
+
+### `SagaDeferralTimeout`
+
+Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks its saga records with `reason=poisoned_saga`, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
 
 ### `DeadLetterQueueCapacity`
 

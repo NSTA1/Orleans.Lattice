@@ -289,7 +289,7 @@
     {
       "id": 6,
       "title": "Dead-letter queue churn (ops/s)",
-      "description": "Dead-letter enqueue/removal rate. Only emits when permanent transport or apply failures occur. Flat-zero is the healthy steady state. saga poisoned counts sagas a shipper withholds from a peer because one of their prepares was dead-lettered (outcome=poisoned: the peer serves the saga as never written until it is re-bootstrapped; outcome=refused: the poison list is full and the shipper stalls rather than ship a torn saga). It is recorded only when that happens, so it carries no 'or vector(0)' zero-fill: an empty result is the healthy reading (issue #2520).",
+      "description": "Dead-letter enqueue/removal rate. Only emits when permanent transport or apply failures occur. Flat-zero is the healthy steady state. receiver saga poisoned counts deferred prepares that exceeded SagaDeferralTimeout or operator poison requests, plus refused_decided/refused_full failures. Each successful receiver poison parks later saga records and requires a full re-seed from that origin before the poison is retired. saga poisoned counts sagas a shipper withholds from a peer because one of their prepares was dead-lettered (outcome=poisoned: the peer serves the saga as never written until it is re-bootstrapped; outcome=refused: the poison list is full and the shipper stalls rather than ship a torn saga). saga record deferred counts saga prepares and terminals a receiver deferred instead of dead-lettering after exhausting its apply retry budget, so a saga is never served torn and the link waits until the failure clears (issue #4591). Conditionally-emitted saga series carry no 'or vector(0)' zero-fill: an empty result is the healthy reading (issue #2520).",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -322,6 +322,16 @@
           "refId": "P",
           "expr": "sum by (outcome) (rate(orleans_lattice_replication_shipper_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "saga poisoned {{outcome}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(orleans_lattice_replication_apply_saga_deferred_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "saga record deferred"
+        },
+        {
+          "refId": "S",
+          "expr": "sum by (outcome) (rate(orleans_lattice_replication_apply_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "receiver saga poisoned {{outcome}}"
         }
       ]
     },
