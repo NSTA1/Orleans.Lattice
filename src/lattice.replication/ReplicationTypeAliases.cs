@@ -303,7 +303,7 @@ public static class ReplicationTypeAliases
 
     // Receiver per-origin causal frontier (#4586): the origin's shipped low
     // watermark, and the writes held here without being applied.
-    internal const string IReplicationOriginFrontierGrain = "olr.ofg";
-    internal const string ReplicationOriginFrontierState = "olr.ofs";
+    internal const string IReplicationOriginFrontierGrain = "olr.og";
+    internal const string ReplicationOriginFrontierState = "olr.os";
 
 }
