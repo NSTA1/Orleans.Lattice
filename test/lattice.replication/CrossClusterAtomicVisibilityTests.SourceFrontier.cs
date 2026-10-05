@@ -416,7 +416,7 @@ public partial class CrossClusterAtomicVisibilityTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Shipped.Any(r => r.Key == "lost"), Is.False, "precondition: the batch failed to encode and was dead-lettered");
+            Assert.That(transport.Shipped.Any(r => r.Key == "lost"), Is.False, "precondition: the batch failed to encode and was quarantined");
             Assert.That(state.State.Frontier.SkipClamp, Is.EqualTo(skipped));
             Assert.That(transport.Latest?.TreeLowWatermark, Is.EqualTo(skipped),
                 "a write the cursor passed without delivering was never applied at the peer");

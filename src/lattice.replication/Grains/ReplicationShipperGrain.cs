@@ -1118,7 +1118,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
-            await ProbePoisonedSagaRetirementAsync(cancellationToken);
+            await DrainLegacyPoisonedSagasAsync();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1341,30 +1341,14 @@ internal sealed partial class ReplicationShipperGrain(
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            // Schema-shaped failure during framing-header construction:
-            // the entries can never be shipped in their current form.
-            // Park every entry in the offending batch on the per-tree
-            // DLQ tagged ReasonSchema and advance the cursor past the
-            // batch so the stream makes progress. Operators inspect /
-            // replay / discard via ILatticeReplicationDeadLetters.
-            Logger.LogWarning(ex,
-                "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
-                _drainBuffer.Count, LogContext, sourceHlc);
-            if (!await RouteBatchToDeadLetterAsync(ex, cancellationToken))
-            {
-                // Fail closed (#4494): the batch stays unparked and the cursor
-                // stays put; stop the tick so nothing after it is carved, and
-                // the next tick re-reads it.
-                ApplyBackoff(options, ex, "dead-letter-refused");
-                return true;
-            }
-
+            // Schema-shaped failure during framing-header construction: the
+            // entries can never be shipped in their current form. Quarantine the
+            // batch and take the peer off the log, durably, before the cursor
+            // moves past it, so a re-seed delivers its writes (#4614).
             await NoteSkippedBatchAsync();
+            await QuarantineUnencodableBatchAsync(_partitionMaxReadSeq, _partitionAdvanced, _drainBuffer.Count, ex);
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
-
-            // Persist the poison list with the cursor move now, not at the next
-            // write interval.
             await FlushCursorAsync(cancellationToken);
             return false;
         }
@@ -1953,7 +1937,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
-            await ProbePoisonedSagaRetirementAsync(cancellationToken);
+            await DrainLegacyPoisonedSagasAsync();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2116,7 +2100,7 @@ internal sealed partial class ReplicationShipperGrain(
                     // already-in-flight (lower-HLC) batches have acked
                     // in order, so the cursor never skips a hole. The
                     // failed batch's drain buffers are left intact for
-                    // RouteBatchToDeadLetterAsync below (no further
+                    // QuarantineUnencodableBatchAsync below (no further
                     // MergeOneBatchAsync runs after this break).
                     encodeFailure = ex;
                     failedMaxReadSeq = maxReadSnapshot;
@@ -2194,32 +2178,18 @@ internal sealed partial class ReplicationShipperGrain(
                 }
             }
 
-            // Handle a deferred schema-shaped encode failure now that
-            // every lower-HLC batch has acked: DLQ the offending batch
-            // and advance the cursor strictly past it so a poison batch
-            // never stalls the stream.
+            // Handle a deferred schema-shaped encode failure now that every
+            // lower-HLC batch has acked: quarantine the batch and take the peer
+            // off the log, durably, then advance the cursor strictly past it, so
+            // a re-seed delivers its writes and the stream never stalls (#4614).
             if (!failed && encodeFailure is not null)
             {
-                Logger.LogWarning(encodeFailure,
-                    "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
-                    _drainBuffer.Count, LogContext, failedSourceHlc);
-                if (await RouteBatchToDeadLetterAsync(encodeFailure, cancellationToken))
-                {
-                    await NoteSkippedBatchAsync();
-                    RetireTerminalHolds(failedBatchId);
-                    await AdvanceCursorPipelinedAsync(
-                        failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
-
-                    // Persist the poison list with the cursor move now, not at
-                    // the next write interval.
-                    await FlushCursorAsync(cancellationToken);
-                }
-                else
-                {
-                    // Fail closed (#4494): the batch stays unparked and the
-                    // cursor stays put; the next tick re-reads it.
-                    ApplyBackoff(options, encodeFailure, "dead-letter-refused");
-                }
+                await NoteSkippedBatchAsync();
+                await QuarantineUnencodableBatchAsync(failedMaxReadSeq, failedAdvanced, _drainBuffer.Count, encodeFailure);
+                RetireTerminalHolds(failedBatchId);
+                await AdvanceCursorPipelinedAsync(
+                    failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
+                await FlushCursorAsync(cancellationToken);
             }
         }
         finally
@@ -2618,9 +2588,6 @@ internal sealed partial class ReplicationShipperGrain(
         _holdsEnabled = TerminalHoldsRequired(options);
         if (_terminalHolds.Count > 0)
         {
-            // A held terminal whose saga was poisoned since it was held is parked,
-            // not released (#4494).
-            await ParkPoisonedTerminalHoldsAsync(cancellationToken);
             await EnsureTailBarriersAsync(cancellationToken);
             EmitReleasableTerminalHolds(maxPerBatch);
         }
@@ -2751,6 +2718,13 @@ internal sealed partial class ReplicationShipperGrain(
                 TallyPrepare(in winningRecord, minPartition, winningShipping.Sequence, options);
             }
 
+            // A record of a batch that could not be encoded is consumed without
+            // shipping: the re-seed export the failure asked for carries it (#4614).
+            if (IsEncodeQuarantined(minPartition, winningShipping.Sequence))
+            {
+                continue;
+            }
+
             if (ReplicationShipEligibility.IsBelowLegacyScalarCursor(
                     _legacyCursorMigrationPending,
                     isPreparedAtomicBatch,
@@ -2762,15 +2736,6 @@ internal sealed partial class ReplicationShipperGrain(
 
             if (!ShouldShip(winningRecord, options))
             {
-                continue;
-            }
-
-            // A later prepare or a terminal of a saga poisoned by a dead-lettered
-            // prepare is parked, never shipped: the peer must not commit the saga
-            // without the lost write (#4494).
-            if (IsPoisonedSagaRecord(in winningRecord))
-            {
-                await ParkPoisonedRecordAsync(winningRecord, minPartition, winningShipping.Sequence, cancellationToken);
                 continue;
             }
 
@@ -4175,71 +4140,6 @@ internal sealed partial class ReplicationShipperGrain(
         }
     }
 
-    /// <summary>
-    /// Routes every entry in the current drain buffer to the per-tree
-    /// dead-letter queue, tagged with
-    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>. Fails closed
-    /// (#4603): when any entry cannot be parked - the queue is full, or the
-    /// enqueue failed - it returns <see langword="false"/> so the caller does
-    /// not advance past the batch, and the next tick re-parks it (the enqueue
-    /// is idempotent, so entries already parked keep their one slot). Advancing
-    /// past an entry that is not parked would lose it for the peer for good.
-    /// A full queue marks the link stalled on the peer-status path until a
-    /// park succeeds.
-    /// <para>
-    /// The saga of every prepare in the batch is poisoned first (#4494), so its
-    /// terminals are parked rather than shipped. Returns <see langword="false"/>,
-    /// parking nothing, when the poison list cannot take the batch's sagas: the
-    /// caller must then not advance past the batch (fail closed).
-    /// </para>
-    /// </summary>
-    private async Task<bool> RouteBatchToDeadLetterAsync(Exception encodeFailure, CancellationToken cancellationToken)
-    {
-        var failureReason = encodeFailure.Message ?? "<no message>";
-        if (!TryPoisonDrainBufferSagas())
-        {
-            return false;
-        }
-
-        // Marked before parking, durably with the poison: a park the full queue
-        // refuses (#4603) is retried through the poison filter, not through here,
-        // so this is the one place the fresh poison is seen (#4620).
-        if (_reseedForPoisonPending)
-        {
-            await MarkReseedRequiredForPoisonAsync(cancellationToken);
-        }
-
-        var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
-        foreach (var entry in _drainBuffer)
-        {
-            try
-            {
-                await dlq.EnqueueAsync(
-                    entry,
-                    failureReason,
-                    retryCount: 0,
-                    LatticeReplicationMetrics.ReasonSchema,
-                    cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                if (ex is ReplicationDeadLetterQueueFullException)
-                {
-                    _peerStats.RecordDeadLetterFull(
-                        _treeName, _peerClusterId, ReplicationContactDirection.Outbound, _cursorFlushClock.GetUtcNow());
-                }
-
-                Logger.LogWarning(ex,
-                    "Failed to park entry on DLQ for {Context} (key={Key}, hlc={Hlc}); not advancing past the batch",
-                    LogContext, entry.Key, entry.Timestamp);
-                return false;
-            }
-        }
-
-        _peerStats.RecordDeadLetterFull(_treeName, _peerClusterId, ReplicationContactDirection.Outbound, since: null);
-        _pendingCursorWrites++;
-        return true;
-    }
 
     private void ParseGrainKey()
     {
@@ -4420,7 +4320,8 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.BoundPhysicalTreeId = physical;
         ResetTerminalHoldsForNewSource(followsSagaPause);
         DiscardClockFloors();
-        ResetPoisonedSagasForNewSource(followsSagaPause);
+        // Quarantined sequences belong to the retired log (#4614).
+        ClearEncodeQuarantine();
         // The new log is shipped from its start: a replay with no snapshot (#4533).
         await BeginReplayFilterAsync(partitions, carried: false);
         await state.WriteStateAsync();

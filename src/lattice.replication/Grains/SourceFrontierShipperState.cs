@@ -50,7 +50,7 @@ internal sealed class SourceFrontierShipperState
 
     /// <summary>
     /// The lowest stamp of a local record the cursor passed without delivering it
-    /// (a dead-lettered batch), or <see langword="null"/>. Cleared only by a
+    /// (a batch that could not be encoded), or <see langword="null"/>. Cleared only by a
     /// re-seed from an export after <see cref="SkipClampEpoch"/>, which carries it.
     /// </summary>
     [Id(6)]
