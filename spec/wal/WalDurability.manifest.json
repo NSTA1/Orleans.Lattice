@@ -1,17 +1,17 @@
 {
   "mutations": "mutations",
   "refinement": "Refinement.md",
-  "nonBehaviouralActions": [],
+  "nonBehaviouralActions": ["PurgeSettled"],
   "counts": {
     "invariants": 11,
     "properties": 4,
-    "actions": 22,
-    "mutations": 39,
-    "behaviourRows": 36,
+    "actions": 25,
+    "mutations": 42,
+    "behaviourRows": 38,
     "distinctStates": 111154
   },
   "variants": {
     "TwoFaults": { "distinctStates": 680122 },
-    "SnapshotLoss": { "distinctStates": 1365609 }
+    "SnapshotLoss": { "distinctStates": 3277793 }
   }
 }
