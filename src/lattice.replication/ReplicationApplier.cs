@@ -142,8 +142,8 @@ internal sealed partial class ReplicationApplier(
     /// rejects the duplicate-emit pair a structural rewrite (shard split /
     /// merge) generates when it shadow-forwards a user write into a
     /// different shard, and any other recent re-delivery, without a leaf
-    /// hop. There is no per-origin HLC drop threshold for point writes
-    /// (#1060, #4463), so a
+    /// hop. There is no per-origin HLC drop threshold for point writes but
+    /// the bootstrap drop floor (#1060, #4463, #4549), so a
     /// re-delivery evicted from the bounded cache under sustained churn falls
     /// through to the idempotent leaf-level last-writer-wins apply, which is
     /// a no-op for identical bytes.
@@ -499,9 +499,12 @@ internal sealed partial class ReplicationApplier(
                 ReplicationFloorAdmission.Stamp(admission.FloorEpoch);
             }
 
-            // There is NO per-origin HLC drop threshold for point writes -
-            // neither the incrementally-advanced diagonal nor a
-            // snapshot-pinned floor.
+            // Apart from the bootstrap drop floor above, there is NO per-origin
+            // HLC drop threshold for point writes - neither the
+            // incrementally-advanced diagonal nor a snapshot-pinned floor. The
+            // drop floor is sound where these are not because it is the
+            // source's per-origin applied low watermark, which is downward-
+            // closed (#4586), and is final only once its import closed stable.
             //
             // The source HLC is stamped per leaf (BPlusLeafGrain's own
             // clock) and WAL/replog partitions are keyed by

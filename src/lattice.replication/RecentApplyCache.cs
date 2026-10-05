@@ -23,7 +23,8 @@ namespace Orleans.Lattice.Replication;
 /// suppresses recent duplicate identity tuples before the apply grain hop; cache
 /// eviction under sustained churn falls through to the leaf-level per-key LWW merge,
 /// which makes an identical re-apply a no-op. There is no per-origin HLC drop
-/// threshold ahead of the cache (#1060, #4463).
+/// threshold ahead of the cache but the bootstrap drop floor (#1060, #4463,
+/// #4549).
 /// </para>
 /// <para>
 /// A reservation is <em>in flight</em> from <see cref="TryAdd(WalRecord, out bool)"/>

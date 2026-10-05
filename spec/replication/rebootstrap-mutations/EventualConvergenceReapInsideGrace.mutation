@@ -8,7 +8,7 @@ SUMMARY: a tombstone is reaped while a write it beats is still on its way, which
 PERTURBS: Reap
 
 --- FIND
-    /\ \A i \in (cursor[<<r, s>>] + 1)..Len(wal[r]) : wal[r][i].h > reg[s].h
+    /\ \A o \in Others : \A i \in (cursor[<<o, s>>] + 1)..Len(wal[o]) : wal[o][i].h > reg[s].h
 --- REPLACE
 \* MUTATION: no grace period.
     /\ TRUE
