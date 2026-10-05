@@ -58,12 +58,15 @@ not to hold in production:
   checks the fixed design, which captures such a decision at its recorded
   verdict.
 - **A coordinated restore could end with one cluster restored and another not
-  (#4637, open).** A participant's fence timer compensates on its own once it
-  outlives its window, even after the restore's coordinator decided to commit,
-  so the restore can finish mixed. The specification models the timer and
-  checks the intended design, in which a participant compensates only before
-  the decision; the gap is listed in the restore refinement note until the fix
-  lands.
+  (#4637, fixed).** A participant's fence timer compensated on its own once it
+  outlived its window, even after the restore's coordinator decided to commit,
+  and the coordinator counted the participant's refusal of the late commit as
+  success, so the restore could finish mixed. A prepared participant now asks
+  the coordinator for the decision when its fence expires and keeps the fence
+  up while the coordinator is undecided or unreachable, and the coordinator
+  never completes a saga a participant refused. The specification checks this
+  design; the one exception it does not cover is an operator resolving a
+  participant whose coordinator is lost, which is audited.
 
 ## Which parts run in production code
 

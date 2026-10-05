@@ -131,7 +131,7 @@ public partial class CrossClusterSagaParticipantGrainTests
     [Test]
     public async Task Arming_the_cutover_fence_survives_a_reminder_service_fault()
     {
-        // The fence reminder is only the coordinator-loss safety net. Failing the
+        // The fence reminder is only the decision-query safety net. Failing the
         // prepare because the reminder service is down would refuse a cutover
         // that the coordinator can still drive to a decision directly.
         var participant = new RecordingSagaParticipant();
@@ -145,7 +145,7 @@ public partial class CrossClusterSagaParticipantGrainTests
             Assert.That(response.Vote, Is.EqualTo(SagaVote.Commit));
             Assert.That(state.State.Phase, Is.EqualTo(SagaPhase.Prepared));
             Assert.That(state.State.FenceDeadlineTicks, Is.GreaterThan(0),
-                "the durable deadline is still recorded, so a later activation can still self-compensate");
+                "the durable deadline is still recorded, so a later activation can still ask the coordinator");
         });
     }
 

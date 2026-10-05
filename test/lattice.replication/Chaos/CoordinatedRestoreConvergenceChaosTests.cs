@@ -111,8 +111,9 @@ public class CoordinatedRestoreConvergenceChaosTests
                     $"iteration {iteration}: a healthy cluster prepares");
             }
 
-            // Coordinator is lost before it delivers a decision. The durable abort
-            // path (what the cutover-fence expiry fires) compensates every cluster.
+            // Coordinator is lost before it delivers a decision. Its prepare deadline
+            // records abort, which a fence-expiry query (or an operator resolution)
+            // delivers through the durable abort path (issue #4637).
             foreach (var cluster in clusters)
             {
                 await cluster.Grain.AbortAsync(request);

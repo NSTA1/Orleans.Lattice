@@ -1079,6 +1079,38 @@ answers. A snapshot row the storage provider cannot read at all - so
 its storage grain cannot activate - is beyond the rebuild's reach;
 restore the tree from a backup.
 
+### A vanished leaf snapshot
+
+A snapshot that is **absent** is not, on its own, proof that the leaf
+never had one (issue #4634). When a leaf's snapshot store keeps a
+snapshot, the leaf records that fact - one flag per WAL partition the
+snapshot covers - in its own durable state row, and that record is
+written before the leaf publishes any WAL pin resolved against the
+snapshot's coverage. So the WAL GC can never trim behind a snapshot
+whose existence is not durably on record, and because the record sits
+in the same row as the leaf's projection checkpoint, no storage loss
+can keep one and drop the other. The record only ever turns on, so it
+costs at most one extra state write per partition per leaf.
+
+If the snapshot later vanishes - lost storage, or a row deleted
+outside the lattice - the leaf's next cold start finds no snapshot,
+and finds the record set. The snapshot may have been the only durable
+copy of the prefix it covered, so the replay **fails closed** exactly
+as for an unreadable snapshot: data operations fail with
+`LeafSnapshotUnavailableException` and nothing is replayed. Whether the
+WAL tail still starts at offset `0` is not consulted, for the same
+reason as above: the leaf's durable WAL pin was resolved against the
+vanished snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a cold rebuild would be running. A
+leaf that never kept a snapshot is not affected.
+
+The remedy is the same: restore the snapshot or the tree from a
+backup, or call `ILattice.RebuildLeafProjectionAsync` for the leaf's
+shard to accept the loss. The rebuild drops the record along with the
+snapshot it describes, so the next activation rebuilds from the WAL
+that survives. Clearing a leaf (tree deletion, a merge) drops the
+record with the rest of its row.
+
 ### Observe materialiser lag
 
 ```csharp verify
