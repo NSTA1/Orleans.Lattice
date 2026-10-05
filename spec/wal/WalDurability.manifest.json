@@ -3,14 +3,15 @@
   "refinement": "Refinement.md",
   "nonBehaviouralActions": [],
   "counts": {
-    "invariants": 9,
+    "invariants": 10,
     "properties": 4,
-    "actions": 14,
-    "mutations": 22,
-    "behaviourRows": 26,
-    "distinctStates": 91389
+    "actions": 18,
+    "mutations": 31,
+    "behaviourRows": 31,
+    "distinctStates": 111154
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 445516 }
+    "TwoFaults": { "distinctStates": 680122 },
+    "SnapshotLoss": { "distinctStates": 1106104 }
   }
 }

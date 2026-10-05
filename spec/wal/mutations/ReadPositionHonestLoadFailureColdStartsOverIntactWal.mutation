@@ -11,7 +11,7 @@ CLASS: Invariant
 SUMMARY: a failed snapshot load cold-starts when the tail reads 0, and the GC trims under the leaf's old pin mid-rebuild
 PERTURBS: ActivateLoadFail
 --- FIND
-    /\ snapCov[l] # NoSnap
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
     /\ UNCHANGED vars
 --- REPLACE
     /\ snapCov[l] # NoSnap
