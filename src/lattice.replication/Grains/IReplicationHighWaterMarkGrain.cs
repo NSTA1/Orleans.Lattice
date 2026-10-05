@@ -149,4 +149,29 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// <param name="frontier">The snapshot frontier to merge. Must be non-null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Durably records that the write of <paramref name="originClusterId"/> at
+    /// <paramref name="timestamp"/> was acknowledged by this tree and then lost
+    /// for good - an operator discarded it from the dead-letter queue (#4603).
+    /// From then on <see cref="CheckDependenciesAsync"/> reports any entry that
+    /// depends on it as <see cref="CausalDependencyVerdict.Lost"/>. Idempotent.
+    /// </summary>
+    /// <param name="originClusterId">The lost write's origin. Must be non-null and non-empty.</param>
+    /// <param name="timestamp">The lost write's source HLC.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RecordLostAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks each dependency vector in <paramref name="dependencies"/> (as
+    /// produced by <see cref="CausalApplyBuffer.RequiredDependencies"/>) and
+    /// returns one verdict per vector, in order:
+    /// <see cref="CausalDependencyVerdict.Lost"/> when it names a write recorded
+    /// by <see cref="RecordLostAsync"/>, otherwise
+    /// <see cref="CausalDependencyVerdict.Met"/> when the local vector clock
+    /// dominates it, otherwise <see cref="CausalDependencyVerdict.Unmet"/>.
+    /// </summary>
+    /// <param name="dependencies">The dependency vectors to check. Must be non-null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CausalDependencyVerdict[]> CheckDependenciesAsync(IReadOnlyList<VersionVector> dependencies, CancellationToken cancellationToken = default);
 }

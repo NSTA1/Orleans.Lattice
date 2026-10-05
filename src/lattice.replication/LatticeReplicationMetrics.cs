@@ -128,6 +128,14 @@ public static class LatticeReplicationMetrics
     public const string OutcomeParkedCausalBuffer = "parked-causal-buffer";
 
     /// <summary>
+    /// Apply-duration outcome for an entry dead-lettered because one of its
+    /// causal dependencies names a write this cluster acknowledged and then lost
+    /// for good (#4603). Terminal: the entry is parked with reason
+    /// <see cref="ReasonDependencyLost"/> and never applied.
+    /// </summary>
+    public const string OutcomeRejectedDependencyLost = "rejected-dependency-lost";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was suppressed by the
     /// per-tree shadow-forward dedupe cache because an identity tuple
     /// (<c>(originClusterId, timestamp, key, op)</c>) matching this
@@ -208,6 +216,7 @@ public static class LatticeReplicationMetrics
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
     /// <see cref="ReasonModeMismatch"/>, <see cref="ReasonForeignTenant"/>,
     /// <see cref="ReasonTenantOffline"/>, <see cref="ReasonSuspendedTenant"/>,
+    /// <see cref="ReasonPoisonedSaga"/>, <see cref="ReasonDependencyLost"/>,
     /// and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
@@ -237,7 +246,11 @@ public static class LatticeReplicationMetrics
     /// <summary>Reason tag value: entry removed by a successful <c>Replay</c>.</summary>
     public const string ReasonReplayed = "replayed";
 
-    /// <summary>Reason tag value: entry removed by FIFO capacity eviction during a later enqueue.</summary>
+    /// <summary>
+    /// Reason tag value retained for dashboards and older builds: entry removed
+    /// by FIFO capacity eviction during a later enqueue. Not emitted since
+    /// #4603, which replaced eviction with refusal.
+    /// </summary>
     public const string ReasonEvicted = "evicted";
 
     /// <summary>
@@ -798,8 +811,9 @@ public static class LatticeReplicationMetrics
     /// Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>; the
     /// reason tag distinguishes operator <c>Discard</c>
     /// (<see cref="ReasonDiscarded"/>), successful <c>Replay</c>
-    /// (<see cref="ReasonReplayed"/>), and FIFO capacity eviction during
-    /// a later enqueue (<see cref="ReasonEvicted"/>).
+    /// (<see cref="ReasonReplayed"/>). <see cref="ReasonEvicted"/> is no longer
+    /// emitted: since #4603 a full queue refuses an enqueue instead of evicting
+    /// (see <see cref="DeadLetterRefused"/>).
     /// </summary>
     public static readonly Counter<long> DeadLetterRemoved =
         Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
@@ -841,6 +855,30 @@ public static class LatticeReplicationMetrics
     /// shipped so the peer never commits the saga without the lost write.
     /// </summary>
     public const string ReasonPoisonedSaga = "poisoned_saga";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for an
+    /// entry whose causal dependency names a write the receiver acknowledged and
+    /// then lost for good - an operator discarded it from the dead-letter queue
+    /// (#4603). The dependency can never be satisfied, so the entry is parked as
+    /// a terminal state instead of waiting on the causal-apply buffer.
+    /// </summary>
+    public const string ReasonDependencyLost = "dependency_lost";
+
+    /// <summary>
+    /// Counter of entries the per-tree dead-letter queue refused because it
+    /// already holds
+    /// <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/> entries
+    /// (#4603). The queue no longer evicts to make room: the refused entry is
+    /// kept unacknowledged (the receiver defers it so the sender re-ships, and
+    /// the shipper does not advance past it), so a sustained rate means a
+    /// replication stream is stalled until an operator replays or discards
+    /// parked entries. Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>
+    /// (the reason the entry would have been parked with).
+    /// </summary>
+    public static readonly Counter<long> DeadLetterRefused =
+        Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.refused", unit: "{entry}",
+            description: "Entries the per-tree dead-letter queue refused because it was full, tagged by tree and reason.");
 
     // --- Per-peer observable gauges ----------------------------------------------
     //

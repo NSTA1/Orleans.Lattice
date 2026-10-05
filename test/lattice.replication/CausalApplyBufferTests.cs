@@ -25,6 +25,22 @@ public class CausalApplyBufferTests
         return v;
     }
 
+    /// <summary>
+    /// A drain predicate that treats exactly the given write identities as
+    /// satisfied, standing in for the tree's high-water-mark grain verdict.
+    /// </summary>
+    private static Func<WalRecord, bool> AppliedOnly(
+        string? localClusterId = null,
+        params (string Origin, HybridLogicalClock Clock)[] applied)
+    {
+        var set = applied.ToHashSet();
+        return entry =>
+        {
+            var required = CausalApplyBuffer.RequiredDependencies(entry, localClusterId);
+            return required is null || required.Entries.All(d => set.Contains((d.Key, d.Value)));
+        };
+    }
+
     private static WalRecord Entry(
         string key,
         HybridLogicalClock ts,
@@ -139,7 +155,7 @@ public class CausalApplyBufferTests
         buffer.TryAdd(Entry("first", Hlc(10), vc: Vc((OriginA, Hlc(5)))), 16, 1 << 20, out _);
         buffer.TryAdd(Entry("second", Hlc(11), vc: Vc((OriginA, Hlc(5)))), 16, 1 << 20, out _);
 
-        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+        var ready = buffer.DrainSatisfied(AppliedOnly(null, (OriginA, Hlc(5))));
 
         Assert.Multiple(() =>
         {
@@ -155,7 +171,7 @@ public class CausalApplyBufferTests
         buffer.TryAdd(Entry("hi", Hlc(10), vc: Vc((OriginA, Hlc(5)))), 16, 1 << 20, out _);
         buffer.TryAdd(Entry("hi2", Hlc(11), vc: Vc((OriginA, Hlc(50)))), 16, 1 << 20, out _);
 
-        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+        var ready = buffer.DrainSatisfied(AppliedOnly(null, (OriginA, Hlc(5))));
 
         Assert.Multiple(() =>
         {
@@ -166,113 +182,84 @@ public class CausalApplyBufferTests
     }
 
     [Test]
-    public void DependenciesSatisfied_returns_true_for_null_vector_clock()
+    public void RequiredDependencies_is_null_for_null_vector_clock()
     {
         var entry = Entry("k", Hlc(1), vc: null);
 
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()), Is.True);
+        Assert.That(CausalApplyBuffer.RequiredDependencies(entry), Is.Null);
     }
 
     [Test]
-    public void DependenciesSatisfied_returns_true_for_empty_vector_clock()
+    public void RequiredDependencies_is_null_for_empty_vector_clock()
     {
         var entry = Entry("k", Hlc(1), vc: new VersionVector());
 
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()), Is.True);
+        Assert.That(CausalApplyBuffer.RequiredDependencies(entry), Is.Null);
     }
 
     [Test]
-    public void DependenciesSatisfied_skips_entrys_own_origin_diagonal()
+    public void RequiredDependencies_skips_entrys_own_origin_diagonal()
     {
-        // Entry's VC carries its own origin's HLC; the per-origin HWM
-        // table is the authoritative dedup key for that component, so
-        // the dep-check must not require localVc to dominate the
-        // diagonal - that would deadlock the very entry we're applying.
+        // Requiring the entry's own origin diagonal would deadlock the very
+        // entry being applied.
         var entry = Entry("k", Hlc(100), origin: OriginB, vc: Vc((OriginB, Hlc(100))));
 
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()), Is.True);
+        Assert.That(CausalApplyBuffer.RequiredDependencies(entry), Is.Null);
     }
 
     [Test]
-    public void DependenciesSatisfied_returns_false_when_dep_origin_unknown_locally()
+    public void RequiredDependencies_names_each_foreign_write_exactly()
     {
-        var entry = Entry("k", Hlc(1), origin: OriginB, vc: Vc((OriginC, Hlc(50))));
+        // Each (origin, t) names origin's write at t: the required vector
+        // carries it verbatim for the high-water-mark grain to check.
+        var entry = Entry("k", Hlc(1), origin: OriginB, vc: Vc((OriginC, Hlc(50)), (OriginA, Hlc(7, 2))));
 
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()), Is.False);
+        var required = CausalApplyBuffer.RequiredDependencies(entry);
+
+        Assert.That(required, Is.Not.Null);
+        Assert.That(required!.Entries, Is.EquivalentTo(new Dictionary<string, HybridLogicalClock>
+        {
+            [OriginC] = Hlc(50),
+            [OriginA] = Hlc(7, 2),
+        }));
     }
 
     [Test]
-    public void DependenciesSatisfied_returns_false_when_dep_origin_below_required_tick()
-    {
-        var entry = Entry("k", Hlc(1), origin: OriginB, vc: Vc((OriginC, Hlc(50))));
-        var local = Vc((OriginC, Hlc(20)));
-
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, local), Is.False);
-    }
-
-    [Test]
-    public void DependenciesSatisfied_returns_true_when_local_dominates()
-    {
-        var entry = Entry("k", Hlc(1), origin: OriginB, vc: Vc((OriginC, Hlc(50))));
-        var local = Vc((OriginC, Hlc(100)));
-
-        Assert.That(CausalApplyBuffer.DependenciesSatisfied(entry, local), Is.True);
-    }
-
-    [Test]
-    public void DependenciesSatisfied_skips_local_cluster_diagonal()
+    public void RequiredDependencies_skips_local_cluster_diagonal()
     {
         // A foreign entry whose VC depends on a write the receiver itself
-        // authored. The receiver-side local vector clock tracks only
-        // foreign-applied frontiers, so its own diagonal stays at zero -
-        // but the receiver durably holds every write it originated, so the
-        // dependency is trivially satisfied. Without the local-cluster
-        // exemption this parks forever and stalls convergence (the bug a
-        // healed A-C partition exposes when C's write causally follows A's).
+        // authored. The receiver durably holds every write it originated, so
+        // the dependency is trivially satisfied. Without the local-cluster
+        // exemption it would wait out the whole dependency window (the stall
+        // a healed A-C partition exposes when C's write causally follows A's).
         var entry = Entry("k", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50))));
 
         Assert.Multiple(() =>
         {
-            // Without the receiver hint the self-dependency is unsatisfiable.
-            Assert.That(
-                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector()),
-                Is.False);
-            // Naming OriginA as the receiver's own cluster satisfies it.
-            Assert.That(
-                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector(), localClusterId: OriginA),
-                Is.True);
+            Assert.That(CausalApplyBuffer.RequiredDependencies(entry), Is.Not.Null);
+            Assert.That(CausalApplyBuffer.RequiredDependencies(entry, localClusterId: OriginA), Is.Null);
         });
     }
 
     [Test]
-    public void DependenciesSatisfied_still_requires_other_origins_when_local_cluster_exempted()
+    public void RequiredDependencies_still_requires_other_origins_when_local_cluster_exempted()
     {
-        // Mixed dependency: one component on the receiver's own cluster
-        // (exempt) and one on a genuine third-party origin (still gated).
         var entry = Entry("k", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50)), (OriginB, Hlc(70))));
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(
-                CausalApplyBuffer.DependenciesSatisfied(entry, new VersionVector(), localClusterId: OriginA),
-                Is.False);
-            Assert.That(
-                CausalApplyBuffer.DependenciesSatisfied(entry, Vc((OriginB, Hlc(70))), localClusterId: OriginA),
-                Is.True);
-        });
+        var required = CausalApplyBuffer.RequiredDependencies(entry, localClusterId: OriginA);
+
+        Assert.That(required, Is.Not.Null);
+        Assert.That(required!.Entries.Keys, Is.EquivalentTo(new[] { OriginB }));
     }
 
     [Test]
     public void DrainSatisfied_releases_local_cluster_self_dependency()
     {
-        // A parked entry whose only outstanding dependency is on the
-        // receiver's own cluster must drain once the receiver hint is
-        // supplied; without it the entry would stay parked forever.
         var buffer = new CausalApplyBuffer();
         buffer.TryAdd(Entry("self-dep", Hlc(100), origin: OriginC, vc: Vc((OriginA, Hlc(50)))), 16, 1 << 20, out _);
 
-        var stillParked = buffer.DrainSatisfied(new VersionVector());
-        var released = buffer.DrainSatisfied(new VersionVector(), localClusterId: OriginA);
+        var stillParked = buffer.DrainSatisfied(AppliedOnly());
+        var released = buffer.DrainSatisfied(AppliedOnly(localClusterId: OriginA));
 
         Assert.Multiple(() =>
         {
@@ -283,13 +270,11 @@ public class CausalApplyBufferTests
     }
 
     [Test]
-    public void DependenciesSatisfied_throws_when_local_vc_is_null()
+    public void DrainSatisfied_throws_when_predicate_is_null()
     {
-        var entry = Entry("k", Hlc(1), vc: Vc((OriginC, Hlc(50))));
+        var buffer = new CausalApplyBuffer();
 
-        Assert.That(
-            () => CausalApplyBuffer.DependenciesSatisfied(entry, null!),
-            Throws.ArgumentNullException);
+        Assert.That(() => buffer.DrainSatisfied(null!), Throws.ArgumentNullException);
     }
 
     [Test]
@@ -307,7 +292,7 @@ public class CausalApplyBufferTests
             Assert.That(afterSecond, Is.GreaterThan(afterFirst));
         });
 
-        var ready = buffer.DrainSatisfied(new VersionVector());
+        var ready = buffer.DrainSatisfied(AppliedOnly());
         Assert.Multiple(() =>
         {
             Assert.That(ready, Has.Count.EqualTo(2));
@@ -416,7 +401,7 @@ public class CausalApplyBufferTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyDependencyWaitMsName);
 
-        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+        var ready = buffer.DrainSatisfied(AppliedOnly(null, (OriginA, Hlc(5))));
 
         Assert.Multiple(() =>
         {
@@ -445,7 +430,7 @@ public class CausalApplyBufferTests
             LatticeReplicationMetrics.MeterName,
             LatticeReplicationMetrics.ApplyDependencyWaitMsName);
 
-        var ready = buffer.DrainSatisfied(Vc((OriginA, Hlc(5))));
+        var ready = buffer.DrainSatisfied(AppliedOnly(null, (OriginA, Hlc(5))));
 
         Assert.Multiple(() =>
         {
