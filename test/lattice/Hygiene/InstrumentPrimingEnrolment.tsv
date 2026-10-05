@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 200 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 203 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -141,6 +141,8 @@ src/lattice.replication/LatticeReplicationMetrics.cs#PeerFellOffLogSuppressed	op
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentEntriesElided	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (request.TreeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentHwmAdvances	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (request.TreeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverContentManifestExchanges	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (request.TreeName)
+src/lattice.replication/LatticeReplicationMetrics.cs#ReceiverSagaPoisoned	unresolved	reason=dimension outcome: no declaration found for outcome
+src/lattice.replication/LatticeReplicationMetrics.cs#SagaApplyDeferred	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaCompensations	primed	
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaFenceDuration	open	open=tenant, tree; open dimension: tree carries a runtime identifier (tree)
 src/lattice.replication/LatticeReplicationMetrics.cs#SagaParticipantAborts	unresolved	reason=dimension reason: no declaration found for reason
@@ -194,6 +196,7 @@ src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#QueuedReplayPermitWait
 src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#ReplayConcurrencyCeilingGauge	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/BPlusTree/Grains/BPlusLeafGrain.Activation.cs#WithheldReplayPermitsGauge	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/BPlusTree/Grains/CoordinatorPhaseTickCensus.cs#Gauge	unresolved	reason=dimension kind: no declaration found for kind
+src/lattice/BPlusTree/Grains/CopyReceiveFenceCensus.cs#Gauge	open	open=tenant, tree; open dimension: tree carries a runtime identifier (physicalTreeId)
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyBudgetBytesName)	unresolved	reason=dimension (unread-observable-callback:static () => MeasureBudgetBytes(LeafResidentWorkingSet.Shared)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyRegistrationsName)	unresolved	reason=dimension (unread-observable-callback:static () => MeasureRegistrations(LeafResidentWorkingSet.Shared)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
 src/lattice/BPlusTree/Grains/LeafResidencyMetrics.cs#(unassigned:LatticeMetrics.LeafResidencyResidentBytesName)	unresolved	reason=dimension (unread-observable-callback:static () => MeasureResidentBytes(LeafResidentWorkingSet.Shared)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
@@ -234,6 +237,7 @@ src/lattice/LatticeMetrics.cs#ConfigChanged	primed
 src/lattice/LatticeMetrics.cs#CoordinatorCompleted	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#CoordinatorPhaseTickFailures	unresolved	reason=dimension (unread-tag-argument:PhaseTickFailureTags()): tag argument(s) PhaseTickFailureTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/LatticeMetrics.cs#CoordinatorPurgedTreeAbandonments	unresolved	reason=dimension (unread-tag-argument:PhaseTickFailureTags()): tag argument(s) PhaseTickFailureTags() are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
+src/lattice/LatticeMetrics.cs#CopyReceiveFencedApplies	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteCompleted	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteDuration	unresolved	reason=dimension outcome: no declaration found for outcomeTag
 src/lattice/LatticeMetrics.cs#CrossTreeAtomicWriteParticipants	unresolved	reason=dimension outcome: no declaration found for outcomeTag

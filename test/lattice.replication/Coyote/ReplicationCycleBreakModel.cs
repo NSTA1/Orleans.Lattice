@@ -91,6 +91,9 @@ public sealed class ReplicationCycleBreakModel : ICoyoteModel
                             "PROBE: a shipper drained a foreign-origin entry from its WAL");
                     }
 
+                    // Pinned: every entry is a Set. The core's tombstone-reap clause refuses a
+                    // maintenance record whatever its origin, so it can only remove relays and
+                    // reflections, never add one; ReplicationShipEligibilityTests covers it.
                     var ships = _mode == ReplicationCycleBreakMode.NoShipFilter
                         || ReplicationShipEligibility.IsShipEligible(origin, MutationKind.Set, from);
                     if (ships)

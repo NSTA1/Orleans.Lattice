@@ -19,4 +19,12 @@ internal sealed class ParkedCausalEntry
 
     /// <summary>UTC ticks at which the entry was first parked.</summary>
     [Id(1)] public long ParkedAtTicks { get; init; }
+
+    /// <summary>
+    /// The tree's receive-fence epoch, read uncached when the entry was parked
+    /// (issue #4593). The drain stamps the entry's apply with it, so a restored
+    /// copy refuses an entry parked before its restore paused receiving. Zero for
+    /// an entry parked before the epoch was recorded.
+    /// </summary>
+    [Id(2)] public long AdmissionEpoch { get; init; }
 }

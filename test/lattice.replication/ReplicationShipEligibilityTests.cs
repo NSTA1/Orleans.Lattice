@@ -96,4 +96,15 @@ public class ReplicationShipEligibilityTests
             ReplicationShipEligibility.IsBelowLegacyScalarCursor(true, true, Hlc(1), Hlc(5)),
             Is.False);
     }
+
+    [Test]
+    public void IsLegacyMigrationTick_only_for_a_scalar_cursor_with_no_partition_cursors()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReplicationShipEligibility.IsLegacyMigrationTick(Hlc(5), 0), Is.True);
+            Assert.That(ReplicationShipEligibility.IsLegacyMigrationTick(Hlc(5), 1), Is.False);
+            Assert.That(ReplicationShipEligibility.IsLegacyMigrationTick(HybridLogicalClock.Zero, 0), Is.False);
+        });
+    }
 }

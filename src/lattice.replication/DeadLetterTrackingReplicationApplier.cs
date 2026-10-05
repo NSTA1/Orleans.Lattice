@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
@@ -24,6 +25,20 @@ namespace Orleans.Lattice.Replication;
 /// non-deferred not-applied result is acknowledged and the sender moves past it.
 /// A successful apply clears the counter for
 /// that tuple so later transient failures get a fresh budget.
+/// <para>
+/// <b>Saga records are never parked alone (#4591).</b> A prepare or a
+/// <see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>
+/// terminal that exhausts the budget is not parked: parking acknowledges it, so
+/// the sender's terminal hold would count a parked prepare as delivered and the
+/// receiver would commit the saga without that key, and a parked terminal would
+/// strand the saga's buckets. Such a record returns a
+/// <see cref="ApplyResult.Deferred"/> result instead - a not-accepted,
+/// cursor-preserving ack - so the sender keeps and re-ships it, and on the
+/// per-entry path no later record of the same saga in the batch is applied. The
+/// stream from that
+/// origin for that tree waits until the failure clears; each deferral counts on
+/// <see cref="LatticeReplicationMetrics.SagaApplyDeferred"/>.
+/// </para>
 /// <para>
 /// The retry counter is intentionally in-memory: the decorator is
 /// registered as a singleton, so all apply paths share the same
@@ -59,10 +74,25 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     ILatticeReplicationContext? replicationContext = null) : IReplicationApplier
 {
     private readonly ConcurrentDictionary<RetryKey, int> _failures = new();
+    private readonly ConcurrentDictionary<RetryKey, DateTime> _firstDeferrals = new();
 
     /// <inheritdoc />
     public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default)
-        => ApplyTrackedAsync(entry, recordContact: false, cancellationToken);
+        => ApplyWithPoisonFilterAsync(entry, recordContact: false, cancellationToken);
+
+    private async Task<ApplyResult> ApplyWithPoisonFilterAsync(
+        WalRecord entry,
+        bool recordContact,
+        CancellationToken cancellationToken)
+    {
+        var (filtered, withheld) = await FilterPoisonedAsync([entry], cancellationToken).ConfigureAwait(false);
+        if (withheld)
+        {
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
+
+        return await ApplyTrackedAsync(filtered[0], recordContact, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Applies one entry under the retry-budget accounting. When
@@ -103,7 +133,9 @@ internal sealed class DeadLetterTrackingReplicationApplier(
 
         // Successful apply (or filtered re-delivery) clears any
         // accumulated failure state for the tuple.
-        _failures.TryRemove(KeyFor(entry), out _);
+        var key = KeyFor(entry);
+        _failures.TryRemove(key, out _);
+        _firstDeferrals.TryRemove(key, out _);
         if (recordContact)
         {
             ReplicationInboundContact.Record(peerStats, options, replicationContext, entry, success: true);
@@ -145,12 +177,35 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
 
+        var (unpoisonedEntries, withheld) = await FilterPoisonedAsync(entries, cancellationToken).ConfigureAwait(false);
+        if (withheld)
+        {
+            // A record of a poisoned saga is withheld until the re-seed retires
+            // the poison, so the whole push is deferred: the sender re-ships it,
+            // and the other records re-apply idempotently then.
+            if (unpoisonedEntries.Count > 0)
+            {
+                var partial = await ApplyBatchCoreAsync(unpoisonedEntries, cancellationToken).ConfigureAwait(false);
+                return partial with { Deferred = true };
+            }
+
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
+
+        return await ApplyBatchCoreAsync(unpoisonedEntries, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<ApplyResult> ApplyBatchCoreAsync(
+        IReadOnlyList<WalRecord> unpoisonedEntries,
+        CancellationToken cancellationToken)
+    {
+
         // Single-entry fast path: defer to the per-entry decorator so
         // there is exactly one retry-budget code path on the hot path
         // for low-rate (single-entry per push) deployments.
-        if (entries.Count == 1)
+        if (unpoisonedEntries.Count == 1)
         {
-            return await ApplyTrackedAsync(entries[0], recordContact: true, cancellationToken).ConfigureAwait(false);
+            return await ApplyTrackedAsync(unpoisonedEntries[0], recordContact: true, cancellationToken).ConfigureAwait(false);
         }
 
         // Steady-state heuristic: if no entry has any prior failure
@@ -160,9 +215,9 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var hasHistory = false;
         if (!_failures.IsEmpty)
         {
-            for (var i = 0; i < entries.Count; i++)
+            for (var i = 0; i < unpoisonedEntries.Count; i++)
             {
-                if (_failures.ContainsKey(KeyFor(entries[i])))
+                if (_failures.ContainsKey(KeyFor(unpoisonedEntries[i])))
                 {
                     hasHistory = true;
                     break;
@@ -174,7 +229,15 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         {
             try
             {
-                return await inner.ApplyBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+                var result = await inner.ApplyBatchAsync(unpoisonedEntries, cancellationToken).ConfigureAwait(false);
+                for (var i = 0; i < unpoisonedEntries.Count; i++)
+                {
+                    var key = KeyFor(unpoisonedEntries[i]);
+                    _failures.TryRemove(key, out _);
+                    _firstDeferrals.TryRemove(key, out _);
+                }
+
+                return result;
             }
             catch (OperationCanceledException)
             {
@@ -197,10 +260,22 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var applied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
-        for (var i = 0; i < entries.Count; i++)
+        HashSet<Guid>? deferredSagas = null;
+        for (var i = 0; i < unpoisonedEntries.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = await ApplyTrackedAsync(entries[i], recordContact: true, cancellationToken).ConfigureAwait(false);
+            if (deferredSagas is not null
+                && unpoisonedEntries[i].TransactionId != Guid.Empty
+                && deferredSagas.Contains(unpoisonedEntries[i].TransactionId))
+            {
+                // Nothing of a saga is applied behind its deferred record
+                // (#4591): a terminal later in the batch would otherwise commit
+                // the saga without the deferred prepare. The not-accepted ack
+                // re-ships the batch, so the skipped record is delivered again.
+                continue;
+            }
+
+            var result = await ApplyTrackedAsync(unpoisonedEntries[i], recordContact: true, cancellationToken).ConfigureAwait(false);
             if (result.Applied)
             {
                 applied = true;
@@ -208,6 +283,10 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             if (result.Deferred)
             {
                 anyDeferred = true;
+                if (IsSagaRecord(unpoisonedEntries[i]))
+                {
+                    (deferredSagas ??= new HashSet<Guid>()).Add(unpoisonedEntries[i].TransactionId);
+                }
             }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
@@ -216,6 +295,15 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         }
         return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = anyDeferred };
     }
+
+    /// <summary>
+    /// Whether <paramref name="entry"/> belongs to a saga - a prepare, or a
+    /// <see cref="MutationKind.TxCommit"/> / <see cref="MutationKind.TxAbort"/>
+    /// terminal - and so must never be parked alone.
+    /// </summary>
+    internal static bool IsSagaRecord(in WalRecord entry) =>
+        entry.TransactionId != Guid.Empty
+        && (entry.IsPrepared || entry.Op is MutationKind.TxCommit or MutationKind.TxAbort);
 
     private async Task<ApplyResult> OnFailureAsync(
         WalRecord entry,
@@ -272,6 +360,56 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             throw failure;
         }
 
+        if (IsSagaRecord(entry))
+        {
+            // A saga prepare or terminal is never parked alone (#4591). Parking
+            // acknowledges it, so the sender's terminal hold would count a parked
+            // prepare as delivered and release the saga's terminal, and this
+            // receiver would commit the saga without that key; a parked terminal
+            // would strand every bucket of the saga. Defer it instead: the
+            // receive path answers with a not-accepted, cursor-preserving ack, the
+            // sender keeps the record and re-ships it, and the stream from this
+            // origin for this tree waits for it until the failure clears. The
+            // counter is kept, so every later attempt defers again at once.
+            if (attempts == max)
+            {
+                logger.LogError(
+                    failure,
+                    "Replication cannot apply saga {Op} for transaction {TransactionId} (tree '{TreeId}', origin {Origin}, key '{Key}') "
+                    + "after {Attempts} attempts. It is deferred, not dead-lettered, so the saga is never served torn: the sender re-ships it "
+                    + "and the stream from that origin waits until the failure clears. Fix the cause or re-bootstrap the tree from the origin.",
+                    entry.Op, entry.TransactionId, entry.TreeId, entry.OriginClusterId ?? "<none>", entry.Key ?? string.Empty, attempts);
+            }
+
+            LatticeReplicationMetrics.SagaApplyDeferred.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, entry.TreeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId ?? string.Empty),
+                LatticeTenantLabel.ForTree(entry.TreeId));
+
+            if (entry.IsPrepared
+                && await TryPoisonTimedOutPrepareAsync(entry, key, failure, attempts, cancellationToken).ConfigureAwait(false))
+            {
+                if (!await ParkPoisonedSagaRecordAsync(
+                    entry,
+                    failure.Message ?? "<no message>",
+                    attempts,
+                    failure,
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    // The queue is full (#4603): the poison stands, but the prepare
+                    // stays unacknowledged until a re-delivery can park it.
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                }
+
+                _failures.TryRemove(key, out _);
+                _firstDeferrals.TryRemove(key, out _);
+                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
+
         // Threshold reached: park the entry, advance the HWM past it (a
         // progress frontier only - the canonical applier does not dedupe on
         // it, so a re-delivered copy would be applied afresh; the non-deferred
@@ -323,6 +461,248 @@ internal sealed class DeadLetterTrackingReplicationApplier(
 
         _failures.TryRemove(key, out _);
         return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+    }
+
+    /// <summary>
+    /// Removes every terminal of a saga this receiver has poisoned for the
+    /// record's origin. Such a terminal is withheld, not applied and not parked:
+    /// the caller defers the push, so the sender keeps it and re-ships it after
+    /// the re-seed the poison triggered retires the poison. Applying it would
+    /// commit the saga without the poisoned prepare; parking it would acknowledge
+    /// it, and the terminal of a saga still in flight at the re-seed's export
+    /// would then never arrive, stranding the buckets the re-seed restaged. A
+    /// later prepare of a poisoned saga is applied as usual (it only stages): the
+    /// re-seed keeps it for a saga still in flight and discards it for a decided
+    /// one, and if it cannot be applied it is parked at once. Returns the records
+    /// to apply and whether any was withheld.
+    /// </summary>
+    private async Task<(IReadOnlyList<WalRecord> Entries, bool Withheld)> FilterPoisonedAsync(
+        IReadOnlyList<WalRecord> entries,
+        CancellationToken cancellationToken)
+    {
+        if (LatticeBootstrapApplyContext.IsActive)
+        {
+            return (entries, false);
+        }
+
+        Dictionary<(string TreeId, string Origin), HashSet<Guid>>? byTreeOrigin = null;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (entry.Op is not (MutationKind.TxCommit or MutationKind.TxAbort)
+                || entry.TransactionId == Guid.Empty
+                || string.IsNullOrWhiteSpace(entry.TreeId))
+            {
+                continue;
+            }
+
+            var key = (entry.TreeId, entry.OriginClusterId ?? string.Empty);
+            byTreeOrigin ??= new Dictionary<(string TreeId, string Origin), HashSet<Guid>>();
+            if (byTreeOrigin.TryGetValue(key, out var set))
+            {
+                set.Add(entry.TransactionId);
+            }
+            else
+            {
+                byTreeOrigin[key] = [entry.TransactionId];
+            }
+        }
+
+        if (byTreeOrigin is null)
+        {
+            return (entries, false);
+        }
+
+        Dictionary<(string TreeId, string Origin), HashSet<Guid>>? poisoned = null;
+        foreach (var kvp in byTreeOrigin)
+        {
+            var filtered = await grainFactory
+                .GetGrain<IReceiverSagaPoisonGrain>(kvp.Key.TreeId)
+                .FilterPoisonedAsync(kvp.Key.Origin, kvp.Value)
+                .ConfigureAwait(false);
+            if (filtered.Count == 0)
+            {
+                continue;
+            }
+
+            (poisoned ??= new Dictionary<(string TreeId, string Origin), HashSet<Guid>>())[kvp.Key] = new HashSet<Guid>(filtered);
+        }
+
+        if (poisoned is null)
+        {
+            return (entries, false);
+        }
+
+        var unpoisoned = new List<WalRecord>(entries.Count);
+        var withheld = false;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            var treeId = entry.TreeId ?? string.Empty;
+            var origin = entry.OriginClusterId ?? string.Empty;
+            if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort
+                && poisoned.TryGetValue((treeId, origin), out var set)
+                && set.Contains(entry.TransactionId))
+            {
+                withheld = true;
+                LatticeReplicationMetrics.SagaApplyDeferred.Add(
+                    1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, origin),
+                    LatticeTenantLabel.ForTree(treeId));
+                continue;
+            }
+
+            unpoisoned.Add(entry);
+        }
+
+        return (unpoisoned, withheld);
+    }
+
+    private async Task<bool> TryPoisonTimedOutPrepareAsync(
+        WalRecord entry,
+        RetryKey key,
+        Exception failure,
+        int attempts,
+        CancellationToken cancellationToken)
+    {
+        var origin = entry.OriginClusterId ?? string.Empty;
+        var poison = grainFactory.GetGrain<IReceiverSagaPoisonGrain>(entry.TreeId);
+
+        // A failing prepare of a saga already poisoned - by an operator, or by
+        // this record's timeout on another silo - is parked at once, so the
+        // operator escape resumes the link without waiting out the bound here.
+        var alreadyPoisoned = await poison
+            .FilterPoisonedAsync(origin, new[] { entry.TransactionId })
+            .ConfigureAwait(false);
+        if (alreadyPoisoned.Count > 0)
+        {
+            return true;
+        }
+
+        var now = DateTime.UtcNow;
+        var first = _firstDeferrals.GetOrAdd(key, now);
+        var timeout = options.Get(entry.TreeId).SagaDeferralTimeout;
+        if (now - first < timeout)
+        {
+            return false;
+        }
+
+        var status = await TxRegistryRouting.GetRegistry(grainFactory, entry.TreeId, entry.TransactionId)
+            .GetRecordedStatusAsync(entry.TransactionId)
+            .ConfigureAwait(false);
+        if (status != TxStatus.InFlight)
+        {
+            RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedDecided);
+            logger.LogError(
+                failure,
+                "Receiver refused to poison saga prepare for transaction {TransactionId} (tree '{TreeId}', origin {Origin}, key '{Key}') "
+                + "after {Attempts} attempts because the receiver registry already recorded status {Status}; the record remains deferred.",
+                entry.TransactionId,
+                entry.TreeId,
+                origin,
+                entry.Key ?? string.Empty,
+                attempts,
+                status);
+            return false;
+        }
+
+        var poisoned = await poison
+            .PoisonAsync(origin, entry.TransactionId, "Deferred prepare exceeded the receiver saga deferral timeout.")
+            .ConfigureAwait(false);
+        if (!poisoned)
+        {
+            RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedFull);
+            logger.LogError(
+                failure,
+                "Receiver refused to poison saga prepare for transaction {TransactionId} (tree '{TreeId}', origin {Origin}, key '{Key}') "
+                + "after {Attempts} attempts because the receiver poison set is full; the record remains deferred.",
+                entry.TransactionId,
+                entry.TreeId,
+                origin,
+                entry.Key ?? string.Empty,
+                attempts);
+            return false;
+        }
+
+        RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTimeout);
+        LogPoisonedSaga(entry, failure, "deferred prepare exceeded the receiver saga deferral timeout");
+        _ = ReceiverSagaPoisonReseed.TryStartOrMarkOwedAsync(
+            grainFactory,
+            options,
+            entry.TreeId,
+            origin,
+            logger,
+            CancellationToken.None);
+        return true;
+    }
+
+    /// <summary>
+    /// Parks a record of a receiver-poisoned saga. Returns <see langword="false"/>
+    /// when the dead-letter queue is full (#4603), in which case the caller must
+    /// keep the record unacknowledged.
+    /// </summary>
+    private async Task<bool> ParkPoisonedSagaRecordAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        Exception? failure,
+        CancellationToken cancellationToken)
+    {
+        var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
+        try
+        {
+            await dlq.EnqueueAsync(
+                entry,
+                failureReason,
+                retryCount,
+                LatticeReplicationMetrics.ReasonPoisonedSaga,
+                cancellationToken).ConfigureAwait(false);
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+            return false;
+        }
+
+        LogPoisonedSaga(entry, failure, "record is part of a receiver-poisoned saga and was parked");
+        return true;
+    }
+
+    internal static void RecordReceiverSagaPoisoned(string treeId, string originClusterId, string outcome)
+    {
+        LatticeReplicationMetrics.ReceiverSagaPoisoned.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, originClusterId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(treeId));
+    }
+
+    private void LogPoisonedSaga(WalRecord entry, Exception? failure, string action)
+    {
+        if (string.IsNullOrEmpty(entry.CrossTreeOperationId))
+        {
+            logger.LogError(
+                failure,
+                "Receiver poisoned saga transaction {TransactionId} from origin {Origin} on tree '{TreeId}': {Action}.",
+                entry.TransactionId,
+                entry.OriginClusterId ?? string.Empty,
+                entry.TreeId,
+                action);
+            return;
+        }
+
+        logger.LogError(
+            failure,
+            "Receiver poisoned saga transaction {TransactionId} from origin {Origin} on tree '{TreeId}' for cross-tree operation {CrossTreeOperationId}: {Action}. "
+            + "The cross-tree receiver barrier for that operation will stay incomplete until the tree is re-bootstrapped from the origin.",
+            entry.TransactionId,
+            entry.OriginClusterId ?? string.Empty,
+            entry.TreeId,
+            entry.CrossTreeOperationId,
+            action);
     }
 
     private static RetryKey KeyFor(WalRecord entry) =>
@@ -392,4 +772,3 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         _ => LatticeReplicationMetrics.ReasonUnknown,
     };
 }
-

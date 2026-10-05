@@ -945,13 +945,23 @@ internal sealed partial class ReplicationShipperGrain(
         // boundaries. Elision is opt-in and gated on the content-hash dedup
         // master switch, so the default path is unaffected.
 
-        if (window == 1)
+        try
         {
-            await PumpSerialOnceAsync(options, cancellationToken);
-            return;
-        }
+            if (window == 1)
+            {
+                await PumpSerialOnceAsync(options, cancellationToken);
+                return;
+            }
 
-        await PumpPipelinedOnceAsync(options, window, cancellationToken);
+            await PumpPipelinedOnceAsync(options, window, cancellationToken);
+        }
+        finally
+        {
+            // After every batch of the tick has folded its cursors: a rewind
+            // applied before a later fold would be raised past the retained
+            // saga records it exists to re-ship (#4534).
+            await MaybeClearReseedAsync();
+        }
     }
 
     /// <summary>
@@ -1401,8 +1411,7 @@ internal sealed partial class ReplicationShipperGrain(
         // still stamps its pin, and that is precisely the window in
         // which the producer must not trim.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
-
-        await MaybeClearReseedAsync(ack);
+        NoteReseedEcho(ack);
 
         if (!ack.Accepted)
         {
@@ -2299,6 +2308,7 @@ internal sealed partial class ReplicationShipperGrain(
         // Same cross-cluster blocked-floor propagation as the serial
         // leg, ahead of the pipelined cursor advance below.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+        NoteReseedEcho(ack);
 
         if (!ack.Accepted)
         {
@@ -2482,9 +2492,8 @@ internal sealed partial class ReplicationShipperGrain(
         // every partition - including genuinely cold ones - because a cold
         // partition's unshipped entries may legitimately carry a per-leaf
         // HLC below the scalar cursor.
-        _legacyCursorMigrationPending =
-            state.State.Cursor != HybridLogicalClock.Zero
-            && state.State.PartitionCursors.Count == 0;
+        _legacyCursorMigrationPending = ReplicationShipEligibility.IsLegacyMigrationTick(
+            state.State.Cursor, state.State.PartitionCursors.Count);
 
         // The durable cursor of a partition with a held saga terminal is capped
         // at that terminal (#4480); resume from the uncapped acknowledged
@@ -2492,6 +2501,7 @@ internal sealed partial class ReplicationShipperGrain(
         // Without holds the two are equal.
         PrepareTerminalHoldsForTick(partitions);
         ReportReseedState();
+        await PrepareReplayFilterForTickAsync(partitions);
 
         for (var p = 0; p < partitions; p++)
         {
@@ -2744,6 +2754,14 @@ internal sealed partial class ReplicationShipperGrain(
             // The peer lost records in a trimmed gap and awaits a re-seed:
             // any saga could be missing a member, so none is delivered (#4534).
             if (ReseedRequired && IsSagaRecord(in winningRecord))
+            {
+                continue;
+            }
+
+            // A replayed (non-contiguous) stream withholds, saga by saga, any
+            // saga the origin proves forgotten and purged (#4533).
+            if (state.State.ReplayFilterHorizon is not null
+                && await TryWithholdReplayedSagaAsync(winningRecord, minPartition, winningShipping.Sequence, partitions))
             {
                 continue;
             }
@@ -3586,6 +3604,7 @@ internal sealed partial class ReplicationShipperGrain(
         // buffer drains. Without this the pin would freeze at its last
         // shipped value for as long as the link stays quiet.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+        NoteReseedEcho(ack);
 
         if (!ack.Accepted)
         {
@@ -4154,6 +4173,14 @@ internal sealed partial class ReplicationShipperGrain(
             return false;
         }
 
+        // Marked before parking, durably with the poison: a park the full queue
+        // refuses (#4603) is retried through the poison filter, not through here,
+        // so this is the one place the fresh poison is seen (#4620).
+        if (_reseedForPoisonPending)
+        {
+            await MarkReseedRequiredForPoisonAsync(cancellationToken);
+        }
+
         var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
         foreach (var entry in _drainBuffer)
         {
@@ -4365,6 +4392,8 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.BoundPhysicalTreeId = physical;
         ResetTerminalHoldsForNewSource(followsSagaPause);
         ResetPoisonedSagasForNewSource(followsSagaPause);
+        // The new log is shipped from its start: a replay with no snapshot (#4533).
+        await BeginReplayFilterAsync(partitions, carried: false);
         await state.WriteStateAsync();
 
         if (_partitionGrainCache.Length >= partitions)

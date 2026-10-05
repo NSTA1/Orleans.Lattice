@@ -665,6 +665,20 @@ coordinator progress independently of whether the event stream is enabled.
 | `orleans.lattice.warmup.leaf_cache.duration` | `Histogram<double>` | `ms` | Wall-clock duration of one shard root's leaf-cache pre-warm fan-out. One observation per shard per warm-up when the feature is enabled and the access model ranked at least one leaf. Tagged `tree`, `shard`, and the tenant label. Read against `warmup.duration` to attribute how much of a tree's warm-start cost is leaf priming. |
 | `orleans.lattice.leaf_access.model.leaves` | `Histogram<int>` | `{leaf}` | Leaves resident in a shard root's leaf-access frequency histogram, observed each time the model is persisted. Tagged `tree`, `shard`, and the tenant label. Bounded above by the model's tracked-leaf cap, so a distribution pinned at that cap means the shard's read set is wider than the model can represent and the pre-warm ranking is drawn from a pruned view. |
 
+### Restored-copy receive fence (sourced from `CopyReceiveFenceGrain` and `LatticeGrain`)
+
+A coordinated restore closes its restored physical copy for inbound replication
+before the alias swap makes the copy routable, and opens it only when the saga's
+write fence lifts ([#4593](https://github.com/NSTA1/Orleans.Lattice/issues/4593)).
+While it is closed, a replicated write that routes to it is refused and the
+replication applier defers it, so the sender re-ships it after the lift. See
+[Coordinated restore](../lattice.replication/coordinated-restore.md#restored-copies-are-born-receive-closed).
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.restore.copy_receive_fenced` | `Counter<long>` | `{apply}` | One increment per replication apply refused because it routed to a restored copy whose receive fence is still closed. Tagged `tree` (the logical tree the apply addressed), `reason` - `closed` (the copy is still closed) or `pre_cutover` (the copy is open but the apply was admitted before the restore paused receiving, so it carries a pre-cutover write) - and the tenant label. A short burst during a coordinated restore is expected: each refused entry is deferred and re-shipped once the fence lifts. A rate that does not return to zero after the restore completes means a copy is stuck closed - read `restore.copy_receive_closed_age` to find it. |
+| `orleans.lattice.restore.copy_receive_closed_age` | `ObservableGauge<double>` | `s` | Seconds each restored copy on this silo has had its receive fence closed, tagged `tree` with the **physical** copy id (not the logical tree id) and the tenant label. Reported by every activated closed copy; the saga's write-fence grain touches its closed copies on each poll while the fence is held, so a copy stuck closed stays reported. **Absent when no copy is closed** - an open copy has no age. **Alarm** when any series exceeds the restore's expected cutover-to-completion span (a few multiples of the fence poll interval): the saga has not observed global completion, so replication into that tree is deferred. Lift or abort the saga named in the copy's `copy-receive-fence` grain state. |
+
 ### Distributed lock (sourced from `LatticeLockGrain`)
 
 The FIFO-fair distributed lock / lease grain behind `ILatticeLockGrain` (see

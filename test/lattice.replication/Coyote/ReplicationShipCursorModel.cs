@@ -79,10 +79,12 @@ public sealed class ReplicationShipCursorModel : ICoyoteModel
 
         for (var tick = 0; tick < 12 && partitionCursor < partition.Count; tick++)
         {
+            // The fixed design asks the production predicate whether this is the legacy-migration
+            // tick, so a regression of that predicate makes the fixed arm fail (#4439 F6).
             var legacyMigrationPending = _mode switch
             {
                 ReplicationShipCursorMode.ScalarCursorAlwaysFilters => true,
-                _ => !partitionCursorSaved && scalarCursor != HybridLogicalClock.Zero,
+                _ => ReplicationShipEligibility.IsLegacyMigrationTick(scalarCursor, partitionCursorSaved ? 1 : 0),
             };
 
             var batchEnd = Math.Min(partition.Count, partitionCursor + 1 + Choose(runtime, 2));

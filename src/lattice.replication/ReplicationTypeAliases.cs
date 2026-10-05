@@ -124,6 +124,15 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.ParkedCausalEntry"/>.</summary>
     internal const string ParkedCausalEntry = "olr.cr";
 
+    /// <summary>Alias for <see cref="Grains.IReceiverSagaPoisonGrain"/>.</summary>
+    internal const string IReceiverSagaPoisonGrain = "olr.yg";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonState"/>.</summary>
+    internal const string ReceiverSagaPoisonState = "olr.ys";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
+    internal const string ReceiverSagaPoisonRecord = "olr.yr";
+
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
 
@@ -255,6 +264,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
     internal const string TreeReceiveFenceState = "olr.ft";
 
+    /// <summary>Alias for <see cref="ReceiveFenceObservation"/> (issue #4593).</summary>
+    internal const string ReceiveFenceObservation = "olr.fo";
+
     // Runtime per-tree replication configuration (the sys-replication-config
     // CRDT tree). The composite OR-Map value record carrying a tree's
     // enablement flag and declared wire merge mode.
@@ -288,5 +300,10 @@ public static class ReplicationTypeAliases
     // happened after it took the peer off the log.
     internal const string IReplicationExportEpochGrain = "olr.xg";
     internal const string ReplicationExportEpochState = "olr.xs";
+
+    // Receiver per-origin causal frontier (#4586): the origin's shipped low
+    // watermark, and the writes held here without being applied.
+    internal const string IReplicationOriginFrontierGrain = "olr.og";
+    internal const string ReplicationOriginFrontierState = "olr.os";
 
 }

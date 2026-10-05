@@ -71,8 +71,10 @@ The core WAL - its partition grains, commit-log writer, and garbage collector - 
 | Option | Type | Default |
 |---|---|---|
 | [`MaxApplyRetries`](#maxapplyretries) | `int` | 5 |
+| [`SagaDeferralTimeout`](#sagadeferraltimeout) | `TimeSpan` | 15 minutes |
 | [`DeadLetterQueueCapacity`](#deadletterqueuecapacity) | `int` | 1000 |
 | [`CausalBufferMaxEntries`](#causalbuffermaxentries) | `int` | 1024 |
+| [`CausalAppliedIdentityCapacity`](#causalappliedidentitycapacity) | `int` | 16,384 |
 | [`CausalBufferMaxBytes`](#causalbuffermaxbytes) | `long` | 16 MiB |
 | [`ShadowForwardDedupeCacheSize`](#shadowforwarddedupecachesize) | `int` | 4096 |
 | [`ApplyMaxParallelRuns`](#applymaxparallelruns) | `int` | 1 |
@@ -203,9 +205,17 @@ Maximum pending WAL batches per partition. Raising it increases pipeline depth a
 
 Retry budget before a poison inbound entry is moved to the dead-letter queue. Raise only when failures are usually transient.
 
+### `SagaDeferralTimeout`
+
+Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
+
 ### `DeadLetterQueueCapacity`
 
 Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. A full queue never evicts: it refuses further parks and holds the affected replication link back (the link reports Stalled) until parked entries are replayed or discarded, because every parked entry was acknowledged and evicting it would lose the write. See [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure).
+
+### `CausalAppliedIdentityCapacity`
+
+How many applied write identities `(origin, HLC)` a receiver remembers per tree and origin ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). An entry whose causal dependency names a remembered write is released at once. A dependency whose identity was forgotten - evicted past this capacity, lost to a reactivation, or applied in another tree - is decided by the origin's low watermark instead (see [Causal-dependency gate](replication-apply.md#6-causal-dependency-gate)). The record is in memory only, so the capacity trades memory for latency, never correctness. It must be between 1 and 1,048,576.
 
 ### `CausalBufferMaxEntries`
 

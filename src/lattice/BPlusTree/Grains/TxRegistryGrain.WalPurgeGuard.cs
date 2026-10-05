@@ -44,6 +44,7 @@ internal sealed partial class TxRegistryGrain
     internal const int MaxWalPurgeSamples = 32;
 
     private readonly List<WalPurgeSample> _walPurgeSamples = [];
+    private bool _walPurgeHeld;
     private DateTimeOffset _walPurgeLastRefresh = DateTimeOffset.MinValue;
     private bool _walPurgeRefreshInFlight;
     private ILatticeReplicationContext? _replicationContext;
@@ -102,8 +103,60 @@ internal sealed partial class TxRegistryGrain
             return true;
         }
 
+        if (_walPurgeHeld)
+        {
+            return false;
+        }
+
         var stamp = state.State.ForgetWalGenerations.TryGetValue(txid, out var g) ? g : 0L;
         return stamp < state.State.WalClearedGeneration;
+    }
+
+    /// <summary>
+    /// Reads the tree's <see cref="IWalPurgeHoldGrain"/> immediately before a
+    /// prune pass that could purge something (issue #4534). A trim forced past
+    /// a replication consumer's unshipped cursor records a hold before it
+    /// trims; while any hold is outstanding the peer still needs a re-seed,
+    /// which can only settle a saga whose decision is still stored, so every
+    /// purge waits. Read after the cleared generation was established, so a
+    /// trim that evidence depends on has its hold visible here. A failed read
+    /// holds (fail closed).
+    /// </summary>
+    private async Task RefreshWalPurgeHoldAsync()
+    {
+        if (!WalPurgeGuardApplies || !HasClearedTombstone())
+        {
+            _walPurgeHeld = false;
+            return;
+        }
+
+        try
+        {
+            // The WAL GC records holds under the physical tree whose log it trims.
+            var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+            var holds = await grainFactory.GetGrain<IWalPurgeHoldGrain>(entry?.PhysicalTreeId ?? TreeId).GetAsync();
+            _walPurgeHeld = holds.Count > 0;
+        }
+        catch (Exception ex)
+        {
+            _walPurgeHeld = true;
+            LogWalPurgeGuardRefreshFailed(logger, TreeId, ex);
+        }
+    }
+
+    private bool HasClearedTombstone()
+    {
+        var cleared = state.State.WalClearedGeneration;
+        foreach (var txid in state.State.ForgottenAt.Keys)
+        {
+            var stamp = state.State.ForgetWalGenerations.TryGetValue(txid, out var g) ? g : 0L;
+            if (stamp < cleared)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

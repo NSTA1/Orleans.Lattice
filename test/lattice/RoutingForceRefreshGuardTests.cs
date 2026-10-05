@@ -31,6 +31,11 @@ public sealed class RoutingForceRefreshGuardTests
         "routed fan-out whose retry loop compares the map version with the registry's after the pass "
         + "and re-resolves on a change, so a stale map costs a retry, never a wrong answer";
 
+    private const string CopyReceiveFenceCheck =
+        "restored-copy receive-fence admission check (#4593): it routes nothing itself, and the route the "
+        + "apply then uses is checked again on every resolution, where a stale route to a replaced copy hits that "
+        + "copy's retained redirect and re-resolves; forcing it would drop the activation's cache on every apply";
+
     private const string ReconciledScan =
         "routed scan: a stale alias heals on StaleTreeRoutingException, and a shard that gave slots away "
         + "reports them so the scan re-reads them under the registry's current map";
@@ -67,6 +72,16 @@ public sealed class RoutingForceRefreshGuardTests
         ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyMergeManyCoreAsync"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyTerminalPostGateAsync"] = (1, RoutedDataPath),
         ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyTerminalToShardAsync"] = (1, RoutedDataPath),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplySetAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyDeleteAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyDeleteRangeAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyMergeManyAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyCrdtDeltaManyAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyCrdtDeltaWithExpiryAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyPreparedSetAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyPreparedDeleteAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::ApplyTxTerminalAsync"] = (1, CopyReceiveFenceCheck),
+        ["src/lattice/BPlusTree/Grains/LatticeGrain.ReplicationApply.cs::FinalizeCrossTreeTerminalAsync"] = (1, CopyReceiveFenceCheck),
 
         // Bulk load, the backup restore lifecycle and the schema cutover force their
         // refresh (#4206); only the shadow build, which resolves a tree it has just
