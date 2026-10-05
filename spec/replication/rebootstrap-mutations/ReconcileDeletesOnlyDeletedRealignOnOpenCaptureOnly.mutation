@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted in ReplicationReBootstrap. After a source restore, an entry s logged
+# under the old lineage can still reach r during the drain. Realigning on the
+# pre-capture alone misses it, and a later pass deletes a value s never deleted.
+MODULE: ReconcileDeletesOnlyDeletedRealignOnOpenCaptureOnly
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: realignment considers only entries captured at open, so a stale source entry taken during the drain is later reconciled as a delete
+PERTURBS: EndExport
+
+--- FIND
+          /\ aligned' = IF ex.scope /\ stable /\ ~(orphan /\ ex.precap.o = s) /\ ~LateOrphan
+--- REPLACE
+\* MUTATION: an entry taken during the drain does not block realignment.
+          /\ aligned' = IF ex.scope /\ stable /\ ~(orphan /\ ex.precap.o = s)
+--- END

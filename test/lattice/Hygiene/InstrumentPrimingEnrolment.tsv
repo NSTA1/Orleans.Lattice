@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 202 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 205 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Reviewed: lowered 203 -> 202 by #4614, which removed the instrument orleans.lattice.replication.shipper.saga_poisoned (one fully-read declaration gone), not lost reach.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
@@ -109,6 +109,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#ApplyDuration	unresolved	re
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyFifoViolations	unresolved	reason=single-value domain tree -> [treeId]; likely under-resolved, not a constant
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyLag	unresolved	reason=dimension (unread-tag-argument:ViewTenantTag): tag argument(s) ViewTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyParallelRuns	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplySourceLineageRefused	unresolved	reason=dimension reason: no declaration found for reason
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapBytesReceived	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapDuration	unresolved	reason=dimension outcome: no declaration found for outcome
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapEntriesReceived	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
@@ -161,6 +162,8 @@ src/lattice.replication/LatticeReplicationMetrics.cs#ShipElidedPayloads	open	ope
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipRedundantPayloadBytes	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipRedundantPayloads	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipWireVersionDownStamp	unresolved	reason=dimension reason: no declaration found for reason
+src/lattice.replication/LatticeReplicationMetrics.cs#SourceRestoreUncoordinated	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
+src/lattice.replication/LatticeReplicationMetrics.cs#TombstoneReapBound	unresolved	reason=dimension reason: no declaration found for reason
 src/lattice.replication/LatticeReplicationMetrics.cs#WalEntriesShipped	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (batch.TreeName)
 src/lattice.replication/RemediationGuard.cs#(unassigned:LatticeReplicationMetrics.DigestRemediationDisabledName)	unresolved	reason=dimension reason: unrecognised value expression: LatticeReplicationMetrics.DigestRemediationDisabledReasonTag...
 src/lattice.replication/ReplicationPeerStats.cs#(unassigned:LatticeReplicationMetrics.BytesBehindName)	unresolved	reason=dimension (unread-observable-callback:static () => _current?.ObserveBytesBehind() ?? Array.Empty<Measurement<long>>()): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension

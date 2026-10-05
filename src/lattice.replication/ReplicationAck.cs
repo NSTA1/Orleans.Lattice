@@ -254,6 +254,18 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(9)] public Guid? ReceiverLineage { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the receiver refused the batch because the
+    /// sender read it under a source lineage the receiver's tree does not hold
+    /// (issue #4673): the lineage the receiver last drained from the sender is
+    /// another one, or the receiver's contents were replaced since. The batch is
+    /// not accepted, so the sender's cursor holds. The sender re-resolves its
+    /// source binding: a stale binding rebinds and never re-sends the old log,
+    /// and a current one takes the peer off the log so a re-seed drains the
+    /// current lineage. A receiver built before this slot omits it.
+    /// </summary>
+    [Id(10)] public bool SourceLineageRefused { get; init; }
 }
 
 /// <summary>

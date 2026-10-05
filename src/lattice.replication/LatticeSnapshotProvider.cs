@@ -157,11 +157,20 @@ internal sealed class LatticeSnapshotProvider(
 
 
         var openGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+
+        // The source's applied low watermarks (#4586 part 2b), read after the
+        // open generation and before the enumeration's prepared pass and snap0.
+        // Only an unbounded export carries them: a bounded one omits every key
+        // overwritten after its cut, so it does not reflect what they cover.
+        var frontierAtOpen = asOfHlc == HybridLogicalClock.Zero
+            ? await CaptureFrontierAtOpenAsync(treeName, openGeneration, cancellationToken).ConfigureAwait(false)
+            : null;
         SnapshotStream? stream = null;
         var entries = EnumerateWithCloseGenerationAsync();
         stream = new SnapshotStream(treeName, asOfHlc, frontier, entries)
         {
             OpenGeneration = openGeneration,
+            OpenFrontier = frontierAtOpen,
             ExportEpoch = epoch,
         };
         return stream;
@@ -182,12 +191,68 @@ internal sealed class LatticeSnapshotProvider(
                 }
 
                 stream!.CloseGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+                stream.SourceFrontier = frontierAtOpen;
             }
             finally
             {
                 linked?.Dispose();
             }
         }
+    }
+
+    /// <summary>
+    /// Reads the source's applied frontier for the tree when the export opens
+    /// (issue #4586 part 2b): every foreign origin's low watermark and held
+    /// writes from this cluster's receiver tree frontier, kept only when the
+    /// frontier observed the open generation's lineage. <see langword="null"/>
+    /// when the tree registry tracks no lineage for the tree.
+    /// <para>
+    /// The source's own origin is never covered. A restore, revert or alias
+    /// move of the source's tree can lose its own writes without deleting them,
+    /// and no floor bounds the lost range soundly, so a positive own-origin
+    /// watermark could fabricate deletes or drop deliveries the receiver needs.
+    /// Nothing needs one: the source's shipped watermark, tagged with the
+    /// receiver's lineage after its re-seed rewind, covers the source's writes
+    /// at that receiver.
+    /// </para>
+    /// </summary>
+    private async Task<SnapshotSourceFrontier?> CaptureFrontierAtOpenAsync(
+        string treeName,
+        SnapshotSourceGeneration openGeneration,
+        CancellationToken cancellationToken)
+    {
+        if (openGeneration.Lineage is not { } lineage)
+        {
+            return null;
+        }
+
+        var ownOrigin = _options.Get(treeName).ClusterId;
+        var lows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        var held = new Dictionary<string, HybridLogicalClock[]>(StringComparer.Ordinal);
+        var frontier = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+            .GetAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (frontier.Epoch != Guid.Empty && frontier.RegistryLineage == lineage)
+        {
+            foreach (var (origin, lowWatermark) in frontier.LowWatermarks)
+            {
+                if (string.Equals(origin, ownOrigin, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                lows[origin] = lowWatermark;
+                var identities = await _grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                    .GetHeldForTreeAsync(treeName, cancellationToken)
+                    .ConfigureAwait(false);
+                if (identities.Length > 0)
+                {
+                    held[origin] = identities;
+                }
+            }
+        }
+
+        return new SnapshotSourceFrontier { Lineage = lineage, LowWatermarks = lows, Held = held };
     }
 
     private async Task<SnapshotSourceGeneration> CaptureSourceGenerationAsync(string treeName)

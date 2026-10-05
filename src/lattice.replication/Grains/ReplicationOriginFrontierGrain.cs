@@ -199,6 +199,31 @@ internal sealed class ReplicationOriginFrontierGrain(
         _aggregateDirty ? PersistAggregateAsync() : Task.CompletedTask;
 
     /// <inheritdoc />
+    public Task<HybridLogicalClock?> GetMinHeldForTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        HybridLogicalClock? lowest = null;
+        foreach (var source in (ReadOnlySpan<string>)[BufferSource(treeId), DeadLetterSource(treeId), ExportSource(treeId)])
+        {
+            if (!state.State.HeldBySource.TryGetValue(source, out var held))
+            {
+                continue;
+            }
+
+            foreach (var identity in held)
+            {
+                if (lowest is not { } current || identity < current)
+                {
+                    lowest = identity;
+                }
+            }
+        }
+
+        return Task.FromResult(lowest);
+    }
+
+    /// <inheritdoc />
     public async Task SetHeldAsync(string source, IReadOnlyCollection<HybridLogicalClock> held, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);
@@ -273,6 +298,48 @@ internal sealed class ReplicationOriginFrontierGrain(
 
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public Task<HybridLogicalClock[]> GetHeldForTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var held = new HashSet<HybridLogicalClock>(state.State.Lost);
+        foreach (var source in new[] { BufferSource(treeId), DeadLetterSource(treeId), ExportSource(treeId) })
+        {
+            if (state.State.HeldBySource.TryGetValue(source, out var identities))
+            {
+                held.UnionWith(identities);
+            }
+        }
+
+        return Task.FromResult(held.ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<int> DropExportHeldBelowAsync(string treeId, HybridLogicalClock below, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var source = ExportSource(treeId);
+        if (!state.State.HeldBySource.TryGetValue(source, out var identities))
+        {
+            return 0;
+        }
+
+        var dropped = identities.RemoveWhere(identity => identity < below);
+        if (identities.Count == 0)
+        {
+            state.State.HeldBySource.Remove(source);
+        }
+
+        if (dropped > 0)
+        {
+            await WriteStateAsync().ConfigureAwait(true);
+        }
+
+        return identities.Count;
     }
 
     /// <inheritdoc />

@@ -1,0 +1,31 @@
+# Pairs with ClearRecorded. The purge clears a leaf without first recording on
+# its shard that it began clearing leaves, so recovery can never re-create the
+# leaf and it fails closed for ever. The base records ShardRootState.LeafClearsBegun
+# before the first clear. Production analogue: #4671's R4.
+MODULE: ClearRecordedClearWithoutRecord
+TARGET: ClearRecorded
+CLASS: Invariant
+SUMMARY: the purge clears a leaf without recording that it began
+PERTURBS: PurgeClear
+
+--- FIND
+    /\ purgeBegun' = TRUE
+    /\ cleared' = [cleared EXCEPT ![l] = TRUE]
+--- REPLACE
+\* MUTATION: the clear runs without the shard's record.
+    /\ purgeBegun' = purgeBegun
+    /\ cleared' = [cleared EXCEPT ![l] = TRUE]
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

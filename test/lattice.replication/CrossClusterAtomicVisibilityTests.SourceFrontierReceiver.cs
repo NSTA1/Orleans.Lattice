@@ -28,11 +28,15 @@ public partial class CrossClusterAtomicVisibilityTests
         public ReplicationTreeFrontierGrain Frontier { get; }
         public ReplicationHighWaterMarkGrain Hwm { get; }
 
+        /// <summary>The grain factory the receiver's grains resolve each other through.</summary>
+        public IGrainFactory Factory { get; }
+
         private int _observed;
 
         public FrontierReceiver(string tree, Guid? lineage)
         {
             var factory = HighWaterMarkTestGrains.FrontierFactory(Origins);
+            Factory = factory;
             Hwm = HighWaterMarkTestGrains.Real(grainFactory: factory, treeId: tree);
             factory.GetGrain<IReplicationHighWaterMarkGrain>(tree, Arg.Any<string?>()).Returns(Hwm);
             Lineage.GetLineageAsync(tree, Arg.Any<CancellationToken>()).Returns(lineage);
@@ -181,6 +185,40 @@ public partial class CrossClusterAtomicVisibilityTests
                 "acknowledgements from before the first lineage cannot vouch for the stamped contents, so the first lineage is a forced gap");
             Assert.That(watermark, Is.EqualTo(HybridLogicalClock.Zero));
             Assert.That(verdict, Is.EqualTo(CausalDependencyVerdict.Unmet));
+        });
+    }
+
+    [Test]
+    public async Task A_dependent_of_a_write_an_uncoordinated_source_restore_destroyed_is_released_not_parked_forever()
+    {
+        // The source wrote w, a peer that learned it wrote d depending on it,
+        // and the source then restored its tree to before w outside a
+        // coordinated restore, so w never ships here. After the re-seed rewind
+        // the source's watermark from its new log passes w: d is released
+        // without w rather than parked for a write no relay can deliver. That is
+        // the divergence a unilateral source restore accepts by contract; the
+        // source counts the restore as uncoordinated.
+        const string tree = FrontierReceiver.Tree + "-source-restore";
+        var receiver = new FrontierReceiver(tree, Guid.NewGuid());
+        var epoch = await receiver.Frontier.ObserveAsync(TwoSiteClusterFixture.SiteAClusterId, null, CancellationToken.None);
+        var ticks = DateTime.UtcNow.Ticks;
+        var w = Hlc(ticks, 10);
+        var afterRewind = new ReplicationSourceFrontier
+        {
+            ReceiverLineage = epoch,
+            TreeLowWatermark = Hlc(ticks, 50),
+            OriginLowWatermark = Hlc(ticks, 50),
+            OriginGeneration = 1,
+        };
+
+        var before = await receiver.CheckAsync(w);
+        await receiver.Frontier.ObserveAsync(TwoSiteClusterFixture.SiteAClusterId, afterRewind, CancellationToken.None);
+        var after = await receiver.CheckAsync(w);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(before, Is.EqualTo(CausalDependencyVerdict.Unmet), "precondition: w never arrived here");
+            Assert.That(after, Is.EqualTo(CausalDependencyVerdict.Met), "released on the source's watermark, not parked for ever");
         });
     }
 }

@@ -209,6 +209,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
             CausalStableFrontier = stream.CausalStableFrontier,
             ExportEpoch = stream.ExportEpoch,
             OpenGeneration = stream.OpenGeneration,
+            SourceFrontier = stream.OpenFrontier,
         };
     }
 
@@ -267,7 +268,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
 
         if (stream.CloseGeneration is { } close)
         {
-            yield return new RemoteSnapshotStreamItem { CloseGeneration = close };
+            yield return new RemoteSnapshotStreamItem { CloseGeneration = close, SourceFrontier = stream.SourceFrontier };
         }
     }
 }

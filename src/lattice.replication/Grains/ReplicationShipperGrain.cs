@@ -964,6 +964,9 @@ internal sealed partial class ReplicationShipperGrain(
         }
         finally
         {
+            // A refusal for the source lineage re-resolves the binding before
+            // anything else this tick acts on it (#4673).
+            await MaybeHandleSourceLineageRefusalAsync(Math.Max(1, options.ReplogPartitions));
             // After every batch of the tick has folded its cursors: a rewind
             // applied before a later fold would be raised past the retained
             // saga records it exists to re-ship (#4534).
@@ -1364,6 +1367,7 @@ internal sealed partial class ReplicationShipperGrain(
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                 SourceFrontier = _currentFrontier,
+                SourceLineage = SourceLineageStamp,
                 // Payload is empty on the framing path - the
                 // transport consumes EncodedEnvelope. Bytes-only
                 // transports that need a serialised form are not
@@ -1408,6 +1412,7 @@ internal sealed partial class ReplicationShipperGrain(
         // which the producer must not trim.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteSourceLineageRefusal(ack);
         NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
@@ -2121,6 +2126,7 @@ internal sealed partial class ReplicationShipperGrain(
                         OriginClusterId = options.ClusterId,
                         ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                         SourceFrontier = _currentFrontier,
+                        SourceLineage = SourceLineageStamp,
                         Payload = ReadOnlyMemory<byte>.Empty,
                         Envelope = null,
                         EncodedEnvelope = encodedEnvelope,
@@ -2299,6 +2305,7 @@ internal sealed partial class ReplicationShipperGrain(
         // leg, ahead of the pipelined cursor advance below.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteSourceLineageRefusal(ack);
         NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
@@ -2721,6 +2728,15 @@ internal sealed partial class ReplicationShipperGrain(
             // A record of a batch that could not be encoded is consumed without
             // shipping: the re-seed export the failure asked for carries it (#4614).
             if (IsEncodeQuarantined(minPartition, winningShipping.Sequence))
+            {
+                continue;
+            }
+
+            // A record the bound log held when the binding's lineage changed is
+            // consumed without shipping: the re-seed export that change asked
+            // for carries its effects, and an old-lineage record must never
+            // reach a peer drained from the new lineage (#4673).
+            if (IsBelowSourceLineageBoundary(minPartition, winningShipping.Sequence))
             {
                 continue;
             }
@@ -3610,6 +3626,7 @@ internal sealed partial class ReplicationShipperGrain(
         // shipped value for as long as the link stays quiet.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
         NoteReseedEcho(ack);
+        NoteSourceLineageRefusal(ack);
         NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
@@ -4248,8 +4265,8 @@ internal sealed partial class ReplicationShipperGrain(
             }
         }
 
-        var physical = await ResolveSourcePhysicalAsync();
-        await ApplyResolvedIdentityAsync(physical, partitions);
+        var (physical, lineage) = await ResolveSourceBindingAsync();
+        await ApplyResolvedIdentityAsync(physical, partitions, lineage);
     }
 
     /// <summary>
@@ -4272,7 +4289,7 @@ internal sealed partial class ReplicationShipperGrain(
         var partitions = Math.Max(1, options.ReplogPartitions);
         EnsureScratchSized(partitions);
 
-        await ApplyResolvedIdentityAsync(newPhysicalTreeId, partitions);
+        await ApplyResolvedIdentityAsync(newPhysicalTreeId, partitions, await ObserveLineageForAsync(newPhysicalTreeId));
 
         // No pump re-arm is needed here: the steady-state phase timer is armed on
         // every activation (OnActivateCoreAsync), so an already-active shipper
@@ -4296,7 +4313,7 @@ internal sealed partial class ReplicationShipperGrain(
     /// peer merges every entry by <see cref="HybridLogicalClock"/> (LWW), making
     /// the replay idempotent.
     /// </summary>
-    private async Task ApplyResolvedIdentityAsync(string physical, int partitions)
+    private async Task ApplyResolvedIdentityAsync(string physical, int partitions, SourceLineageObservation lineage)
     {
         _walTreeId = physical;
         _sourceIdentityResolved = true;
@@ -4314,11 +4331,19 @@ internal sealed partial class ReplicationShipperGrain(
             // next cursor-advance write. Avoiding a dedicated write here keeps
             // the shipper's deferred-persist accounting unchanged.
             state.State.BoundPhysicalTreeId = physical;
+            NoteSourceLineage(lineage, physicalChanged: false);
             return;
         }
 
         if (string.Equals(bound, physical, StringComparison.Ordinal))
         {
+            // A purge and recreate re-stamps the lineage over the same log
+            // (#4673): its old-lineage records stay in it, below the boundary.
+            if (NoteSourceLineage(lineage, physicalChanged: false))
+            {
+                await ForceSourceLineageGapAsync(partitions);
+            }
+
             return;
         }
 
@@ -4333,6 +4358,9 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.PartitionCursors.Clear();
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
+        // The retired log's lineage boundary means nothing in the new one.
+        state.State.SourceLineageBoundary.Clear();
+        var lineageChanged = NoteSourceLineage(lineage, physicalChanged: true);
         ResetTerminalHoldsForNewSource(followsSagaPause);
         DiscardClockFloors();
         // Quarantined sequences belong to the retired log (#4614).
@@ -4348,6 +4376,14 @@ internal sealed partial class ReplicationShipperGrain(
         else
         {
             Array.Clear(_partitionGrainCache, 0, _partitionGrainCache.Length);
+        }
+
+        // A move to a new lineage (a restore, revert or alias move, but not a
+        // resize) also forces a gap: the new log may hold records of contents
+        // the new lineage no longer has (#4673).
+        if (lineageChanged)
+        {
+            await ForceSourceLineageGapAsync(partitions);
         }
     }
 

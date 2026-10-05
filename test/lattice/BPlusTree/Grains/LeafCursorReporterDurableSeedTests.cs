@@ -503,6 +503,9 @@ public sealed class LeafCursorReporterDurableSeedTests
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() =>
             Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
                 new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
+        public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
             Task.FromResult<IReadOnlyDictionary<string, long>>(
                 new Dictionary<string, long>(StringComparer.Ordinal));
@@ -531,6 +534,9 @@ public sealed class LeafCursorReporterDurableSeedTests
         public Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Fail();
         public Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Fail();
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() => throw fault();
+        public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => throw fault();
         public Task RemoveAsync(string consumerId) => Fail();
         public Task ClearAsync() => Fail();

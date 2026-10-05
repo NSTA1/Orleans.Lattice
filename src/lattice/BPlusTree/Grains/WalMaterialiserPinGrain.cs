@@ -142,6 +142,12 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private const int OffsetEntryOverheadChars = 40;
 
+    /// <summary>
+    /// Estimated per-entry serialisation overhead of a
+    /// <see cref="WalMaterialiserPinState.OverrideHolds"/> entry beyond its key.
+    /// </summary>
+    private const int HoldEntryOverheadChars = 8;
+
     private readonly IGrainContext _context;
     private readonly IPersistentState<WalMaterialiserPinState> _state;
     private readonly IOptionsMonitor<LatticeOptions> _options;
@@ -325,6 +331,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             // No provider handle: the injected IPersistentState has already read
             // the single legacy slot, which is the whole of this shard's state.
+            PruneCoveredHolds();
             RecomputeEstimate();
             return;
         }
@@ -364,6 +371,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         cancellationToken.ThrowIfCancellationRequested();
 
         MarkMisroutedConsumersDirty();
+        PruneCoveredHolds();
         RecomputeEstimate();
 
         var target = ResolveTargetWidth(
@@ -520,13 +528,15 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private HashSet<string>? SnapshotLegacyIds()
     {
         var legacy = _state.State;
-        if (legacy.Pins.Count == 0 && legacy.Offsets.Count == 0)
+        legacy.OverrideHolds ??= new HashSet<string>(StringComparer.Ordinal);
+        if (legacy.Pins.Count == 0 && legacy.Offsets.Count == 0 && legacy.OverrideHolds.Count == 0)
         {
             return null;
         }
 
         var ids = new HashSet<string>(legacy.Pins.Keys, StringComparer.Ordinal);
         ids.UnionWith(legacy.Offsets.Keys);
+        ids.UnionWith(legacy.OverrideHolds);
         return ids;
     }
 
@@ -683,6 +693,38 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 MarkBucketDirty(offset.Key, layoutWidth);
             }
         }
+
+        // Override holds union across slots (issue #4641). A hold read from a
+        // stale slot for a consumer whose offset has since become real is
+        // dropped by PruneCoveredHolds once every slot is merged, so a union can
+        // over-hold for one activation but never resurrect a hold that matters.
+        if (contents.OverrideHolds is { } holds)
+        {
+            foreach (var consumerId in holds)
+            {
+                if (_state.State.OverrideHolds.Add(consumerId) && layoutWidth >= 2)
+                {
+                    MarkBucketDirty(consumerId, layoutWidth);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drops every override hold whose consumer now has a real durable offset
+    /// (issue #4641): the WAL GC's offset-floor stop protects every entry above
+    /// that offset on every arm, so the hold has nothing left to protect.
+    /// </summary>
+    private void PruneCoveredHolds()
+    {
+        var holds = _state.State.OverrideHolds ??= new HashSet<string>(StringComparer.Ordinal);
+        if (holds.Count == 0)
+        {
+            return;
+        }
+
+        holds.RemoveWhere(consumerId =>
+            _state.State.Offsets.TryGetValue(consumerId, out var offset) && offset >= 0);
     }
 
     /// <summary>
@@ -705,6 +747,17 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 if (SlotOf(consumerId, _bucketCount) != bucket)
                 {
                     MarkBucketDirty(consumerId, _bucketCount);
+                }
+            }
+
+            if (holder.State.OverrideHolds is { } holds)
+            {
+                foreach (var consumerId in holds)
+                {
+                    if (SlotOf(consumerId, _bucketCount) != bucket)
+                    {
+                        MarkBucketDirty(consumerId, _bucketCount);
+                    }
                 }
             }
         }
@@ -768,6 +821,10 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     internal static long EstimateOffsetEntryBytes(string consumerId)
         => 2L * (consumerId.Length + OffsetEntryOverheadChars);
 
+    /// <summary>Estimated serialised size of one <see cref="WalMaterialiserPinState.OverrideHolds"/> entry.</summary>
+    internal static long EstimateHoldEntryBytes(string consumerId)
+        => 2L * (consumerId.Length + HoldEntryOverheadChars);
+
     /// <summary>Recomputes <see cref="_estimatedBytes"/> from the in-memory map.</summary>
     private void RecomputeEstimate()
     {
@@ -780,6 +837,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         foreach (var consumerId in _state.State.Offsets.Keys)
         {
             total += EstimateOffsetEntryBytes(consumerId);
+        }
+
+        foreach (var consumerId in _state.State.OverrideHolds)
+        {
+            total += EstimateHoldEntryBytes(consumerId);
         }
 
         _estimatedBytes = total;
@@ -855,6 +917,85 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             new Dictionary<string, long>(_state.State.Offsets, StringComparer.Ordinal));
 
     /// <inheritdoc />
+    public async Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds)
+    {
+        ArgumentNullException.ThrowIfNull(consumerIds);
+        for (var i = 0; i < consumerIds.Count; i++)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(consumerIds[i]);
+        }
+
+        // Fail fast before touching memory: a hold that is not durable must not
+        // be reported as raised, and nothing is merged that a failed write would
+        // then have to unwind.
+        ThrowIfFailingFast("override hold");
+
+        List<string>? raised = null;
+        List<uint>? changedHashes = null;
+        for (var i = 0; i < consumerIds.Count; i++)
+        {
+            var consumerId = consumerIds[i];
+
+            // A real offset already protects everything the hold would: the GC's
+            // offset-floor stop refuses every entry above it on every arm.
+            if (_state.State.Offsets.TryGetValue(consumerId, out var offset) && offset >= 0)
+            {
+                continue;
+            }
+
+            if (_state.State.OverrideHolds.Contains(consumerId))
+            {
+                continue;
+            }
+
+            // The GC census reads holds against pins, so a held consumer always
+            // carries a pin; a consumer that has none gets the Zero block pin a
+            // leaf seeds at birth, which a later real frontier advances past.
+            if (!_state.State.Pins.ContainsKey(consumerId))
+            {
+                Merge(consumerId, HybridLogicalClock.Zero, NoOffset);
+            }
+
+            _state.State.OverrideHolds.Add(consumerId);
+            _estimatedBytes += EstimateHoldEntryBytes(consumerId);
+            _dirty = true;
+            MarkBucketDirty(consumerId, _bucketCount);
+            (raised ??= new List<string>(consumerIds.Count)).Add(consumerId);
+            (changedHashes ??= new List<uint>(consumerIds.Count)).Add(HashOf(consumerId));
+        }
+
+        if (changedHashes is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await PersistAsync(MaterialiserPinBirthOutcome, PersistScope.Consumers, changedHashes);
+        }
+        catch
+        {
+            // The hold did not become durable, so it must not stand in memory as
+            // if it had: a second raise would find it and return without a write.
+            // The slots stay dirty, which only over-retains until the next flush.
+            foreach (var consumerId in raised!)
+            {
+                if (_state.State.OverrideHolds.Remove(consumerId))
+                {
+                    _estimatedBytes -= EstimateHoldEntryBytes(consumerId);
+                }
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+        Task.FromResult<IReadOnlyCollection<string>>(
+            new HashSet<string>(_state.State.OverrideHolds, StringComparer.Ordinal));
+
+    /// <inheritdoc />
     public async Task RemoveAsync(string consumerId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
@@ -865,10 +1006,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         var hash = HashOf(consumerId);
         var removedPin = _state.State.Pins.Remove(consumerId);
         var removedOffset = _state.State.Offsets.Remove(consumerId);
-        if (!removedPin && !removedOffset)
+        var removedHold = _state.State.OverrideHolds.Remove(consumerId);
+        if (!removedPin && !removedOffset && !removedHold)
         {
             _hashes.Remove(consumerId);
             return;
+        }
+
+        if (removedHold)
+        {
+            _estimatedBytes -= EstimateHoldEntryBytes(consumerId);
         }
 
         if (removedPin)
@@ -904,13 +1051,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, GrainKey);
         }
 
-        if (_state.State.Pins.Count == 0 && _state.State.Offsets.Count == 0)
+        if (_state.State.Pins.Count == 0
+            && _state.State.Offsets.Count == 0
+            && _state.State.OverrideHolds.Count == 0)
         {
             return;
         }
 
         _state.State.Pins.Clear();
         _state.State.Offsets.Clear();
+        _state.State.OverrideHolds.Clear();
         _hashes.Clear();
         _estimatedBytes = 0;
         _dirty = true;
@@ -1032,6 +1182,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             {
                 _estimatedBytes += EstimateOffsetEntryBytes(consumerId);
             }
+        }
+
+        // A real (coverage-gated) offset makes an override hold redundant (issue
+        // #4641): the GC's offset-floor stop protects every entry above it on
+        // every arm. Dropped in the same slot write that lands the offset, so the
+        // GC, which reads holds before offsets, never sees neither.
+        if (checkpointOffset >= 0 && _state.State.OverrideHolds.Remove(consumerId))
+        {
+            _estimatedBytes -= EstimateHoldEntryBytes(consumerId);
+            changed = true;
         }
 
         // Classify what this merge actually moved, naming both axes rather than
@@ -1693,6 +1853,14 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             if (slices.TryGetValue(SlotOf(offset.Key, width), out var slice))
             {
                 slice.Offsets[offset.Key] = offset.Value;
+            }
+        }
+
+        foreach (var consumerId in _state.State.OverrideHolds)
+        {
+            if (slices.TryGetValue(SlotOf(consumerId, width), out var slice))
+            {
+                slice.OverrideHolds.Add(consumerId);
             }
         }
 

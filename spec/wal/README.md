@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 10 | 4 | 18 | 31 | 31 | 111,154 |
+| `WalDurability` | 11 | 4 | 22 | 39 | 36 | 111,154 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
@@ -39,11 +39,12 @@ invariant and both action properties with a budget of two faults instead of one:
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
-leaf's durable snapshot (`SnapshotVanish`, issue #4634), at two faults so a snapshot can
-vanish and its leaf then stop. Destroyed data is outside the durability properties by
-construction, so it checks the properties that say the loss is never silent -
-`ReadPositionHonest` above all - with the other safety invariants that still apply:
-1,106,104 distinct states.
+leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
+(`LeafRowVanish`, issue #4654), and the operator purge the tree (`PurgeClear`), at two
+faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
+properties by construction, so it checks the properties that say the loss is never
+silent - `ReadPositionHonest` above all, carved out only for a shard whose purge has
+begun - with the other safety invariants that still apply: 1,365,609 distinct states.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the
@@ -125,6 +126,23 @@ snapshot that failed to load and cannot be lowered, so the GC may trim under it
 while the cold rebuild runs. `ReadPositionHonestLoadFailureColdStartsOverIntactWal`
 keeps that standing.
 
+The models found six more while the review's follow-ups were closed out, each
+reproduced before its fix and each fixed:
+
+| Issue | Defect | Check |
+|-------|--------|-------|
+| #4621 | A flush abandoned at its deadline can land after readers have passed its offset, below their cursors. **Fixed by #4659**: the watermark is held below every abandoned call until it settles, and a provider trim watermark tells a hole from a trim. | `LogPrefixAppliedWatermarkIgnoresAbandoned`, `ShippingNeverSkipsTrailingHoleExposed` |
+| #4634 | A cold start over a vanished snapshot replays a WAL trimmed under it. **Fixed by #4653**: the leaf row records held coverage and the activation fails closed. | `ReadPositionHonestVanishedSnapshotStartsCold`, `ReadPositionHonestVanishedSnapshotTailZeroShortcut` |
+| #4654 | A leaf whose state row vanishes comes up empty. **Fixed by #4671**: a rowless leaf serves data only under a create intent. | `ReadPositionHonestRowlessActivationStartsCold`, `ReadPositionHonestSelfHealPassesIntent` |
+| #4622 | A retention TTL yields only to a `Zero` pin, so it trims a write made after an empty release. **Fixed by #4646**: the TTL ceiling is capped at the lowest frontier of a partition's uncovered pins. | `WalPartitionReleaseCoyoteTests.A_ttl_that_yields_only_to_zero_pins_trims_a_write_made_after_an_empty_release` |
+| #4669 | A cold leaf's checkpoint flush tail releases a partition its replay has not read. **Fixed by #4677**: no empty release before the replay barrier latches. | `WalPartitionReleaseCoyoteTests.An_empty_release_published_before_the_partition_is_replayed_trims_an_unread_write` |
+| #4641 | A write stamped below an empty release's frontier is trimmed by every stamp-based GC arm. **Fixed by #4679**: a durable override hold the GC reads as a block until coverage lands. | `WalPartitionReleaseCoyoteTests.Skipping_the_override_hold_lets_the_gc_trim_an_override_stamped_write_issue_4641` |
+
+The last three rows of that table depend on HLC stamps and on several partitions,
+which `WalDurability.tla` abstracts away; `WalPartitionReleaseModel`, a Coyote
+model over the production pin and trim cores, checks them (see the refinement note's
+abstraction gaps).
+
 When a fix lands, its gap row is removed and its detectors are re-proven red against
 the reproducing mutation.
 
@@ -137,9 +155,9 @@ move protocol with one shard crash and one coordinator crash, for one move and, 
 another's lapsed fence). It does NOT
 cover:
 
-- multi-partition checkpoint arrays;
+- multi-partition checkpoint arrays, HLC stamps and retention TTLs in TLC; these are
+  checked by `WalPartitionReleaseModel` instead;
 - splits, resharding and saga state;
-- retention TTLs, which trim past the floor by design;
 - interleavings inside a grain turn's awaits;
 - replication consumers, beyond their effect on the trim floor;
 - liveness under two faults, or any property under three.

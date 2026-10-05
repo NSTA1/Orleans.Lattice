@@ -983,6 +983,14 @@ Every property above is also paired with mutations of the TLA+ module under
 `spec/atomic-commit/mutations-cross-cluster/`, which is where the properties
 without a Coyote guard of their own are shown able to fail.
 
+The loss paths - a shipper gap, a detach and re-add, a receiver poison - and the
+re-seed, replay filter and purge holds that repair them are modelled in TLA+
+only, in the module's variant configurations, with one regression mutation per
+fix. Their fixes are grain-level mechanisms rather than pure cores, so the
+Coyote models above deliver every record and do not encode them; each is pinned
+instead by the real-grain detectors that `spec/atomic-commit/RefinementCrossCluster.md`
+cites on the action that carries it.
+
 ### Property catalogue: plain replication (issue #4438)
 
 The replication module, `spec/replication/Replication.tla` (with its companion

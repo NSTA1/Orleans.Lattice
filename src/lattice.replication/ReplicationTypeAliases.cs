@@ -30,6 +30,12 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-origin HWM persistent state class.</summary>
     internal const string ReplicationHighWaterMarkState = "olr.hs";
 
+    /// <summary>Alias for the bootstrap drop floor persisted on the high-water-mark state (issue #4549).</summary>
+    internal const string ReplicationBootstrapFloor = "olr.hf";
+
+    /// <summary>Alias for the high-water-mark grain's per-origin admission read (issue #4549).</summary>
+    internal const string ReplicationApplyAdmission = "olr.hm";
+
     // Inbound apply pipeline
 
     /// <summary>Alias for the apply-result return value.</summary>
@@ -100,6 +106,7 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
     internal const string SnapshotSourceGeneration = "olr.sg";
+    internal const string SnapshotSourceFrontier = "olr.sx";
 
     // Production replication drivers
 
@@ -323,4 +330,7 @@ public static class ReplicationTypeAliases
     internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
     internal const string SourceFrontierShipperState = "olr.fw";
     internal const string SourceFrontierPrepare = "olr.fx";
+
+    // A receiver's record of the source lineage it last drained (#4673).
+    internal const string ReplicationDrainedLineage = "olr.dn";
 }

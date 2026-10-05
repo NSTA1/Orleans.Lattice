@@ -217,10 +217,29 @@ public partial class CrossClusterAtomicVisibilityTests
             Timestamp = Hlc(ticks, 9),
             OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
         });
-        await PumpAsync(shipper, ticks: 6);
+
+        // The hold must last through the replay, not just to the rewind: a
+        // decision purged after the rewind but before the replay passes its
+        // horizon would leave the replay's verdict for its saga stale (epic
+        // #4430 review finding S3). Step one tick at a time and check every
+        // tick that ends mid-replay.
+        var observedMidReplay = false;
+        for (var tick = 0; tick < 6; tick++)
+        {
+            await PumpAsync(shipper, ticks: 1);
+            if (!shipper.ReseedRequired && state.State.ReplayFilterHorizon is not null)
+            {
+                observedMidReplay = true;
+                Assert.That(state.State.ReplayHoldLog, Is.EqualTo(tree),
+                    "the replay hold stays recorded after the rewind until the replay passes its horizon");
+                await hold.DidNotReceiveWithAnyArgs().RemoveAsync(default!);
+            }
+        }
 
         Assert.Multiple(async () =>
         {
+            Assert.That(observedMidReplay, Is.True,
+                "precondition: a tick ended after the rewind and before the replay passed its horizon");
             Assert.That(state.State.ReplayFilterHorizon, Is.Null, "precondition: the replay passed its horizon");
             Assert.That(state.State.ReplayHoldLog, Is.Null, "the hold is released once the replay clears");
             await hold.Received(1).RemoveAsync(Arg.Is<string>(k => k.EndsWith("#replay", StringComparison.Ordinal)));

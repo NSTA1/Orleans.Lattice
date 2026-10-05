@@ -28,6 +28,7 @@ internal static class BootstrapDeleteReconcile
         Guid? alignedLineage,
         bool heldNoSourceRowsAtImportStart,
         bool anyCapturedKeyAbsentFromExport,
+        bool anySourceRowAbsentFromExportAtEnd,
         LatticeMergeMode mergeMode)
     {
         if (isScopedExport)
@@ -65,22 +66,29 @@ internal static class BootstrapDeleteReconcile
             return new(BootstrapReconcileOutcome.SkippedUnstable, false, true, false);
         }
 
+        // Issue #4549: a source-origin row the receiver took during the drain -
+        // from an older lineage, after a source restore - is not in the
+        // pre-capture. Aligning over it would let a later pass vouch for it and
+        // delete a value the source never deleted, so every alignment also needs
+        // the end-of-drain scan to find no source-origin row the export lacks.
+        var anyOrphaned = anyCapturedKeyAbsentFromExport || anySourceRowAbsentFromExportAtEnd;
         if (alignedLineage is null)
         {
             // The reconcile only touches source-origin keys, so a receiver that
             // held none of them when the import began is aligned by this import,
-            // whatever local or third-origin rows it holds.
-            if (heldNoSourceRowsAtImportStart)
+            // whatever local or third-origin rows it holds - unless one arrived
+            // during the drain that the export does not carry.
+            if (heldNoSourceRowsAtImportStart && !anySourceRowAbsentFromExportAtEnd)
             {
                 return new(BootstrapReconcileOutcome.Reconciled, true, false, true);
             }
 
-            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedNeverAligned, anyCapturedKeyAbsentFromExport);
+            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedNeverAligned, anyOrphaned);
         }
 
         if (alignedLineage != open.Lineage)
         {
-            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedLineageMismatch, anyCapturedKeyAbsentFromExport);
+            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedLineageMismatch, anyOrphaned);
         }
 
         return new(BootstrapReconcileOutcome.Reconciled, true, false, false);

@@ -90,7 +90,13 @@ before calling `AddLatticeReplication`.
   adopts the export's lineage when every source-origin key it held was
   carried by the export, because there is then nothing it could wrongly
   delete; otherwise it skips, counted as `skipped_never_aligned` or
-  `skipped_lineage_mismatch`, and keeps every key.
+  `skipped_lineage_mismatch`, and keeps every key. Every alignment - this
+  one and the one a receiver that held no source row records - also
+  needs a scan at the end of the drain to find no live, non-expiring
+  source-origin row the export lacks (#4549). A source-origin row that
+  arrived during the drain, perhaps one the source shipped under an older
+  lineage before a restore, is absent from the pre-capture; aligning over
+  it would let a later pass delete a value the source never deleted.
 
   An unknown generation (a sender that predates generations), a generation
   that moved during the export, or a deleted or purging source records a
@@ -100,12 +106,94 @@ before calling `AddLatticeReplication`.
   one minute to a six-hour cap, so a sender that never reports a
   generation does not re-bootstrap the tree on every tick. Source-origin
   keys carrying an expiry are not captured because they expire on their
-  own, and receiver-local or third-origin stale keys remain the residual
-  tracked by #4549.
+  own.
+
+  Rows of any other origin - the receiver's own writes and a third
+  cluster's - converge through the source's applied frontier (#4549). The
+  export carries, when it opens and after its opening generation, the
+  source tree's per-origin applied low watermark `S(o)` and the writes
+  below it the source holds without applying `H(o)` (lost marks
+  included); the source's own origin is never part of it, because its
+  writes are re-shipped in offset order with their deletes. A write of
+  origin `o` stamped below `S(o)` and not in `H(o)` was applied at the
+  source before the export opened, so the export already reflects it:
+  carried, or superseded by a later write or a delete.
+
+  Before the drain, once the import is recorded (and once the tree is
+  registered, so its lineage stamp cannot reset anything mid-drain), the
+  receiver installs `(S, H)` as a durable **bootstrap drop floor** on its
+  high-water-mark grain, provided the frontier was read under the
+  export's opening lineage; otherwise it clears any earlier floor. The
+  floor starts **provisional**: a delivery below it - a third cluster's
+  write still in flight, a dead-letter replay, or a causal-buffer drain -
+  is deferred (`outcome=bootstrap-floor-deferred`), not acknowledged,
+  because an import that turns out unstable clears the floor and a
+  dropped delivery would never be re-sent. The drain's own rows, saga
+  terminals, and range deletes are exempt.
+
+  Every install bumps the tree's **floor epoch**. The applier stamps each
+  replicated write with the epoch it was admitted under, the epoch is
+  raised in the tree registry
+  (`TreeRegistryEntry.ReplicationFloorEpoch`), and every shard root of the
+  tree is armed with it. Arming is a serial shard-root turn that returns
+  only once the writes the shard admitted under an older epoch have
+  finished their leaf merges; from then on the shard refuses an
+  older-stamped write, which the applier defers. A shard root that
+  activates later - a split or reshard target included - reads the epoch
+  from the registry before it admits its first stamped write. So no write
+  admitted before the floor existed can land after the reconcile scan.
+
+  After the drain the coordinator scans the receiver's live, non-expiring
+  last-writer-wins rows of every origin other than the source (a local
+  row counts as this cluster's id), and deletes, at the row's own HLC and
+  stamped with the source's id, each one whose key the export did not
+  carry and whose write is below `S(o)` and not in `H(o)`. A pending saga
+  prepare matching the same test belongs to a saga the source had already
+  decided - one still open there is exported as prepared rows - so its
+  bucket on that leaf is discarded, durably, and its later commit
+  installs nothing. A row of another origin the export lacks whose write
+  is at or above `S(o)` - or of an origin the frontier carries no
+  watermark for - proves nothing: the source may have applied it during
+  the export and then deleted it, or not have received it yet. It is kept
+  and the reconcile is owed a retry, which settles it once the watermark
+  has risen past it. The reconcile needs a stable generation like the
+  source-origin reconcile, but not the aligned-lineage record: the
+  frontier itself proves the source applied the write. A stable close
+  then makes the floor final, and from then on a delivery below it is
+  acknowledged without being merged (`outcome=bootstrap-floor-dropped`).
+  An export whose generation moved clears the floor instead, so the
+  deferred deliveries apply when re-shipped, and owes a retry that
+  installs a fresh one. The floor belongs to the receiver's lineage of
+  the tree: the tree frontier's re-stamp clears it with the tree's
+  applied identities. A sender that carries no frontier installs no floor
+  and reconciles no other origin.
 
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **An unbounded export carries the source's applied frontier**
+  ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). For
+  every foreign origin, it carries the applied low watermark below which
+  each of that origin's writes to the tree is reflected in the export, and
+  the writes the source held without applying them (parked, dead-lettered
+  or lost). The values come from the source's own receiver tree frontier,
+  and only when that frontier observed the open generation's lineage. The
+  source's own origin is never covered: a restore, revert or alias move of
+  the source's tree can lose its own writes without deleting them, and the
+  source's shipped watermark, tagged with the receiver's lineage after its
+  re-seed rewind, covers its writes at each receiver anyway. The value
+  rides the export metadata at open, so a receiver can put a drop floor in
+  force before the drain applies anything, and the end-of-stream trailer
+  at close. The receiver keeps it only when the open and close generations
+  match, are known, describe a live tree, and carry the lineage the
+  frontier was read under. The bootstrap pin then installs it on the
+  receiver's tree frontier: each origin's watermark starts from the
+  export's, and the source's held writes stay held until the receiver
+  applies them itself or the origin's own watermark passes them. Otherwise
+  every origin starts from zero, which is sound and rises as each origin's
+  own sender ships its watermark. The export reads every key of the tree
+  through non-interleaving calls, so a write the watermarks cover cannot be
+  overtaken by the read. A bounded or scoped export carries no frontier.
 - **Expired keys are not emitted.** The committed projection reads an
   expired key as absent; the receiver's copy carries the same absolute
   expiry, so it expires there too.
@@ -793,6 +881,20 @@ if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
     _ = lifted;
 }
 ```
+
+### Source lineage gate
+
+When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
+
+From then on, the push path refuses a batch from that source in two cases:
+- the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
+- the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
+
+A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
+- A sender whose binding is stale rebinds and never re-sends the old log.
+- A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
+
+The gate refuses more than the reconcile strictly needs, because a lineage cannot be ordered and a refusal only costs a re-seed. A batch with no stamp (a sender that predates the header), or from a source this tree never drained, applies as before. A failure to read the record refuses the batch for now without asking for a re-seed.
 
 ### Sample usage
 

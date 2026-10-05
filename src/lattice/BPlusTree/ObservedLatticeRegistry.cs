@@ -337,6 +337,13 @@ internal static class ObservedLatticeRegistry
                 MethodTag(nameof(SetWalMaxRetainedBytesAsync)));
 
         /// <inheritdoc />
+        public Task RaiseReplicationFloorEpochAsync(string treeId, long epoch) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.RaiseReplicationFloorEpochAsync(treeId, epoch),
+                MethodTag(nameof(RaiseReplicationFloorEpochAsync)));
+
+        /// <inheritdoc />
         public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) =>
             Observe(
                 Stopwatch.GetTimestamp(),

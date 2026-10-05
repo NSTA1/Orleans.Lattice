@@ -1,0 +1,16 @@
+# Pairs with ReconcileDeletesOnlyDeleted in ReplicationReBootstrap. An entry s logged before its lineage was
+# re-stamped can arrive after r aligned with the new lineage. Applied, it is a
+# source entry the new contents lack, and the reconcile fabricates its delete.
+# Reproduces current production (#4673): a batch carries no source lineage.
+MODULE: ReconcileDeletesOnlyDeletedStaleLineageApplied
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: an aligned receiver applies an entry the source logged under its old lineage, which a later pass then reconciles as a delete
+PERTURBS: Deliver
+
+--- FIND
+       IN IF StaleLineage(e) THEN UNCHANGED <<reg, clk>>
+--- REPLACE
+\* MUTATION: no lineage check on delivery.
+       IN IF FALSE THEN UNCHANGED <<reg, clk>>
+--- END

@@ -188,6 +188,46 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The origin's high-water mark together with the tree's bootstrap drop
+    /// floor for it (issue #4549). The applier reads it once per entry, or once
+    /// per same-origin run of a batch, in place of <see cref="GetAsync"/>.
+    /// </summary>
+    /// <param name="originClusterId">The origin whose admission to read.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ReplicationApplyAdmission> GetAdmissionAsync(string originClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs, durably, the bootstrap drop floor a full bootstrap's export
+    /// carries (issue #4549), replacing any earlier one: per origin, the
+    /// source's applied low watermark at export open and the writes below it the
+    /// source held without applying. Installed before the drain applies anything,
+    /// so no delivery the export already reflects lands meanwhile. An empty or
+    /// out-of-bounds export installs no floor. The floor starts provisional - a
+    /// delivery below it is deferred - until <see cref="FinalizeBootstrapFloorAsync"/>.
+    /// Every install bumps the tree's floor epoch, which it returns.
+    /// </summary>
+    /// <param name="lowWatermarks">Per origin, the source's applied low watermark at export open.</param>
+    /// <param name="held">Per origin, the writes the source held without applying.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's new floor epoch.</returns>
+    Task<long> SetBootstrapFloorAsync(
+        IReadOnlyDictionary<string, HybridLogicalClock> lowWatermarks,
+        IReadOnlyDictionary<string, HybridLogicalClock[]> held,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the tree's provisional bootstrap drop floor final, durably (issue
+    /// #4549): its import closed against a stable source, so from now on a
+    /// delivery below it is dropped. A no-op when there is no provisional floor.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task FinalizeBootstrapFloorAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Removes the tree's bootstrap drop floor, durably (issue #4549).</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ClearBootstrapFloorAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Whether the tree recorded <paramref name="originClusterId"/>'s write at
     /// <paramref name="timestamp"/> as applied and still remembers it (issue
     /// #4586 part 2b). Interleaves: the origin's frontier asks while this grain

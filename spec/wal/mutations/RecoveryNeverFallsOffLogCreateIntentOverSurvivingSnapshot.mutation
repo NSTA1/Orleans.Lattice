@@ -1,0 +1,31 @@
+# Pairs with RecoveryNeverFallsOffLog. A leaf admits the purge reseed's create
+# intent while its snapshot survives, so recovery re-creates it over that
+# snapshot before the purge's clear removes it; the snapshot's coverage has fallen
+# off a WAL the GC trimmed after the leaf's pin was retired, and the leaf latches
+# stale. The base refuses an intent over surviving evidence until the clear runs.
+# Production analogue: #4671's R3 (admission ignores evidence).
+MODULE: RecoveryNeverFallsOffLogCreateIntentOverSurvivingSnapshot
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: a re-create intent is admitted over a surviving snapshot
+PERTURBS: Activate
+
+--- FIND
+    /\ row[l] \/ CreateIntent(l)
+--- REPLACE
+\* MUTATION: the intent is admitted whatever the leaf's surviving evidence.
+    /\ row[l] \/ purgeBegun
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

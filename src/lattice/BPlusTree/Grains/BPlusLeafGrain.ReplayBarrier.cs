@@ -226,6 +226,13 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private ValueTask AwaitReplayBarrierAsync()
     {
+        // A leaf with no state row that was not reached through a path creating
+        // it may be one whose row was lost, and has nothing to serve but an empty
+        // cache; it fails closed rather than report every key it held absent
+        // (issue #4654).
+        if (IsUnadmittedRowlessActivation)
+            return new ValueTask(AwaitAdmissionThenReplayBarrierAsync());
+
         // _replayBarrierArmed, NOT _replayBarrier: a faulted replay nulls the
         // latter, and the next request must re-arm rather than sail past it.
         if (_replayBarrierSatisfied || _replayBarrierRetired || !_replayBarrierArmed)

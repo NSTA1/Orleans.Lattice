@@ -1,0 +1,50 @@
+# Pairs with NoLostContribution. Reproduces production before #4613 was fixed
+# (#4626): a split does not forward a CRDT write to its destination, and its
+# drains import the source's row as a cross-shard migration, which is dropped
+# over any destination row not itself migrated and otherwise installed
+# last-writer-wins. The destination's own terminal fold is such a row, so the
+# split keeps one copy and loses whatever the other alone held.
+MODULE: NoLostContributionSplitImportDropsOverOwnRow
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: a split's import drops the source's row over the destination's own fold, losing a contribution only the source held
+PERTURBS: WriteB, Copy, Commit
+
+--- FIND
+          /\ IF owner = "src" /\ Forwarding
+--- REPLACE
+\* MUTATION: a split does not forward a CRDT write.
+          /\ IF owner = "src" /\ Forwarding /\ kind = "resize"
+--- END
+
+--- FIND
+    /\ Import
+    /\ pend' = [pend EXCEPT !["dst"] = @ \/ (pend["src"] /\ sg = "prepared")]
+--- REPLACE
+\* MUTATION: a split's background drain imports last-writer-wins, dropped over an own row.
+    /\ IF kind = "split"
+       THEN IF stamp["dst"] > 0 /\ ~migd["dst"]
+            THEN UNCHANGED <<row, stamp, clk, migd>>
+            ELSE IF stamp["src"] > stamp["dst"]
+                 THEN /\ row' = [row EXCEPT !["dst"] = row["src"]]
+                      /\ stamp' = [stamp EXCEPT !["dst"] = stamp["src"]]
+                      /\ clk' = [clk EXCEPT !["dst"] = Max(@, stamp["src"])]
+                      /\ migd' = [migd EXCEPT !["dst"] = TRUE]
+                 ELSE UNCHANGED <<row, stamp, clk, migd>>
+       ELSE Import
+    /\ pend' = [pend EXCEPT !["dst"] = @ \/ (pend["src"] /\ sg = "prepared")]
+--- END
+
+--- FIND
+       THEN Import
+--- REPLACE
+\* MUTATION: the final drain imports last-writer-wins, dropped over an own row.
+       THEN IF stamp["dst"] > 0 /\ ~migd["dst"]
+            THEN UNCHANGED <<row, stamp, clk, migd>>
+            ELSE IF stamp["src"] > stamp["dst"]
+                 THEN /\ row' = [row EXCEPT !["dst"] = row["src"]]
+                      /\ stamp' = [stamp EXCEPT !["dst"] = stamp["src"]]
+                      /\ clk' = [clk EXCEPT !["dst"] = Max(@, stamp["src"])]
+                      /\ migd' = [migd EXCEPT !["dst"] = TRUE]
+                 ELSE UNCHANGED <<row, stamp, clk, migd>>
+--- END

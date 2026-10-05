@@ -781,6 +781,14 @@ internal static class TypeAliases
     /// <summary>Alias for a leaf's applied-terminal witness sidecar state (issue #4545).</summary>
     internal const string LeafTerminalWitnessState = "ol.ltw";
 
+    /// <summary>Alias for a leaf's row-record sidecar grain interface (issue #4654).</summary>
+    internal const string ILeafRowRecordGrain = "ol.grr";
+
+    /// <summary>Alias for a leaf's row-record sidecar state (issue #4654).</summary>
+    internal const string LeafRowRecordState = "ol.lrr";
+
+    /// <summary>Alias for the fault a leaf whose state row was lost fails closed with (issue #4654).</summary>
+    internal const string LeafStateRowLost = "ol.lsl";
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 
@@ -866,6 +874,9 @@ internal static class TypeAliases
 
     /// <summary>Alias for the closed-copy replication apply refusal.</summary>
     internal const string CopyReceiveFenced = "ol.qfx";
+
+    /// <summary>Alias for the stale replication floor-admission refusal (issue #4549).</summary>
+    internal const string ReplicationFloorAdmissionStale = "ol.rae";
 
     /// <summary>Alias for the per-physical-copy receive fence status.</summary>
     internal const string CopyReceiveFenceStatus = "ol.qft";

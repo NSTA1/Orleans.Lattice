@@ -939,10 +939,38 @@ never checkpointed. Such a leaf replays from the "nothing applied" sentinel on a
 cold activation and could not detect a trimmed prefix. Any other leaf pin the offset
 floor does not cover caps the partition's ceiling at its frontier: that frontier was
 published by an empty release, when the leaf held no row there and had applied
-nothing, so every entry the leaf has since written to the partition is stamped above
+nothing, so every entry the leaf has since ticked for the partition is stamped above
 it, even though the pin store's monotone merge keeps the frontier after that write.
+A leaf publishes an empty release for a partition only after its activation's
+replay has latched (issue #4669). Until then every partition counts as data-bearing
+when the leaf resolves its pins, even one it holds no row in yet, so a checkpoint
+flush that runs part-way through the replay (pass 1 flushes incrementally, sweeping
+partitions in ascending backlog order) keeps the block on a partition it has not yet
+read, unless that partition's WAL is proven empty.
 A held or capped partition grows for as long as the hold stands; watch
 `orleans.lattice.wal.gc.leaf_pin_hold_age` (see [Metrics](metrics.md)).
+
+Not every write a leaf appends is ticked by the leaf. A replicated apply, a
+replicated or idempotency-keyed range delete, a carried copy from a split, resize or
+reshard, and a compaction reap keep a stamp from elsewhere, and that stamp can sit
+below the frontier the leaf published for the partition. The merge can never lower
+the frontier, so the leaf raises an **override hold** instead (issue #4641). Before
+it appends a record stamped below its own clock, it durably records a hold for that
+partition's pin in the pin store, once per partition per activation. A shard root
+does the same for the leaves it touches before it appends a saga terminal stamped
+from an override. The GC reads a held pin whose offset is still the `-1` sentinel
+exactly as a block pin, whether or not the leaf is live: the partition admits
+nothing, and the leaf is named to the blocked-leaf remedy, which drives it to a
+checkpoint and capture. The pin store drops the hold in the same write that lands the
+pin's first real offset, because from then on the offset floor stops the scan below
+every entry the leaf has not durably covered. A hold that cannot be made durable fails
+the write before it is appended.
+
+Each pass reads every partition's head before it reads the holds, and it reads the
+holds before the offset floor, and it trims nothing past the head it read. A write
+appended after the holds were read was appended after its hold was raised, so it lies
+past that head; a hold the store dropped before the read was dropped for a real offset
+the floor then sees.
 
 The scan is conservative: the first non-eligible entry per WAL partition stops the
 walk for that partition, as does the first entry above the partition's durable

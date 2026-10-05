@@ -227,11 +227,20 @@ A second companion,
 covers what happens once the source has garbage-collected a tombstone. A
 receiver that fell off the source's log past a delete whose tombstone was
 then reaped receives it by no path, and keeps the deleted value. The module
-checks the planned receiver-side reconcile and its safety gates; until it is
-built that gap is open (#4537), and a key the receiver holds under another
-origin remains a residual (#4549). It also states the reap guard production
-lacks: a tombstone is reaped on the wall clock alone, so a write it beats
-that arrives after the grace period resurrects the key (#4615).
+checks the receiver-side reconcile and its safety gates. The reconcile of a
+key the source wrote is built (#4647, the fix for #4537), and so is the
+reconcile of a key another cluster wrote, below the source's low watermark
+for its origin, behind a bootstrap drop floor that stops an in-flight write
+resurrecting it (#4549). The module also states two guards production lacks
+and one contract:
+
+- A tombstone is reaped on the wall clock alone, so a write it beats that
+  arrives after the grace period resurrects the key (#4615).
+- A receiver aligned with a new source lineage still applies a batch read
+  under the old one (#4673).
+- The source-restore contract: a unilateral source restore never makes a
+  peer delete a row it dropped, so peers may diverge, and a coordinated
+  restore converges them.
 
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is

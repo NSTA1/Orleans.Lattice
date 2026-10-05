@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted. A resize during the scan can make it pass a
+# key present throughout. If the physical tree does not change, the open and close
+# comparison cannot see it and the reconcile deletes a live key.
+MODULE: ReconcileDeletesOnlyDeletedResizeUnseen
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: a resize during the export is not detected, so a key the scan passed over is reconciled as deleted
+PERTURBS: Resize
+
+--- FIND
+    /\ phys' = 1
+--- REPLACE
+\* MUTATION: the physical tree does not change.
+    /\ phys' = phys
+--- END

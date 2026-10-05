@@ -129,7 +129,7 @@ public partial class BPlusLeafGrainTests
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
+        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "TryBeginOrphanRetirementAsync",
         "AbsorbSuccessorRangeAsync",

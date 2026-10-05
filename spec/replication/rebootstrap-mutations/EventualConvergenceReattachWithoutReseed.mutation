@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Detaching a peer skips its shipper past
+# the log (#4534-B); re-attaching it must re-seed it, or what was skipped is lost.
+MODULE: EventualConvergenceReattachWithoutReseed
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a detached peer is re-attached without a re-seed, so the entries its detached shipper skipped never arrive
+PERTURBS: Detach
+
+--- FIND
+    /\ detached' = TRUE
+    /\ fellOff' = TRUE
+--- REPLACE
+    /\ detached' = TRUE
+\* MUTATION: re-attaching requests no re-seed.
+    /\ fellOff' = fellOff
+--- END

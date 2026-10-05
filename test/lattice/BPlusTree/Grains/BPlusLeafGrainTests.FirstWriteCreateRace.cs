@@ -60,6 +60,9 @@ public partial class BPlusLeafGrainTests
         // cold-start apply. After the fix PersistAsync recognises the
         // benign first-create lost race, adopts the winner's row, and
         // converges without throwing.
+        // Both racers are creating the leaf, so each carries a create intent
+        // naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain));
         Assert.DoesNotThrowAsync(async () => await grain.SetTreeIdAsync("fox"),
             "A benign empty/empty first-create lost race on a brand-new leaf "
             + "must converge by re-reading the winner's row, not fail the "
