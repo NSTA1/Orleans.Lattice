@@ -161,14 +161,16 @@ public sealed class SourceWalTrimFallOffIntegrationTests
     {
         var gc = SiloServices(_siteA).GetRequiredService<ILatticeWalGc>();
         LatticeWalGcReport latest = default;
+        var attempt = 0;
         await TestPoll.UntilAsync(
             async () =>
             {
-                // A leaf that has not yet checkpointed holds its partitions with a
-                // durable block pin, against the retention ceiling too (issue
-                // #4622), so the source leaves make their writes durable first:
-                // a graceful deactivation checkpoints and captures.
-                await DeactivateSourceLeavesAsync();
+                // The retention ceiling never overtakes a leaf (issue #4622): a
+                // leaf pin with no durable offset holds or caps its partition, so
+                // the source leaves make their writes durable first, through the
+                // WAL GC's bank step or a graceful deactivation, each of which
+                // checkpoints and captures.
+                await MakeSourceLeavesDurableAsync(attempt++);
                 await Task.Delay(TimeSpan.FromMilliseconds(25));
                 latest = await gc.RunOnceAsync(Tree, CancellationToken.None);
                 return latest.EntriesTrimmed > 0;
@@ -180,15 +182,18 @@ public sealed class SourceWalTrimFallOffIntegrationTests
         Assert.That(latest.EntriesTrimmed, Is.GreaterThan(0), "the trim pass must remove entries the shipper has not sent");
     }
 
-    private async Task DeactivateSourceLeavesAsync()
+    private async Task MakeSourceLeavesDurableAsync(int attempt)
     {
         var pinKeys = WalMaterialiserPinRouting.EnumerateReadKeys(
             Tree,
             WalMaterialiserPinRouting.ResolveShardCount(
                 SiloServices(_siteA).GetService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>()));
+        var leaves = new HashSet<Guid>();
         foreach (var pinKey in pinKeys)
         {
-            foreach (var (consumerId, pin) in await _siteA.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetPinsAsync())
+            var pinGrain = _siteA.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey);
+            var offsets = await pinGrain.GetPinOffsetsAsync();
+            foreach (var consumerId in (await pinGrain.GetPinsAsync()).Keys)
             {
                 // A per-partition pin id ends in "_<partition>"; a single-partition
                 // log's pin id ends at the leaf guid.
@@ -199,12 +204,28 @@ public sealed class SourceWalTrimFallOffIntegrationTests
                     end = consumerId.Length;
                 }
 
-                if (pin <= HybridLogicalClock.Zero
+                if (offsets.GetValueOrDefault(consumerId, -1) < 0
                     && start >= 0 && end > start + 10
                     && Guid.TryParseExact(consumerId[(start + 10)..end], "N", out var leaf))
                 {
-                    await _siteA.Client.GetGrain<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>(leaf).ForceDeactivateAsync();
+                    leaves.Add(leaf);
                 }
+            }
+        }
+
+        // Alternate the bank step on the live activation with a graceful
+        // deactivation: under load a deactivation barrier can skip once its
+        // deadline is spent.
+        foreach (var leaf in leaves)
+        {
+            var grain = _siteA.Client.GetGrain<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>(leaf);
+            if (attempt % 2 == 0)
+            {
+                await grain.BankDurablePinAsync();
+            }
+            else
+            {
+                await grain.ForceDeactivateAsync();
             }
         }
 
