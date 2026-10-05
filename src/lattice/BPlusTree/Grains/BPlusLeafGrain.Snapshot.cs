@@ -1355,6 +1355,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var current = _durableSnapshotOffsetsByPartition;
+        RaiseKeptSnapshotCoverageMarker(perPartition);
         if (current is null || current.Length < perPartition.Length)
         {
             var grown = new long[perPartition.Length];
@@ -3799,6 +3800,18 @@ internal sealed partial class BPlusLeafGrain
 
         if (blob is null)
         {
+            // An absent snapshot is not proof that this leaf never had one (issue
+            // #4634). If its store once kept a snapshot whose coverage licensed the
+            // WAL GC to trim, a cold rebuild from the surviving suffix would come
+            // up without that prefix and report its keys absent. That is a lost
+            // snapshot, and it fails the replay closed exactly as a failed load
+            // does (issue #4450), whatever the WAL tail reads.
+            if (DetectLostKeptSnapshot() is { } lost)
+            {
+                _snapshotLoadFailedThisAttempt = true;
+                _snapshotLoadFaultThisAttempt = lost;
+            }
+
             return false;
         }
 

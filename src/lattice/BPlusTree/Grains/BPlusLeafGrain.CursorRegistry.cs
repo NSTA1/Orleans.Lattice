@@ -398,6 +398,11 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
+
+        // Issue #4634: the record that a snapshot was kept must be durable before
+        // any pin that licenses the WAL GC to trim behind that snapshot.
+        await PersistKeptSnapshotCoverageMarkerAsync();
+
         var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
         if (neverWritten && !HasNeverWrittenScannedThroughPartition(partitionCount, partitionsWithLiveData))
         {
