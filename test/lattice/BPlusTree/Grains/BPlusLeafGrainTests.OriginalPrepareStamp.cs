@@ -347,12 +347,14 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task A_shadow_forward_of_a_later_write_landing_after_the_drain_is_still_dropped()
     {
-        // Pre-existing (NOT closed by #4522, reported separately): MergeManyAsync
-        // drops a cross-shard migration import over any non-migrated row whatever
-        // its stamp. A drained value is non-migrated - at P under rule (d), and at
-        // a fresh stamp before it - so a later write W > P whose live
-        // shadow-forward lands after the destination's drain is lost here. Pinned
-        // so a fix to it is deliberate.
+        // MergeManyAsync drops a cross-shard migration import over any
+        // non-migrated row whatever its stamp. Since #4564 a value drained at an
+        // original stamp CARRIED from the split source is stored migrated, so a
+        // later import competes with it by last-writer-wins
+        // (BPlusLeafGrainTests.MigrationImportAfterTerminal). This prepare was
+        // minted here, under the local route, so its drained value is on this
+        // leaf's own lineage and stays non-migrated: the guard keeps dropping an
+        // import over it, as it does over any destination-minted write.
         var (grain, state) = CreateStampLeaf();
         var tx = Guid.NewGuid();
         await PrepareStampedAsync(grain, tx, "k", "saga", OwnRoute);

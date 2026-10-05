@@ -1,0 +1,15 @@
+{
+  "mutations": "mutations-incremental",
+  "refinement": "RefinementIncremental.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 5,
+    "properties": 0,
+    "actions": 8,
+    "mutations": 13,
+    "behaviourRows": 11,
+    "distinctStates": 1709
+  }
+}

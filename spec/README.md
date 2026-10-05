@@ -28,6 +28,7 @@ be quiet about one.
 | [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnership` | Who serves a key across an adaptive split, an online reshard and an online resize with its fence, flip, undo and purge, with stale routers and an atomic-write saga bound to one physical copy. |
 | [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipRetention` | What the registry's mask and retirement, a late forwarded prepare and a leaf reactivation do to a saga bound across a split and a resize. The companion of `ShardOwnership`; the seam between the two is described in that directory's README. |
 | [`backup/`](backup/README.md) | `BackupCapture` | A backup capture racing in-flight sagas: the per-tree decision gate (#4485) and a cross-tree set's fence, drain gate, re-check and validation. |
+| [`backup/`](backup/README.md) | `BackupIncremental` | An incremental backup racing a saga: its prepares and terminals in the delta window resolved against the decision gate, the frontier held back for an unsettled saga, the undecided sagas a link hands on, and the fall back to a full backup (#4589). |
 | [`backup/`](backup/README.md) | `BackupProvenance` | What a backup chain records: per-origin provenance, the empty-origin rule and the chain's HLC frontier. |
 | [`backup/`](backup/README.md) | `BackupRestore` | A coordinated restore across regions, its per-record admission, and the replication that resumes after it. |
 | [`backup/`](backup/README.md) | `BackupCutover` | A local shadow-cutover restore and its revert: alias and map moved together, stale-routing redirects, the alias reservation. |
@@ -179,12 +180,15 @@ discovered module, and each test case is named with the module
 - `TlcModelCheckTests` (category `Tlc`): the base model holds with the
   manifest's state count, each variant configuration holds with its own count,
   and each mutation runs as a two-arm (or, with `DEADLOCK: off`, three-arm)
-  experiment.
+  experiment. A mutation's `BOUNDS:` header shrinks only the mutant arm's
+  instance; the control arm always checks the module's own bounds, and
+  mutations that build the same control share one run of it.
 - `SpecMutationCatalogueTests`: every checked property is paired, the counts
   match, `TypeOK` is checked, temporal properties sit under `PROPERTIES`, every
   mutation applies to the current base and changes something, every generated
-  cfg names its target once, and every variant assigns only names the
-  specification has.
+  cfg names its target once, every variant and every mutation `BOUNDS:` header
+  assigns only names the specification has, and only the mutant arm carries a
+  mutation's bounds.
 - `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
   every behavioural action is perturbed by a mutation that really edits it.
 - `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
@@ -300,7 +304,11 @@ broken pipeline rather than a missing convenience.
 
 ## CI budget
 
-TLC time is dominated by how many TLC processes run, not by state-space size:
+TLC time is dominated by how many TLC processes run, not by state-space size,
+except for temporal mutants, which pay for the whole state graph before TLC
+reports the violation; those declare `BOUNDS:` to run on the smallest instance
+that still exhibits it (see the mutation format in
+[`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md)):
 the atomic-commit base model finishes in about six seconds on an idle machine,
 and most of each run is JVM start-up. A module costs one run for its base model,
 two per mutation (the control arm and the mutant), one more per

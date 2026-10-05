@@ -741,12 +741,29 @@ internal sealed partial class LatticeGrain
     /// <see cref="TxStatus.Indeterminate"/>; the recorded verdict behind it is
     /// used, as the leaf's own sweep does, because this finishes work the
     /// receiver owns rather than answering a reader.
+    /// <para>
+    /// Settling applies a terminal, so the decision is read the way every
+    /// terminal-applying path reads it, through
+    /// <see cref="ITxRegistryGrain.GetStatusForTerminalAsync"/>, never the
+    /// reader's <see cref="ITxRegistryGrain.GetStatusAsync"/> (issue #4590).
+    /// While a snapshot capture holds the registry's decision gate (#4485), a
+    /// reader is still served a delegated saga's coordinator verdict, uncached
+    /// and outside the gate's decision snapshot; settling on it would land the
+    /// saga's committed value on this key while a sibling key's bucket resolves
+    /// against that snapshot as pre-saga, so the capture would hold the batch
+    /// torn. The terminal-intent read answers such a saga
+    /// <see cref="TxStatus.InFlight"/> under the gate, so the prepare is staged
+    /// instead - failing closed - and settles after the gate is released, when
+    /// the verdict is cached and the leaf's sweep or the saga's terminal drains
+    /// the bucket. The recorded-status fallback reads local decisions only, which
+    /// a gate admits no new ones of, so it cannot step outside the snapshot either.
+    /// </para>
     /// </summary>
     /// <returns><see langword="true"/> when the prepare was settled and must not be staged.</returns>
     private async Task<bool> TrySettleReplicatedPrepareAsync(Guid transactionId, Func<Task> applyCommitted)
     {
         var registry = TxRegistryRouting.GetRegistry(grainFactory, TreeId, transactionId);
-        var status = await registry.GetStatusAsync(transactionId);
+        var status = await registry.GetStatusForTerminalAsync(transactionId);
         if (status == TxStatus.Indeterminate)
         {
             status = await registry.GetRecordedStatusAsync(transactionId);

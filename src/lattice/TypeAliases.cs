@@ -244,6 +244,12 @@ internal static class TypeAliases
     // lifts (terminal saga decision or the bounded cutover deadline).
     internal const string LatticeWriteFenced = "ol.wfx";
 
+    // Receiver bootstrap read fence (issue #4526). Thrown by a shard root's read
+    // surface while a snapshot bootstrap drains into the tree, so no reader can
+    // observe a partial import. Retryable: the fence lifts once the drain has
+    // applied every snapshot entry.
+    internal const string LatticeTreeBootstrapping = "ol.tbf";
+
     // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
     // write surface when a write would violate the declared replication mode
     // for a tree (a CRDT accessor whose mode differs from the declared mode,

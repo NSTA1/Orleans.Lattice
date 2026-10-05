@@ -478,5 +478,23 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(27)] public bool PrepareStampOriginal { get; init; }
+
+    /// <summary>
+    /// The migration provenance (<c>LwwValue.IsMigrated</c>) of the value this
+    /// record stores: set on a cross-shard migration import, and on a saga value
+    /// stored at an original prepare stamp carried from another shard - its
+    /// prepare, its drain and its committed-values backstop (issue #4564). Mirrors
+    /// <see cref="LatticeMutation.IsMigrated"/>, so the activation-time replay
+    /// restores the flag the foreground write stored and a later migration import
+    /// is admitted or dropped exactly as it would have been before the leaf
+    /// reactivated.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store, like
+    /// <see cref="PrepareStampOriginal"/>: a record authored before the slot
+    /// existed decodes as <see langword="false"/>, which is how replay treated
+    /// every record before it, and an older decoder skips the unknown id.
+    /// </para>
+    /// </summary>
+    [Id(28)] public bool IsMigrated { get; init; }
 }
 

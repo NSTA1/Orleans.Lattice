@@ -186,6 +186,13 @@ def parse_args() -> argparse.Namespace:
         default="skipped by policy",
         help="Why the tiers are skipped, recorded on every policy-skipped item.",
     )
+    parser.add_argument(
+        "--skip-tlc-reason",
+        default="",
+        help="When non-empty, the shards test-shards.json marks \"tlc\": true are "
+             "recorded as skipped with this reason instead of run. tier-scope.py "
+             "sets it only for a member pull request whose diff touches no TLC input.",
+    )
     parser.add_argument("--output-matrix")
     parser.add_argument("--report-file")
     parser.add_argument(
@@ -319,7 +326,7 @@ def build_shard_filters(config: dict) -> list[dict]:
             claimed.extend(includes)
             claimed_categories.extend(categories)
 
-        result.append({"shard": name, "filter": expression})
+        result.append({"shard": name, "filter": expression, "tlc": bool(entry.get("tlc"))})
     return result
 
 
@@ -330,13 +337,16 @@ def make_items(
     seeded: set[str],
     skip_tiers: list[str] | None = None,
     skip_reason: str = "skipped by policy",
+    skip_tlc_reason: str = "",
 ) -> tuple[list[dict], list[dict]]:
     """Return (items to run, items skipped by policy).
 
     With no skipped tiers the second list is empty and the first is exactly
     the full plan. With skipped tiers, nothing disappears: a crossed item of a
     skipped tier moves to the second list, and an untiered item stays in the
-    first with the skipped tiers' categories excluded and recorded.
+    first with the skipped tiers' categories excluded and recorded. A non-empty
+    skip_tlc_reason moves every item of a shard marked "tlc" to the second list
+    the same way.
     """
     skip_tiers = list(skip_tiers or [])
     exclusion = exclusion_filter(skip_tiers)
@@ -414,11 +424,11 @@ def make_items(
                     "label": f"{package} / {shard['shard']} ({tier})",
                     "seeded": package in seeded,
                 }
-                if tier in skip_tiers:
+                if tier in skip_tiers or (shard["tlc"] and skip_tlc_reason):
                     # Recorded, not run. It costs nothing (no process start),
                     # so it is priced at zero and never reaches the packer.
                     item["estimate"] = 0.0
-                    item["skip"] = skip_reason
+                    item["skip"] = skip_reason if tier in skip_tiers else skip_tlc_reason
                     skipped.append(item)
                 else:
                     items.append(item)
@@ -557,7 +567,8 @@ def main() -> int:
 
     durations = load_durations(args.durations)
     items, skipped = make_items(
-        packages, shard_config, durations, seeded, args.skip_tiers, args.skip_reason
+        packages, shard_config, durations, seeded, args.skip_tiers, args.skip_reason,
+        args.skip_tlc_reason.strip(),
     )
     legs = pack(items, args.max_legs)
 

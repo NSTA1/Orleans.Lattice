@@ -113,6 +113,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapEntriesReceived	op
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackEntries	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (tree)
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackSkipped	unresolved	reason=dimension reason: unrecognised value expression: LatticeReplicationMetrics.BootstrapFallbackSkipReasonTag(rea...
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapFallbackTriggered	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (tree)
+src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapReadFenceForceLifted	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapTransientRetries	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#CoalesceBytesElided	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#CoalesceDeltasMerged	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)

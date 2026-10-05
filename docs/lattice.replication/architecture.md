@@ -112,10 +112,12 @@ flowchart LR
    [`replication-apply.md`](replication-apply.md).
 
 7. **Bootstrap.** A peer seeds from a point-in-time snapshot and then
-   switches to incremental shipping at the snapshot's HLC - automatically when
-   the fall-off detector finds its per-origin high-water mark behind the
-   retained WAL, or on an explicit re-seed request, which is how a new peer is
-   seeded. See
+   switches to incremental shipping at the snapshot's HLC. A receiver-side
+   fall-off probe can start that automatically when the receiver's own local WAL
+   no longer retains entries for an origin it has already recorded. A source-side
+   shipper can also detect that its read cursor was trimmed past, stamp the next
+   push with `ReplicationBatch.ReseedAfterEpoch`, and ask the receiver to run the
+   same full bootstrap. An explicit re-seed request seeds a new peer. See
    [`snapshot-bootstrap.md`](snapshot-bootstrap.md) and
    [`auto-bootstrap.md`](auto-bootstrap.md).
 

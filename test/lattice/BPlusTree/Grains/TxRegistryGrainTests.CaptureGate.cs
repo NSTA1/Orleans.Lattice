@@ -113,6 +113,44 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
+    public async Task Gate_remembers_only_the_txids_its_status_lookups_answered_undecided()
+    {
+        var (grain, _) = CreateGrain();
+        var committed = Guid.NewGuid();
+        await grain.MarkCommittedAsync(committed);
+        var undecided = Guid.NewGuid();
+        var neverAsked = Guid.NewGuid();
+        var token = Guid.NewGuid();
+        await grain.AcquireCaptureGateAsync(token, TxRegistryCaptureGateMode.Gate, GateLease);
+
+        Assert.That(await grain.GetCaptureGateUndecidedAsync(token), Is.Empty, "nothing was looked up yet");
+
+        await grain.GetCaptureGateStatusManyAsync(token, [committed, undecided]);
+        await grain.GetCaptureGateStatusManyAsync(token, [undecided]);
+
+        Assert.That(await grain.GetCaptureGateUndecidedAsync(token), Is.EqualTo(new[] { undecided }),
+            $"only the undecided lookup is remembered, once; {neverAsked} was never asked about");
+    }
+
+    [Test]
+    public async Task Undecided_lookup_is_per_capture_and_fails_closed_without_a_live_gate()
+    {
+        var (grain, _) = CreateGrain();
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        await grain.AcquireCaptureGateAsync(first, TxRegistryCaptureGateMode.Gate, GateLease);
+        await grain.AcquireCaptureGateAsync(second, TxRegistryCaptureGateMode.Gate, GateLease);
+        var txid = Guid.NewGuid();
+        await grain.GetCaptureGateStatusManyAsync(first, [txid]);
+
+        Assert.That(await grain.GetCaptureGateUndecidedAsync(second), Is.Empty, "a lookup under one capture is not another's");
+
+        await grain.ReleaseCaptureGateAsync(first);
+        var ex = Assert.ThrowsAsync<TxDecisionGateRefusedException>(() => grain.GetCaptureGateUndecidedAsync(first));
+        Assert.That(ex!.Refusal, Is.EqualTo(TxDecisionGateRefusal.GateLapsed));
+    }
+
+    [Test]
     public async Task Upgrading_a_fence_to_a_gate_captures_the_decisions_at_the_upgrade()
     {
         var (grain, _) = CreateGrain();
