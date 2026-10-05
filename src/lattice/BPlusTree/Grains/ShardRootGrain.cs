@@ -893,7 +893,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                var forwardTask = TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 var splitResult = await TraverseForWriteAsync(key, value);
 
                 // If the root node split, we need to create a new internal root.
@@ -904,7 +903,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -933,7 +933,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                var forwardTask = TrackShadowForward((key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks);
 
                 while (splitResult is not null)
@@ -945,7 +944,8 @@ internal sealed partial class ShardRootGrain(
                 // The target fetches the authoritative entry via the normal merge
                 // path so expiry is preserved end-to-end.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value, expiresAtTicks);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -970,16 +970,15 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                // Shadow-forward the same semantic operation so the destination tree
-                // observes GetOrSet semantics too. LWW on the destination absorbs
-                // the interleaving between drain reads and this forward.
-                var forwardTask = TrackShadowForward((key, value), static (t, s) => t.GetOrSetAsync(s.key, s.value));
+                // The resize mirror forwards only a write that occurred here, as the
+                // row it stored (issue #4522). Re-running GetOrSet on the
+                // destination could write the caller's value there while this
+                // copy kept its existing one.
                 var result = await TraverseForGetOrSetAsync(key, value);
 
                 // If the key was already live, no write occurred - return existing value.
                 if (result.ExistingValue is not null)
                 {
-                    await forwardTask;
                     return result.ExistingValue;
                 }
 
@@ -992,7 +991,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1044,7 +1044,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1106,13 +1107,6 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count == 0) return;
 
-            // Online-resize shadow-forward: forward the whole batch once in parallel
-            // with the local apply. Without batched forward, a single SetManyAsync
-            // of N entries would pay N sequential shadow-forward RTTs. Mirrors
-            // MergeManyAsync's pattern. LWW on the destination absorbs any
-            // interleaving with the drain reader.
-            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
-
             // Preserve the local exception as the primary diagnostic. The
             // older shape (try { local } finally { await forwardTask; }) would
             // replace a local failure with a forward-path failure if both
@@ -1138,11 +1132,17 @@ internal sealed partial class ShardRootGrain(
 
             if (localFailure is null)
             {
-                // Local succeeded - surface any forward failure to the caller.
+                // Local succeeded - mirror the batch to the online-resize
+                // destination once, at this copy's own stamps (issue #4522), and
+                // surface any forward failure to the caller.
                 var forwardTs = Stopwatch.GetTimestamp();
                 try
                 {
-                    await forwardTask;
+                    await MirrorAppliedWritesAsync(
+                        DistinctKeys(entries),
+                        entries,
+                        static (t, s) => t.SetManyAsync(s),
+                        static s => ShadowForwardRefusal.PerEntry(s));
                 }
                 finally
                 {
@@ -1573,16 +1573,6 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count == 0) return Array.Empty<string>();
 
-            // Online-resize shadow-forward of the whole conditional batch in
-            // parallel with the local apply. The destination shard re-evaluates
-            // the guard against its own copy; LWW reconciles any interleaving with
-            // the drain reader. The forwarded written set is discarded - this
-            // shard's local apply is authoritative for the returned set.
-            var forwardTask = TrackShadowForward(
-                (entries, predicate),
-                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate),
-                static s => ShadowForwardRefusal.PerEntry(s));
-
             System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
             IReadOnlyList<string> written = Array.Empty<string>();
             var localApplyTs = Stopwatch.GetTimestamp();
@@ -1602,10 +1592,19 @@ internal sealed partial class ShardRootGrain(
 
             if (localFailure is null)
             {
+                // Mirror only the entries the guard admitted, as written here and
+                // at this copy's own stamps (issue #4522): re-evaluating the guard
+                // on the destination's copy could admit a different set.
                 var forwardTs = Stopwatch.GetTimestamp();
                 try
                 {
-                    await forwardTask;
+                    var writtenKeys = new HashSet<string>(written, StringComparer.Ordinal);
+                    var writtenEntries = entries.FindAll(e => writtenKeys.Contains(e.Key));
+                    await MirrorAppliedWritesAsync(
+                        writtenKeys,
+                        writtenEntries,
+                        static (t, s) => t.SetManyAsync(s),
+                        static s => ShadowForwardRefusal.PerEntry(s));
                 }
                 finally
                 {
@@ -1856,14 +1855,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                // For online resize, tombstones MUST be forwarded - the destination
-                // tree becomes authoritative at swap, so a tombstone that never
-                // reached T' would leave the key alive post-swap. LWW on the
-                // destination resolves any interleaving with the drain reader.
-                // This differs from the adaptive-split path, where post-swap
-                // cleanup restores convergence within one tree.
-                var forwardTask = TrackShadowForward(key, static (t, s) => t.DeleteAsync(s));
-
                 bool result;
                 GrainId leafId;
                 if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
@@ -1905,7 +1896,13 @@ internal sealed partial class ShardRootGrain(
                 // coordinator's cleanup phase; only a saga prepare needs the
                 // marker to close the mid-saga atomic-visibility torn read.
                 await ForwardLocalDeleteToShadowIfNeededAsync(key);
-                await forwardTask;
+                // For online resize, tombstones MUST be forwarded - the
+                // destination tree becomes authoritative at swap, so a tombstone
+                // that never reached it would leave the key alive post-swap. The
+                // mirror ships the tombstone row at this copy's own stamp (issue
+                // #4522). This differs from the adaptive-split path, where
+                // post-swap cleanup restores convergence within one tree.
+                await MirrorAppliedWritesAsync([key], key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
