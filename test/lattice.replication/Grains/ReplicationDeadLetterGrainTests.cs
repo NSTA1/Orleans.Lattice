@@ -21,15 +21,13 @@ public class ReplicationDeadLetterGrainTests
     private static async Task<(ReplicationDeadLetterGrain grain, SortedDictionary<string, byte[]> data, LatticeReplicationOptions options)> CreateGrainAsync(
         (Orleans.Lattice.BPlusTree.Grains.ISystemLattice store, SortedDictionary<string, byte[]> data)? backing = null,
         int capacity = 1000,
-        IReplicationHighWaterMarkGrain? hwm = null)
+        IReplicationOriginFrontierGrain? frontier = null)
     {
         var (store, data) = backing ?? FakeSystemLattice.Create();
         var context = Substitute.For<IGrainContext>();
         var grainFactory = Substitute.For<IGrainFactory>();
-        if (hwm is not null)
-        {
-            grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeId).Returns(hwm);
-        }
+        frontier ??= Substitute.For<IReplicationOriginFrontierGrain>();
+        grainFactory.GetGrain<IReplicationOriginFrontierGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(frontier);
         var options = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
@@ -225,22 +223,24 @@ public class ReplicationDeadLetterGrainTests
     [Test]
     public async Task DiscardAsync_records_a_foreign_origin_entry_as_lost_before_removing_it()
     {
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
-        var (grain, _, _) = await CreateGrainAsync(hwm: hwm);
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
         var entry = MakeEntry("a");
         var id = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         Assert.That(await grain.DiscardAsync(id, CancellationToken.None), Is.True);
 
-        await hwm.Received(1).RecordLostAsync("site-b", entry.Timestamp, Arg.Any<CancellationToken>());
+        await frontier.Received(1).RecordLostAsync(
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(l => l.Count == 1 && l.Contains(entry.Timestamp)),
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task DiscardAsync_keeps_the_entry_when_the_lost_mark_cannot_be_recorded()
     {
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
-        hwm.RecordLostAsync(default!, default, default).ReturnsForAnyArgs(Task.FromException(new TimeoutException("hwm down")));
-        var (grain, _, _) = await CreateGrainAsync(hwm: hwm);
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        frontier.RecordLostAsync(default!, default).ReturnsForAnyArgs(Task.FromException(new TimeoutException("frontier down")));
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
         var id = await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         Assert.ThrowsAsync<TimeoutException>(async () => await grain.DiscardAsync(id, CancellationToken.None));
@@ -251,13 +251,52 @@ public class ReplicationDeadLetterGrainTests
     [Test]
     public async Task DiscardAsync_does_not_record_a_local_origin_entry_as_lost()
     {
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
-        var (grain, _, _) = await CreateGrainAsync(hwm: hwm);
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
         var id = await grain.EnqueueAsync(MakeEntry("a") with { OriginClusterId = "site-a" }, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
 
         await grain.DiscardAsync(id, CancellationToken.None);
 
-        await hwm.DidNotReceiveWithAnyArgs().RecordLostAsync(default!, default, default);
+        await frontier.DidNotReceiveWithAnyArgs().RecordLostAsync(default!, default);
+        await frontier.DidNotReceiveWithAnyArgs().SetHeldAsync(default!, default!, default);
+    }
+
+    [Test]
+    public async Task A_parked_foreign_write_is_published_as_held_before_the_enqueue_returns_and_released_on_removal()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+        var entry = MakeEntry("a");
+
+        var id = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var heldWhileParked = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+        await grain.RemoveReplayedAsync(id, CancellationToken.None);
+        var heldAfterRemoval = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(heldWhileParked, Is.True);
+            Assert.That(heldAfterRemoval, Is.False);
+        });
+        await frontier.Received(1).SetHeldAsync(
+            ReplicationOriginFrontierGrain.DeadLetterSource(TreeId),
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(h => h.Count == 1 && h.Contains(entry.Timestamp)),
+            Arg.Any<CancellationToken>());
+        await frontier.Received(1).SetHeldAsync(
+            ReplicationOriginFrontierGrain.DeadLetterSource(TreeId),
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(h => h.Count == 0),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task An_enqueue_whose_held_publication_fails_throws_so_the_write_is_not_acknowledged()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        frontier.SetHeldAsync(default!, default!, default).ReturnsForAnyArgs(Task.FromException(new TimeoutException("frontier down")));
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+
+        Assert.ThrowsAsync<TimeoutException>(
+            async () => await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None));
     }
 
     [Test]

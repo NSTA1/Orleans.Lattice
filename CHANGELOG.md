@@ -120,6 +120,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
+- **Replication - A causally dependent write no longer applies before the write it depends on.** The receiver treated a dependency as met once the origin's highest applied HLC passed it, but a later write of the origin routinely arrives first, so a dependent could become visible before the write it names. A dependency now names exactly one write: it is met when that write was applied, or when the origin's low watermark passes it and the receiver holds no unapplied copy of it, across every tree. A new `CausalAppliedIdentityCapacity` option bounds the applied writes remembered per tree and origin. ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)) (`Orleans.Lattice.Replication`)
+
 - **Core - Multi-key reads hide a cross-tree batch whose coordinator is unreachable.** `GetManyAsync`, key and entry scans and cursors served such a batch's keys at their old values, while point reads hid them. They now hide them too, so a reader never sees a cross-tree batch as not applied while other trees may show it applied. ([#4448](https://github.com/NSTA1/Orleans.Lattice/issues/4448)) (`Orleans.Lattice`)
 
 - **Core - Growing a resized tree no longer over-counts after atomic batches.** On a tree that had been resized, a split looked up each in-flight batch's outcome under the wrong tree id and took committed batches for unfinished. It then re-sent their writes to the new shard, where nothing settled them, so `CountAsync` counted those keys twice. The split now reads the outcome under the tree's own id. ([#4368](https://github.com/NSTA1/Orleans.Lattice/issues/4368)) (`Orleans.Lattice`)

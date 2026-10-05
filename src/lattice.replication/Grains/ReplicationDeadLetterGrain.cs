@@ -124,6 +124,8 @@ internal sealed class ReplicationDeadLetterGrain(
         {
             // A re-shipped copy of an entry already parked (the first delivery was
             // parked but its batch was deferred for another entry). One slot each.
+            // Publish again: the first enqueue's publication may have failed.
+            await PublishHeldAsync(entry.OriginClusterId, cancellationToken).ConfigureAwait(true);
             return existing;
         }
 
@@ -152,6 +154,11 @@ internal sealed class ReplicationDeadLetterGrain(
             capacity: null,
             cancellationToken).ConfigureAwait(true);
         _parked[identity] = assigned;
+
+        // Issue #4586: the origin's frontier must list the write as held before
+        // the caller acknowledges it, or a dependent could be released while the
+        // write sits here unapplied.
+        await PublishHeldAsync(entry.OriginClusterId, cancellationToken).ConfigureAwait(true);
 
         LatticeReplicationMetrics.DeadLetterEnqueued.Add(
             1,
@@ -207,8 +214,8 @@ internal sealed class ReplicationDeadLetterGrain(
         if (!string.IsNullOrEmpty(entry.OriginClusterId)
             && !string.Equals(entry.OriginClusterId, localClusterId, StringComparison.Ordinal))
         {
-            await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(_treeId)
-                .RecordLostAsync(entry.OriginClusterId, entry.Timestamp, cancellationToken)
+            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(entry.OriginClusterId)
+                .RecordLostAsync([entry.Timestamp], cancellationToken)
                 .ConfigureAwait(true);
         }
 
@@ -250,7 +257,18 @@ internal sealed class ReplicationDeadLetterGrain(
 
         if (bytes is not null)
         {
-            _parked.Remove(ParkedIdentity.From(serializer.Deserialize(bytes).Entry));
+            var removedEntry = serializer.Deserialize(bytes).Entry;
+            _parked.Remove(ParkedIdentity.From(removedEntry));
+
+            // Best effort: a write still listed after its removal only delays a
+            // dependent until the origin frontier confirms it with this queue.
+            try
+            {
+                await PublishHeldAsync(removedEntry.OriginClusterId, cancellationToken).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+            }
         }
 
         LatticeReplicationMetrics.DeadLetterRemoved.Add(
@@ -260,6 +278,51 @@ internal sealed class ReplicationDeadLetterGrain(
             LatticeTenantLabel.ForTree(_treeId));
 
         return true;
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+        foreach (var identity in _parked.Keys)
+        {
+            if (identity.Timestamp == timestamp
+                && string.Equals(identity.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(true);
+            }
+        }
+
+        return Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// Publishes every write of <paramref name="originClusterId"/> this queue
+    /// holds to the origin's frontier (issue #4586). Skipped for a local-origin
+    /// entry - one the outbound shipper parked - which no dependency check here
+    /// ever names.
+    /// </summary>
+    private Task PublishHeldAsync(string? originClusterId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(originClusterId)
+            || string.Equals(originClusterId, optionsMonitor.Get(_treeId).ClusterId, StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        var held = new HashSet<HybridLogicalClock>();
+        foreach (var identity in _parked.Keys)
+        {
+            if (string.Equals(identity.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                held.Add(identity.Timestamp);
+            }
+        }
+
+        return grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+            .SetHeldAsync(ReplicationOriginFrontierGrain.DeadLetterSource(_treeId), held, cancellationToken);
     }
 
     /// <summary>The identity that makes a dead-letter enqueue idempotent.</summary>

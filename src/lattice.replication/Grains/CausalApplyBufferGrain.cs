@@ -91,6 +91,11 @@ internal sealed class CausalApplyBufferGrain(
             }
         }
 
+        // Issue #4586: the origin's frontier lists the write as held before the
+        // caller acknowledges it - also for a duplicate, whose first publication
+        // may have failed - or a dependent could be released while it sits here.
+        await PublishHeldAsync(entry.OriginClusterId, strict: true).ConfigureAwait(true);
+
         // Re-check after the insert: an advance whose drain ran between the
         // caller's dependency check and this park would otherwise leave the
         // entry parked with its dependencies already met (the lost wakeup).
@@ -113,6 +118,58 @@ internal sealed class CausalApplyBufferGrain(
 
     /// <inheritdoc />
     public Task<int> CountAsync() => Task.FromResult(EnsureLoaded().Count);
+
+    /// <inheritdoc />
+    public Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        foreach (var parked in state.State.Entries)
+        {
+            if (parked.Entry.Timestamp == timestamp
+                && string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(true);
+            }
+        }
+
+        return Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// Publishes every write of <paramref name="originClusterId"/> the durable
+    /// buffer holds to the origin's frontier (issue #4586). Strict publication
+    /// throws on failure; a best-effort one - after a removal, when a stale
+    /// listing only delays a dependent until the frontier confirms it here - does
+    /// not.
+    /// </summary>
+    private async Task PublishHeldAsync(string? originClusterId, bool strict)
+    {
+        if (string.IsNullOrEmpty(originClusterId)
+            || string.Equals(originClusterId, options.Get(TreeId).ClusterId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var held = new HashSet<HybridLogicalClock>();
+        foreach (var parked in state.State.Entries)
+        {
+            if (string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                held.Add(parked.Entry.Timestamp);
+            }
+        }
+
+        try
+        {
+            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+                .SetHeldAsync(ReplicationOriginFrontierGrain.BufferSource(TreeId), held, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex) when (!strict && ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Publishing the held writes of origin {Origin} for tree {Tree} failed; the frontier confirms them on demand", originClusterId, TreeId);
+        }
+    }
 
     /// <inheritdoc />
     public Task OnDeactivateAsync(DeactivationReason reason, CancellationToken token)
@@ -398,6 +455,22 @@ internal sealed class CausalApplyBufferGrain(
         {
             state.State.Entries = previous;
             throw;
+        }
+
+        // Issue #4586: a write removed from the buffer (applied, or moved to the
+        // dead-letter queue, which published it first) leaves its origin's held set.
+        var removedOrigins = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parked in previous)
+        {
+            if (!string.IsNullOrEmpty(parked.Entry.OriginClusterId))
+            {
+                removedOrigins.Add(parked.Entry.OriginClusterId);
+            }
+        }
+
+        foreach (var origin in removedOrigins)
+        {
+            await PublishHeldAsync(origin, strict: false).ConfigureAwait(true);
         }
     }
 }

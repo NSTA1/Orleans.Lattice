@@ -26,7 +26,7 @@ public class LatticeSnapshotProviderUnitTests
         var factory = Substitute.For<IGrainFactory>();
         var cursors = Substitute.For<IWalCursorRegistry>();
         var lattice = Substitute.For<ILattice>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
 
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(lattice);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
