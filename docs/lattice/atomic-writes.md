@@ -418,6 +418,11 @@ write and the drain.
   shard's backstop keys, so a leaf that holds no bucket for a key - the
   sibling a leaf split moved the key's range to, say - applies the saga's
   value at `P` and never over a write acknowledged after the prepare.
+- An online resize's mirror forwards each prepare to the resized copy
+  carrying `P`, and every other write as the row it stored, at that row's
+  own stamp, so the resized copy never re-stamps a write on its own clock.
+  Its prepared-bucket sweep and the terminals it mirrors carry `P` too, so
+  the resized copy orders every write exactly as the source does.
 - A leaf split hands its new sibling the donor's clock, so the sibling
   stamps later writes above every prepare the donor minted.
 - The write-ahead log records whether a prepare's stamp is original, so
@@ -438,10 +443,11 @@ aborts, so a saga never commits without its stamps. The
 records each read-back that leaves the fast path (see
 [Metrics](metrics.md)).
 
-`P` is carried only to a shard of the copy whose clocks minted it. A
-terminal re-resolved to another copy, redelivered to a resized copy after
-the old one was purged, or mirrored by a shard root to a resize destination
-carries none.
+`P` is carried only to a shard of the copy whose clocks minted it, or to a
+resized copy its mirror keeps on the same clock lineage. A terminal the
+coordinator re-resolves to another copy, or redelivers to a resized copy
+after the old one was purged, carries none, and carries no committed-values
+backstop either.
 
 A prepare without that evidence is applied as before, at a fresh dominating
 stamp, with the migrated-row exception that lets a saga beat a pre-saga
@@ -449,12 +455,12 @@ value a split migrates in above the destination's clock. That covers:
 
 - a prepare written by a silo that predates this change, which keeps a
   rolling upgrade safe;
-- a prepare an online resize copies;
 - a CRDT-delta prepare, which folds into the key's current value at the
   terminal stamp rather than replacing it.
 
-A resize copy stamps its mirrored writes with its own clock, which does not
-order them against `P`.
+Before [#4522](https://github.com/NSTA1/Orleans.Lattice/issues/4522) the
+resize mirror forwarded each write as the operation itself, so the resized
+copy stamped it on its own clock, which does not order it against `P`.
 
 ### A later write the split imports is not dropped over the saga's value
 

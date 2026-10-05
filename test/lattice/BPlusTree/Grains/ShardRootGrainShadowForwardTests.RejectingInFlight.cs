@@ -2,6 +2,7 @@ using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Runtime;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -103,7 +104,15 @@ public partial class ShardRootGrainShadowForwardTests
     public async Task SetManyAsync_prepared_by_a_saga_bound_to_the_fenced_copy_is_applied_and_forwarded()
     {
         var h = CreateHarness();
-        h.ShadowTarget.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(Task.CompletedTask);
+        object? carried = null;
+        h.ShadowTarget.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            carried = Orleans.Runtime.RequestContext.Get(LatticeEventConstants.OriginalPrepareStampsRequestContextKey);
+            return Task.CompletedTask;
+        });
+        var prepareStamp = new HybridLogicalClock { WallClockTicks = 7_000, Counter = 3 };
+        h.Leaf.GetOriginalPrepareStampsAsync(Arg.Any<Guid>())
+            .Returns(Task.FromResult<Dictionary<string, HybridLogicalClock?>?>(new() { ["k1"] = prepareStamp }));
         SetShadowPhase(h.State, ShadowForwardPhase.Rejecting);
         List<KeyValuePair<string, byte[]>> entries = [new("k1", [1])];
 
@@ -122,6 +131,9 @@ public partial class ShardRootGrainShadowForwardTests
         }
 
         await h.ShadowTarget.Received(1).SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
+        // Issue #4522: the mirrored prepare carries the local prepare's stamp.
+        Assert.That(carried, Is.InstanceOf<Dictionary<string, HybridLogicalClock>>());
+        Assert.That(((Dictionary<string, HybridLogicalClock>)carried!)["k1"], Is.EqualTo(prepareStamp));
     }
 
     [Test]
@@ -187,7 +199,7 @@ public partial class ShardRootGrainShadowForwardTests
 
         Assert.That(h.State.State.ShadowForward!.Phase, Is.EqualTo(ShadowForwardPhase.Drained));
         Assert.That(h.State.WriteCount, Is.GreaterThan(0));
-        await h.ShadowTarget.Received(1).SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received(1).MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     [Test]
