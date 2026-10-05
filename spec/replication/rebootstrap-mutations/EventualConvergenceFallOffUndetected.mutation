@@ -1,5 +1,6 @@
-# Pairs with EventualConvergence in ReplicationReBootstrap. LatticeFallOffLogDetector is
-# what requests the re-bootstrap; without it the entries the trim skipped never reach r.
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces production before
+# #4599 (#4587): the only fall-off probe read the receiver's own WAL, so a source trim
+# requested no re-bootstrap and the entries it skipped never reached r.
 MODULE: EventualConvergenceFallOffUndetected
 TARGET: EventualConvergence
 CLASS: Temporal

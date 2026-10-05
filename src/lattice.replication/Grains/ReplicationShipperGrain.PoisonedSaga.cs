@@ -106,6 +106,54 @@ internal sealed partial class ReplicationShipperGrain
         state.State.PoisonedSagas.Count + count <= PoisonedSagaCapacity;
 
     /// <summary>
+    /// Set when the batch being parked poisoned a new saga; the caller then
+    /// asks the peer to re-seed (<see cref="MarkReseedRequiredForPoisonAsync"/>).
+    /// </summary>
+    private bool _reseedForPoisonPending;
+
+    /// <summary>
+    /// Asks the peer to re-seed after a saga was poisoned for it (#4620). The
+    /// poison keeps the peer from ever committing the saga torn, but it also
+    /// means the peer never receives the saga again, so without a re-seed the
+    /// peer serves it as never written for good while this cluster has it
+    /// decided. Reuses the forced-gap marker (#4577, #4533): the replay hold is
+    /// taken first and the tree's export epoch recorded durably, every push
+    /// carries it, the peer re-bootstraps from an export after it - which ships
+    /// the decided saga as committed rows and its decision row - and the echo
+    /// clears the marker. The rewind that follows re-reads the poisoned saga's
+    /// records, and they are parked again, because the saga stays poisoned, so
+    /// the re-seed does not repeat.
+    /// </summary>
+    private async Task MarkReseedRequiredForPoisonAsync(CancellationToken cancellationToken)
+    {
+        _reseedForPoisonPending = false;
+        if (ReseedRequired)
+        {
+            return;
+        }
+
+        var epoch = await TakePeerOffLogStateAsync();
+
+        // Park the poisoned saga's held terminals before the holds are dropped,
+        // then drop the rest: saga records are withheld from here until the
+        // echo, and the rewind re-reads everything a dropped hold would have
+        // released. The drain buffer is not purged: it is the batch being parked.
+        await ParkPoisonedTerminalHoldsAsync(cancellationToken);
+        _terminalHolds.Clear();
+        _prepareTallies.Clear();
+        _prepareTallyOrder.Clear();
+
+        // Durable with the poison itself, before any record of the batch is parked.
+        await state.WriteStateAsync();
+        ReportReseedState();
+
+        Logger.LogWarning(
+            "{Context}: a saga was poisoned for peer {Peer} after a prepare was dead-lettered. Saga records are withheld from the "
+            + "peer until it is re-seeded from a snapshot export after epoch {Epoch}, which delivers the poisoned saga whole.",
+            LogContext, _peerClusterId, epoch);
+    }
+
+    /// <summary>
     /// Poisons the saga of every prepared record in the drain buffer that is
     /// about to be parked. Returns <see langword="false"/> - poisoning nothing -
     /// when the poison list cannot take the batch's new sagas, in which case the
@@ -145,6 +193,10 @@ internal sealed partial class ReplicationShipperGrain
             {
                 AddPoisonedSaga(txid, "a prepare of the saga was dead-lettered instead of shipped");
             }
+
+            // A poisoned saga is never shipped to the peer again, so only a
+            // re-seed makes it visible there (#4620).
+            _reseedForPoisonPending = true;
 
             LatticeReplicationMetrics.ShipperSagaPoisoned.Add(
                 fresh.Count,

@@ -2499,9 +2499,8 @@ internal sealed partial class ReplicationShipperGrain(
         // every partition - including genuinely cold ones - because a cold
         // partition's unshipped entries may legitimately carry a per-leaf
         // HLC below the scalar cursor.
-        _legacyCursorMigrationPending =
-            state.State.Cursor != HybridLogicalClock.Zero
-            && state.State.PartitionCursors.Count == 0;
+        _legacyCursorMigrationPending = ReplicationShipEligibility.IsLegacyMigrationTick(
+            state.State.Cursor, state.State.PartitionCursors.Count);
 
         // The durable cursor of a partition with a held saga terminal is capped
         // at that terminal (#4480); resume from the uncapped acknowledged
@@ -4179,6 +4178,14 @@ internal sealed partial class ReplicationShipperGrain(
         if (!TryPoisonDrainBufferSagas())
         {
             return false;
+        }
+
+        // Marked before parking, durably with the poison: a park the full queue
+        // refuses (#4603) is retried through the poison filter, not through here,
+        // so this is the one place the fresh poison is seen (#4620).
+        if (_reseedForPoisonPending)
+        {
+            await MarkReseedRequiredForPoisonAsync(cancellationToken);
         }
 
         var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
