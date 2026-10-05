@@ -429,7 +429,7 @@ LeafStop(l) ==
 (* latches it stale when the WAL has been trimmed past its durable          *)
 (* checkpoint. Both trim tests are WalFallOffCore.IsPrefixLost.            *)
 (***************************************************************************)
-FallsOff(cp) == cp > 0 /\ tail > cp + 1
+FallsOff(cp) == cp >= 0 /\ tail > cp + 1
 
 Activate(l) ==
     /\ ~up[l]
