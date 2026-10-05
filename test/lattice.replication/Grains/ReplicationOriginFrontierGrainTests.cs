@@ -18,8 +18,8 @@ public sealed class ReplicationOriginFrontierGrainTests
     {
         var grain = HighWaterMarkTestGrains.Frontier(Origin);
 
-        var first = await grain.RecordLowWatermarkAsync(Hlc(10), CancellationToken.None);
-        var lower = await grain.RecordLowWatermarkAsync(Hlc(5), CancellationToken.None);
+        var first = await grain.RecordLowWatermarkAsync(Hlc(10), generation: 0, CancellationToken.None);
+        var lower = await grain.RecordLowWatermarkAsync(Hlc(5), generation: 0, CancellationToken.None);
 
         Assert.Multiple(() =>
         {
@@ -38,7 +38,7 @@ public sealed class ReplicationOriginFrontierGrainTests
         factory.GetGrain<ICausalApplyBufferGrain>(Tree, Arg.Any<string?>()).Returns(buffer);
         var grain = HighWaterMarkTestGrains.Frontier(Origin, factory);
         await grain.SetHeldAsync(ReplicationOriginFrontierGrain.BufferSource(Tree), [Hlc(4)], CancellationToken.None);
-        await grain.RecordLowWatermarkAsync(Hlc(10), CancellationToken.None);
+        await grain.RecordLowWatermarkAsync(Hlc(10), generation: 0, CancellationToken.None);
 
         var verdicts = await grain.CheckAsync([Hlc(4), Hlc(5)], CancellationToken.None);
 
@@ -55,7 +55,7 @@ public sealed class ReplicationOriginFrontierGrainTests
         var state = new FakePersistentState<ReplicationOriginFrontierState>();
         var grain = HighWaterMarkTestGrains.Frontier(Origin, factory, state);
         await grain.SetHeldAsync(ReplicationOriginFrontierGrain.DeadLetterSource(Tree), [Hlc(4)], CancellationToken.None);
-        await grain.RecordLowWatermarkAsync(Hlc(10), CancellationToken.None);
+        await grain.RecordLowWatermarkAsync(Hlc(10), generation: 0, CancellationToken.None);
 
         var verdicts = await grain.CheckAsync([Hlc(4)], CancellationToken.None);
 
@@ -74,7 +74,7 @@ public sealed class ReplicationOriginFrontierGrainTests
 
         await grain.RecordLostAsync([Hlc(4)], CancellationToken.None);
         await grain.RecordLostAsync([Hlc(4)], CancellationToken.None);
-        await grain.RecordLowWatermarkAsync(Hlc(10), CancellationToken.None);
+        await grain.RecordLowWatermarkAsync(Hlc(10), generation: 0, CancellationToken.None);
         var reactivated = HighWaterMarkTestGrains.Frontier(Origin, state: state);
         var verdicts = await reactivated.CheckAsync([Hlc(4)], CancellationToken.None);
 

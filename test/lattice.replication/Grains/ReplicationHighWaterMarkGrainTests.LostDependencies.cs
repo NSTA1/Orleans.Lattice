@@ -113,7 +113,7 @@ public partial class ReplicationHighWaterMarkGrainTests
         var grain = HighWaterMarkTestGrains.Real(grainFactory: HighWaterMarkTestGrains.FrontierFactory(frontiers));
         await grain.CheckDependenciesAsync([Vector((OriginA, Hlc(7)))], CancellationToken.None);
 
-        await frontiers[OriginA].RecordLowWatermarkAsync(Hlc(8), CancellationToken.None);
+        await frontiers[OriginA].RecordLowWatermarkAsync(Hlc(8), generation: 0, CancellationToken.None);
         var verdicts = await grain.CheckDependenciesAsync([Vector((OriginA, Hlc(7))), Vector((OriginA, Hlc(8)))], CancellationToken.None);
 
         Assert.Multiple(() =>

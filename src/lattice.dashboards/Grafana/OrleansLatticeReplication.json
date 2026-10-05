@@ -2164,6 +2164,33 @@
           "legendFormat": "{{reason}}"
         }
       ]
+    },
+    {
+      "id": 45861,
+      "title": "Causal frontier origins by mode - issue #4586",
+      "description": "Receiver tree-frontier (tree, origin) pairs by mode. exact: the origin ships an applied low watermark the tree accepted. pending: no watermark yet (an older sender, or its clock floor is not enabled). awaiting_reseed: the tree's contents were replaced and a full bootstrap is outstanding. degraded: the tree registry tracks no lineage for the tree. Every mode is sound; on a fully upgraded cluster, pairs that stay outside exact mean dependents of forgotten identities wait or overflow to hlc_skew.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 993
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (mode) (orleans_lattice_replication_causal_frontier_origins{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{mode}}"
+        }
+      ]
     }
   ]
 }

@@ -379,6 +379,15 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
                 };
             }
 
+            // The sender's applied low watermark for this tree at the peer
+            // (issue #4586 part 2b) travels beside the batch, like the re-seed
+            // epoch, so the framing is unchanged.
+            if (batch.SourceFrontier is { } frontier)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.SourceFrontierHeader, frontier.ToText());
+            }
+
             using var call = channel.Invoker.AsyncUnaryCall(
                 _method.Push,
                 host: null,
