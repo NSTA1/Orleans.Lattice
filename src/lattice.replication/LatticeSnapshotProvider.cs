@@ -293,8 +293,11 @@ internal sealed class LatticeSnapshotProvider(
         // drain it. An aged-out row with no resident bucket is resolved to its
         // recorded verdict here, exactly as the prepared pass resolves one
         // over a bucket (#4481). A row the source has already purged cannot
-        // be exported, so a pre-cut prepare of that saga can still strand on
-        // the receiver; that residual is the source's to close.
+        // be exported; a re-seed's receiver decides such a saga's stale
+        // pending buckets aborted (#4533), so a saga the source still knows
+        // but cannot settle (an unresolved Indeterminate row) ships as a
+        // value-less row naming it, which keeps the receiver from treating it
+        // as purged. A receiver that predates it skips a row with no value.
         foreach (var (txid, decided) in snap0?.ToList() ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -322,6 +325,15 @@ internal sealed class LatticeSnapshotProvider(
                     Value = null!,
                     TransactionId = txid,
                     SettledDecision = status == TxStatus.Committed,
+                };
+            }
+            else
+            {
+                yield return new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
                 };
             }
         }

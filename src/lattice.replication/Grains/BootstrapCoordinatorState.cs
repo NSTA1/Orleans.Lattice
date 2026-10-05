@@ -148,4 +148,15 @@ internal sealed class BootstrapCoordinatorState
     /// The UTC tick at or after which a failed, fenced bootstrap is re-driven.
     /// </summary>
     [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
+
+    /// <summary>
+    /// Per sender cluster id, the highest export epoch it asked this receiver to
+    /// re-seed past (<c>x-lattice-replication-reseed-after</c>, issues #4533 /
+    /// #4534) and that no drain has consumed yet. While a sender waits it
+    /// withholds every saga record, so a drain from it whose export epoch is
+    /// greater clears the stale pending buckets its purged sagas left behind,
+    /// and removes the entry. State written before this slot decodes to an
+    /// empty map.
+    /// </summary>
+    [Id(16)] public Dictionary<string, long> ReseedAfterEpochs { get; set; } = new(StringComparer.Ordinal);
 }

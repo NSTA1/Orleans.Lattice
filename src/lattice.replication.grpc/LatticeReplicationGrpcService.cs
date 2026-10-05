@@ -420,6 +420,27 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
         var entries = request.Entries;
 
+        // A saga record from a sender this receiver is re-seeding is a straggler
+        // pushed before the sender's re-seed marker: the sender withholds every
+        // saga record until the drain has cleared its stale pending buckets, and
+        // applying this one after the clear could stage a prepare nothing
+        // settles (#4533). Refuse the batch; the sender re-ships its plain
+        // records and keeps withholding the sagas.
+        if (await ReplicationReseedResponder.RefusesStragglerAsync(
+                _grainFactory, request.TreeName, request.OriginClusterId, entries, _logger).ConfigureAwait(false))
+        {
+            return new ReplicationAckBox
+            {
+                Value = new ReplicationAck
+                {
+                    Accepted = false,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = bootstrapEpoch,
+                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                },
+            };
+        }
+
         // Time the apply call so the flow-control policy can shape
         // its hint against the real receiver-side cost of the just-
         // applied batch. Stopwatch.GetTimestamp is allocation-free;

@@ -46,6 +46,10 @@ internal sealed partial class ReplicationShipperGrain
             return;
         }
 
+        // The replay hold first: every export the re-seed can complete from is
+        // taken after the epoch read below, so no saga in flight at it loses its
+        // decision while the replay may still read it (#4533).
+        await TakeReplayHoldAsync();
         var epoch = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName).GetAsync();
         state.State.ReseedRequiredEpoch = epoch;
         state.State.ReseedRequiredSinceUtcTicks = _cursorFlushClock.GetUtcNow().UtcTicks;
@@ -67,17 +71,49 @@ internal sealed partial class ReplicationShipperGrain
             LogContext, partition, requested, firstRetained, epoch);
     }
 
-    /// <summary>
-    /// Clears the re-seed marker once the peer acknowledges a bootstrap from
-    /// an export taken after it, and rewinds every partition to its lowest
-    /// retained entry so every retained saga is delivered whole.
-    /// </summary>
-    private async Task MaybeClearReseedAsync(ReplicationAck ack)
+    // The highest export epoch the peer echoed this tick, by any ack: a push
+    // (serial or pipelined) or a liveness probe.
+    private long? _reseedEchoThisTick;
+
+    /// <summary>Records the bootstrap epoch an ack echoes, for <see cref="MaybeClearReseedAsync"/>.</summary>
+    private void NoteReseedEcho(ReplicationAck ack)
     {
+        if (ack.BootstrapEpoch is { } echoed && (_reseedEchoThisTick is not { } seen || echoed > seen))
+        {
+            _reseedEchoThisTick = echoed;
+        }
+    }
+
+    /// <summary>
+    /// Clears the re-seed marker once the peer acknowledged, by any ack this
+    /// tick, a bootstrap from an export taken after it, and rewinds every
+    /// partition to its lowest retained entry so every retained saga is
+    /// delivered whole. Runs at the end of the pump tick, after every batch
+    /// has folded its cursors, so no fold raises a rewound partition again.
+    /// </summary>
+    private async Task MaybeClearReseedAsync()
+    {
+        var echo = _reseedEchoThisTick;
+        _reseedEchoThisTick = null;
+        if (echo is not { } echoedThisTick)
+        {
+            return;
+        }
+
+        var ack = new ReplicationAck { Accepted = true, BootstrapEpoch = echoedThisTick };
         if (state.State.ReseedRequiredEpoch is not { } marker
             || ack.BootstrapEpoch is not { } echoed
             || echoed <= marker)
         {
+            return;
+        }
+
+        // The replay that follows the rewind is exact only while every
+        // registry honours the replay's purge hold (#4533): stay off the log,
+        // withholding saga records, until no silo predates it.
+        if (!AllSilosHonourPurgeHolds())
+        {
+            LogPurgeHoldUnsupported();
             return;
         }
 
@@ -102,6 +138,9 @@ internal sealed partial class ReplicationShipperGrain
         PublishDurableReadPositions();
         Array.Clear(_ackedNext);
         state.State.ReseedRequiredEpoch = null;
+        // Re-shipping from the lowest retained entry is a replay whose
+        // snapshot carries any saga it withholds (#4533).
+        await BeginReplayFilterAsync(_partitionCount, carried: true);
         state.State.ReseedRequiredSinceUtcTicks = 0;
         await state.WriteStateAsync();
         ReportReseedState();
