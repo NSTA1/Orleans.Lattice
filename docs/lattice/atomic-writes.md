@@ -737,11 +737,16 @@ matters most for the cross-cluster bootstrap export built from that
 snapshot - see
 [Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md).
 
-The masked row remains readable to the one caller that legitimately
-needs it: the leaf's activation-time self-terminalisation sweep, which
-is finishing a prepare it already owns rather than disclosing an
-outcome to a caller, reads past the mask through a deliberately narrow
-registry bypass. Read paths never do.
+The masked row remains readable to the callers that finish a prepare
+rather than disclose an outcome to a reader, through a deliberately
+narrow registry bypass: the leaf's activation-time self-terminalisation
+sweep, a split's or a resize copy's prepared-bucket sweep, and a
+snapshot capture. A capture resolves a still-pending bucket against the
+decision the registry records, masked or not, because a capture is
+permanent: hiding the key would leave it absent from every restore while
+another key of the same committed batch, whose terminal already landed,
+is held post-saga ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)).
+Read paths never read past the mask.
 
 `TxStatus.Indeterminate` is additive by value, so a mixed-version
 cluster stays wire-compatible: a node that predates the case takes the
