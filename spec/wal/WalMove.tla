@@ -33,7 +33,12 @@ MaxOff == 3
 Offs == 0..(MaxOff - 1)
 MaxCrashes == 1
 MaxCoordCrashes == 1
-MaxMoves == 1
+
+\* The moves an operator may start, one coordinator each. The base checks one;
+\* the TwoMoves variant configuration checks two, which can contend for the
+\* same partition: a move may take over another move's lapsed fence.
+MoveIds == {"m1"}
+NoMove == "none"
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
 Min(S) == CHOOSE x \in S : \A y \in S : x <= y
@@ -46,18 +51,20 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  tail      the oldest readable offset.                                  *)
 (*  acked     offsets acknowledged to their writer (only once durable).    *)
 (*  cons      the consumer's read position, -1 before it has read.         *)
-(*  move      the coordinator's phase: "idle", "fenced" or "copied".       *)
-(*  moveCopy  the offsets the move copied to the target home.              *)
-(*  dfence    the durable fence: held by the move in the placement pin.    *)
+(*  move[m]   move m's coordinator phase: "idle" (not started), "fenced",  *)
+(*            "copied", or "done" (flipped, aborted or abandoned).         *)
+(*  moveCopy[m] the offsets move m copied to its target home.              *)
+(*  dfence    the move whose durable fence the placement pin holds, or     *)
+(*            NoMove.                                                      *)
 (*  lapsed    the durable fence's lease has lapsed.                        *)
 (*  afence    the source activation's in-memory fence.                     *)
-(*  moves     moves started; crashes, coordCrashes  crashes so far.        *)
+(*  crashes, coordCrashes  crashes so far.                                 *)
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked, cons, move, moveCopy,
-          dfence, lapsed, afence, moves, crashes, coordCrashes
+          dfence, lapsed, afence, crashes, coordCrashes
 
 vars == <<next, inflight, durable, tail, acked, cons, move, moveCopy,
-          dfence, lapsed, afence, moves, crashes, coordCrashes>>
+          dfence, lapsed, afence, crashes, coordCrashes>>
 
 TypeOK ==
    /\ next \in 0..MaxOff
@@ -66,12 +73,11 @@ TypeOK ==
    /\ tail \in 0..MaxOff
    /\ acked \subseteq Offs
    /\ cons \in -1..(MaxOff - 1)
-   /\ move \in {"idle", "fenced", "copied"}
-   /\ moveCopy \subseteq Offs
-   /\ dfence \in BOOLEAN
+   /\ move \in [MoveIds -> {"idle", "fenced", "copied", "done"}]
+   /\ moveCopy \in [MoveIds -> SUBSET Offs]
+   /\ dfence \in MoveIds \cup {NoMove}
    /\ lapsed \in BOOLEAN
    /\ afence \in BOOLEAN
-   /\ moves \in 0..MaxMoves
    /\ crashes \in 0..MaxCrashes
    /\ coordCrashes \in 0..MaxCoordCrashes
 
@@ -84,12 +90,11 @@ Init ==
     /\ tail = 0
     /\ acked = {}
     /\ cons = -1
-    /\ move = "idle"
-    /\ moveCopy = {}
-    /\ dfence = FALSE
+    /\ move = [m \in MoveIds |-> "idle"]
+    /\ moveCopy = [m \in MoveIds |-> {}]
+    /\ dfence = NoMove
     /\ lapsed = FALSE
     /\ afence = FALSE
-    /\ moves = 0
     /\ crashes = 0
     /\ coordCrashes = 0
 
@@ -103,7 +108,7 @@ Append ==
     /\ next < MaxOff
     /\ inflight' = inflight \cup {next}
     /\ next' = next + 1
-    /\ UNCHANGED <<durable, tail, acked, cons, move, moveCopy, dfence, lapsed, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<durable, tail, acked, cons, move, moveCopy, dfence, lapsed, afence, crashes, coordCrashes>>
 
 (***************************************************************************)
 (* FlushAck(o): an in-flight append's flush lands on the stream's current  *)
@@ -114,7 +119,7 @@ FlushAck(o) ==
     /\ inflight' = inflight \ {o}
     /\ durable' = durable \cup {o}
     /\ acked' = acked \cup {o}
-    /\ UNCHANGED <<next, tail, cons, move, moveCopy, dfence, lapsed, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, tail, cons, move, moveCopy, dfence, lapsed, afence, crashes, coordCrashes>>
 
 (***************************************************************************)
 (* Consume: the consumer reads the next offset below the durable-contiguous *)
@@ -125,7 +130,7 @@ ConsumeFrom == IF cons + 1 < tail THEN tail ELSE cons + 1
 Consume ==
     /\ ConsumeFrom < Watermark
     /\ cons' = ConsumeFrom
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, move, moveCopy, dfence, lapsed, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, move, moveCopy, dfence, lapsed, afence, crashes, coordCrashes>>
 
 (***************************************************************************)
 (* GcTrim: the GC trims the prefix the consumer has read.                  *)
@@ -135,10 +140,10 @@ GcTrim ==
          /\ t - 1 <= cons
          /\ tail' = t
          /\ durable' = {o \in durable : o >= t}
-    /\ UNCHANGED <<next, inflight, acked, cons, move, moveCopy, dfence, lapsed, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, acked, cons, move, moveCopy, dfence, lapsed, afence, crashes, coordCrashes>>
 
 (***************************************************************************)
-(* MoveFence: an operator starts a move. The coordinator raises the        *)
+(* MoveFence(m): an operator starts move m. Its coordinator raises the    *)
 (* durable fence (a compare-and-swap on the placement pin, under a fresh   *)
 (* lease) and then quiesces the source, which fences its activation.       *)
 (* MoveCopy: once the stream has quiesced - no append in flight, the stale *)
@@ -152,46 +157,50 @@ GcTrim ==
 (* quiesce, a cancellation), releases its durable fence if it still holds  *)
 (* it, and deactivates the source, which resumes unfenced.                 *)
 (***************************************************************************)
-MoveFence ==
-    /\ move = "idle"
-    /\ moves < MaxMoves
-    /\ ~dfence
-    /\ move' = "fenced"
-    /\ dfence' = TRUE
+MoveFence(m) ==
+    /\ move[m] = "idle"
+    \* WalMoveFenceCore.EvaluateRaise: no fence is held, or another move's
+    \* lapsed fence is taken over; another move's live fence refuses the raise.
+    /\ \/ dfence = NoMove
+       \/ dfence # m /\ lapsed
+    /\ move' = [move EXCEPT ![m] = "fenced"]
+    /\ dfence' = m
     /\ lapsed' = FALSE
     /\ afence' = TRUE
-    /\ moves' = moves + 1
     /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moveCopy, crashes, coordCrashes>>
 
-MoveCopy ==
-    /\ move = "fenced"
+MoveCopy(m) ==
+    /\ move[m] = "fenced"
     /\ afence
     /\ inflight = {}
-    /\ dfence
-    /\ moveCopy' = durable
-    /\ move' = "copied"
+    /\ dfence = m
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = durable]
+    /\ move' = [move EXCEPT ![m] = "copied"]
     /\ lapsed' = FALSE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, dfence, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, dfence, afence, crashes, coordCrashes>>
 
-MoveSwitch ==
-    /\ move = "copied"
-    /\ dfence
-    /\ durable' = {o \in moveCopy : o >= tail}
-    /\ move' = "idle"
-    /\ moveCopy' = {}
-    /\ dfence' = FALSE
+MoveSwitch(m) ==
+    /\ move[m] = "copied"
+    /\ dfence = m
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
+    /\ dfence' = NoMove
     /\ lapsed' = FALSE
     /\ afence' = FALSE
-    /\ UNCHANGED <<next, inflight, tail, acked, cons, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, tail, acked, cons, crashes, coordCrashes>>
 
-MoveAbort ==
-    /\ move # "idle"
-    /\ move' = "idle"
-    /\ moveCopy' = {}
-    /\ dfence' = FALSE
-    /\ lapsed' = FALSE
-    /\ afence' = FALSE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moves, crashes, coordCrashes>>
+\* The aborting coordinator releases only its own fence
+\* (WalMoveFenceCore.IsReleaseAdmitted with its move id), then deactivates the
+\* source; the next activation re-derives its fence from what the pin holds.
+MoveAbort(m) ==
+    /\ move[m] \in {"fenced", "copied"}
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
+    /\ dfence' = IF dfence = m THEN NoMove ELSE dfence
+    /\ lapsed' = IF dfence = m THEN FALSE ELSE lapsed
+    /\ afence' = (dfence' # NoMove)
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, crashes, coordCrashes>>
 
 (***************************************************************************)
 (* LeaseLapse: time passes and the durable fence's lease lapses. Abstract  *)
@@ -202,18 +211,18 @@ MoveAbort ==
 (* lease's expiry, and the next one releases) and serves unfenced.         *)
 (***************************************************************************)
 LeaseLapse ==
-    /\ dfence
+    /\ dfence # NoMove
     /\ ~lapsed
     /\ lapsed' = TRUE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, afence, crashes, coordCrashes>>
 
 Release ==
-    /\ dfence
+    /\ dfence # NoMove
     /\ lapsed
-    /\ dfence' = FALSE
+    /\ dfence' = NoMove
     /\ lapsed' = FALSE
     /\ afence' = FALSE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, crashes, coordCrashes>>
 
 (***************************************************************************)
 (* ShardCrash: the shard's activation is lost at any step. Unflushed       *)
@@ -223,7 +232,7 @@ Release ==
 (* from the durable fence - fenced while the lease holds, and releasing it *)
 (* once the lease has lapsed. The coordinator is a different grain, so the *)
 (* move survives the crash.                                                *)
-(* CoordinatorCrash: the move's coordinator is lost; the move is           *)
+(* CoordinatorCrash(m): move m's coordinator is lost; the move is          *)
 (* abandoned and its durable fence is left in place for its lease to       *)
 (* govern.                                                                 *)
 (***************************************************************************)
@@ -231,20 +240,19 @@ ShardCrash ==
     /\ crashes < MaxCrashes
     /\ inflight' = {}
     /\ next' = Max({tail} \cup {o + 1 : o \in durable})
-    /\ afence' = (dfence /\ ~lapsed)
-    /\ dfence' = (dfence /\ ~lapsed)
+    /\ afence' = (dfence # NoMove /\ ~lapsed)
+    /\ dfence' = IF lapsed THEN NoMove ELSE dfence
     /\ lapsed' = FALSE
     /\ crashes' = crashes + 1
-    /\ UNCHANGED <<durable, tail, acked, cons, move, moveCopy, moves, coordCrashes>>
+    /\ UNCHANGED <<durable, tail, acked, cons, move, moveCopy, coordCrashes>>
 
-CoordinatorCrash ==
+CoordinatorCrash(m) ==
     /\ coordCrashes < MaxCoordCrashes
-    /\ move # "idle"
-    /\ move' = "idle"
-    /\ moveCopy' = {}
+    /\ move[m] \in {"fenced", "copied"}
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
     /\ coordCrashes' = coordCrashes + 1
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, dfence, lapsed, afence, moves, crashes>>
-
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, dfence, lapsed, afence, crashes>>
 (***************************************************************************)
 (* A fully quiesced stream has an explicit stuttering successor so natural *)
 (* termination is not reported as a deadlock.                              *)
@@ -252,8 +260,8 @@ CoordinatorCrash ==
 Quiesced ==
     /\ next = MaxOff
     /\ inflight = {}
-    /\ move = "idle"
-    /\ ~dfence
+    /\ \A m \in MoveIds : move[m] \in {"idle", "done"}
+    /\ dfence = NoMove
     /\ tail = MaxOff
 
 Stutter == Quiesced /\ UNCHANGED vars
@@ -263,14 +271,14 @@ Next ==
     \/ \E o \in Offs : FlushAck(o)
     \/ Consume
     \/ GcTrim
-    \/ MoveFence
-    \/ MoveCopy
-    \/ MoveSwitch
-    \/ MoveAbort
+    \/ \E m \in MoveIds : MoveFence(m)
+    \/ \E m \in MoveIds : MoveCopy(m)
+    \/ \E m \in MoveIds : MoveSwitch(m)
+    \/ \E m \in MoveIds : MoveAbort(m)
     \/ LeaseLapse
     \/ Release
     \/ ShardCrash
-    \/ CoordinatorCrash
+    \/ \E m \in MoveIds : CoordinatorCrash(m)
     \/ Stutter
 
 (***************************************************************************)
@@ -286,9 +294,9 @@ Spec ==
     /\ \A o \in Offs : WF_vars(FlushAck(o))
     /\ WF_vars(Consume)
     /\ WF_vars(GcTrim)
-    /\ WF_vars(MoveCopy)
-    /\ WF_vars(MoveSwitch)
-    /\ WF_vars(MoveAbort)
+    /\ \A m \in MoveIds : WF_vars(MoveCopy(m))
+    /\ \A m \in MoveIds : WF_vars(MoveSwitch(m))
+    /\ \A m \in MoveIds : WF_vars(MoveAbort(m))
     /\ WF_vars(LeaseLapse)
     /\ WF_vars(Release)
 
@@ -306,7 +314,7 @@ MovedStreamKeepsAckedWrites ==
 \* (Once the lease lapses and a source activation releases the fence, appends
 \* resume and the flip is refused instead.)
 CopyTakenQuiesced ==
-    move = "copied" /\ dfence => inflight = {}
+    \A m \in MoveIds : move[m] = "copied" /\ dfence = m => inflight = {}
 
 \* The consumer never reads past an append that is still in flight.
 ReaderNeverPassesHole ==
@@ -333,6 +341,6 @@ StreamEventuallyComplete ==
 \* its lease and a release always follows, including after the coordinator is
 \* lost.
 FenceEventuallyReleased ==
-    [](dfence => <>~dfence)
+    [](dfence # NoMove => <>(dfence = NoMove))
 
 =============================================================================

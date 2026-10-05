@@ -1,0 +1,30 @@
+# Pairs with MovedStreamKeepsAckedWrites, and needs two moves (the TwoMoves
+# variant's instance; the mutation declares the second move itself). The flip
+# requires A durable fence to be held rather than THIS move's
+# (WalMoveFenceCore.IsFlipAdmitted compares move ids). Move m1 copies; its lease
+# lapses and the source releases the fence and serves an append; move m2 raises
+# its own fence; m1's flip then sees a fence held and cuts over to its copy,
+# which lacks the append. The base flip requires the fence to name this move.
+MODULE: MovedStreamKeepsAckedWritesFlipAcceptsAnyMovesFence
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: the flip accepts another move's fence, so a move whose own fence was released still cuts over and drops a write
+PERTURBS: MoveSwitch
+
+--- FIND
+    /\ move[m] = "copied"
+    /\ dfence = m
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
+--- REPLACE
+\* MUTATION: any move's fence admits the flip.
+    /\ move[m] = "copied"
+    /\ dfence # NoMove
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
+--- END
+
+--- FIND
+MoveIds == {"m1"}
+--- REPLACE
+\* MUTATION: the defect needs a second move.
+MoveIds == {"m1", "m2"}
+--- END
