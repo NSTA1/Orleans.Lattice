@@ -25,9 +25,9 @@ PERTURBS: DeliverTerminal, ReceiverRegister, ReceiverNotify
 --- END
 --- FIND
     /\ rstage' = [rstage EXCEPT ![tr] = "done"]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo, lossVars>>
 --- REPLACE
 \* MUTATION: the notify is followed by the registration.
     /\ rstage' = [rstage EXCEPT ![tr] = "register"]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo, lossVars>>
 --- END

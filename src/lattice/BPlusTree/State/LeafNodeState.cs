@@ -468,6 +468,15 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(26)] public bool[]? SnapshotCoveredPartitions { get; set; }
 
     /// <summary>
+    /// Whether this leaf's row record (<see cref="ILeafRowRecordGrain"/>, issue
+    /// #4654) is known to be durable, so <c>PersistAsync</c> writes it only
+    /// before the first state write that carries this flag rather than before
+    /// every one. A row written before the record existed has this
+    /// <see langword="false"/>, and its next write records it.
+    /// </summary>
+    [Id(27)] public bool RowRecorded { get; set; }
+
+    /// <summary>
     /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
     /// so the next activation can reserve hydration budget accurately from its
     /// very first moment instead of re-learning the size by overshooting

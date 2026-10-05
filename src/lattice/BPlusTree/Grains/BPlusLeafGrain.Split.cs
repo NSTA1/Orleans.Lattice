@@ -1088,7 +1088,13 @@ internal sealed partial class BPlusLeafGrain
             // already applied to one of those keys is recognised there too.
             TerminalWitnesses = CollectTerminalWitnessesForSibling(splitKey),
         };
-        await newLeaf.InitializeSiblingAsync(siblingInit);
+
+        // The sibling is being created here, so its first row write carries a
+        // create intent naming it (issue #4654).
+        using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+        {
+            await newLeaf.InitializeSiblingAsync(siblingInit);
+        }
 
         // Join the back-pointer fixup before mutating the donor's own
         // state so a thrown fixup surfaces here (and not on a later
@@ -1277,7 +1283,10 @@ internal sealed partial class BPlusLeafGrain
         var movedWitnesses = CollectTerminalWitnessesForSibling(splitKey);
         if (HasWitnessNotIn(movedWitnesses, siblingInit.TerminalWitnesses))
         {
-            await newLeaf.InitializeSiblingAsync(siblingInit with { TerminalWitnesses = movedWitnesses });
+            using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+            {
+                await newLeaf.InitializeSiblingAsync(siblingInit with { TerminalWitnesses = movedWitnesses });
+            }
         }
 
         // Advance the donor's per-partition projection checkpoints to

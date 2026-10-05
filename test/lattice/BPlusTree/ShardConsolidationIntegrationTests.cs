@@ -465,8 +465,13 @@ public partial class ShardConsolidationIntegrationTests
         Assert.That(await donor.IsRetiredAsync(), Is.True);
         Assert.That(await donor.GetLeftmostLeafIdAsync(), Is.Null,
             "The retired donor must hold no leaf chain once the fold has committed.");
-        Assert.That(await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(donorLeafBefore!.Value).CountAsync(), Is.Zero,
-            "The donor's leaf state must be cleared, which also retires its WAL materialiser pins.");
+        // The donor's leaf state must be cleared, which also retires its WAL
+        // materialiser pins. A cleared leaf has no state row, so a direct data
+        // operation on it fails closed rather than reading it as empty (#4654).
+        var donorLeaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(donorLeafBefore!.Value);
+        Assert.That(await donorLeaf.GetTreeIdAsync(), Is.Null, "The donor's leaf state must be cleared.");
+        Assert.That(Assert.CatchAsync(async () => await donorLeaf.CountAsync()), Is.InstanceOf<ILatticeLeafUnavailable>(),
+            "A cleared, unrouted leaf has no row and is not being created, so it fails closed.");
 
         await AssertAllReadableAsync(tree, expected, "after the fold");
 
