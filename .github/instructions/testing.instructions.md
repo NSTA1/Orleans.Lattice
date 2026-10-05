@@ -1081,7 +1081,7 @@ only that module, and their composition was checked once, clean, but is too
 large to gate. Two companion modules sit beside them: `ShardOwnershipCrdt`
 (CRDT-mode keys) and `ShardOwnershipCutover`, which checks a saga bound to the
 previous copy across a shadow-cutover restore and its revert and found #4689
-(open). Three ownership
+(fixed). Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1098,7 +1098,7 @@ encoding is listed where one exists.
 | `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
-| `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy`, `SagaSettles` | `ShardOwnershipCutover` | No reader is served a saga's batch torn across a shadow-cutover restore or its revert; once committed, the batch sits only on its bound copy; the saga settles. | TLA+ only. | Mutations, e.g. `AtomicAcrossCutoverDecideSkipsDiscard` (production, #4689) and `SagaSettlesDiscardRouted`. |
+| `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy`, `SagaSettles` | `ShardOwnershipCutover` | No reader is served a saga's batch torn across a shadow-cutover restore or its revert; once committed, the batch sits only on its bound copy; the saga settles. | TLA+ only. | Mutations, e.g. `AtomicAcrossCutoverDecideSkipsDiscard` (production before #4689's fix) and `SagaSettlesDiscardRouted`. |
 | (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
