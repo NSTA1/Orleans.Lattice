@@ -71,6 +71,9 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  durable   offsets the WAL store holds (trim removes them).             *)
 (*  tail      the oldest readable offset; every offset below it is gone.   *)
 (*  acked     offsets acknowledged to their writer (only once durable).    *)
+(*  orphans   abandoned appends: the flush deadline or the drain budget     *)
+(*            faulted their acknowledgement, but the provider call may      *)
+(*            still land (issue #4621). Never acknowledged.                 *)
 (*                                                                         *)
 (* Leaf l:                                                                 *)
 (*  up[l]     an activation exists and has finished activating.            *)
@@ -103,14 +106,14 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*                                                                         *)
 (*  faults    environment faults spent so far.                             *)
 (***************************************************************************)
-VARIABLES next, inflight, durable, tail, acked,
+VARIABLES next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
           pinOff, pinHlc, hadSnap, faults
 
-walVars  == <<next, inflight, durable, tail, acked>>
+walVars  == <<next, inflight, durable, tail, acked, orphans>>
 leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
 pinVars  == <<pinOff, pinHlc, hadSnap>>
-vars == <<next, inflight, durable, tail, acked,
+vars == <<next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
           pinOff, pinHlc, hadSnap, faults>>
 
@@ -122,6 +125,7 @@ TypeOK ==
    /\ durable \subseteq Offs
    /\ tail \in 0..MaxOff
    /\ acked \subseteq Offs
+   /\ orphans \subseteq Offs
    /\ up \in [Leaves -> BOOLEAN]
    /\ cache \in [Leaves -> SUBSET Offs]
    /\ rp \in [Leaves -> Pos]
@@ -152,7 +156,15 @@ TypeOK ==
 (***************************************************************************)
 Readable == {o \in durable : o >= tail}
 
-Watermark == IF inflight = {} THEN next ELSE Min(inflight)
+\* One past the highest stored entry, never below the tail: what a recovering
+\* allocator hands out next (WalOffsetAllocationCore.RecoveredNextOffset).
+RecoveredNext == Max({tail} \cup {o + 1 : o \in durable})
+
+\* A reader is shown only offsets below every unsettled append (in flight or
+\* abandoned) and below the offset a recovering allocator would hand out next
+\* (one past the highest stored entry): a trailing hole is never exposed, so no
+\* reader passes an offset a recovered allocator can reissue (issue #4621).
+Watermark == Min({next, RecoveredNext} \cup inflight \cup orphans)
 
 Owned(l) == {o \in acked : Owner[o] = l}
 
@@ -185,6 +197,7 @@ Init ==
     /\ durable = {}
     /\ tail = 0
     /\ acked = {}
+    /\ orphans = {}
     /\ up = [l \in Leaves |-> TRUE]
     /\ cache = [l \in Leaves |-> {}]
     /\ rp = [l \in Leaves |-> -1]
@@ -216,6 +229,7 @@ Append ==
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED orphans
 
 (***************************************************************************)
 (* FlushAck(o): one in-flight append's flush completes - flushes complete  *)
@@ -238,6 +252,7 @@ FlushAck(o) ==
     /\ UNCHANGED <<up, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
+    /\ UNCHANGED orphans
 
 (***************************************************************************)
 (* ShardCrash: the WAL shard's activation is lost at any step. Every       *)
@@ -245,8 +260,6 @@ FlushAck(o) ==
 (* recovers from what the store holds: one past the highest stored offset, *)
 (* never below the tail.                                                   *)
 (***************************************************************************)
-RecoveredNext == Max({tail} \cup {o + 1 : o \in durable})
-
 ShardCrash ==
     /\ faults < MaxFaults
     /\ inflight' = {}
@@ -255,7 +268,49 @@ ShardCrash ==
     /\ UNCHANGED <<durable, tail, acked>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
+    \* An abandoned call dies with the process (in-memory and file providers),
+    \* or can land only at or above the committed tail (Azure Table: phase 2
+    \* commits in offset order and ReconcileAsync rolls a late phase-1 row
+    \* forward in order or back), so no orphan survives to land below a reader.
+    /\ orphans' = {}
 
+(***************************************************************************)
+(* Abandon(o): an append's flush misses its deadline, or the drain budget  *)
+(* expires under it. Its acknowledgement is faulted, but the provider call *)
+(* is still running and may yet land (issue #4621). The abandoned offset   *)
+(* bounds the watermark until the call settles: WalAbandonedFlushRegistry. *)
+(* LateLand(o): the abandoned call lands. A provider refuses a write at an *)
+(* occupied offset (create-only) or at or below its trim watermark, so the *)
+(* entry appears only in a gap no reader has passed. SettleHole(o): the    *)
+(* call settles without landing; the offset is a permanent hole, which    *)
+(* readers then pass and the trim watermark distinguishes from a trim.     *)
+(***************************************************************************)
+Abandon(o) ==
+    /\ o \in inflight
+    /\ faults < MaxFaults
+    /\ inflight' = inflight \ {o}
+    /\ orphans' = orphans \cup {o}
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<next, durable, tail, acked>>
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+
+LateLand(o) ==
+    /\ o \in orphans
+    /\ orphans' = orphans \ {o}
+    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
+    /\ UNCHANGED <<next, inflight, tail, acked>>
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+
+SettleHole(o) ==
+    /\ o \in orphans
+    /\ orphans' = orphans \ {o}
+    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
 (***************************************************************************)
 (* ReadStep(l): an active leaf reads the next entry of the shared stream   *)
 (* past its read position (activation replay and the starvation drive      *)
@@ -415,6 +470,7 @@ GcTrim ==
          /\ tail' = t
          /\ durable' = {o \in durable : o >= t}
     /\ UNCHANGED <<next, inflight, acked>>
+    /\ UNCHANGED orphans
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -540,6 +596,9 @@ ReplayFaultRearm(l) ==
 Next ==
     \/ Append
     \/ \E o \in Offs : FlushAck(o)
+    \/ \E o \in Offs : Abandon(o)
+    \/ \E o \in Offs : LateLand(o)
+    \/ \E o \in Offs : SettleHole(o)
     \/ ShardCrash
     \/ \E l \in Leaves : ReadStep(l)
     \/ \E l \in Leaves : PersistCheckpoint(l)
@@ -566,6 +625,7 @@ Spec ==
     /\ [][Next]_vars
     /\ WF_vars(Append)
     /\ \A o \in Offs : WF_vars(FlushAck(o))
+    /\ \A o \in Offs : WF_vars(LateLand(o) \/ SettleHole(o))
     /\ WF_vars(GcTrim)
     /\ \A l \in Leaves : WF_vars(ReadStep(l))
     /\ \A l \in Leaves : WF_vars(PersistCheckpoint(l))
@@ -595,6 +655,14 @@ TrimCoveredBySnapshot ==
 ReadPositionHonest ==
     \A l \in Leaves : \A o \in Owned(l) :
         (up[l] /\ o <= rp[l]) => o \in cache[l]
+
+\* No entry ever becomes readable below a reader's position: every readable
+\* entry a leaf owns at or below its read position is in its projection,
+\* acknowledged or not. An abandoned append that lands late (issue #4621) must
+\* therefore land only above every reader.
+LogPrefixApplied ==
+    \A l \in Leaves : \A o \in Readable :
+        (up[l] /\ ~stale[l] /\ Owner[o] = l /\ o <= rp[l]) => o \in cache[l]
 
 \* No reader is ever shown an offset above a still-unfilled prefix hole.
 ShippingNeverSkips ==
@@ -645,6 +713,6 @@ EveryAckedWriteMaterialised ==
 \* Reclamation eventually advances over the whole stream once every write
 \* is in and every pin can be released.
 ReclamationEventuallyAdvances ==
-    <>(tail = MaxOff)
+    <>(next = MaxOff /\ inflight \cup orphans = {} /\ durable = {})
 
 =============================================================================
