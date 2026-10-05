@@ -481,6 +481,7 @@ A restore, revert, purge and recreate, or alias move re-stamps the source tree's
   - There is no stamp when the registry tracks no lineage for the tree.
   - A liveness probe carries no records and is not stamped.
 - **A binding whose lineage changes forces a gap.** The shipper first reads each partition's next sequence of the newly bound log as a boundary, then takes the peer off the log ([Forced gap](#forced-gap-a-peer-taken-off-the-log)).
+  - Only a move from one lineage to another is a change. A tree first registered after its shipper bound it replaced nothing, and a restart or backstop re-resolve that reads the same lineage is no change. A read that finds no lineage, such as a tree unregistered for a recreate, keeps the last lineage seen, so the recreate's new lineage is still compared against it.
   - Every record below the boundary was appended before the re-seed marker, so the export that settles the re-seed carries it.
   - The shipper consumes such a record without shipping it for as long as the binding holds, the re-seed rewind included, so the rewind cannot loop on it.
   - This covers a purge and recreate too, whose old-lineage records stay in the same log. No old-lineage write lands after the re-stamp, so they are all below the boundary.

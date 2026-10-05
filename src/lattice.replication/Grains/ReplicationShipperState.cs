@@ -262,8 +262,10 @@ internal sealed class ReplicationShipperState
 
     /// <summary>
     /// The source tree lineage the shipper's binding was resolved under (issue
-    /// #4673), stamped on every push. <see langword="null"/> when the source
-    /// registry tracks no lineage for the tree. Meaningful only while
+    /// #4673), stamped on every push: the last non-null lineage a resolve read,
+    /// kept while the registry reports none (a tree unregistered for a
+    /// recreate), so a recreate is compared against it. <see langword="null"/>
+    /// while no resolve has read a lineage. Meaningful only while
     /// <see cref="BoundSourceLineageKnown"/>.
     /// </summary>
     [Id(22)]

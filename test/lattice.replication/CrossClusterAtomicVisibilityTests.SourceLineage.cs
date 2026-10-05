@@ -19,13 +19,13 @@ public partial class CrossClusterAtomicVisibilityTests
 {
     private sealed class LineageRegistry
     {
-        public TreeRegistryEntry Entry { get; set; } = new() { Lineage = Guid.NewGuid() };
+        public TreeRegistryEntry? Entry { get; set; } = new() { Lineage = Guid.NewGuid() };
 
         public ILatticeRegistry Build(string tree)
         {
             var registry = Substitute.For<ILatticeRegistry>();
             registry.GetEntryAsync(tree).Returns(_ => Task.FromResult<TreeRegistryEntry?>(Entry));
-            registry.ResolveAsync(tree).Returns(_ => Task.FromResult(Entry.PhysicalTreeId ?? tree));
+            registry.ResolveAsync(tree).Returns(_ => Task.FromResult(Entry?.PhysicalTreeId ?? tree));
             return registry;
         }
     }
@@ -68,7 +68,7 @@ public partial class CrossClusterAtomicVisibilityTests
         const string tree = "ccv-lineage-alias";
         var ticks = DateTime.UtcNow.Ticks;
         var (shipper, feeds, restored, transport, registry) = LineageShipper(tree, "ccv-lineage-alias-p2");
-        var original = registry.Entry.Lineage;
+        var original = registry.Entry!.Lineage;
 
         feeds[0].Append(LocalSet(tree, "before", Hlc(ticks, 10)));
         await PumpAsync(shipper, ticks: 1);
@@ -78,7 +78,7 @@ public partial class CrossClusterAtomicVisibilityTests
         // moved the alias to it, re-stamping the lineage in the same row write.
         restored[0].Append(LocalSet(tree, "restored-content", Hlc(ticks, 5)));
         var restoredLineage = Guid.NewGuid();
-        registry.Entry = registry.Entry with { PhysicalTreeId = "ccv-lineage-alias-p2", Lineage = restoredLineage };
+        registry.Entry = registry.Entry! with { PhysicalTreeId = "ccv-lineage-alias-p2", Lineage = restoredLineage };
         await shipper.NotifySourceIdentityChangedAsync("ccv-lineage-alias-p2", CancellationToken.None);
         var gapForced = shipper.ReseedRequired;
 
@@ -121,7 +121,7 @@ public partial class CrossClusterAtomicVisibilityTests
         await PumpAsync(shipper, ticks: 1);
         transport.Accepting = true;
         var recreated = Guid.NewGuid();
-        registry.Entry = registry.Entry with { Lineage = recreated };
+        registry.Entry = registry.Entry! with { Lineage = recreated };
         await shipper.NotifySourceIdentityChangedAsync(tree, CancellationToken.None);
         var gapForced = shipper.ReseedRequired;
 
@@ -148,12 +148,12 @@ public partial class CrossClusterAtomicVisibilityTests
         const string tree = "ccv-lineage-resize";
         var ticks = DateTime.UtcNow.Ticks;
         var (shipper, feeds, restored, transport, registry) = LineageShipper(tree, "ccv-lineage-resize-p2");
-        var lineage = registry.Entry.Lineage;
+        var lineage = registry.Entry!.Lineage;
         feeds[0].Append(LocalSet(tree, "before", Hlc(ticks, 10)));
         await PumpAsync(shipper, ticks: 1);
 
         restored[0].Append(LocalSet(tree, "copied", Hlc(ticks, 5)));
-        registry.Entry = registry.Entry with { PhysicalTreeId = "ccv-lineage-resize-p2" };
+        registry.Entry = registry.Entry! with { PhysicalTreeId = "ccv-lineage-resize-p2" };
         await shipper.NotifySourceIdentityChangedAsync("ccv-lineage-resize-p2", CancellationToken.None);
         await PumpAsync(shipper, ticks: 2);
 
