@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence. Reproduces production before #4599 (#4587): the fall-off
+# probe reads only the receiver's own WAL, so a source trim past the receiver's
+# cursor is never detected and no re-bootstrap is requested. The skipped entries
+# reach the receiver by no path.
+MODULE: EventualConvergenceTrimNeverRebootstraps
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a trim past the receiver requests no re-bootstrap, so the entries it skipped never arrive
+PERTURBS: Trim
+
+--- FIND
+    /\ skipped' = (cursor[BootEdge] + 1)..Len(wal[BootSource])
+    /\ requested' = TRUE
+--- REPLACE
+    /\ skipped' = (cursor[BootEdge] + 1)..Len(wal[BootSource])
+\* MUTATION: nothing detects the fall-off.
+    /\ requested' = requested
+--- END
