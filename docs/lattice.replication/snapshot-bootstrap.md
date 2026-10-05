@@ -1157,6 +1157,35 @@ recorded verdict behind an aged-out row):
 A receiver that predates the decision slot sees a row with no value
 that is neither prepared nor a tombstone, which its drain skips.
 
+**Cross-tree sub-sagas.** A tree's part of a cross-tree atomic write (see
+[Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier))
+is settled on a receiver by a barrier that waits for every participating
+tree's terminal. An import of one participant settles that tree's
+sub-saga from the export instead, and its terminal may never be shipped
+again: it is often trimmed, which is why the peer fell off the log. So
+([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683)):
+
+- **The export names the operation.** The authoring tree's transaction
+  registry records each sub-saga's cross-tree operation id and
+  participating trees when it parks prepared, and keeps them for exactly
+  as long as it stores the decision. Every decision row and prepared row
+  of such a sub-saga carries them.
+- **The drain records the arrival.** For a decision row that names an
+  operation, the drain records the tree's arrival at the receiver's barrier
+  for it, with the row's verdict, as the tree's terminal would. The wait
+  set is the participants replicated here, plus the tree. If that completes
+  the barrier, every participant is finalized.
+- **The tree stays fenced until the barrier decides.** The imported tree
+  serves the sub-saga post-saga, while a sibling whose terminal has not
+  arrived serves it pre-saga. So the drain does not lift the read fence
+  while any barrier it arrived at is undecided. The bootstrap stays in its
+  incremental-handoff phase, re-checks on each tick, and lifts the fence
+  and completes once every one has decided.
+  - The cost is availability: the imported tree is unreadable until the
+    sibling's own terminal reaches this receiver.
+  - A re-driven drain records the same arrival again, and a terminal of the
+    tree shipped later overwrites it. Both are no-ops.
+
 A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's
 [replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
@@ -1287,5 +1316,8 @@ prepare and left pre-saga beside its siblings (issue #4526).
 Modelled in `AtomicCommitCrossCluster`: the real drain, with
 incremental replication interleaved and the fence, is clean on every
 property, and lifting the fence early or on failure fires
-`RAllOrNothing`.
+`RAllOrNothing`. For a cross-tree sub-saga the fence is held past the
+drain until the receiver's barrier decides (see
+[Cross-tree sub-sagas](#snapshot-and-in-flight-atomic-visibility) above),
+which the cross-tree slice of the model checks clean.
 

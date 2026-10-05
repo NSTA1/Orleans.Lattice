@@ -428,4 +428,21 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(14)] public long WalClearedGeneration { get; set; }
+
+    /// <summary>
+    /// The cross-tree atomic write each sub-saga this tree authored belongs to
+    /// (issue #4683): the operation id and the participating trees, recorded
+    /// durably when the sub-saga parks prepared, before any terminal of it
+    /// exists. Kept for exactly as long as the sub-saga's decision is stored,
+    /// so a snapshot export that ships the decision row can name the
+    /// operation, and a receiver that imports this tree can record the tree's
+    /// arrival at its cross-tree barrier, as a shipped terminal would. An entry
+    /// whose txid has neither a decision nor a delegation is a purged saga's,
+    /// and the next prune drops it.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state decodes to an empty map, so a
+    /// sub-saga parked by an older build names no operation.
+    /// </para>
+    /// </summary>
+    [Id(15)] public Dictionary<Guid, CrossTreeMembership> CrossTreeMemberships { get; set; } = [];
 }

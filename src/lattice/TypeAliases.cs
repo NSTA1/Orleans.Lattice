@@ -378,6 +378,7 @@ internal static class TypeAliases
     internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
     // Ambient producer-side cross-tree terminal metadata (RequestContext value).
     internal const string CrossTreeTerminalInfo = "ol.cti";
+    internal const string CrossTreeMembership = "ol.ctm";
 
     // Distributed lock / lease (#1608)
     internal const string LockToken = "ol.lkt";
