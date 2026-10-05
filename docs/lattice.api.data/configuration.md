@@ -1,6 +1,6 @@
 # Orleans.Lattice.Api.Data configuration
 
-The facade package has one public options type, `LatticeApiDataOptions`, which carries the read-bounding knobs for a bounded range read and the drain-step knob for a bounded range delete. It is bound through the `AddLatticeDataApi` registration extension and resolvable via `IOptions<LatticeApiDataOptions>`. The sibling gRPC package also exposes `LatticeDataApiGrpcOptions` for server-side transport authorization and credential bridging.
+The facade package exposes `LatticeApiDataOptions`, which carries the read-bounding knobs for a bounded range read and the drain-step knob for a bounded range delete. It is bound through the `AddLatticeDataApi` registration extension and resolvable via `IOptions<LatticeApiDataOptions>`. The sibling gRPC package also exposes `LatticeDataApiGrpcOptions` for server-side transport authorization and credential bridging.
 
 The data API adds no authorization posture of its own: every operation routes through the gated `ILattice` surface, so the cluster's access gate is the single source of enforcement. These knobs bound range reads and the per-step range-delete drain size.
 

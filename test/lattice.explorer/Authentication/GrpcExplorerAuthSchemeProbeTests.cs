@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Orleans.Lattice.Explorer.Core.Authentication;
+using Orleans.Lattice.Explorer.Core.Connection;
 
 namespace Orleans.Lattice.Explorer.Tests.Authentication;
 
@@ -69,5 +70,27 @@ public class GrpcExplorerAuthSchemeProbeTests
         Assert.That(
             GrpcExplorerAuthSchemeProbe.IsCallerCancellation(new RpcException(new Status(status, "failed")), cancelled.Token),
             Is.False);
+    }
+
+    [Test]
+    public void The_probes_channel_leaves_cancellation_surfacing_as_an_RpcException()
+    {
+        // Why the probe needs the RpcException(Cancelled) arm at all, and why its
+        // OperationCanceledException arm cannot be reached through the transport:
+        // Grpc.Net.Client raises OperationCanceledException only when a channel
+        // opts in with ThrowOperationCanceledOnCancellation, and the Explorer's
+        // factory never sets it. Flipping that option would make the cancellation
+        // arms swap roles, so pin it here rather than leaving the comment on the
+        // catch block as the only record.
+        var options = LatticeGrpcChannelFactory.BuildChannelOptions(new LatticeConnectionSettings
+        {
+            Address = "http://localhost:5000",
+            AllowUnencryptedHttp2 = true,
+        });
+
+        Assert.That(
+            options.ThrowOperationCanceledOnCancellation,
+            Is.False,
+            "a cancelled probe call reaches the probe as RpcException(Cancelled), never as OperationCanceledException");
     }
 }

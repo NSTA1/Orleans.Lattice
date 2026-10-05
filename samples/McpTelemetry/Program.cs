@@ -37,15 +37,12 @@ using Orleans.Lattice.Samples.McpTelemetry;
 // telemetry answer is a genuine round-trip: silo -> Prometheus scrape -> PromQL
 // query -> MCP tool result.
 //
-// The sample proves the headline properties of the telemetry surface:
-//
-//   1. A caller granted the cluster-wide LatticeOperation.Telemetry capability
-//      discovers the four read-only lattice_telemetry_* tools and runs a live
-//      PromQL query end-to-end over MCP against real Prometheus.
-//   2. Permission-scoping: the same caller does NOT see the state tools it was
-//      not granted, and an unauthenticated caller is offered nothing at all.
-//   3. The dual-credential boundary: the tools authenticate to Prometheus with a
-//      backend credential the host configures, never the caller's identity.
+// Intended journey: show the telemetry surface's capability-gated discovery,
+// permission scoping, and dual-credential boundary against real Prometheus.
+// Current behaviour: this sample registers no ILatticeApiMcpAuthorizer, so the
+// default DenyAllMcpAuthorizer hides every group tool and the client reaches
+// only lattice_capabilities. See the README's known issue before treating this
+// as an end-to-end telemetry-tool demo.
 //
 // Prerequisite: start Prometheus first with `docker compose up -d` in this
 // directory. See README.md.
@@ -107,8 +104,9 @@ builder.Services.AddOpenTelemetry()
 builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge, DemoCredentialBridge>();
 
 // The MCP server front door, mounted at /mcp so it coexists with /metrics.
-// RequireAuthorization is disabled purely to keep the sample one-command
-// runnable; discovery is still fail-closed and permission-scoped underneath.
+// RequireAuthorization is disabled purely to avoid an ASP.NET Core identity
+// provider; Prometheus still must be started separately, and the default MCP
+// authorizer still hides group tools until the README known issue is addressed.
 builder.Services.AddLatticeMcp(options =>
 {
     options.RequireAuthorization = false;

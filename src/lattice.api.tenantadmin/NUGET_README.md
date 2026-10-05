@@ -16,7 +16,7 @@ through a single seam that every transport binding (gRPC, MCP) adapts over.
 | `SuspendTenantAsync` | Transitions an existing tenant to the suspended status (idempotent). |
 | `ResumeTenantAsync` | Transitions a suspended tenant back to active (idempotent). |
 | `DeleteTenantAsync` | Removes a tenant, cascading the delete to the tenant's trees. |
-| `SetTenantQuotasAsync` | Authors the tenant's resource quotas (keys, bytes, memory, trees, operations per second, and burst allowance). |
+| `SetTenantQuotasAsync` | Authors the tenant's resource quotas (keys, bytes, memory, trees, operations per second, burst allowance, and delegated access caps). |
 
 `ILatticeTenantRegionAdmin` administers per-tenant region residency:
 
@@ -40,9 +40,12 @@ administers its own trees without ever naming another tenant's.
 `ILatticeTenantAccessAdmin` lists, adds, and removes a tenant's tenant-admin
 subjects (a tenant can never be left without one), `ILatticeTenantGrantAdmin`
 administers the two-step cross-tenant grant agreement (the granting tenant offers,
-the grantee approves or rejects, and either party may revoke), and the read-only
+the grantee approves or rejects, and either party may revoke), the read-only
 `ILatticeTenantQuotaUsage` reports a tenant's per-dimension consumption against its
-quota ceilings.
+quota ceilings, and `ILatticeTenantDirectoryAdmin` / `ILatticeTenantPolicyAdmin`
+let tenant administrators manage tenant groups, the member set, tenant-tier rules,
+explanations, effective permissions, and posture when delegated tenant access
+administration is enabled.
 
 ## Fail-closed by design
 

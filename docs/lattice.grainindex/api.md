@@ -87,7 +87,7 @@ See [Backfill](backfill.md).
 | `IGrainIndexAdmin` | `DeclaredIndexes`, `GetStatusAsync`, `ListStatusAsync`, `PauseBackfillAsync`, `ResumeBackfillAsync`, `RebuildAsync`, `RunBackfillPassAsync`. |
 | `GrainIndexStatus` | `IndexName`, `Definition`, `Registered`, `Fingerprint`, `KeyCodecId`, `NeedsBackfill`, `Drift`, `Backfill`, `Progress`, `EntryCount`. |
 | `GrainIndexDriftStatus` | Whether the declaration drifted, and on which fields. |
-| `GrainIndexMetrics` | `MeterName` and `Meter` - the shared core meter (`LatticeMetrics.Meter`), not a package meter - plus the eight instruments and their names, the tag names and `path` values, and `IndexTag(string)`, which caches one `index` tag per index name. |
+| `GrainIndexMetrics` | `MeterName` and `Meter` - the shared core meter (`LatticeMetrics.Meter`), not a package meter - plus the instrument names, tag names and `path` values, and `IndexTag(string)`, which caches one `index` tag per index name. |
 
 See [Observability](observability.md).
 

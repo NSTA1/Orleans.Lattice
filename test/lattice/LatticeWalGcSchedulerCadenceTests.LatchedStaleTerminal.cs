@@ -302,8 +302,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     {
         // The sweep stopped driving the leaf, so a floor that clears afterwards
         // was cleared by something else - an operator rebuild. Crediting it
-        // would inflate the healed/attempted ratio and advance the heal epoch
-        // on evidence that says nothing about the sweep. The control for the
+        // would inflate the healed/attempted ratio on evidence that says
+        // nothing about the sweep. The control for the
         // clearing transition itself is
         // ExecuteAsync_publishes_a_healed_outcome_when_a_swept_leaf_stops_blocking,
         // which credits exactly this transition for an ordinary drive.

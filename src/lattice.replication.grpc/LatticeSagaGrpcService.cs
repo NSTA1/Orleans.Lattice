@@ -223,7 +223,7 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         // LatticeReplicationGrpcService.EnsureOriginMatchesCaller - a gate
         // applied to one verb of a family and not its siblings is not a gate,
         // because the caller picks the verb.
-        var origin = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        var origin = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
         if (string.IsNullOrWhiteSpace(origin))
         {
             _logger.LogWarning(
@@ -293,17 +293,5 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
                     + "see server logs for the underlying exception."),
                 ex.Message);
         }
-    }
-
-    private static string? ReadHeader(ServerCallContext context, string key)
-    {
-        foreach (var entry in context.RequestHeaders)
-        {
-            if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return entry.Value;
-            }
-        }
-        return null;
     }
 }

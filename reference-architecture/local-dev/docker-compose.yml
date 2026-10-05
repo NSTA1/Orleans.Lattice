@@ -154,8 +154,9 @@ x-mcp-dev-toggles: &mcp-dev-toggles
   # OPTIONAL multi-tenancy tool groups (off by default), paired with the silo's
   # Tenancy__Enabled. When "true", the head dials the silo's tenant-admin gRPC
   # facade and contributes the tenant self-awareness tools (lattice_tenant_current
-  # / _list / _get); Mcp__EnableTenantControl additionally advertises the mutating
-  # tenant administration tools. Keep both in step with the silo flag - the tools
+  # / _list / _get); Mcp__EnableTenantControl additionally advertises the tenant
+  # administration tools (lifecycle, residency and delegated tenant access, reads
+  # and writes). Keep both in step with the silo flag - the tools
   # target a facade the silo only maps when its Tenancy__Enabled is also "true".
   Mcp__EnableTenancy: "${TENANCY_ENABLED:-false}"
   Mcp__EnableTenantControl: "${TENANCY_CONTROL:-false}"

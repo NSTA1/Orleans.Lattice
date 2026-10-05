@@ -56,7 +56,7 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
         {
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.WalMaxBatchEntries)} "
-                + $"must be at least 1 ({scope}). The per-shard WAL grain refuses to flush a "
+                + $"must be at least 1 ({scope}). The per-partition WAL grain refuses to flush a "
                 + "zero-sized batch; a non-positive value would deadlock the commit-time observer.");
         }
 

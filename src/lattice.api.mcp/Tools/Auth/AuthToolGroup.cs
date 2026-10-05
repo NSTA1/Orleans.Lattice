@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using Orleans.Lattice.Api.Auth;
+using static Orleans.Lattice.Api.Mcp.McpHandlerToolFactory;
 
 namespace Orleans.Lattice.Api.Mcp;
 
@@ -58,7 +59,7 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
         var tools = new List<McpServerTool>
         {
             // ----- Introspection (read-only) -----
-            Read(services, AuthToolHandlers.ExplainAsync, "lattice_auth_explain", "Explain an authorization decision",
+            ReadOnlyTool(services, AuthToolHandlers.ExplainAsync, "lattice_auth_explain", "Explain an authorization decision",
                 "Explains whether a subject may perform an operation over a keyspace scope (whole tree, a key, or a "
                 + "prefix), returning the access gate's verdict and the authored rules that apply. Set subjectKind to "
                 + "Group to explain a group subject rather than a user. The subject's groups are resolved from the "
@@ -70,29 +71,29 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 + "evaluated'. The result also reports the cluster's authorization posture (whether the all-trees grant "
                 + "tier and access-administration delegation are enabled), so you can tell whether a cluster-wide "
                 + "Tree:* grant is actually live and whether a policy-tree delegation rule is authorable. Read-only."),
-            Read(services, AuthToolHandlers.EffectivePermissionsAsync, "lattice_auth_effective_permissions",
+            ReadOnlyTool(services, AuthToolHandlers.EffectivePermissionsAsync, "lattice_auth_effective_permissions",
                 "List a subject's effective permissions",
                 "Returns the authorization rules currently in effect for a subject (grants and denies), resolved from "
                 + "the live policy store and the subject's group closure. Set subjectKind to Group to resolve a group "
                 + "subject rather than a user. The result also reports the cluster's authorization posture (the "
                 + "all-trees grant and access-administration delegation tier flags), so a listed but inert Tree:* rule "
                 + "is distinguishable from an enforced one. Read-only."),
-            Read(services, AuthToolHandlers.GetGroupAsync, "lattice_auth_get_group", "Get a group",
+            ReadOnlyTool(services, AuthToolHandlers.GetGroupAsync, "lattice_auth_get_group", "Get a group",
                 "Reads a single group record by id, or null when no such group exists. Read-only."),
-            Read(services, AuthToolHandlers.ListGroupsAsync, "lattice_auth_list_groups", "List groups",
+            ReadOnlyTool(services, AuthToolHandlers.ListGroupsAsync, "lattice_auth_list_groups", "List groups",
                 "Reads one page of the group catalog in ascending group-id order. Pass the returned next page token to "
                 + "continue. Read-only."),
-            Read(services, AuthToolHandlers.ListGroupMembersAsync, "lattice_auth_list_group_members", "List a group's members",
+            ReadOnlyTool(services, AuthToolHandlers.ListGroupMembersAsync, "lattice_auth_list_group_members", "List a group's members",
                 "Returns the direct members (users and nested groups) of a group, in ascending ordinal order. Read-only."),
-            Read(services, AuthToolHandlers.ListSubjectGroupsAsync, "lattice_auth_list_subject_groups",
+            ReadOnlyTool(services, AuthToolHandlers.ListSubjectGroupsAsync, "lattice_auth_list_subject_groups",
                 "List a subject's groups",
                 "Returns the full transitive set of group ids a subject belongs to, walking nested groups. Read-only."),
-            Read(services, AuthToolHandlers.GetRuleAsync, "lattice_auth_get_rule", "Get an authorization rule",
+            ReadOnlyTool(services, AuthToolHandlers.GetRuleAsync, "lattice_auth_get_rule", "Get an authorization rule",
                 "Reads a single rule by its governed tree id and rule id, or null when none exists. Read-only."),
-            Read(services, AuthToolHandlers.ListRulesAsync, "lattice_auth_list_rules", "List all authorization rules",
+            ReadOnlyTool(services, AuthToolHandlers.ListRulesAsync, "lattice_auth_list_rules", "List all authorization rules",
                 "Reads one page of every rule in the store, ordered by (governed tree id, rule id). Pass the returned "
                 + "next page token to continue. Read-only."),
-            Read(services, AuthToolHandlers.ListRulesForTreeAsync, "lattice_auth_list_rules_for_tree",
+            ReadOnlyTool(services, AuthToolHandlers.ListRulesForTreeAsync, "lattice_auth_list_rules_for_tree",
                 "List a tree's authorization rules",
                 "Reads one page of the rules governing a single tree, ordered by (governed tree id, rule id). Pass the "
                 + "returned next page token to continue. Returns the tree's own rules AND the cluster-wide wildcard "
@@ -104,68 +105,28 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
         if (enableAdministration)
         {
             // ----- Administration (destructive) -----
-            tools.Add(Write(services, AuthToolHandlers.UpsertGroupAsync, "lattice_auth_upsert_group", "Create or replace a group",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.UpsertGroupAsync, "lattice_auth_upsert_group", "Create or replace a group",
                 "Creates or replaces a group record (id and optional display name), returning the written record. "
                 + "Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveGroupAsync, "lattice_auth_remove_group", "Remove a group",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.RemoveGroupAsync, "lattice_auth_remove_group", "Remove a group",
                 "Removes a group record by id. A no-op when no such group exists. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.AddMemberAsync, "lattice_auth_add_member", "Add a group member",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.AddMemberAsync, "lattice_auth_add_member", "Add a group member",
                 "Adds a membership edge making a member (a user or a nested group) a direct member of a group. "
                 + "Idempotent. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveMemberAsync, "lattice_auth_remove_member", "Remove a group member",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.RemoveMemberAsync, "lattice_auth_remove_member", "Remove a group member",
                 "Removes a membership edge. A no-op when the edge does not exist. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.PutRuleAsync, "lattice_auth_put_rule", "Create or replace a rule",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.PutRuleAsync, "lattice_auth_put_rule", "Create or replace a rule",
                 "Creates or replaces an authorization rule granting or denying a set of operations over a keyspace "
                 + "scope to a user or group, returning the persisted rule. A cluster-wide all-trees rule (scope Tree:*) "
                 + "carrying data-plane operations is rejected unless the cluster's all-trees grant tier is enabled, and "
                 + "a whole-tree Admin rule on the reserved policy tree (access-administration delegation) is rejected "
                 + "unless the delegation tier is enabled; check the posture from lattice_auth_explain or "
                 + "lattice_auth_effective_permissions before authoring either shape. Administrator-gated and destructive."));
-            tools.Add(Write(services, AuthToolHandlers.RemoveRuleAsync, "lattice_auth_remove_rule", "Remove a rule",
+            tools.Add(DestructiveTool(services, AuthToolHandlers.RemoveRuleAsync, "lattice_auth_remove_rule", "Remove a rule",
                 "Removes a rule by its governed tree id and rule id, returning true when a rule was removed. "
                 + "Administrator-gated and destructive."));
         }
 
         return tools;
     }
-
-    private static McpServerTool Read(
-        IServiceProvider services,
-        Delegate handler,
-        string name,
-        string title,
-        string description)
-        => McpServerTool.Create(
-            handler,
-            new McpServerToolCreateOptions
-            {
-                Services = services,
-                Name = name,
-                Title = title,
-                Description = description,
-                SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                ReadOnly = true,
-                Destructive = false,
-                UseStructuredContent = true,
-            });
-
-    private static McpServerTool Write(
-        IServiceProvider services,
-        Delegate handler,
-        string name,
-        string title,
-        string description)
-        => McpServerTool.Create(
-            handler,
-            new McpServerToolCreateOptions
-            {
-                Services = services,
-                Name = name,
-                Title = title,
-                Description = description,
-                SerializerOptions = LatticeApiMcpToolSerialization.Options,
-                ReadOnly = false,
-                Destructive = true,
-                UseStructuredContent = true,
-            });
 }

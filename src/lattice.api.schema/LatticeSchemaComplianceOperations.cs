@@ -52,7 +52,7 @@ internal sealed class LatticeSchemaComplianceOperations : ILatticeSchemaComplian
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
 
         // Composed once under the active tenant, then used for the gate, the
         // record and the scan alike.
@@ -74,7 +74,7 @@ internal sealed class LatticeSchemaComplianceOperations : ILatticeSchemaComplian
             static report => LatticeOperationCompletion.Succeeded(
                 report.TreeId, SchemaComplianceScanResults.ToResultMap(report))).ConfigureAwait(false);
 
-        return LatticeOperationMapping.ToHandle(launch.Record, created: launch.Completion is not null);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -156,16 +156,5 @@ internal sealed class LatticeSchemaComplianceOperations : ILatticeSchemaComplian
             ? warm
             : await _tenantResolver.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
         return tenant.Value ?? throw new LatticeTenantAccessDeniedException();
-    }
-
-    private static string ResolveOperationId(string? operationId)
-    {
-        if (operationId is null)
-        {
-            return LatticeOperationKey.NewId();
-        }
-
-        LatticeOperationKey.ThrowIfInvalid(operationId, nameof(operationId));
-        return operationId;
     }
 }

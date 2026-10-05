@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Entra configuration
 
-The package has one public options type, `LatticeEntraAuthenticatorOptions`, which configures a single Entra credential authenticator: the Entra authority it discovers OIDC metadata from, the tenant allow-list and audiences it accepts, and how it resolves overflowed group membership. It is bound per Entra application by the `AddEntraCredentialAuthenticator` registration extension, so a silo can trust several Entra apps at once alongside other issuers.
+The package documents `LatticeEntraAuthenticatorOptions`, which configures a single Entra credential authenticator: the Entra authority it discovers OIDC metadata from, the tenant allow-list and audiences it accepts, and how it resolves overflowed group membership. It is bound per Entra application by the `AddEntraCredentialAuthenticator` registration extension, so a silo can trust several Entra apps at once alongside other issuers.
 
 ## `LatticeEntraAuthenticatorOptions`
 

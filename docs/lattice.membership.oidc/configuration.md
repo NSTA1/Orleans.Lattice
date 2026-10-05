@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Oidc configuration
 
-The package has one public options type, `LatticeOidcAuthenticatorOptions`, which configures a single generic OpenID Connect credential authenticator: the authority its discovery document is fetched from, the exact issuer and the audiences it accepts, and the claim names it reads the subject and group membership out of. It is bound per issuer by the `AddLatticeOidc` registration extension, so a silo can trust several OIDC providers at once alongside the Entra, JWT, and anonymous authenticators.
+The package documents `LatticeOidcAuthenticatorOptions`, which configures a single generic OpenID Connect credential authenticator: the authority its discovery document is fetched from, the exact issuer and the audiences it accepts, and the claim names it reads the subject and group membership out of. It is bound per issuer by the `AddLatticeOidc` registration extension, so a silo can trust several OIDC providers at once alongside the Entra, JWT, and anonymous authenticators.
 
 ## `LatticeOidcAuthenticatorOptions`
 

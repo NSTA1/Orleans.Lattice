@@ -475,7 +475,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
                 .RestoreBackupAsync(ToRestoreRequest(req), ct)
                 .ConfigureAwait(false);
 #pragma warning restore LATTICE0002
-            return ToRestoreResponse(result);
+            return RestoreResponseMapping.ToRestoreResponse(result);
         });
 
     /// <inheritdoc />
@@ -557,7 +557,7 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     public override Task<RevertRestoreResponse> RevertRestore(RestoreResponse request, ServerCallContext context)
         => InvokeAsync(request, context, static async (control, req, ct) =>
         {
-            await control.RevertRestoreAsync(ToRestoreResult(req), ct).ConfigureAwait(false);
+            await control.RevertRestoreAsync(RestoreResponseMapping.ToRestoreResult(req), ct).ConfigureAwait(false);
             return new RevertRestoreResponse();
         });
 
@@ -816,28 +816,4 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             RuntimeFullBackupIntervalTicks = status.RuntimeFullBackupInterval?.Ticks,
             RuntimeIncrementalBackupIntervalTicks = status.RuntimeIncrementalBackupInterval?.Ticks,
         };
-
-    private static RestoreResponse ToRestoreResponse(LatticeRestoreResult result) =>
-        new()
-        {
-            BackupId = result.BackupId,
-            TargetTreeId = result.TargetTreeId,
-            Mode = result.Mode,
-            OperationId = result.OperationId,
-            ManifestChain = result.ManifestChain,
-            EntriesApplied = result.EntriesApplied,
-            ShadowPhysicalTreeId = result.ShadowPhysicalTreeId,
-            PreviousPhysicalTreeId = result.PreviousPhysicalTreeId,
-        };
-
-    private static LatticeRestoreResult ToRestoreResult(RestoreResponse response) =>
-        new(
-            response.BackupId,
-            response.TargetTreeId,
-            response.Mode,
-            response.OperationId,
-            response.ManifestChain,
-            response.EntriesApplied,
-            response.ShadowPhysicalTreeId,
-            response.PreviousPhysicalTreeId);
 }

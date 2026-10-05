@@ -35,7 +35,8 @@ primitive types directly.
 
 ## CRDT types (via the `ILattice` extension surface)
 
-The sample tours the first eight accessors below; the last five complete the
+The sample tours the first eight accessors below (`PnCounter` through `Sequence`); the
+remaining rows (`GCounter` through `MinRegister`) complete the
 typed CRDT extension surface and are not exercised here.
 
 | Accessor | Semantics | Use case |
