@@ -148,6 +148,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 return Task.CompletedTask;
             }
 
+            public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+            public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+                Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
             public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
                 Task.FromResult<IReadOnlyDictionary<string, long>>(
                     new Dictionary<string, long>(Offsets, StringComparer.Ordinal));

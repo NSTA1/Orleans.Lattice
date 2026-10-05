@@ -450,7 +450,10 @@ internal sealed partial class BPlusLeafGrain
             return _commitLogWriter;
 
         _commitLogWriterResolved = true;
-        _commitLogWriter = context.ActivationServices?.GetService<ICommitLogWriter>();
+        var inner = context.ActivationServices?.GetService<ICommitLogWriter>();
+        // Every leaf append raises the override holds its records need first
+        // (issue #4641); see BPlusLeafGrain.OverrideHold.cs.
+        _commitLogWriter = inner is null ? null : new OverrideHoldCommitLogWriter(this, inner);
         return _commitLogWriter;
     }
 

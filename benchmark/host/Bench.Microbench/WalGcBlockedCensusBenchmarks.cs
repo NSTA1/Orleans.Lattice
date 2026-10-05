@@ -55,6 +55,9 @@ public class WalGcBlockedCensusBenchmarks
             Task.FromResult<IReadOnlyDictionary<string, long>>(new Dictionary<string, long>());
 
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() => _pins;
+        public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => _offsets;
         public Task ReportAsync(string consumerId, HybridLogicalClock frontier) => throw new NotSupportedException();
         public Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => throw new NotSupportedException();

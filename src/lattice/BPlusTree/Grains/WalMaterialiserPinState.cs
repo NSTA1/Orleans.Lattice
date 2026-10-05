@@ -91,4 +91,26 @@ internal sealed class WalMaterialiserPinState
     /// </summary>
     [Id(2)]
     public int PersistedBucketCount { get; set; }
+
+    /// <summary>
+    /// The leaf-materialiser consumers holding an <b>override hold</b> (issue
+    /// #4641), keyed by the same consumer id as <see cref="Pins"/>. A leaf raises
+    /// one, durably, before it appends a write stamped below its own clock (a
+    /// replication apply, a range delete's issue stamp, a carried copy, a reap) to
+    /// a partition whose durable offset is still the <c>-1</c> sentinel. Such a
+    /// write can sit below the frontier the leaf last published by an empty
+    /// release, and the monotonic-max <see cref="Pins"/> merge can never lower
+    /// that frontier back to <see cref="HybridLogicalClock.Zero"/>, so the hold
+    /// is the non-monotone half that says "treat this pin as a block pin".
+    /// <para>
+    /// A hold is meaningful only while the consumer's <see cref="Offsets"/> entry
+    /// is below zero. Once the consumer publishes a real (coverage-gated) offset,
+    /// the WAL GC's offset-floor stop already protects every entry above it on
+    /// every arm, so the store drops the hold. Persisted under a distinct
+    /// <see cref="IdAttribute"/> so state written before this field existed
+    /// deserialises with no holds.
+    /// </para>
+    /// </summary>
+    [Id(3)]
+    public HashSet<string> OverrideHolds { get; set; } = new(StringComparer.Ordinal);
 }

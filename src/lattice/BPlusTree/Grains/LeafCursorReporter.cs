@@ -353,6 +353,59 @@ internal sealed class LeafCursorReporter(
         await PersistPinBatchDurablyAsync(treeName, reports, seed: true).ConfigureAwait(false);
     }
 
+    /// <inheritdoc />
+    public async Task RaiseOverrideHoldsAsync(
+        string treeName,
+        IReadOnlyList<string> consumerIds,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        ArgumentNullException.ThrowIfNull(consumerIds);
+        if (grainFactory is null || consumerIds.Count == 0)
+        {
+            // No durable backing: there is no durable pin census for a WAL GC to
+            // read, so there is nothing a hold could add.
+            return;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
+        if (consumerIds.Count == 1)
+        {
+            var key = WalMaterialiserPinRouting.ShardKey(treeName, consumerIds[0], shardCount);
+            await grainFactory.GetGrain<IWalMaterialiserPinGrain>(key)
+                .RaiseOverrideHoldsAsync(consumerIds)
+                .ConfigureAwait(false);
+            return;
+        }
+
+        // Each hold must land in the shard its consumer's pin routes to, which is
+        // the shard the WAL GC reads that consumer's offset from.
+        var byShard = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        for (var i = 0; i < consumerIds.Count; i++)
+        {
+            var consumerId = consumerIds[i];
+            ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+            var key = WalMaterialiserPinRouting.ShardKey(treeName, consumerId, shardCount);
+            if (!byShard.TryGetValue(key, out var bucket))
+            {
+                bucket = new List<string>();
+                byShard[key] = bucket;
+            }
+
+            bucket.Add(consumerId);
+        }
+
+        var raises = new List<Task>(byShard.Count);
+        foreach (var (key, bucket) in byShard)
+        {
+            raises.Add(grainFactory.GetGrain<IWalMaterialiserPinGrain>(key).RaiseOverrideHoldsAsync(bucket));
+        }
+
+        // Every shard's write must have landed; any failure fails the caller.
+        await Task.WhenAll(raises).ConfigureAwait(false);
+    }
+
     /// <summary>
     /// Writes every durable pin advance that the debounce in
     /// <see cref="NoteDurableMaterialiserFrontier"/> coalesced and never wrote,

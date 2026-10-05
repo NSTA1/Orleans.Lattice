@@ -197,6 +197,9 @@ public sealed class LeafCursorReporterShedTests
             Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
                 new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
 
+        public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
             Task.FromResult<IReadOnlyDictionary<string, long>>(
                 new Dictionary<string, long>(StringComparer.Ordinal));
