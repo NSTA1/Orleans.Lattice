@@ -892,6 +892,14 @@ public static class LatticeReplicationMetrics
     public const string OutcomeReceiverSagaPoisonedTimeout = "timeout";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga terminal that kept failing past the receiver saga deferral timeout
+    /// recorded receiver-side poison (issue #4692). The terminal is withheld,
+    /// not parked, and a re-seed settles the saga.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedTerminalTimeout = "terminal_timeout";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
     /// host-trusted operator request recorded receiver-side poison.
     /// </summary>

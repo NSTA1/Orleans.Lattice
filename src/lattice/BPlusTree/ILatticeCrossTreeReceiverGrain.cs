@@ -39,8 +39,11 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// persists its state before returning, so the registration that precedes
     /// this call is linearized against a durable decision. The first terminal
     /// freezes the wait set (the participant tree-ids replicated on this
-    /// receiver); later terminals must carry an identical wait set or are
-    /// rejected. Returns a <see cref="CrossTreeReceiverDecision"/> whose
+    /// receiver), and the frozen set is authoritative: a later terminal's
+    /// differing wait set - the receiver's replicated trees changed mid-operation
+    /// - is ignored, and a terminal for a tree outside the frozen set joins it,
+    /// or, once the barrier has decided, is finalized with its verdict (issue
+    /// #4692). Returns a <see cref="CrossTreeReceiverDecision"/> whose
     /// <see cref="CrossTreeReceiverDecision.Decided"/> is <c>false</c> while the
     /// wait set is incomplete, and otherwise carries the global commit/abort
     /// verdict plus the per-tree finalize records the caller must materialize.
@@ -87,7 +90,7 @@ internal sealed record CrossTreeReceiverTerminal
     /// <summary>
     /// The set of participant tree-ids that are replicated on this receiver
     /// (<c>participants ∩ trees-replicated-here</c>). Frozen on the first
-    /// terminal and validated for exact match on later terminals. A tree that
+    /// terminal; a later terminal's value is advisory (issue #4692). A tree that
     /// the cross-tree batch touched but which is <i>not</i> replicated on this
     /// receiver is absent, so the barrier completes without waiting for it -
     /// partial-replication cross-tree batches are valid and flip on the subset
