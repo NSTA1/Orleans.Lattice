@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ReceiverSagaPoisonReseedIntegrationTests
+public partial class ReceiverSagaPoisonReseedIntegrationTests
 {
     private const string SiteAClusterId = "rspr-site-a";
     private const string SiteBClusterId = "rspr-site-b";
@@ -152,7 +152,7 @@ public class ReceiverSagaPoisonReseedIntegrationTests
             && state != LatticeBootstrapState.Failed
             && Environment.TickCount64 < deadline);
 
-        Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the poison-triggered re-seed must complete");
+        Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the re-seed must complete");
     }
 
     private static async Task<List<IBPlusLeafGrain>> LeavesAsync(TestCluster cluster, string tree)

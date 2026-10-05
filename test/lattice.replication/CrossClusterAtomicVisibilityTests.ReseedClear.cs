@@ -329,6 +329,55 @@ public partial class CrossClusterAtomicVisibilityTests
         });
     }
 
+    [Test]
+    public async Task Detached_shipper_does_not_rewind_when_its_peer_echoes_a_later_epoch()
+    {
+        // #4652 (epic #4430 review finding S2): a detached shipper has left the
+        // log's offset consumers and released its purge holds, so the GC may
+        // already have trimmed a prepare it never read. A later-epoch echo must
+        // therefore not clear its re-seed or rewind it: only re-attaching, which
+        // re-marks the re-seed, makes it eligible again.
+        const string tree = "ccv-reseed-detached";
+        var (feeds, walEncoder, txid, ticks) = TrimmedSagaFeeds(tree);
+        long? echo = null;
+        var shipped = new List<WalRecord>();
+        var transport = RecordingTransport(walEncoder, shipped, () => echo);
+        var registry = ReplayRegistry(Guid.NewGuid(), Guid.NewGuid(), txid);
+        var state = new FakePersistentState<ReplicationShipperState>();
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state,
+            configureFactory: factory => factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry));
+
+        await PumpAsync(shipper, ticks: 2);
+        Assert.That(shipper.ReseedRequired, Is.True, "precondition: the trim took the peer off the log");
+
+        await shipper.DetachFromLogAsync(CancellationToken.None);
+        Assert.That(state.State.DetachedFromLog, Is.True, "precondition: the peer's removal detached the shipper");
+        var markedCursor = state.State.PartitionCursors.TryGetValue(0, out var c) ? c : 0L;
+
+        echo = 1;
+        feeds[1].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "plain",
+            Value = new byte[] { 3 },
+            Timestamp = Hlc(ticks, 9),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+        await PumpAsync(shipper, ticks: 4);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipped.Any(r => r.Key == "plain"), Is.True,
+                "precondition: the detached shipper still ships plain writes, so the peer's echo was seen");
+            Assert.That(shipper.ReseedRequired, Is.True,
+                "a detached shipper must not clear its re-seed on an echo: the GC no longer holds the log for it");
+            Assert.That(state.State.PartitionCursors.TryGetValue(0, out var after) ? after : 0L, Is.GreaterThanOrEqualTo(markedCursor),
+                "a detached shipper must not rewind");
+            Assert.That(shipped.Any(r => r.TransactionId == txid), Is.False, "no saga record ships while detached");
+        });
+    }
+
     private static (ReplicationShipperGrainTests.StubReplogShardGrain[] Feeds, ReplicationShipperGrainTests.StubWalRecordEncoder Encoder, Guid Txid, long Ticks)
         TrimmedSagaFeeds(string tree)
     {
