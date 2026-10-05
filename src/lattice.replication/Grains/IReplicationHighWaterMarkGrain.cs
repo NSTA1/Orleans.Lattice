@@ -176,6 +176,17 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Forgets every applied identity <see cref="AdvanceAppliedAsync"/> recorded
+    /// (issue #4586). Called on every lineage change of the tree - an alias swap
+    /// for a restore, revert, resize, remediation or operator rebind - because a
+    /// write recorded as applied before it may no longer be in the tree, and a
+    /// dependent released on that record would be visible without it. A forgotten
+    /// identity is decided by the origin's frontier instead, so this only delays.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Durably records that the write of <paramref name="originClusterId"/> at
     /// <paramref name="timestamp"/> was acknowledged and then lost for good - an
     /// operator discarded it from the dead-letter queue (#4603). The mark lives on

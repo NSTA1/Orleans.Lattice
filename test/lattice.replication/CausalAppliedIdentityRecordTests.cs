@@ -38,6 +38,23 @@ public sealed class CausalAppliedIdentityRecordTests
     }
 
     [Test]
+    public void Clear_forgets_every_identity_of_every_origin()
+    {
+        var record = new CausalAppliedIdentityRecord();
+        record.Record("a", Hlc(5), capacity: 10);
+        record.Record("b", Hlc(6), capacity: 10);
+
+        record.Clear();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(record.Contains("a", Hlc(5)), Is.False);
+            Assert.That(record.Contains("b", Hlc(6)), Is.False);
+            Assert.That(record.Count("a"), Is.Zero);
+        });
+    }
+
+    [Test]
     public void Record_rejects_an_empty_origin()
     {
         Assert.That(() => new CausalAppliedIdentityRecord().Record("", Hlc(1), 1), Throws.InstanceOf<ArgumentException>());

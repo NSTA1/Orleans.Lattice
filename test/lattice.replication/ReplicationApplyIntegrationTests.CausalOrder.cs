@@ -1,3 +1,4 @@
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
@@ -140,6 +141,39 @@ public partial class ReplicationApplyIntegrationTests
         await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(dependentTree).DrainAsync();
 
         Assert.That((await lattice.GetWithVersionAsync("b")).Value, Is.EqualTo(new byte[] { 2 }));
+    }
+
+    [Test]
+    public async Task A_dependent_parks_after_the_receiver_tree_is_rolled_back_to_before_its_dependency()
+    {
+        const string origin = "site-h";
+        const string tree = "ri-causal-lineage";
+        const string emptyCopy = "ri-causal-lineage-restored";
+        var applier = CreateSiteBApplier();
+        var lattice = _fixture.SiteB.Client.GetGrain<ILattice>(tree);
+        var w = RecentHlc(TimeSpan.TicksPerSecond * 2);
+
+        // w is applied, and the tree records its identity.
+        Assert.That((await applier.ApplyAsync(OriginSet(origin, tree, "w", w))).Applied, Is.True);
+
+        // Roll the receiver's tree back to before w: repoint it onto a copy that
+        // never held w, which is the alias swap a shadow-cutover restore or a
+        // revert performs. The registry's alias observers run on the swap.
+        await _fixture.SiteB.Client.GetGrain<ILattice>(emptyCopy).SetAsync("seed", new byte[] { 0 });
+        var registry = _fixture.SiteB.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.SetAliasAsync(tree, emptyCopy);
+        Assert.That(await registry.GetAliasesTargetingAsync(emptyCopy), Does.Contain(tree), "precondition: the tree now resolves to the copy");
+
+        // A dependent of w must not be released on the record from before.
+        var b = LwwSet(tree, "b", new byte[] { 2 }, RecentHlc(0)) with { VectorClock = DependsOnOrigin(origin, w) };
+        var result = await applier.ApplyAsync(b);
+        var parked = await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(tree).CountAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.False, "w is not in the restored tree, so b must park");
+            Assert.That(parked, Is.EqualTo(1));
+        });
     }
 
     private static WalRecord OriginSet(string origin, string tree, string key, HybridLogicalClock ts) =>

@@ -93,6 +93,10 @@ internal sealed class ReplicationHighWaterMarkGrain(
         cancellationToken.ThrowIfCancellationRequested();
         _ = asOfHlc; // Reserved for future bootstrap-protocol extensions.
 
+        // A pin re-seeds the tree from its restored contents (issue #4586): a
+        // write recorded as applied before the restore may no longer be there.
+        _applied.Clear();
+
         // Build a defensive copy so subsequent caller-side mutations to
         // the supplied frontier do not bleed into grain state.
         var replacement = frontier.Clone();
@@ -186,6 +190,14 @@ internal sealed class ReplicationHighWaterMarkGrain(
 
         return advanceHighWaterMark
             && await TryAdvanceAsync(originClusterId, highest, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        _applied.Clear();
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />

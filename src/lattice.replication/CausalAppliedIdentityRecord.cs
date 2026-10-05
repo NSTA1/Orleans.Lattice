@@ -39,6 +39,13 @@ internal sealed class CausalAppliedIdentityRecord
     public bool Contains(string originClusterId, HybridLogicalClock required) =>
         _applied.TryGetValue(originClusterId, out var identities) && identities.Contains(required);
 
+    /// <summary>
+    /// Forgets every recorded identity. Called when the tree's contents change
+    /// lineage - a restore, revert, resize, rebind or re-seed - because a write
+    /// recorded as applied before it may no longer be in the tree.
+    /// </summary>
+    public void Clear() => _applied.Clear();
+
     /// <summary>How many identities of <paramref name="originClusterId"/> are recorded.</summary>
     public int Count(string originClusterId) =>
         _applied.TryGetValue(originClusterId, out var identities) ? identities.Count : 0;

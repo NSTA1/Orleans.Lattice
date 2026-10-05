@@ -31,6 +31,46 @@ public partial class ReplicationHighWaterMarkGrainTests
     }
 
     [Test]
+    public async Task ResetAppliedIdentitiesAsync_forgets_the_record_but_keeps_the_high_water_mark()
+    {
+        var grain = CreateGrain();
+        await grain.AdvanceAppliedAsync(OriginA, Hlc(50), [Hlc(50)], advanceHighWaterMark: true, CancellationToken.None);
+
+        await grain.ResetAppliedIdentitiesAsync(CancellationToken.None);
+
+        var verdicts = await grain.CheckDependenciesAsync([Vector((OriginA, Hlc(50)))], CancellationToken.None);
+        var hwm = await grain.GetAsync(OriginA, CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(verdicts[0], Is.EqualTo(CausalDependencyVerdict.Unmet),
+                "after a lineage change the write may no longer be in the tree");
+            Assert.That(hwm, Is.EqualTo(Hlc(50)), "the reset is about identities, not the shipping cursor");
+        });
+    }
+
+    [Test]
+    public async Task PinSnapshotAsync_forgets_the_applied_identity_record()
+    {
+        var grain = CreateGrain();
+        await grain.AdvanceAppliedAsync(OriginA, Hlc(50), [Hlc(50)], advanceHighWaterMark: true, CancellationToken.None);
+
+        await grain.PinSnapshotAsync(Hlc(10), Vector((OriginA, Hlc(10))), CancellationToken.None);
+
+        var verdicts = await grain.CheckDependenciesAsync([Vector((OriginA, Hlc(50)))], CancellationToken.None);
+        Assert.That(verdicts[0], Is.EqualTo(CausalDependencyVerdict.Unmet), "a re-seed replaces the tree's contents");
+    }
+
+    [Test]
+    public void ResetAppliedIdentitiesAsync_observes_cancellation()
+    {
+        var grain = CreateGrain();
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.That(() => grain.ResetAppliedIdentitiesAsync(cts.Token), Throws.InstanceOf<OperationCanceledException>());
+    }
+
+    [Test]
     public async Task AdvanceAppliedAsync_records_identities_and_advances_only_when_asked()
     {
         var state = new FakePersistentState<ReplicationHighWaterMarkState>();
