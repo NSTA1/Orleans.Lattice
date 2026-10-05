@@ -4174,6 +4174,14 @@ internal sealed partial class ReplicationShipperGrain(
             return false;
         }
 
+        // Marked before parking, durably with the poison: a park the full queue
+        // refuses (#4603) is retried through the poison filter, not through here,
+        // so this is the one place the fresh poison is seen (#4620).
+        if (_reseedForPoisonPending)
+        {
+            await MarkReseedRequiredForPoisonAsync(cancellationToken);
+        }
+
         var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
         foreach (var entry in _drainBuffer)
         {
