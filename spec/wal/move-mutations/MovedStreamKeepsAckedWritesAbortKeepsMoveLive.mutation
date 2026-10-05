@@ -9,14 +9,18 @@ SUMMARY: an abort unfences the source but leaves the move and its durable fence 
 PERTURBS: MoveAbort
 
 --- FIND
-    /\ move # "idle"
-    /\ move' = "idle"
-    /\ moveCopy' = {}
-    /\ dfence' = FALSE
+    /\ move[m] \in {"fenced", "copied"}
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
+    /\ dfence' = IF dfence = m THEN NoMove ELSE dfence
+    /\ lapsed' = IF dfence = m THEN FALSE ELSE lapsed
+    /\ afence' = (dfence' # NoMove)
 --- REPLACE
 \* MUTATION: the source is unfenced but the move is not abandoned.
-    /\ move # "idle"
+    /\ move[m] \in {"fenced", "copied"}
     /\ move' = move
     /\ moveCopy' = moveCopy
     /\ dfence' = dfence
+    /\ lapsed' = lapsed
+    /\ afence' = FALSE
 --- END

@@ -119,19 +119,46 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             sourceClusterId,
             metadata.AsOfHlc);
 
-        var entries = DrainAsync(treeName, sourceClusterId, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, metadata.AsOfHlc, metadata.CausalStableFrontier, entries)
+        SnapshotStream? stream = null;
+        var entries = DrainAsync(treeName, sourceClusterId, asOfHlc, generation => stream!.CloseGeneration = generation, cancellationToken);
+        stream = new SnapshotStream(
+            treeName,
+            metadata.AsOfHlc,
+            metadata.CausalStableFrontier,
+            entries)
         {
+            OpenGeneration = metadata.OpenGeneration,
             ExportEpoch = metadata.ExportEpoch,
         };
+        return stream;
     }
 
     private async IAsyncEnumerable<SnapshotEntry> DrainAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock asOfHlc,
+        Action<SnapshotSourceGeneration?> setCloseGeneration,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (_transport is IRemoteSnapshotItemTransport itemTransport)
+        {
+            await foreach (var item in itemTransport
+                .RequestSnapshotItemsAsync(treeName, sourceClusterId, asOfHlc, cancellationToken)
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (item.CloseGeneration is { } close)
+                {
+                    setCloseGeneration(close);
+                    continue;
+                }
+
+                yield return item.Entry;
+            }
+
+            yield break;
+        }
+
         await foreach (var entry in _transport
             .RequestSnapshotAsync(treeName, sourceClusterId, asOfHlc, cancellationToken)
             .WithCancellation(cancellationToken)

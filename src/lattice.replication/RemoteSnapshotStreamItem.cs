@@ -30,4 +30,10 @@ public readonly record struct RemoteSnapshotStreamItem
     /// an empty key/value.
     /// </summary>
     [Id(0)] public SnapshotEntry Entry { get; init; }
+
+    /// <summary>
+    /// Optional end-of-stream source generation trailer. When this value is
+    /// present the message is a trailer rather than a snapshot entry.
+    /// </summary>
+    [Id(1)] public SnapshotSourceGeneration? CloseGeneration { get; init; }
 }

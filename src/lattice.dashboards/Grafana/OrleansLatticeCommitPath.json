@@ -527,7 +527,7 @@
     {
       "id": 114,
       "title": "WAL writer admission & dispatch (rate)",
-      "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure. Conditionally-emitted series here (wal.writer.append.admission_timeouts, wal.writer.append.drain.releases) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
+      "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain), plus wal.append.floor_refusals (fresh writes a replicated tree's partition refused below its clock floor, issue #4586; a sustained rate means silo clock skew or a pipeline stalled past ReplicationClockFloorLag). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure. Conditionally-emitted series here (wal.writer.append.admission_timeouts, wal.writer.append.drain.releases, wal.append.floor_refusals) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 108 },
@@ -536,7 +536,8 @@
         { "refId": "A", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_saturation_refusals_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "saturation refusals/s" },
         { "refId": "B", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "admission timeouts/s" },
         { "refId": "C", "expr": "sum (rate(orleans_lattice_wal_writer_append_dispatched_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "dispatched/s" },
-        { "refId": "D", "expr": "sum (rate(orleans_lattice_wal_writer_append_drain_releases_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "drain releases/s" }
+        { "refId": "D", "expr": "sum (rate(orleans_lattice_wal_writer_append_drain_releases_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "drain releases/s" },
+        { "refId": "E", "expr": "sum (rate(orleans_lattice_wal_append_floor_refusals_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "clock-floor refusals/s" }
       ]
     },
     {

@@ -47,6 +47,11 @@ internal readonly record struct TreeDeletionSnapshot
     [Id(6)] public int PurgeShardCount { get; init; }
 
     /// <summary>
+    /// Monotonic epoch incremented by every soft delete for this tree id.
+    /// </summary>
+    [Id(7)] public long DeletionEpoch { get; init; }
+
+    /// <summary>
     /// Whether the tree can still be recovered: it is soft-deleted, no purge has
     /// completed, and no purge is currently in progress.
     /// </summary>

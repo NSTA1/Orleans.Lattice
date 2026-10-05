@@ -1102,6 +1102,18 @@
       ]
     },
     {
+      "id": 1000,
+      "title": "Bootstrap delete reconcile (rate by outcome)",
+      "description": "Rate of in-place bootstrap delete-reconcile decisions (orleans.lattice.replication.bootstrap.reconcile), split by outcome. This is conditionally emitted; absence means no reconcile decision occurred in the selected window, not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 1000 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree, outcome) (rate(orleans_lattice_replication_bootstrap_reconcile_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{outcome}}" }
+      ]
+    },
+    {
       "id": 35,
       "title": "Fall-off-log suppressed events (rate)",
       "description": "Rate of fall-off-log detections suppressed as duplicates (orleans.lattice.replication.peer.fell_off_log_suppressed), by tree. Pairs with the peer.fell_off_log panel: a high suppressed-to-raised ratio means the detector is correctly de-duplicating repeated signals for the same gap. Conditionally-emitted series here (replication.peer.fell_off_log_suppressed) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
