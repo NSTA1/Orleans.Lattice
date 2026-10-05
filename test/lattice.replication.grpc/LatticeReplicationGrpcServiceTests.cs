@@ -1072,7 +1072,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task ExchangeContentManifest_reports_all_missing_when_index_cold()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
@@ -1109,7 +1109,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task ExchangeContentManifest_elides_entry_receiver_already_holds()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(heldClock));
@@ -1158,7 +1158,7 @@ public class LatticeReplicationGrpcServiceTests
         // Eliding it would let a concurrent write that loses to it everywhere
         // else win at this receiver for good.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         var newerClock = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
@@ -1198,7 +1198,7 @@ public class LatticeReplicationGrpcServiceTests
         // #4585: a restore, purge, alias rebind or clearing bootstrap lowers
         // the leaf behind the index's back. The leaf read is the authority.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         var heldClock = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
@@ -1236,7 +1236,7 @@ public class LatticeReplicationGrpcServiceTests
         // The receiver merged site-a's write at 20 without moving its mark
         // (for example during a bootstrap drain): eliding it advances the mark.
         var factory = Substitute.For<IGrainFactory>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         var mark = new HybridLogicalClock { WallClockTicks = 10, Counter = 0 };
         var heldClock = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
         hwmGrain.GetAsync("site-a", Arg.Any<CancellationToken>()).Returns(Task.FromResult(mark));
@@ -1529,7 +1529,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task GetPeerHighWaterMark_returns_stored_clock_for_known_origin()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkSubstitute.Create();
         var clock = new HybridLogicalClock { WallClockTicks = 555, Counter = 6 };
         hwm.GetAsync("site-a", Arg.Any<CancellationToken>()).Returns(Task.FromResult(clock));
         factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwm);
@@ -1549,7 +1549,7 @@ public class LatticeReplicationGrpcServiceTests
     public async Task GetPeerHighWaterMark_returns_zero_clock_for_unknown_origin()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkSubstitute.Create();
         hwm.GetAsync("never-seen", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         factory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwm);

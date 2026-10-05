@@ -52,13 +52,42 @@ public class ReplicationTreeAliasObserverTests
     }
 
     [Test]
-    public async Task OnTreeAliasChanged_is_noop_when_no_peers_configured()
+    public async Task OnTreeAliasChanged_does_not_notify_shippers_when_no_peers_configured()
     {
         var factory = Substitute.For<IGrainFactory>();
         var observer = Create(factory, []);
 
         await observer.OnTreeAliasChangedAsync(Change(), CancellationToken.None);
 
+        factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task OnTreeAliasChanged_resets_the_applied_identity_record_even_without_peers()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("alpha").Returns(hwm);
+        var observer = Create(factory, []);
+
+        await observer.OnTreeAliasChangedAsync(Change(tree: "alpha"), CancellationToken.None);
+
+        await hwm.Received(1).ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void OnTreeAliasChanged_propagates_a_failed_identity_reset_and_does_not_rebind()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        hwm.ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("hwm down")));
+        factory.GetGrain<IReplicationHighWaterMarkGrain>("alpha").Returns(hwm);
+        var observer = Create(factory, ["site-b"]);
+
+        Assert.That(
+            () => observer.OnTreeAliasChangedAsync(Change(tree: "alpha"), CancellationToken.None),
+            Throws.InstanceOf<InvalidOperationException>());
         factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
     }
 

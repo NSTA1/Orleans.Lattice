@@ -73,7 +73,7 @@ public partial class LatticeReplicationLocalVcSeederTests
         shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>([$"{Tree}/0"]));
 
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkTestGrains.Substitute();
         hwmGrain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwmGrain);
 
@@ -157,7 +157,7 @@ public partial class LatticeReplicationLocalVcSeederTests
         shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<IReadOnlyList<string>>([$"{Tree}/0"]));
 
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkTestGrains.Substitute();
         hwmGrain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwmGrain);
 

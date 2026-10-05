@@ -54,7 +54,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(treeId).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(treeId).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
@@ -282,7 +282,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(Arg.Any<string>()).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
@@ -396,7 +396,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var lattice = Substitute.For<ILattice>();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
