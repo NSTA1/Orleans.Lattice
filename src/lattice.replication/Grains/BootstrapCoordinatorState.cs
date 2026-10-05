@@ -148,4 +148,16 @@ internal sealed class BootstrapCoordinatorState
     /// The UTC tick at or after which a failed, fenced bootstrap is re-driven.
     /// </summary>
     [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
+
+    /// <summary>
+    /// Origin whose receiver-poisoned saga set was captured at the start of the
+    /// current drain for pre-export pending-bucket discard.
+    /// </summary>
+    [Id(16)] public string PoisonSettleOriginClusterId { get; set; } = "";
+
+    /// <summary>
+    /// Poisoned transaction ids captured at the start of the current drain.
+    /// Retired only after the full re-seed reaches the live-incremental handoff.
+    /// </summary>
+    [Id(17)] public List<Guid> PoisonSettleTransactionIds { get; set; } = new();
 }
