@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 
@@ -57,6 +58,18 @@ namespace Orleans.Lattice.Replication;
 /// This means a saga that lands a prepare-commit pair concurrent with
 /// the export is observed by the bootstrapped peer either at every
 /// key or at none, never at a strict subset.
+/// </para>
+/// <para>
+/// <b>Sagas that decide while the export reads (issue #4685).</b> The passes
+/// read each leaf at its own instant, so a saga that decides between two of
+/// those reads can be captured pre-saga on one key and post-saga (drained) on
+/// another - including a saga the registry snapshot never saw, which ships no
+/// decision row. The export therefore closes with a completion step: it takes
+/// a second registry snapshot once the passes are done, and for every saga
+/// decided since the first ships a decision row and, when it committed, every
+/// prepare of it the source's write-ahead log holds from the export's opening
+/// head onwards, as committed rows at their own prepare stamps. See
+/// <c>EnumerateCompletionAsync</c> for the argument.
 /// </para>
 /// <para>
 /// <b>Aged-out decisions over a resident prepare.</b> A saga snap0 reports as
@@ -206,8 +219,42 @@ internal sealed class LatticeSnapshotProvider(
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        // Issue #4685: hold the tree's saga decisions from before snap0 until the
+        // completion has read them, so a saga that decides during the export is
+        // still recorded at close and ships its decision row.
+        var physicalTreeId = await _grainFactory.GetLatticeRegistry().ResolveAsync(treeName).ConfigureAwait(false);
+        var purgeHold = _grainFactory.GetGrain<IWalPurgeHoldGrain>(physicalTreeId);
+        var holdKey = ExportPurgeHoldPrefix + Guid.NewGuid().ToString("N");
+        await ReleaseStaleExportHoldsAsync(purgeHold).ConfigureAwait(false);
+        await purgeHold.AddAsync(holdKey, Array.Empty<long>()).ConfigureAwait(false);
+        try
+        {
+            await foreach (var entry in EnumerateHeldAsync(treeName, asOfHlc, physicalTreeId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return entry;
+            }
+        }
+        finally
+        {
+            await purgeHold.RemoveAsync(holdKey).ConfigureAwait(false);
+        }
+    }
+
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateHeldAsync(
+        string treeName,
+        HybridLogicalClock asOfHlc,
+        string physicalTreeId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
         var lattice = _grainFactory.GetGrain<ILattice>(treeName);
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
+
+        // Issue #4685: every WAL partition's readable head, captured BEFORE
+        // snap0, so every prepare a saga stages after snap0 is at or above it.
+        // See EnumerateCompletionAsync.
+        var partitions = Math.Max(1, _options.Get(treeName).ReplogPartitions);
+        var openHeads = await ReadHeadsAsync(physicalTreeId, partitions, readable: true, cancellationToken).ConfigureAwait(false);
 
         // Freeze a tree-wide view of saga decisions for the duration of
         // this export. The TxRegistry is the single tree-wide
@@ -255,6 +302,7 @@ internal sealed class LatticeSnapshotProvider(
         // is the steady-state result either way.
         var recordedResolved = new HashSet<Guid>();
         var preparedSagas = new HashSet<Guid>();
+        var lateDecided = new HashSet<Guid>();
         await foreach (var prepared in EnumeratePreparedAsync(
                 treeName, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
@@ -298,6 +346,11 @@ internal sealed class LatticeSnapshotProvider(
                 .ConfigureAwait(false))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (BeforeCommittedEntryForTesting is { } beforeEntry)
+                {
+                    await beforeEntry(pair.Key).ConfigureAwait(false);
+                }
 
                 var versioned = await lattice
                     .GetWithVersionAsync(pair.Key, cancellationToken)
@@ -424,6 +477,7 @@ internal sealed class LatticeSnapshotProvider(
                 .ConfigureAwait(false);
             if (recorded is TxStatus.Committed or TxStatus.Aborted)
             {
+                lateDecided.Add(txid);
                 yield return new SnapshotEntry
                 {
                     Key = string.Empty,
@@ -433,7 +487,284 @@ internal sealed class LatticeSnapshotProvider(
                 };
             }
         }
+
+        if (SkipCompletionForTesting)
+        {
+            yield break;
+        }
+
+        await foreach (var completion in EnumerateCompletionAsync(
+                treeName, physicalTreeId, partitions, snap0, openHeads, lateDecided, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return completion;
+        }
     }
+
+    /// <summary>
+    /// The export's completion step (issue #4685).
+    /// <para>
+    /// The passes read each leaf at its own instant. A saga S that decides
+    /// while they run can therefore be captured with one key pre-saga (read
+    /// before S prepared it) and another post-saga (read after S's terminal
+    /// drained it); and when S is absent from snap0 and the prepared pass
+    /// shipped no bucket of it, no decision row names it either. The receiver
+    /// would serve S split until the incremental stream delivered S's last
+    /// source-shard terminal.
+    /// </para>
+    /// <para>
+    /// The completion takes snap1 once the passes are done, then every WAL
+    /// partition's head C1. L is every saga decided in snap1 that snap0 did not
+    /// have decided. For each S in L it ships a decision row, and, when S
+    /// committed, every prepare of S the log holds in [C0, C1) as a committed
+    /// row at the prepare's own stamp. Why that ships every saga whole:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>A saga undecided at snap1 has drained nothing before
+    /// the passes ended (a terminal drains only after the decision), so every
+    /// key of it shipped pre-saga or as a bucket; the receiver's tally hides it
+    /// until the stream settles it.</description></item>
+    /// <item><description>A saga decided at snap0 is shipped whole by the
+    /// passes, as before.</description></item>
+    /// <item><description>A key of an S in L whose prepare is below C0 was
+    /// prepared before the passes read it, so they captured it as its bucket
+    /// (which S's decision row settles) or as its drained value: never as
+    /// neither. C0 is read before snap0, so every prepare S stages after snap0
+    /// is at or above it.</description></item>
+    /// <item><description>A prepare of S at or above C0 precedes S's decision,
+    /// which precedes snap1, which precedes C1, so it is in [C0, C1) and ships
+    /// committed. Last-writer-wins at the prepare's own stamp keeps it above
+    /// the pre-saga value the passes may have shipped for the key (the leaf
+    /// stamped the prepare after that value), and makes it a no-op over the
+    /// drained value, which carries the same stamp. A typed CRDT prepare ships
+    /// its delta: CRDT deltas are joins, so applying it over a drained state
+    /// that already includes it changes nothing.</description></item>
+    /// </list>
+    /// <para>
+    /// The decision rows rely on S still being recorded at snap1: the export
+    /// holds the tree's decision purges (<see cref="IWalPurgeHoldGrain"/>) from
+    /// before snap0 until this step has read the log. The step fails closed,
+    /// with a retryable <see cref="TimeoutException"/> the bootstrap retries
+    /// whole, when the log no longer holds [C0, C1) or the tree was moved to
+    /// another physical copy while the export ran.
+    /// </para>
+    /// </summary>
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateCompletionAsync(
+        string treeName,
+        string physicalTreeId,
+        int partitions,
+        Dictionary<Guid, TxStatus>? snap0,
+        long[] openHeads,
+        HashSet<Guid> decisionRowsShipped,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var snap1 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
+            .StableSnapshotAsync(_grainFactory, treeName)
+            .ConfigureAwait(false);
+
+        var committedLate = new HashSet<Guid>();
+        foreach (var (txid, decided) in snap1?.ToList() ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snap0 is not null && snap0.TryGetValue(txid, out var atOpen) && atOpen is TxStatus.Committed or TxStatus.Aborted)
+            {
+                continue;
+            }
+
+            var status = decided;
+            if (status == TxStatus.Indeterminate)
+            {
+                status = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                    .GetRegistry(_grainFactory, treeName, txid)
+                    .GetRecordedStatusAsync(txid)
+                    .ConfigureAwait(false);
+            }
+
+            if (status is not (TxStatus.Committed or TxStatus.Aborted))
+            {
+                continue;
+            }
+
+            if (status == TxStatus.Committed)
+            {
+                committedLate.Add(txid);
+            }
+
+            if (decisionRowsShipped.Add(txid))
+            {
+                yield return new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = status == TxStatus.Committed,
+                };
+            }
+        }
+
+        var closeHeads = await ReadHeadsAsync(physicalTreeId, partitions, readable: false, cancellationToken).ConfigureAwait(false);
+        var physicalAtClose = await _grainFactory.GetLatticeRegistry().ResolveAsync(treeName).ConfigureAwait(false);
+        if (!string.Equals(physicalAtClose, physicalTreeId, StringComparison.Ordinal))
+        {
+            throw new TimeoutException(
+                $"Tree '{treeName}' moved from physical copy '{physicalTreeId}' to '{physicalAtClose}' while it was exported; "
+                + "the export cannot complete the sagas that decided during it from one log. Retry the export.");
+        }
+
+        if (committedLate.Count == 0 || SkipCompletionSegmentForTesting)
+        {
+            yield break;
+        }
+
+        // Stream each partition's segment page by page, keeping only the
+        // prepares of the sagas being completed: memory is one page.
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var from = openHeads[partition];
+            var to = closeHeads[partition];
+            if (to <= from)
+            {
+                continue;
+            }
+
+            var wal = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            await AwaitReadableAsync(wal, to, treeName, partition, cancellationToken).ConfigureAwait(false);
+
+            var next = from;
+            while (next < to)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var page = await wal.ReadAsync(next, CompletionPageSize, cancellationToken).ConfigureAwait(false);
+                if (page.Entries.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var sequenced in page.Entries)
+                {
+                    if (sequenced.Sequence >= to)
+                    {
+                        break;
+                    }
+
+                    var record = sequenced.Entry;
+                    if (!record.IsPrepared
+                        || record.Op is not (MutationKind.Set or MutationKind.Delete)
+                        || !committedLate.Contains(record.TransactionId))
+                    {
+                        continue;
+                    }
+
+                    var isTombstone = record.Op == MutationKind.Delete || record.IsTombstone;
+                    yield return new SnapshotEntry
+                    {
+                        Key = record.Key,
+                        Value = isTombstone ? Array.Empty<byte>() : (record.Value ?? Array.Empty<byte>()),
+                        Timestamp = record.Timestamp,
+                        IsTombstone = isTombstone,
+                        ExpiresAtTicks = record.ExpiresAtTicks,
+                        Delta = record.Delta,
+                        Mode = record.Mode,
+                    };
+                }
+
+                if (page.NextSequence <= next)
+                {
+                    break;
+                }
+
+                next = page.NextSequence;
+            }
+
+            // Fail closed when a trim reached into the segment: a prepare it
+            // removed cannot be shipped, so the completion would be partial.
+            var lowest = await wal.GetLowestRetainedSequenceAsync(cancellationToken).ConfigureAwait(false);
+            if (lowest < 0 || lowest > from)
+            {
+                throw new TimeoutException(
+                    $"WAL partition {partition} of tree '{treeName}' was trimmed past the export's opening head {from} "
+                    + $"(lowest retained {lowest}) before the export read the sagas that decided during it. Retry the export.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every WAL partition's head: the readable head (one past the highest
+    /// sequence a read exposes, below any write still in flight) when
+    /// <paramref name="readable"/>, else the next sequence an append takes.
+    /// </summary>
+    private async Task<long[]> ReadHeadsAsync(string physicalTreeId, int partitions, bool readable, CancellationToken cancellationToken)
+    {
+        var heads = new Task<long>[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var wal = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            heads[partition] = readable
+                ? wal.GetReadableHeadAsync(cancellationToken).AsTask()
+                : wal.GetNextSequenceAsync(cancellationToken).AsTask();
+        }
+
+        return await Task.WhenAll(heads).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits, bounded, until <paramref name="wal"/> exposes every sequence below
+    /// <paramref name="head"/>, so a read below it sees each write that landed.
+    /// </summary>
+    private static async Task AwaitReadableAsync(IWalShardGrain wal, long head, string treeName, int partition, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + CompletionReadableWait;
+        while (await wal.GetReadableHeadAsync(cancellationToken).ConfigureAwait(false) < head)
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"WAL partition {partition} of tree '{treeName}' did not expose sequence {head - 1} within {CompletionReadableWait}; "
+                    + "the export cannot read the sagas that decided during it. Retry the export.");
+            }
+
+            await Task.Delay(CompletionReadablePoll, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Releases export purge holds a crashed export left behind. A live export
+    /// removes its own hold when it ends; one older than
+    /// <see cref="StaleExportHoldAge"/> belongs to an export that cannot still
+    /// be running, and left in place it would suspend the tree's decision purges
+    /// for ever.
+    /// </summary>
+    private static async Task ReleaseStaleExportHoldsAsync(IWalPurgeHoldGrain purgeHold)
+    {
+        var holds = await purgeHold.GetAsync().ConfigureAwait(false);
+        var cutoff = DateTimeOffset.UtcNow - StaleExportHoldAge;
+        foreach (var (consumerId, hold) in holds)
+        {
+            if (consumerId.StartsWith(ExportPurgeHoldPrefix, StringComparison.Ordinal) && hold.Since < cutoff)
+            {
+                await purgeHold.RemoveAsync(consumerId).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>The purge-hold consumer id prefix of an export's hold (issue #4685).</summary>
+    internal const string ExportPurgeHoldPrefix = "snapshot-export/";
+
+    /// <summary>How long a crashed export's purge hold outlives it before the next export releases it.</summary>
+    internal static readonly TimeSpan StaleExportHoldAge = TimeSpan.FromHours(24);
+
+    private const int CompletionPageSize = 256;
+
+    private static readonly TimeSpan CompletionReadableWait = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan CompletionReadablePoll = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>Test seam: skips the completion step entirely (issue #4685 perturbation).</summary>
+    internal bool SkipCompletionForTesting { get; set; }
+
+    /// <summary>Test seam: ships the completion's decision rows but not its log segment (issue #4685 perturbation).</summary>
+    internal bool SkipCompletionSegmentForTesting { get; set; }
 
     /// <summary>
     /// Test seam: runs after the export's registry snapshot (snap0) is taken
@@ -449,6 +780,12 @@ internal sealed class LatticeSnapshotProvider(
     /// (#4598).
     /// </summary>
     internal Func<Task>? AfterPreparedPassForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: runs in the committed-projection pass before each key is
+    /// read, so a test can run a saga between two of the pass's reads (#4685).
+    /// </summary>
+    internal Func<string, Task>? BeforeCommittedEntryForTesting { get; set; }
 
     /// <summary>
     /// Walks every shard's leaf chain on the source tree and emits a

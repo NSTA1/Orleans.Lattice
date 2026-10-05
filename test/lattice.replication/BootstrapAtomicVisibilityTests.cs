@@ -444,6 +444,7 @@ public partial class BootstrapAtomicVisibilityTests
 
     private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) =>
+            treeId.StartsWith(CrdtTreePrefix, StringComparison.Ordinal) ? LatticeMergeMode.PnCounter : LatticeMergeMode.LwwRegister;
     }
 }
