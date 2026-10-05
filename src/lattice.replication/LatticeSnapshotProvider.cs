@@ -262,6 +262,11 @@ internal sealed class LatticeSnapshotProvider(
             yield return prepared;
         }
 
+        if (AfterPreparedPassForTesting is { } afterPrepared)
+        {
+            await afterPrepared().ConfigureAwait(false);
+        }
+
         using (LatticeRegistrySnapshotContext.BeginScope(snap0))
         {
             // Committed-projection pass. Every leaf in the scan reads
@@ -436,6 +441,14 @@ internal sealed class LatticeSnapshotProvider(
     /// mid-export (#4627).
     /// </summary>
     internal Func<Task>? AfterRegistrySnapshotForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: runs after the prepared-row pass and before the
+    /// committed-projection pass, so a test can run a saga the prepared pass
+    /// never saw and drain part of it before the committed pass reads it
+    /// (#4598).
+    /// </summary>
+    internal Func<Task>? AfterPreparedPassForTesting { get; set; }
 
     /// <summary>
     /// Walks every shard's leaf chain on the source tree and emits a
