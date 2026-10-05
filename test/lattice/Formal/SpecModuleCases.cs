@@ -41,8 +41,12 @@ public static class SpecModuleCases
         return module.LoadMutations().Select(mutation => new object[] { module, mutation });
     }
 
-    /// <summary>One case per variant configuration of every discovered module.</summary>
-    public static IEnumerable<TestCaseData> Variants() => Expand(VariantsFor);
+    /// <summary>
+    /// One case per variant configuration of every discovered module, each
+    /// tagged with the CI shard category <see cref="TlcCiShard.OfVariant"/> assigns it.
+    /// </summary>
+    public static IEnumerable<TestCaseData> Variants() =>
+        Expand(VariantsFor).Select(TlcCiShard.Tag);
 
     /// <summary>One case per variant configuration <paramref name="module"/>'s manifest declares.</summary>
     public static IEnumerable<object[]> VariantsFor(SpecModule module)
