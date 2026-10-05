@@ -877,6 +877,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
+    /// Drops every in-memory pending mutation for <paramref name="transactionId"/>
+    /// on this leaf without recording a transaction-registry decision and
+    /// without surfacing prepared values. Used by receiver re-seed settlement,
+    /// after the drain, to clear the buckets of a poisoned saga the export showed
+    /// decided at, or gone from, the origin.
+    /// </summary>
+    Task DiscardPendingTransactionAsync(Guid transactionId);
+
+    /// <summary>
     /// Every key this leaf holds a prepare for under
     /// <paramref name="transactionId"/> (issue #4522), including keys a leaf
     /// split left stranded here, mapped to its original prepare stamp when the

@@ -86,6 +86,7 @@ internal static class TypeAliases
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
+    internal const string DiscardedSagaPrepare = "ol.dsp";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
     internal const string LeafSnapshotSegment = "ol.lss";
@@ -813,5 +814,18 @@ internal static class TypeAliases
 
     /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
     internal const string WalOffsetConsumerRegistryState = "ol.wcs";
-}
 
+    // Restored-copy receive fence (issue #4593)
+
+    /// <summary>Alias for the per-physical-copy receive fence grain interface.</summary>
+    internal const string ICopyReceiveFenceGrain = "ol.qfg";
+
+    /// <summary>Alias for the per-physical-copy receive fence state.</summary>
+    internal const string CopyReceiveFenceState = "ol.qfs";
+
+    /// <summary>Alias for the closed-copy replication apply refusal.</summary>
+    internal const string CopyReceiveFenced = "ol.qfx";
+
+    /// <summary>Alias for the per-physical-copy receive fence status.</summary>
+    internal const string CopyReceiveFenceStatus = "ol.qft";
+}

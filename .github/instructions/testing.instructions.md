@@ -1039,10 +1039,10 @@ reported under that fix's own assertion tag, not merely some violation.
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
 | `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
-| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is TLA+ only. | Cited. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is not in the Coyote model; its production detectors are named in `spec/wal/MoveRefinement.md`. | Cited. |
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
-| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
+| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors (#4525's fix) are named in `spec/wal/MoveRefinement.md`. |
 
 **Gap analysis.** Four WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
@@ -1056,8 +1056,8 @@ table says so rather than borrowing one:
 `FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
 every one of them with a firing mutation. The four defects the model found (#4450,
 #4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
-regression checks. The review (#4433) found #4523 (fixed) and #4525 (open: a standing mutation in
-`spec/wal/` and gap rows in its refinement note until its fix lands).
+regression checks. The review (#4433) found #4523 and #4525, both now fixed; their mutations are
+ordinary regression checks too.
 
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
@@ -1115,7 +1115,7 @@ its window, #4589).
 | `BackupIncremental` | `ChainCoversCommitted`, `SagaFallbackOnlyAcrossFull` | A link whose decision snapshot holds a saga committed restores it whole; an increment falls back to a full backup only for a saga straddling the full capture's frontier. | None; detectors in the note. |
 | `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
-| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
+| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
 | `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
 
 What these do not cover - the participant fence timer, a batch in flight across

@@ -1,0 +1,17 @@
+# Pairs with RestoredCutNotReAdvanced. Production before issue #4593: the apply
+# seam routes a delivery to whatever copy the alias resolves to when it lands, so
+# a pre-cutover write a stale cached gate admitted before the pause lands on the
+# restored copy after the alias swap.
+MODULE: RestoredCutNotReAdvancedCopyFenceDropped
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: the apply seam never checks the copy it routed to
+PERTURBS: Land
+
+--- FIND
+          IN \/ p \in closed[d]
+             \/ r.ep < floor[d][p]
+--- REPLACE
+          IN \* MUTATION: no closed-copy or admission-epoch check.
+             FALSE
+--- END

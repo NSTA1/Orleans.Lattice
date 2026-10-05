@@ -100,11 +100,36 @@ internal sealed class SagaWriteFenceGrain(
         state.State.FencedShardKeys = stillFenced is { Count: > 0 }
             ? [.. stillFenced.Union(resolved, StringComparer.Ordinal)]
             : resolved;
+
+        // Issue #4593: record the restored copies to close BEFORE closing them,
+        // so every lift opens them even after a crash in between. A re-engage
+        // of a still-active fence keeps the copies it already closed.
+        var closedCopies = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (stillFenced is not null)
+        {
+            foreach (var (copy, tree) in state.State.ReceiveClosedCopies)
+            {
+                closedCopies[copy] = tree;
+            }
+        }
+
+        foreach (var (copy, tree) in request.ReceiveClosedCopies ?? [])
+        {
+            closedCopies[copy] = tree;
+        }
+
+        state.State.ReceiveClosedCopies = closedCopies;
         await state.WriteStateAsync();
 
+        // Receiving pauses FIRST, so each restored copy can be closed with the
+        // epoch of its tree's pause as its minimum admission epoch: an apply
+        // admitted before that pause is refused by the copy even after it opens.
+        // The copies close before the caller's alias swap makes them routable,
+        // so no replication apply can read one as open while receiving is paused.
+        var epochs = await PauseReceiveAsync(sagaId);
+        await CloseReceiveCopiesAsync(sagaId, epochs);
         await EngageWriteFenceAsync(sagaId, deadline);
         await PauseShippingAsync(sagaId);
-        await PauseReceiveAsync(sagaId);
 
         await ArmPollReminderAsync();
 
@@ -146,11 +171,13 @@ internal sealed class SagaWriteFenceGrain(
         await LiftWriteFenceAsync(sagaId);
         await ResumeShippingAsync(sagaId);
         await ResumeReceiveAsync(sagaId);
+        await OpenReceiveCopiesAsync(sagaId);
 
         RecordFenceDurationOnce();
         state.State.WritesUnblocked = true;
         state.State.ShippingResumed = true;
         state.State.Phase = SagaWriteFencePhase.Lifted;
+        state.State.ReceiveClosedCopies = new(StringComparer.Ordinal);
         await state.WriteStateAsync();
 
         await FinishAsync();
@@ -190,6 +217,7 @@ internal sealed class SagaWriteFenceGrain(
         state.State.ShippingResumed = false;
         state.State.EngagedAtTicks = 0;
         state.State.FencedShardKeys = [];
+        state.State.ReceiveClosedCopies = new(StringComparer.Ordinal);
         await state.WriteStateAsync();
     }
 
@@ -234,15 +262,22 @@ internal sealed class SagaWriteFenceGrain(
                 await LiftWriteFenceAsync(sagaId);
                 await ResumeShippingAsync(sagaId);
                 await ResumeReceiveAsync(sagaId);
+                await OpenReceiveCopiesAsync(sagaId);
                 RecordFenceDurationOnce();
                 state.State.WritesUnblocked = true;
                 state.State.ShippingResumed = true;
                 state.State.Phase = SagaWriteFencePhase.Lifted;
+                state.State.ReceiveClosedCopies = new(StringComparer.Ordinal);
                 await state.WriteStateAsync();
                 await FinishAsync();
                 Logger.LogInformation(
                     "Shipping resumed for saga '{SagaId}' on observed global completion.", sagaId);
+                return;
             }
+
+            // Still held: touch every closed copy, so a copy stuck closed stays
+            // activated and reported by the closed-copy age gauge (issue #4593).
+            await TouchReceiveClosedCopiesAsync();
         }
     }
 
@@ -389,17 +424,51 @@ internal sealed class SagaWriteFenceGrain(
             key => grainFactory.GetGrain<IReplicationShipperGrain>(key)
                 .ResumeShippingAsync(sagaId, CancellationToken.None));
 
-    private Task PauseReceiveAsync(string sagaId) =>
-        BoundedFanOut.ForEachAsync(
+    private async Task<Dictionary<string, long>> PauseReceiveAsync(string sagaId)
+    {
+        var epochs = new System.Collections.Concurrent.ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        await BoundedFanOut.ForEachAsync(
             state.State.Trees,
             BoundedFanOut.DefaultWidth,
-            tree => grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree).PauseAsync(sagaId));
+            async tree => epochs[tree] = await grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree).PauseAsync(sagaId));
+        return new Dictionary<string, long>(epochs, StringComparer.Ordinal);
+    }
 
     private Task ResumeReceiveAsync(string sagaId) =>
         BoundedFanOut.ForEachAsync(
             state.State.Trees,
             BoundedFanOut.DefaultWidth,
             tree => grainFactory.GetGrain<ITreeReceiveFenceGrain>(tree).ResumeAsync(sagaId));
+
+    private Task CloseReceiveCopiesAsync(string sagaId, IReadOnlyDictionary<string, long> epochs) =>
+        BoundedFanOut.ForEachAsync(
+            state.State.ReceiveClosedCopies.ToList(),
+            BoundedFanOut.DefaultWidth,
+            pair => grainFactory.GetGrain<ICopyReceiveFenceGrain>(pair.Key)
+                .CloseAsync(sagaId, epochs.TryGetValue(pair.Value, out var epoch) ? epoch : 0));
+
+    private Task OpenReceiveCopiesAsync(string sagaId) =>
+        BoundedFanOut.ForEachAsync(
+            state.State.ReceiveClosedCopies.Keys.ToList(),
+            BoundedFanOut.DefaultWidth,
+            copy => grainFactory.GetGrain<ICopyReceiveFenceGrain>(copy).OpenAsync(sagaId));
+
+    private async Task TouchReceiveClosedCopiesAsync()
+    {
+        try
+        {
+            await BoundedFanOut.ForEachAsync(
+                state.State.ReceiveClosedCopies.Keys.ToList(),
+                BoundedFanOut.DefaultWidth,
+                copy => grainFactory.GetGrain<ICopyReceiveFenceGrain>(copy).GetStatusAsync());
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Failed to touch the closed restored copies of saga '{SagaId}' (non-fatal).",
+                state.State.SagaId);
+        }
+    }
 
     private async Task ArmPollReminderAsync()
     {
