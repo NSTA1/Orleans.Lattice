@@ -176,10 +176,9 @@ Each loses no behaviour the instance can distinguish.
   routed prepare can straggle and land late.
 
 Each module modelled the **intended** design while production had an open
-defect, with a mutation that reproduced production. Every such defect but one is
-now fixed, and each mutation stays as a regression check; the refinement notes
-list them with their issues. The open one is #4689, which the cutover module
-models as fixed while three of its mutations reproduce production.
+defect, with a mutation that reproduced production. Every such defect is now
+fixed, and each mutation stays as a regression check; the refinement notes list
+them with their issues.
 
 ## Properties checked
 
@@ -261,7 +260,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4611 | A CRDT prepare applied by the terminal's backstop is installed last-writer-wins, losing contributions the row gained after staging (found while extending this area to CRDT keys; fixed, #4617) | `NoLostContributionBackstopInstallsLastWriterWins` |
 | #4613 | A split's import of a CRDT row is dropped over the destination's own fold, and CRDT writes were not forwarded during the split (fixed, #4626) | `NoLostContributionSplitImportDropsOverOwnRow` |
 | #4618 | A resize neither mirrors a CRDT write nor joins the rows it merges into the resized copy (fixed, #4665) | `NoLostContributionResizeWriteNotMirrored`, `NoLostContributionResizeDrainLastWriterWins` |
-| #4689 | A saga re-bound across a shadow-cutover restore leaves its prepares on the previous copy, which a stale reader before the redirect, or any reader after a revert, is served torn (found by the cutover module; **open**) | `AtomicAcrossCutoverDecideSkipsDiscard`, `AtomicAcrossCutoverRebindForgetsLeftCopy`, `CommittedBatchOnBoundCopyRebindBeforeDecisionForgets` |
+| #4689 | A saga re-bound across a shadow-cutover restore leaves its prepares on the previous copy, which a stale reader before the redirect, or any reader after a revert, is served torn (found by the cutover module; fixed) | `AtomicAcrossCutoverDecideSkipsDiscard`, `AtomicAcrossCutoverRebindForgetsLeftCopy`, `CommittedBatchOnBoundCopyRebindBeforeDecisionForgets` |
 | #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
