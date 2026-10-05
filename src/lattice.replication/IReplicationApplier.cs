@@ -12,7 +12,9 @@ namespace Orleans.Lattice.Replication;
 /// <list type="bullet">
 /// <item>suppressing recent exact re-deliveries by <c>(originClusterId, timestamp,
 /// key, op)</c>; older repeats re-apply idempotently under the tree's merge
-/// semantics (there is no per-origin HLC drop threshold),</item>
+/// semantics (there is no per-origin HLC drop threshold but the bootstrap
+/// drop floor, which drops only a write a stable bootstrap's export already
+/// reflects),</item>
 /// <item>routing the entry through the apply seam exposed by
 /// <c>Orleans.Lattice</c> so the persisted
 /// <c>LwwValue&lt;byte[]&gt;</c> carries the source HLC and origin

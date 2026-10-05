@@ -142,8 +142,8 @@ internal sealed partial class ReplicationApplier(
     /// rejects the duplicate-emit pair a structural rewrite (shard split /
     /// merge) generates when it shadow-forwards a user write into a
     /// different shard, and any other recent re-delivery, without a leaf
-    /// hop. There is no per-origin HLC drop threshold for point writes
-    /// (#1060, #4463), so a
+    /// hop. There is no per-origin HLC drop threshold for point writes but
+    /// the bootstrap drop floor (#1060, #4463, #4549), so a
     /// re-delivery evicted from the bounded cache under sustained churn falls
     /// through to the idempotent leaf-level last-writer-wins apply, which is
     /// a no-op for identical bytes.
