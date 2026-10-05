@@ -63,8 +63,11 @@ internal sealed partial class ShardRootGrain
         if (LatticePreparedContext.Current && transactionId != Guid.Empty)
         {
             var stamps = await MirroredPrepareStampsAsync(transactionId, keys);
+            if (stamps.Refused)
+                return;
+
             using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
-            using (LatticeOriginalPrepareStampContext.With(stamps))
+            using (LatticeOriginalPrepareStampContext.With(stamps.Stamps))
             {
                 await TrackShadowForward(preparedState, preparedForward, preparedSplitPerKey);
             }
@@ -85,14 +88,25 @@ internal sealed partial class ShardRootGrain
     /// <summary>
     /// The original prepare stamp of each of <paramref name="keys"/> this shard
     /// just prepared under <paramref name="transactionId"/>, or
-    /// <see langword="null"/> when none is marked (a CRDT-delta prepare folds at
-    /// the terminal stamp, so it has none to carry).
+    /// <see langword="null"/> stamps when none is marked (a CRDT-delta prepare
+    /// folds at the terminal stamp, so it has none to carry).
+    /// <para>
+    /// <c>Refused</c> is set when the write is a forwarded prepare
+    /// (<see cref="LatticeForwardedPrepareContext"/>) and no key holds a bucket:
+    /// the leaf refused it because its saga had decided or been forgotten (issues
+    /// #4445, #4632), so there is nothing to mirror, and the saga's terminal
+    /// reaches the destination copy on its own. A coordinator's prepare is never
+    /// refused, so a missing bucket there still throws.
+    /// </para>
     /// </summary>
-    private async Task<Dictionary<string, HybridLogicalClock>?> MirroredPrepareStampsAsync(
+    private async Task<(Dictionary<string, HybridLogicalClock>? Stamps, bool Refused)> MirroredPrepareStampsAsync(
         Guid transactionId,
         IReadOnlyCollection<string> keys)
     {
         var buckets = await GetOriginalPrepareStampsAsync(transactionId, exhaustive: false);
+        if (LatticeForwardedPrepareContext.Current && !keys.Any(buckets.ContainsKey))
+            return (null, true);
+
         Dictionary<string, HybridLogicalClock>? stamps = null;
         foreach (var key in keys)
         {
@@ -106,7 +120,7 @@ internal sealed partial class ShardRootGrain
                 (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[key] = p;
         }
 
-        return stamps;
+        return (stamps, false);
     }
 
     /// <summary>

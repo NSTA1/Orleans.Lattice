@@ -63,6 +63,9 @@ public partial class BPlusLeafGrainTests
         var registry = Substitute.For<ITxRegistryGrain>();
         registry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(status));
         registry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(recorded));
+        // A live saga's coordinator holds its participant row until it is
+        // forgotten (issue #4632); tests of a forgotten saga clear it.
+        registry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([0]));
         registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>()).Returns(call =>
         {
             var answers = new Dictionary<Guid, TxStatus>();
@@ -369,5 +372,83 @@ public partial class BPlusLeafGrainTests
         Assert.That(leaf.PendingTransactionCount, Is.Zero,
             "the per-activation memory answers first (issue #4385)");
         await h.Registry.DidNotReceive().GetStatusAsync(Arg.Any<Guid>());
+    }
+    [Test]
+    public async Task Forwarded_prepare_of_a_forgotten_saga_whose_decision_was_pruned_is_refused()
+    {
+        // Issue #4632: the saga committed, completed and was forgotten, and its
+        // decision was pruned, so the registry can only answer InFlight. Its
+        // participant row went with the forget, which tells it apart from a live
+        // saga.
+        var h = BuildReactivatingLeaf(TxStatus.InFlight);
+        h.Registry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([]));
+        var txid = Guid.NewGuid();
+        var leaf = await ReactivateAfterTerminalAsync(h, txid);
+
+        await ForwardedPrepareSetAsync(leaf, txid, "k", [11]);
+        await ForwardedPrepareSetManyAsync(leaf, txid, "k", [11]);
+        await ForwardedPrepareDeleteAsync(leaf, txid, "k");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(leaf.PendingTransactionCount, Is.Zero,
+                "nothing will ever settle a bucket of a forgotten saga, so it must not be installed");
+            Assert.That(leaf.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 22 }),
+                "the refusal must not touch the key's row");
+            Assert.That(leaf.RecentlyTerminalCount, Is.Zero,
+                "the refusal must not record a terminal");
+        });
+        await h.Registry.Received().GetParticipantsAsync(txid);
+        await h.PhysicalRegistry.DidNotReceive().GetParticipantsAsync(Arg.Any<Guid>());
+    }
+
+    [Test]
+    public async Task Forwarded_prepare_of_a_replicated_saga_is_bucketed_without_reading_participants()
+    {
+        // A replicated prepare's saga is never forgotten on this cluster, and its
+        // participant row may be held by another registry, so an absent row
+        // proves nothing.
+        var h = BuildReactivatingLeaf(TxStatus.InFlight);
+        h.Registry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([]));
+        var txid = Guid.NewGuid();
+        var leaf = h.Activate();
+        await leaf.SetAsync("k", [1]);
+
+        using (LatticeOriginContext.With("peer-cluster"))
+        {
+            await ForwardedPrepareSetAsync(leaf, txid, "k", [2]);
+        }
+
+        Assert.That(leaf.PendingTransactionCount, Is.EqualTo(1));
+        await h.Registry.DidNotReceive().GetParticipantsAsync(Arg.Any<Guid>());
+    }
+
+    [Test]
+    public async Task Forwarded_prepare_is_bucketed_when_the_participant_row_cannot_be_read()
+    {
+        var h = BuildReactivatingLeaf(TxStatus.InFlight);
+        h.Registry.GetParticipantsAsync(Arg.Any<Guid>()).Throws(new TimeoutException("registry unreachable"));
+        var txid = Guid.NewGuid();
+        var leaf = h.Activate();
+        await leaf.SetAsync("k", [1]);
+
+        await ForwardedPrepareSetAsync(leaf, txid, "k", [2]);
+
+        Assert.That(leaf.PendingTransactionCount, Is.EqualTo(1),
+            "refusing on an unknown row could drop a write a live saga still needs, so it fails open");
+    }
+
+    [Test]
+    public async Task Forwarded_prepare_of_a_decided_saga_is_refused_without_reading_participants()
+    {
+        var h = BuildReactivatingLeaf(TxStatus.Committed);
+        var txid = Guid.NewGuid();
+        var leaf = h.Activate();
+        await leaf.SetAsync("k", [1]);
+
+        await ForwardedPrepareSetAsync(leaf, txid, "k", [2]);
+
+        Assert.That(leaf.PendingTransactionCount, Is.Zero);
+        await h.Registry.DidNotReceive().GetParticipantsAsync(Arg.Any<Guid>());
     }
 }

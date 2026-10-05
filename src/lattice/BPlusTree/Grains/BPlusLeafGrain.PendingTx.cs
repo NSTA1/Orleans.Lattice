@@ -284,9 +284,9 @@ internal sealed partial class BPlusLeafGrain
             return false;
 
         TxStatus status;
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
         try
         {
-            var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
             status = await registry.GetStatusAsync(txid);
             if (status == TxStatus.Indeterminate)
                 status = await registry.GetRecordedStatusAsync(txid);
@@ -308,7 +308,65 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // The terminal may have landed while the registry call was in flight.
-        return status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid);
+        if (status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid))
+            return true;
+
+        return await IsForwardedPrepareForForgottenTransactionAsync(registry, txid, treeId);
+    }
+
+    /// <summary>
+    /// Whether the saga of a forwarded prepare whose registry reports it undecided
+    /// was in fact forgotten and its decision pruned (issue #4632). A forward
+    /// abandoned at its deadline can still be delivered after its saga committed,
+    /// completed and was forgotten, onto a leaf that no longer remembers the
+    /// terminal; bucketed, nothing would ever settle it, every later split or
+    /// resize would carry it, and it would pin the leaf's WAL prefix.
+    /// <para>
+    /// The registry's participant row tells the two apart for a saga this cluster
+    /// authored. Its coordinator holds the row in the registry the forwarded
+    /// marker names - its own tree - from before its first prepare dispatch until
+    /// <see cref="ITxRegistryGrain.ForgetAsync"/>, which runs after the decision,
+    /// and a forwarded registration only joins an existing row
+    /// (<see cref="ITxRegistryGrain.RegisterParticipantAsync"/>). Every forward is
+    /// sent after its source prepare, so an undecided saga with no row was
+    /// forgotten. The status is read first: a forget between the two reads leaves
+    /// the saga decided either way.
+    /// </para>
+    /// <para>
+    /// A replicated prepare (one carrying its author's
+    /// <see cref="LatticeOriginContext"/>) belongs to a saga this cluster never
+    /// forgets and whose row may be held by another registry, so it is bucketed
+    /// as before. Fails open on a registry fault.
+    /// </para>
+    /// </summary>
+    private async ValueTask<bool> IsForwardedPrepareForForgottenTransactionAsync(
+        ITxRegistryGrain registry, Guid txid, string treeId)
+    {
+        if (LatticeOriginContext.Current is not null)
+            return false;
+
+        IReadOnlyList<int> participants;
+        try
+        {
+            participants = await registry.GetParticipantsAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Could not read the participants of saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
+                    + "prepare; bucketing it.",
+                    txid,
+                    treeId);
+            }
+
+            return false;
+        }
+
+        return participants.Count == 0 || IsRecentlyTerminal(txid);
     }
 
     /// <summary>
