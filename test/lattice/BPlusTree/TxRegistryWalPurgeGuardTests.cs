@@ -137,7 +137,7 @@ public sealed class TxRegistryWalPurgeGuardTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(widened.TrimmedThrough, Is.EqualTo(new long[] { 5, 7, 2 }));
+            Assert.That(widened.TrimmedThrough.ToArray(), Is.EqualTo(new long[] { 5, 7, 2 }));
             Assert.That(widened.Since, Is.EqualTo(first.Since));
             Assert.That(await hold.GetAsync(), Is.Empty);
         });

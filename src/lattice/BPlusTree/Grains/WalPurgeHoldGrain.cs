@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Orleans.Runtime;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -27,14 +28,14 @@ internal sealed class WalPurgeHoldGrain(
             merged[p] = Math.Max(incoming, existing);
         }
 
-        if (previous is not null && merged.AsSpan().SequenceEqual(previous.TrimmedThrough))
+        if (previous is not null && merged.AsSpan().SequenceEqual(previous.TrimmedThrough.AsSpan()))
         {
             return;
         }
 
         holds[consumerId] = new WalPurgeHold
         {
-            TrimmedThrough = merged,
+            TrimmedThrough = ImmutableArray.Create(merged),
             Since = previous?.Since ?? TimeProvider.GetUtcNow(),
         };
         try

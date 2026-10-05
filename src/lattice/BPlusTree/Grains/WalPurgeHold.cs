@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -13,7 +15,7 @@ internal sealed record WalPurgeHold
 {
     /// <summary>Per partition, the highest offset a forced trim removed; <c>-1</c> for an untouched partition.</summary>
     [Id(0)]
-    public long[] TrimmedThrough { get; init; } = [];
+    public ImmutableArray<long> TrimmedThrough { get; init; } = ImmutableArray<long>.Empty;
 
     /// <summary>When the hold was first taken.</summary>
     [Id(1)]
