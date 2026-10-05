@@ -128,6 +128,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             entries)
         {
             OpenGeneration = metadata.OpenGeneration,
+            OpenFrontier = metadata.SourceFrontier,
             ExportEpoch = metadata.ExportEpoch,
         };
         return stream;

@@ -92,4 +92,10 @@ public readonly record struct RemoteSnapshotMetadata
     /// reconciliation fail-safe.
     /// </summary>
     [Id(5)] public SnapshotSourceGeneration? OpenGeneration { get; init; }
+
+    /// <summary>
+    /// The source tree's applied frontier read when the export opened, or
+    /// <see langword="null"/> from a sender that predates it.
+    /// </summary>
+    [Id(6)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
 }

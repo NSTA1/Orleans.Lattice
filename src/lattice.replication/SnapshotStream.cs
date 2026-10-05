@@ -67,6 +67,14 @@ public sealed class SnapshotStream
     public SnapshotSourceGeneration? CloseGeneration { get; internal set; }
 
     /// <summary>
+    /// The source tree's applied frontier read when the export opened, after
+    /// <see cref="OpenGeneration"/>, or <see langword="null"/> when the sender
+    /// predates it. The receiver installs it as the bootstrap drop floor before
+    /// the drain (issue #4549).
+    /// </summary>
+    internal SnapshotSourceFrontier? OpenFrontier { get; init; }
+
+    /// <summary>
     /// Async stream of every key the source tree carries at
     /// <see cref="AsOfHlc"/>: every live committed entry whose
     /// <see cref="SnapshotEntry.Timestamp"/> is less than or equal to

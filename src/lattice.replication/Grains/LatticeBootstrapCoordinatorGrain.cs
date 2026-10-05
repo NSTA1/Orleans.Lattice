@@ -939,6 +939,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
         await state.WriteStateAsync().ConfigureAwait(true);
 
+        // Issue #4549. Installed before the drain, and only once the import is
+        // recorded: from here on a failure keeps the tree fenced and re-drives
+        // the bootstrap until a drain completes, so the floor never outlives an
+        // abandoned import.
+        var floorInstalled = await InstallBootstrapFloorAsync(treeName, snapshot, cancellationToken).ConfigureAwait(true);
+
         // Lazy-initialise the duration anchor on resume after a silo
         // failover: TryInitiateBootstrapAsync set it on kickoff, but a
         // crashed activation that reactivates here would otherwise
@@ -1087,6 +1093,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 snapshot.OpenGeneration,
                 snapshot.CloseGeneration,
                 mergeMode,
+                cancellationToken)
+            .ConfigureAwait(true);
+
+        await ReconcileForeignDeletesAsync(
+                treeName,
+                sourceClusterId,
+                snapshot,
+                carriedKeys,
+                mergeMode,
+                floorInstalled,
                 cancellationToken)
             .ConfigureAwait(true);
 
@@ -1260,6 +1276,142 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 // re-sends this delete, so fail the attempt and re-drain.
                 throw new LatticeBootstrapEntryDeferredException(treeName, key);
             }
+        }
+    }
+
+    /// <summary>
+    /// Installs the bootstrap drop floor from the frontier the export carried
+    /// when it opened (issue #4549), or clears any earlier floor when the export
+    /// carries none read under its opening lineage. Returns whether a floor is
+    /// in force for this drain.
+    /// </summary>
+    private async Task<bool> InstallBootstrapFloorAsync(
+        string treeName,
+        SnapshotStream snapshot,
+        CancellationToken cancellationToken)
+    {
+        var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
+        if (BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
+        {
+            var frontier = snapshot.OpenFrontier!;
+            await hwm.SetBootstrapFloorAsync(frontier.LowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
+            return true;
+        }
+
+        await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+        return false;
+    }
+
+    /// <summary>
+    /// Deletes the receiver's live rows of origins other than the source whose
+    /// keys the export lacks and whose writes the source had applied before the
+    /// export opened (issue #4549). Scanned after the drain, so every write
+    /// applied before the floor was installed is seen; a later one below the
+    /// floor was dropped. A floor installed for an export that turned out
+    /// unstable is cleared: the reconcile owes a retry for it, and the retry
+    /// installs a fresh one.
+    /// </summary>
+    private async Task ReconcileForeignDeletesAsync(
+        string treeName,
+        string sourceClusterId,
+        SnapshotStream snapshot,
+        HashSet<string> carriedKeys,
+        LatticeMergeMode mergeMode,
+        bool floorInstalled,
+        CancellationToken cancellationToken)
+    {
+        if (!floorInstalled)
+        {
+            return;
+        }
+
+        if (!BootstrapForeignDeleteReconcile.IsEligible(
+                snapshot.OpenFrontier, snapshot.OpenGeneration, snapshot.CloseGeneration, mergeMode))
+        {
+            await _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName)
+                .ClearBootstrapFloorAsync(cancellationToken)
+                .ConfigureAwait(true);
+            state.State.ReconcileOwedBySource[sourceClusterId] = true;
+            Logger.LogWarning(
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the source tree changed during the export, so the "
+                + "bootstrap drop floor is cleared and the reconcile is owed a retry",
+                treeName, sourceClusterId);
+            return;
+        }
+
+        var frontier = snapshot.OpenFrontier!;
+        var localClusterId = _optionsMonitor.Get(treeName).ClusterId;
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        var doomed = new List<(string Key, HybridLogicalClock Timestamp)>();
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
+                {
+                    if (entry.ExpiresAtTicks != 0
+                        || (entry.MergeMode ?? mergeMode) != LatticeMergeMode.LwwRegister
+                        || carriedKeys.Contains(entry.Key))
+                    {
+                        continue;
+                    }
+
+                    // A local write is stored without an origin; the source keys it by this cluster's id.
+                    var origin = string.IsNullOrEmpty(entry.OriginClusterId) ? localClusterId : entry.OriginClusterId;
+                    if (string.Equals(origin, sourceClusterId, StringComparison.Ordinal)
+                        || !BootstrapForeignDeleteReconcile.ShouldDelete(frontier, origin, entry.Timestamp))
+                    {
+                        continue;
+                    }
+
+                    doomed.Add((entry.Key, entry.Timestamp));
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+
+        foreach (var (key, timestamp) in doomed)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Stamped with the source's id, which vouches for the delete: the
+            // applier never applies an entry stamped with this cluster's own id.
+            var record = new WalRecord
+            {
+                TreeId = treeName,
+                Op = MutationKind.Delete,
+                Key = key,
+                Value = null,
+                Timestamp = timestamp,
+                IsTombstone = true,
+                OriginClusterId = sourceClusterId,
+                Mode = LatticeMergeMode.LwwRegister,
+            };
+            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            if (applied.Deferred)
+            {
+                throw new LatticeBootstrapEntryDeferredException(treeName, key);
+            }
+        }
+
+        if (doomed.Count > 0)
+        {
+            Logger.LogWarning(
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' deleted {Count} row(s) of other origins that the source "
+                + "had applied and then deleted before the export",
+                treeName, sourceClusterId, doomed.Count);
         }
     }
 

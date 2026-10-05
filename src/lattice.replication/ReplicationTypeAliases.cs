@@ -106,6 +106,7 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
     internal const string SnapshotSourceGeneration = "olr.sg";
+    internal const string SnapshotSourceFrontier = "olr.sx";
 
     // Production replication drivers
 

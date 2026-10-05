@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ReapedSourceDeleteReconcileIntegrationTests
+public partial class ReapedSourceDeleteReconcileIntegrationTests
 {
     private const string SiteAClusterId = "rsdr-site-a";
     private const string SiteBClusterId = "rsdr-site-b";
@@ -38,6 +38,12 @@ public class ReapedSourceDeleteReconcileIntegrationTests
     /// after its pre-capture: lets a test land a write inside the drain.
     /// </summary>
     private static Func<Task>? _onDrainStarted;
+
+    /// <summary>
+    /// While set, supplies the source frontier an export carries at open when the
+    /// sender itself carries none (issue #4549), from the opening metadata.
+    /// </summary>
+    private static Func<RemoteSnapshotMetadata, SnapshotSourceFrontier?>? _openFrontier;
 
     /// <summary>While set, the receiver's transport behaves as a sender that predates source generations.</summary>
     private static volatile bool _legacySender;
@@ -537,7 +543,7 @@ public class ReapedSourceDeleteReconcileIntegrationTests
         Assert.Multiple(async () =>
         {
             Assert.That(await siteB.GetAsync(thirdKey), Is.EqualTo(new byte[] { 3 }),
-                "only source-origin keys are reconciled; a third-origin key is the #4549 residual and must survive");
+                "the source never applied the third-origin write, so its absence from the export proves nothing and the key must survive");
             Assert.That(await siteB.GetAsync(sourceKey), Is.EqualTo(new byte[] { 1 }));
         });
     }
@@ -578,6 +584,11 @@ public class ReapedSourceDeleteReconcileIntegrationTests
             string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)
         {
             var metadata = await inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+            if (_openFrontier is { } frontierFor && metadata.SourceFrontier is null)
+            {
+                metadata = metadata with { SourceFrontier = frontierFor(metadata) };
+            }
+
             return _legacySender ? metadata with { OpenGeneration = null } : metadata;
         }
 
