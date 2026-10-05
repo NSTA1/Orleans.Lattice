@@ -44,4 +44,35 @@ public enum WalDurabilityLifecycleGuard
     /// off and one leaf owning nothing, by <c>[RecoveryNeverFallsOffLog]</c>.
     /// </summary>
     NeverWrittenReleaseIgnoresCoverage,
+
+    /// <summary>
+    /// An append is acknowledged when its offset is assigned rather than once its
+    /// flush has landed (<c>WalShardGrain.AppendAsync</c> completes only after the
+    /// flush). Must be caught by <c>[AckedWriteDurable]</c>.
+    /// </summary>
+    AckBeforeFlush,
+
+    /// <summary>
+    /// A cold start (no snapshot to load) resumes reading at the persisted
+    /// checkpoint over an empty projection instead of replaying the readable WAL
+    /// from its start (<c>LeafReplayStartPolicy</c>'s cold override), so the leaf's
+    /// read position passes writes its projection never received. Must be caught
+    /// by <c>[ReadPositionHonest]</c>.
+    /// </summary>
+    ColdStartResumesFromCheckpoint,
+
+    /// <summary>
+    /// The replay never reads past the checkpoint the leaf persisted, so a write
+    /// acknowledged while its owner was not applying it is never materialised.
+    /// Must be caught by <c>[EveryAckedWriteMaterialised]</c>.
+    /// </summary>
+    ReplayStopsAtPersistedCheckpoint,
+
+    /// <summary>
+    /// The read position advances only over entries the leaf owns, as before
+    /// issue #2270, so a leaf that owns nothing in the partition never advances,
+    /// keeps its block pin and holds the GC. Must be caught by
+    /// <c>[ReclamationEventuallyAdvances]</c>, with one leaf owning nothing.
+    /// </summary>
+    ReadPositionTracksOwnEntries,
 }
