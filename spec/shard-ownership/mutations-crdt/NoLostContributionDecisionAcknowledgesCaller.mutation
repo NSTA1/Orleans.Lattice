@@ -1,0 +1,17 @@
+# Pairs with NoLostContribution. The saga acknowledges its caller at the
+# decision, before any terminal has applied its contribution anywhere.
+MODULE: NoLostContributionDecisionAcknowledgesCaller
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the saga acknowledges its caller at the decision, before any terminal
+PERTURBS: Decide
+
+--- FIND
+    /\ sg' = "decided"
+    /\ UNCHANGED <<row, stamp, clk, migd, owner, leaf, staged, pend, bleaf, told, mg, kind, aAck, bAck>>
+--- REPLACE
+\* MUTATION: the decision completes the saga and acknowledges its caller.
+    /\ sg' = "done"
+    /\ aAck' = TRUE
+    /\ UNCHANGED <<row, stamp, clk, migd, owner, leaf, staged, pend, bleaf, told, mg, kind, bAck>>
+--- END

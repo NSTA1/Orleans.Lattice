@@ -1,5 +1,5 @@
 # Pairs with NoKeyLost. Reproduces the resize snapshot after #4506 and #4566,
-# which #4522's second fix closes: the snapshot's sweep resolves a bucket of a
+# and before #4522's resize fix (#4629): the snapshot's sweep resolves a bucket of a
 # decided saga at the destination with the committed-values backstop at a fresh
 # dominating stamp (carryOriginalStamps: false), instead of carrying it. A later
 # write the snapshot already copied to R is overwritten.

@@ -18,5 +18,5 @@ OriginDecide ==
     /\ Origin!DecideTx(T)
 \* MUTATION: an unstamped terminal is written with the decision.
     /\ outbox' = outbox \cup {Term(k1, Origin!AllAcked(T), 0)}
-    /\ UNCHANGED <<xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars>>
+    /\ UNCHANGED <<xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars, lossVars>>
 --- END

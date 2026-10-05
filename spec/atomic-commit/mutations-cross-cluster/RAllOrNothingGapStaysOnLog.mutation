@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The shipper loses an unacknowledged record to a
+# WalRetention trim (issue #4534) or an encode failure (issue #4651) and does
+# not take the peer off the log: the saga's terminal still ships while its lost
+# prepare never arrives, so the receiver commits one key and not the other.
+# Production before #4577 and #4651.
+MODULE: RAllOrNothingGapStaysOnLog
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a shipper that loses a record stays on the log and keeps shipping the saga
+PERTURBS: ShipperGap
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ gone' = {m}
+    /\ rs' = "marked"
+--- REPLACE
+\* MUTATION: the gap leaves the peer on the log.
+    /\ gone' = {m}
+    /\ rs' = rs
+--- END

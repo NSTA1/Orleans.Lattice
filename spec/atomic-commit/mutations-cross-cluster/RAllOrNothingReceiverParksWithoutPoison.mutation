@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. Regression check for issue #4591, fixed by #4633.
+# The receiver's dead-letter applier parks and acknowledges a saga prepare it
+# gave up on and goes on applying the saga: the shipper's terminal hold sees the
+# prepare acknowledged and releases the saga's terminals, which commit it without
+# the parked key. #4633 poisons the saga, withholds its terminals and re-seeds.
+MODULE: RAllOrNothingReceiverParksWithoutPoison
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the receiver parks and acknowledges a prepare it gave up on without poisoning its saga
+PERTURBS: ReceiverPoison
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ rpoison' = TRUE
+    /\ losses' = 1
+--- REPLACE
+\* MUTATION: the saga is not poisoned.
+    /\ rpoison' = FALSE
+    /\ losses' = 1
+--- END
