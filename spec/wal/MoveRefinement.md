@@ -105,10 +105,9 @@ more than one consumer.
 
 ## Deliberate abstraction gaps
 
-- **Late-landing flushes: an open defect, issue #4621.** As in `Refinement.md`:
-  create-only provider writes keep a late write and a new append from both being
-  acknowledged, but a late write can land below a reader's cursor. The model has no
-  late-landing action yet.
+- **Late-landing flushes.** Specified in `WalDurability.tla` (`Abandon`, `LateLand`,
+  `SettleHole`; issue #4621), not here: a move's quiesce waits out every abandoned call
+  (the `MoveCopy` row), so none lands under a copy.
 - **Placement, catalogs and providers.** Which provider a partition lives on, the
   placement pin's other contents and its audit, and content verification are not
   modelled; the move is reduced to the stream's contents before and after the flip

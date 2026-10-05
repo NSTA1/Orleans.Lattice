@@ -2191,6 +2191,33 @@
           "legendFormat": "{{mode}}"
         }
       ]
+    },
+    {
+      "id": 45862,
+      "title": "Uncoordinated source restores - issue #4586",
+      "description": "Replacements of a replicated tree's contents (restore, revert, alias rebind) outside a coordinated restore. Peers keep the writes the replacement discarded and may diverge, and a peer write that depends on a discarded write may become visible without it. Any non-zero rate warrants a coordinated restore.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 993
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tree) (rate(orleans_lattice_replication_source_restore_uncoordinated_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{tree}}"
+        }
+      ]
     }
   ]
 }

@@ -1,4 +1,6 @@
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Replication.Grains;
@@ -85,6 +87,90 @@ public sealed class ReplicationTreeLineageObserverTests
             Assert.That(await source.GetLineageAsync("t1", CancellationToken.None), Is.EqualTo(lineage));
             Assert.That(await source.GetLineageAsync("t2", CancellationToken.None), Is.Null);
         });
+    }
+
+    private static async Task<long> CountUncoordinatedAsync(string tree, Func<Task> body)
+    {
+        long count = 0;
+        using var listener = MeterListening.StartForInstrument(
+            LatticeReplicationMetrics.SourceRestoreUncoordinated,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeReplicationMetrics.TagTree && Equals(tag.Value, tree))
+                    {
+                        Interlocked.Add(ref count, value);
+                    }
+                }
+            }));
+        await body();
+        return Interlocked.Read(ref count);
+    }
+
+    private static IGrainFactory FactoryWithFence(string tree, bool paused)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(tree).Returns(Substitute.For<IReplicationTreeFrontierGrain>());
+        var fence = Substitute.For<ITreeReceiveFenceGrain>();
+        fence.ObserveAsync().Returns(new ReceiveFenceObservation { Paused = paused });
+        factory.GetGrain<ITreeReceiveFenceGrain>(tree).Returns(fence);
+        return factory;
+    }
+
+    [Test]
+    public async Task A_replacement_outside_a_coordinated_restore_is_counted()
+    {
+        const string tree = "lineage-uncoordinated";
+        var observer = new ReplicationTreeLineageObserver(FactoryWithFence(tree, paused: false), Enrolled(true));
+
+        var count = await CountUncoordinatedAsync(tree,
+            () => observer.OnLineageChangingAsync(tree, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None));
+
+        Assert.That(count, Is.EqualTo(1));
+    }
+
+    [Test]
+    public async Task A_replacement_a_coordinated_restore_fences_is_not_counted()
+    {
+        const string tree = "lineage-coordinated";
+        var observer = new ReplicationTreeLineageObserver(FactoryWithFence(tree, paused: true), Enrolled(true));
+
+        var count = await CountUncoordinatedAsync(tree,
+            () => observer.OnLineageChangingAsync(tree, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None));
+
+        Assert.That(count, Is.Zero);
+    }
+
+    [Test]
+    public async Task A_registration_or_an_unregistration_is_not_a_restore()
+    {
+        const string tree = "lineage-register";
+        var observer = new ReplicationTreeLineageObserver(FactoryWithFence(tree, paused: false), Enrolled(true));
+
+        var count = await CountUncoordinatedAsync(tree, async () =>
+        {
+            await observer.OnLineageChangingAsync(tree, null, Guid.NewGuid(), CancellationToken.None);
+            await observer.OnLineageChangingAsync(tree, Guid.NewGuid(), null, CancellationToken.None);
+        });
+
+        Assert.That(count, Is.Zero);
+    }
+
+    [Test]
+    public async Task A_fence_that_cannot_be_read_counts_the_replacement_and_never_fails_it()
+    {
+        const string tree = "lineage-fence-down";
+        var factory = FactoryWithFence(tree, paused: false);
+        var fence = Substitute.For<ITreeReceiveFenceGrain>();
+        fence.ObserveAsync().ThrowsAsync(new InvalidOperationException("fence down"));
+        factory.GetGrain<ITreeReceiveFenceGrain>(tree).Returns(fence);
+        var observer = new ReplicationTreeLineageObserver(factory, Enrolled(true));
+
+        var count = await CountUncoordinatedAsync(tree,
+            () => observer.OnLineageChangingAsync(tree, Guid.NewGuid(), Guid.NewGuid(), CancellationToken.None));
+
+        Assert.That(count, Is.EqualTo(1));
     }
 
     [Test]
