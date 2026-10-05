@@ -857,8 +857,14 @@ bound holds on every silo and across a restart. This clause overrules the
 cursor arm and the materialiser offset admission, but not the TTL ceiling,
 which stays a bound: a consumer that falls behind it detects the trimmed gap on
 its next read. A registered consumer that has read nothing holds the whole
-log, and a pass that cannot read the set or any member trims only past the TTL
-ceiling.
+log, and a member whose position cannot be read counts as position 0. Before
+the TTL ceiling trims an entry at or past a consumer's position, the pass
+durably records that consumer's saga decision-purge hold in the tree's
+`IWalPurgeHoldGrain` (issue #4534), so the transaction registry keeps every
+decision the consumer's peer may need to be re-seeded with; a failed hold
+write skips the trim, and so does a pass that cannot read the set of
+registered consumers at all. See
+[Decision-purge holds](../lattice.replication/replication-drivers.md#decision-purge-holds).
 
 An incremental backup capture is deliberately not an offset-reading consumer:
 the GC may trim past it, and the capture then falls back to a full backup. Its

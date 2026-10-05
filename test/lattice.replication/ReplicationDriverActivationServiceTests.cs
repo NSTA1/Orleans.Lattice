@@ -351,12 +351,12 @@ public partial class ReplicationDriverActivationServiceTests
     }
 
     [Test]
-    public async Task ExecuteAsync_ignores_runtime_peer_removed_event()
+    public async Task ExecuteAsync_detaches_a_runtime_removed_peers_shippers_from_the_log_without_tearing_them_down()
     {
-        // A Removed event must not trigger any teardown or activation;
-        // the shipper grain stays activated to drain its remaining
-        // backlog. Verified by asserting GetGrain<IReplicationShipperGrain>
-        // is never called after the Removed event.
+        // A Removed event must not tear the shipper down or re-activate it:
+        // it keeps shipping its backlog best effort. It does detach it from
+        // the write-ahead log (#4534), so a removed peer no longer holds the
+        // log's trims or the tree's saga decision purges.
         var trees = new Dictionary<string, LatticeMergeMode>
         {
             ["alpha"] = LatticeMergeMode.LwwRegister,
@@ -384,15 +384,17 @@ public partial class ReplicationDriverActivationServiceTests
             "positive control: the added peer's shipper to be activated");
         await added.Received(1).EnsureActiveAsync(Arg.Any<CancellationToken>());
 
-        factory.ClearReceivedCalls();
+        initial.ClearReceivedCalls();
+        added.ClearReceivedCalls();
 
-        // OnPeerChange returns without scheduling anything for a non-Added
-        // kind, and the topology invokes its subscribers inline, so once
-        // EmitRemoved has returned the decision is already made and no barrier
-        // (nor the fixed sleep this used to take) is needed.
         topology.EmitRemoved("site-b");
 
-        factory.DidNotReceive().GetGrain<IReplicationShipperGrain>(Arg.Any<string>());
+        await TestPoll.UntilAsync(
+            () => initial.ReceivedCalls().Any(),
+            "the removed peer's shipper to be detached from the log");
+        await initial.Received(1).DetachFromLogAsync(Arg.Any<CancellationToken>());
+        await initial.DidNotReceive().EnsureActiveAsync(Arg.Any<CancellationToken>());
+        Assert.That(added.ReceivedCalls(), Is.Empty, "a peer still in the topology is not detached");
     }
 
     [Test]
