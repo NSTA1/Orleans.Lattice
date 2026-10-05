@@ -177,6 +177,27 @@ public class LatticeReplicationOptions
     public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
 
     /// <summary>
+    /// Wall-clock bound on how long the receiver defers a saga prepare that
+    /// exhausted <see cref="MaxApplyRetries"/> before it poisons the whole saga
+    /// on that receiver and parks the prepare with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/>. Defaults to
+    /// <see cref="DefaultSagaDeferralTimeout"/>. A silo restart restarts the
+    /// in-memory deferral clock, which can only defer longer; it never poisons a
+    /// record earlier than a continuously-running silo would have done. Must be
+    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// <para>
+    /// The bound applies only to prepares. A deferred
+    /// <see cref="MutationKind.TxCommit"/> or <see cref="MutationKind.TxAbort"/>
+    /// terminal is never poisoned by timeout, because a terminal may be the
+    /// record that completes the receiver-side tally after the registry decision
+    /// was already recorded; poisoning it would strand the saga's buckets under
+    /// a recorded commit. Fix the terminal's apply failure or re-bootstrap the
+    /// tree from the origin.
+    /// </para>
+    /// </summary>
+    public TimeSpan SagaDeferralTimeout { get; set; } = DefaultSagaDeferralTimeout;
+
+    /// <summary>
     /// Maximum number of <see cref="DeadLetterEntry"/> records the
     /// per-tree dead-letter queue retains. When the queue is full a new
     /// enqueue is refused rather than evicting a parked entry (issue #4603):
@@ -1603,6 +1624,14 @@ public class LatticeReplicationOptions
     /// transient faults without dragging an origin cursor for hours.
     /// </summary>
     public const int DefaultMaxApplyRetries = 5;
+
+    /// <summary>
+    /// Default value for <see cref="SagaDeferralTimeout"/>: fifteen minutes.
+    /// Long enough for ordinary transient receiver failures to clear and short
+    /// enough that a permanently-unappliable prepare raises an alarm and unblocks
+    /// the origin link within an operator-visible window.
+    /// </summary>
+    public static readonly TimeSpan DefaultSagaDeferralTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Default value for <see cref="DeadLetterQueueCapacity"/>: 1000

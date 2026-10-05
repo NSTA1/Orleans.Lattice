@@ -150,18 +150,42 @@ internal sealed class BootstrapCoordinatorState
     [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
 
     /// <summary>
-    /// Source lineage token this receiver's copy is aligned with, keyed by
-    /// source cluster id. Recorded only after a bootstrap into an empty receiver
-    /// tree; never lazily adopted on a populated receiver.
+    /// Origin whose receiver-poisoned saga set was captured at the start of the
+    /// current drain for pre-export pending-bucket discard.
     /// </summary>
-    [Id(18)] public Dictionary<string, Guid> AlignedLineageBySource { get; set; } = new(StringComparer.Ordinal);
+    [Id(16)] public string PoisonSettleOriginClusterId { get; set; } = "";
+
+    /// <summary>
+    /// Poisoned transaction ids captured at the start of the current drain.
+    /// Retired only after the full re-seed reaches the live-incremental handoff.
+    /// </summary>
+    [Id(17)] public List<Guid> PoisonSettleTransactionIds { get; set; } = new();
+
+    /// <summary>
+    /// Per sender cluster id, the highest export epoch it asked this receiver to
+    /// re-seed past (<c>x-lattice-replication-reseed-after</c>, issues #4533 /
+    /// #4534) and that no drain has consumed yet. While a sender waits it
+    /// withholds every saga record, so a drain from it whose export epoch is
+    /// greater clears the stale pending buckets its purged sagas left behind,
+    /// and removes the entry. State written before this slot decodes to an
+    /// empty map.
+    /// </summary>
+    [Id(18)] public Dictionary<string, long> ReseedAfterEpochs { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Source lineage token this receiver's copy is aligned with, keyed by
+    /// source cluster id (issue #4537). Recorded by a bootstrap that began with
+    /// no row of that source's origin on the receiver, or adopted when the
+    /// export carried every source-origin key the receiver held.
+    /// </summary>
+    [Id(19)] public Dictionary<string, Guid> AlignedLineageBySource { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Sources whose last delete-reconcile attempt skipped because the source
-    /// generation changed or reported deletion during the export. A later full
-    /// re-bootstrap retries from the beginning with a fresh pre-capture.
+    /// generation was unknown, changed, or reported deletion during the export. A
+    /// later full re-bootstrap retries from the beginning with a fresh pre-capture.
     /// </summary>
-    [Id(19)] public Dictionary<string, bool> ReconcileOwedBySource { get; set; } = new(StringComparer.Ordinal);
+    [Id(20)] public Dictionary<string, bool> ReconcileOwedBySource { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Whether the receiver tree held no row of the source's origin at all,
@@ -171,7 +195,7 @@ internal sealed class BootstrapCoordinatorState
     /// its aligned lineage after a crash. Legacy state decodes to
     /// <see langword="false"/>, which skips alignment fail-safe.
     /// </summary>
-    [Id(20)] public bool HeldNoSourceRowsAtImportStart { get; set; }
+    [Id(21)] public bool HeldNoSourceRowsAtImportStart { get; set; }
 
     /// <summary>
     /// Per source cluster, how many owed delete-reconcile retries have been
@@ -179,11 +203,11 @@ internal sealed class BootstrapCoordinatorState
     /// retry backoff, so a sender that never reports its generation does not
     /// re-bootstrap the tree on every maintenance tick.
     /// </summary>
-    [Id(21)] public Dictionary<string, int> OwedRetryAttemptsBySource { get; set; } = new(StringComparer.Ordinal);
+    [Id(22)] public Dictionary<string, int> OwedRetryAttemptsBySource { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per source cluster, the UTC tick before which an owed delete-reconcile
     /// retry is not started (issue #4537).
     /// </summary>
-    [Id(22)] public Dictionary<string, long> OwedRetryNotBeforeTicksBySource { get; set; } = new(StringComparer.Ordinal);
+    [Id(23)] public Dictionary<string, long> OwedRetryNotBeforeTicksBySource { get; set; } = new(StringComparer.Ordinal);
 }

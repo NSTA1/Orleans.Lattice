@@ -1,0 +1,15 @@
+# Pairs with RestoredCutNotReAdvanced. The drain stamps no admission epoch, so an
+# entry parked before the restore paused receiving drains onto the restored copy
+# once the lift opens it.
+MODULE: RestoredCutNotReAdvancedDrainIgnoresEpoch
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: the causal-buffer drain applies an entry parked before the restore
+PERTURBS: Drain
+
+--- FIND
+    /\ IF q.ep < floor[d][alias[d]]
+--- REPLACE
+    \* MUTATION: the parked epoch is ignored.
+    /\ IF FALSE
+--- END

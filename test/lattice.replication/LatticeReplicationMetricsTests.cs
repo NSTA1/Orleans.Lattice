@@ -180,6 +180,38 @@ public class LatticeReplicationMetricsTests
                 Is.EqualTo("orleans.lattice.replication.dead_letter.enqueued"));
             Assert.That(LatticeReplicationMetrics.DeadLetterRemoved.Name,
                 Is.EqualTo("orleans.lattice.replication.dead_letter.removed"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisoned.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.saga_poisoned"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisoned.Unit, Is.EqualTo("{saga}"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisonedName,
+                Is.EqualTo("orleans.lattice.replication.apply.saga_poisoned"));
+        });
+    }
+
+    [Test]
+    public void Receiver_saga_poisoned_counter_records_with_tree_origin_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ReceiverSagaPoisonedName);
+
+        LatticeReplicationMetrics.ReceiverSagaPoisoned.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-b"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTimeout));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "origin" && (string?)t.Value == "site-b"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "outcome" && (string?)t.Value == "timeout"));
         });
     }
 

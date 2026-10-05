@@ -1,3 +1,5 @@
+using Orleans.Lattice.Primitives;
+using Orleans.Lattice.BPlusTree;
 using System.Text;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Backup;
@@ -69,6 +71,31 @@ public sealed class CoordinatedRestoreSetAtomicityTests
         var snapshot = await _fixture.Fence(SagaId).GetSnapshotAsync();
         Assert.That(snapshot.ShippingResumed, Is.False,
             "the group's shipping is globally gated until the set saga completes");
+    }
+
+    [Test]
+    public async Task Set_restore_commit_closes_every_member_restored_copy_to_peer_writes()
+    {
+        // Issue #4593: every member's restored copy is born receive-closed, so a
+        // peer write that passed a stale receive gate before the pause cannot land
+        // on any member after the group's swap.
+        var setId = await ArrangeAdvancedSetAsync();
+        var participant = _fixture.SiloServices.GetRequiredService<RestoreParticipant>();
+        var request = SetRequest(setId);
+        Assert.That((await participant.PrepareAsync(request)).Vote, Is.EqualTo(SagaVote.Commit));
+
+        await participant.CommitAsync(request);
+
+        foreach (var tree in new[] { ReplTree, LocalTree })
+        {
+            var seam = _fixture.GrainFactory.GetGrain<IReplicationApplyGrain>(tree);
+            Assert.ThrowsAsync<CopyReceiveFencedException>(
+                () => seam.ApplySetAsync(
+                    "k/peer-pre-cutover", Encoding.UTF8.GetBytes("peer"),
+                    new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks }, "site-peer", null, 0),
+                tree);
+            Assert.That(await _fixture.GrainFactory.GetGrain<ILattice>(tree).GetAsync("k/peer-pre-cutover"), Is.Null, tree);
+        }
     }
 
     [Test]

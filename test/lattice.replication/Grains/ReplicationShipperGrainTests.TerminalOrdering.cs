@@ -129,10 +129,16 @@ public partial class ReplicationShipperGrainTests
             factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(deadLetters);
         }
 
-        if (txRegistry is not null)
+        // A rebind starts a replay whose filter asks the registry about every
+        // saga (#4533); these sagas are decided and their decisions stored.
+        if (txRegistry is null)
         {
-            factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(txRegistry);
+            txRegistry = Substitute.For<ITxRegistryGrain>();
+            txRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
+            txRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>()));
         }
+
+        factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(txRegistry);
 
         var transport = Substitute.For<IReplicationTransport>();
         var stream = RecordAppliedStream(transport, walEncoder);

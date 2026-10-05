@@ -377,7 +377,8 @@ internal sealed class CausalApplyBuffer
 
     private readonly record struct BufferedEntry(WalRecord Entry, long SizeBytes, long ParkedAtTicks);
 
-    private readonly record struct EntryKey(
+    /// <summary>The identity a parked entry is deduplicated by.</summary>
+    internal readonly record struct EntryKey(
         string TreeId,
         string OriginClusterId,
         HybridLogicalClock Timestamp,

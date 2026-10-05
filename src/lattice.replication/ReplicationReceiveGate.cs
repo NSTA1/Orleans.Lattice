@@ -11,9 +11,13 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The cache window is deliberately short (sub-second) so a resume is observed
 /// promptly. Erring stale in the paused direction is safe (entries are deferred,
-/// not dropped, and retried); erring stale in the unpaused direction is bounded
-/// by the window and covered by the shipper-side pause on the peer, which stays
-/// engaged until global completion.
+/// not dropped, and retried). Erring stale in the unpaused direction is NOT made
+/// safe by the window: an entry can pass a stale answer just before a coordinated
+/// restore pauses the tree and reach the tree after the restore's alias swap, or
+/// after its lift (issue #4593). That is closed at the tree's apply seam instead,
+/// structurally: each answer carries the fence's epoch, the applier stamps the
+/// admitted entry with it, and a restored copy refuses an entry stamped below the
+/// epoch of its restore's pause, and every entry while it is still closed.
 /// </para>
 /// </summary>
 internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IReplicationReceiveGate
@@ -44,6 +48,10 @@ internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IRepl
 
     /// <inheritdoc />
     public async ValueTask<bool> IsReceivePausedAsync(string treeId, CancellationToken cancellationToken = default)
+        => (await ObserveAsync(treeId, cancellationToken).ConfigureAwait(false)).Paused;
+
+    /// <inheritdoc />
+    public async ValueTask<ReceiveFenceObservation> ObserveAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
@@ -51,14 +59,14 @@ internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IRepl
         var now = DateTime.UtcNow;
         if (_cache.TryGetValue(treeId, out var cached) && now < cached.ExpiresAtUtc)
         {
-            return cached.Paused;
+            return cached.Observation;
         }
 
-        var paused = await _grainFactory.GetGrain<ITreeReceiveFenceGrain>(treeId)
-            .IsPausedAsync().ConfigureAwait(false);
+        var observation = await _grainFactory.GetGrain<ITreeReceiveFenceGrain>(treeId)
+            .ObserveAsync().ConfigureAwait(false);
 
-        StoreBounded(treeId, new CacheEntry(paused, now.Add(CacheWindow)), now);
-        return paused;
+        StoreBounded(treeId, new CacheEntry(observation, now.Add(CacheWindow)), now);
+        return observation;
     }
 
     /// <summary>
@@ -94,5 +102,5 @@ internal sealed class ReplicationReceiveGate(IGrainFactory grainFactory) : IRepl
         _cache[treeId] = entry;
     }
 
-    private readonly record struct CacheEntry(bool Paused, DateTime ExpiresAtUtc);
+    private readonly record struct CacheEntry(ReceiveFenceObservation Observation, DateTime ExpiresAtUtc);
 }

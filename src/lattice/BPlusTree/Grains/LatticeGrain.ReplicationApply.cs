@@ -21,8 +21,90 @@ internal sealed partial class LatticeGrain
         }
     }
 
+    /// <summary>
+    /// Issue #4593: refuses a replication apply that routed to a physical copy a
+    /// coordinated restore has fenced against it - a restored copy still closed,
+    /// or an open restored copy the apply was admitted before the restore's pause
+    /// (its stamped <see cref="ReplicationAdmissionEpoch"/> is below the copy's
+    /// minimum admission epoch, or it carries no stamp). Called on every routing
+    /// resolution made under <see cref="ReplicationApplyScope"/>, including the
+    /// cached fast path. An open copy's status is cached, because a copy only moves
+    /// from closed to open and its epoch is fixed once open; a closed one is
+    /// always re-read.
+    /// <para>
+    /// The check runs on every resolution, not once per apply, because a write
+    /// whose first resolution reached the replaced copy is redirected by that
+    /// copy's retained redirect and re-resolves onto the restored copy. That
+    /// re-resolution is the check that refuses it.
+    /// </para>
+    /// </summary>
+    private ValueTask<RoutingInfo> CheckCopyReceive(RoutingInfo routing)
+    {
+        if (_receiveOpenCopies is { } open && open.TryGetValue(routing.PhysicalTreeId, out var floor))
+        {
+            return AdmittedBelow(floor)
+                ? ValueTask.FromException<RoutingInfo>(RefuseCopyReceive(routing.PhysicalTreeId, admittedBeforeRestore: true))
+                : new ValueTask<RoutingInfo>(routing);
+        }
+
+        return ReadCopyReceiveAsync(routing);
+    }
+
+    private async ValueTask<RoutingInfo> ReadCopyReceiveAsync(RoutingInfo routing)
+    {
+        var physicalTreeId = routing.PhysicalTreeId;
+        var status = await grainFactory.GetGrain<ICopyReceiveFenceGrain>(physicalTreeId).GetStatusAsync();
+        if (status.Closed)
+        {
+            throw RefuseCopyReceive(physicalTreeId, admittedBeforeRestore: false);
+        }
+
+        (_receiveOpenCopies ??= new Dictionary<string, long>(StringComparer.Ordinal))[physicalTreeId] = status.MinAdmissionEpoch;
+        if (AdmittedBelow(status.MinAdmissionEpoch))
+        {
+            throw RefuseCopyReceive(physicalTreeId, admittedBeforeRestore: true);
+        }
+
+        return routing;
+    }
+
+    /// <summary>
+    /// Whether the current apply was admitted below <paramref name="floor"/>: by this
+    /// tree's receive fence under an older epoch, or with no stamp at all (fail
+    /// closed). A copy no restore closed has a floor of zero and admits every apply.
+    /// An apply another tree's fence admitted - a cross-tree saga's sibling
+    /// finalize - carries no epoch of this tree's fence, so only the closed check
+    /// applies to it: a terminal by itself writes no data, and a restored copy holds
+    /// no pending bucket for a saga whose prepares predate its restore, so a
+    /// pre-cutover terminal finds nothing to flip there.
+    /// </summary>
+    private bool AdmittedBelow(long floor)
+    {
+        if (floor <= 0)
+        {
+            return false;
+        }
+
+        if (!ReplicationAdmissionEpoch.TryGet(out var admittingTree, out var epoch))
+        {
+            return true;
+        }
+
+        return string.Equals(admittingTree, TreeId, StringComparison.Ordinal) && epoch < floor;
+    }
+
+    private CopyReceiveFencedException RefuseCopyReceive(string physicalTreeId, bool admittedBeforeRestore)
+    {
+        LatticeMetrics.CopyReceiveFencedApplies.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagReason, admittedBeforeRestore ? "pre_cutover" : "closed"),
+            LatticeTenantLabel.ForTree(TreeId));
+        return new CopyReceiveFencedException(TreeId, physicalTreeId, admittedBeforeRestore);
+    }
+
     /// <inheritdoc />
-    public Task ApplySetAsync(
+    public async Task ApplySetAsync(
         string key,
         byte[] value,
         HybridLogicalClock sourceHlc,
@@ -35,6 +117,10 @@ internal sealed partial class LatticeGrain
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         var lww = LwwValue<byte[]>.CreateWithExpiry(value, sourceHlc, expiresAtTicks)
             with
@@ -43,11 +129,11 @@ internal sealed partial class LatticeGrain
                 VectorClock = sourceVectorClock,
             };
 
-        return ApplyMergeOneAsync(key, lww);
+        await ApplyMergeOneAsync(key, lww);
     }
 
     /// <inheritdoc />
-    public Task ApplyDeleteAsync(
+    public async Task ApplyDeleteAsync(
         string key,
         HybridLogicalClock sourceHlc,
         string originClusterId,
@@ -57,6 +143,10 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         var tombstone = LwwValue<byte[]>.Tombstone(sourceHlc)
             with
@@ -65,7 +155,7 @@ internal sealed partial class LatticeGrain
                 VectorClock = sourceVectorClock,
             };
 
-        return ApplyMergeOneAsync(key, tombstone);
+        await ApplyMergeOneAsync(key, tombstone);
     }
 
     /// <inheritdoc />
@@ -101,6 +191,11 @@ internal sealed partial class LatticeGrain
         {
             return;
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         // A predicate-filtered range delete ships the explicit set of keys the
         // authoring leaf matched. The receiver must tombstone exactly that set
@@ -221,6 +316,11 @@ internal sealed partial class LatticeGrain
         {
             return;
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         if (items.Count == 1)
         {
@@ -363,6 +463,11 @@ internal sealed partial class LatticeGrain
             return;
         }
 
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+
         // Fold every delta inside this single grain turn. The grain is
         // non-reentrant, so no other apply or local write to this tree
         // interleaves between the per-item folds - that is what lets the
@@ -453,7 +558,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    public async Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
@@ -462,7 +567,11 @@ internal sealed partial class LatticeGrain
         // Same guarded flow the public no-TTL per-entry apply takes (the caller
         // sets only the ambient origin scope, so the receiver advances its own
         // clock), with the absolute expiry threaded through the fold.
-        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+        await ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
     }
 
     /// <inheritdoc />
@@ -490,6 +599,11 @@ internal sealed partial class LatticeGrain
                 "ApplyPreparedSetAsync requires a non-empty transactionId so the receiver leaf can route the entry into its per-tx pending bucket.",
                 nameof(transactionId));
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
 #if LATTICE_DIAG
         Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
@@ -581,6 +695,11 @@ internal sealed partial class LatticeGrain
                 "ApplyPreparedDeleteAsync requires a non-empty transactionId so the receiver leaf can route the tombstone into its per-tx pending bucket.",
                 nameof(transactionId));
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         if (await TrySettleReplicatedPrepareAsync(
                 transactionId,
@@ -720,6 +839,10 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
         cancellationToken.ThrowIfCancellationRequested();
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         // Step 1 (cross-cluster all-or-nothing visibility gate) -
         // Record this per-source-shard terminal arrival against the
@@ -857,7 +980,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task FinalizeCrossTreeTerminalAsync(
+    public async Task FinalizeCrossTreeTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyList<int> observedSourceShards,
@@ -876,8 +999,12 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
         cancellationToken.ThrowIfCancellationRequested();
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
-        return FinalizeCrossTreeTerminalCoreAsync(
+        await FinalizeCrossTreeTerminalCoreAsync(
             transactionId, committed, observedSourceShards, terminalHlc, originClusterId, cancellationToken);
     }
 
