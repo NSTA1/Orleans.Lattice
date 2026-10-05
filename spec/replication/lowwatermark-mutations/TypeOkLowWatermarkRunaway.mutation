@@ -1,0 +1,16 @@
+# Pairs with TypeOK. Records a watermark past the HLC domain.
+MODULE: TypeOkLowWatermarkRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the recorded watermark leaves its domain
+PERTURBS: Heartbeat
+BOUNDS: Parts = {1}
+
+--- FIND
+    /\ srcv' = SOf
+    /\ Rearm
+--- REPLACE
+    \* MUTATION: out of domain.
+    /\ srcv' = SOf + Top
+    /\ Rearm
+--- END

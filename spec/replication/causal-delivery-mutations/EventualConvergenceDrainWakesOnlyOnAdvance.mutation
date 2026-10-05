@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence in ReplicationCausalDelivery. With dependencies met by
+# identity, merging a write below the origin high-water mark can satisfy a parked
+# entry without moving the mark. A drain armed only by an advance never runs for it.
+# Production also drains on its maintenance tick, which this design abstracts.
+MODULE: EventualConvergenceDrainWakesOnlyOnAdvance
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a drain is re-armed only when the high-water mark advances, so an apply below the mark that meets a parked dependency strands the entry
+PERTURBS: Deliver
+DEADLOCK: off
+
+--- FIND
+             /\ wake' = (wake \/ buf # {})
+--- REPLACE
+\* MUTATION: only an advance re-arms the drain.
+             /\ wake' = (wake \/ (w.h > hwm[w.o] /\ buf # {}))
+--- END

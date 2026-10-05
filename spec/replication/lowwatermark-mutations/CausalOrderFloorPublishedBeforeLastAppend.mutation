@@ -1,0 +1,16 @@
+# Pairs with CausalOrder. Publishes the new floor paired with an offset read before the partition's last
+# append, rather than atomically under the append gate, so the acked cursor can reach the offset while a
+# write below the floor is still unacknowledged.
+MODULE: CausalOrderFloorPublishedBeforeLastAppend
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: the floor is published with an offset read before the last append, so S passes a write below the floor
+PERTURBS: AdvanceFloor
+BOUNDS: Parts = {1}
+
+--- FIND
+    /\ pub' = [pub EXCEPT ![p] = <<floor[p] + 1, Len(alog[p])>>]
+--- REPLACE
+    \* MUTATION: the offset predates the last append.
+    /\ pub' = [pub EXCEPT ![p] = <<floor[p] + 1, IF Len(alog[p]) > 0 THEN Len(alog[p]) - 1 ELSE 0>>]
+--- END

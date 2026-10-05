@@ -1,0 +1,13 @@
+# Pairs with CausalOrder. An inclusive comparison: S vouches only for writes strictly below it.
+MODULE: CausalOrderLowWatermarkInclusive
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a dependency at S itself is treated as met
+PERTURBS: ReceiveB
+
+--- FIND
+       /\ IF t \in lost \/ DepsOk(t)
+--- REPLACE
+       \* MUTATION: an inclusive comparison.
+       /\ IF t \in lost \/ t \in ids \/ (t <= srcv /\ t \notin Held)
+--- END

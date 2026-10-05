@@ -1,0 +1,15 @@
+# Pairs with CausalOrder. The bootstrap pin installs the source's maximum committed HLC - the
+# pointwise-maximum frontier the pin installed before #4586 - instead of its applied low watermark.
+MODULE: CausalOrderBootstrapInstallsHighWaterMark
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: the bootstrap installs a max-HLC frontier, which is not downward-closed
+PERTURBS: Bootstrap
+BOUNDS: Parts = {1}, Bootstraps = TRUE
+
+--- FIND
+    /\ srcv' = Max({srcv, SelfS})
+--- REPLACE
+    \* MUTATION: the source's high-water mark.
+    /\ srcv' = Max({srcv, Max(aCom) + 1})
+--- END

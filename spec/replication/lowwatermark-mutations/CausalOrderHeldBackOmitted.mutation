@@ -1,0 +1,14 @@
+# Pairs with CausalOrder. The check ignores the writes held back unapplied - parked, dead-lettered or
+# lost - so a dependency below S that the receiver acknowledged without applying is treated as met.
+MODULE: CausalOrderHeldBackOmitted
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a dependency below S that is held back unapplied is treated as met
+PERTURBS: ReceiveB
+
+--- FIND
+       /\ IF t \in lost \/ DepsOk(t)
+--- REPLACE
+       \* MUTATION: held-back writes are not excluded.
+       /\ IF t \in lost \/ t \in ids \/ t < srcv
+--- END

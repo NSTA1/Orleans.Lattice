@@ -1,0 +1,15 @@
+# Pairs with CausalOrder. Drops the floor guard: a fresh local stamp below the partition's clock
+# floor is admitted, so S, which vouched for every write below the floor, passes a write the
+# receiver has not had (#4586 part 1, WalClockFloorCore).
+MODULE: CausalOrderFloorGuardDropped
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a silo appends a fresh write below its partition's published floor, which S already passed
+PERTURBS: AuthorA
+
+--- FIND
+    /\ StampOk(p, h)
+--- REPLACE
+    \* MUTATION: no floor guard.
+    /\ TRUE
+--- END

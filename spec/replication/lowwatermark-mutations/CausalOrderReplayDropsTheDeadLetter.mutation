@@ -1,0 +1,15 @@
+# Pairs with CausalOrder. Replaying a dead-letter removes it from the queue without applying it, so it
+# is no longer held back and a dependent below S is released before it.
+MODULE: CausalOrderReplayDropsTheDeadLetter
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a replay removes the dead-letter without applying it, so it is neither held nor applied
+PERTURBS: Replay
+BOUNDS: Parts = {1}
+
+--- FIND
+    /\ rApplied' = rApplied \cup {h} /\ ids' = ids \cup {h}
+--- REPLACE
+    \* MUTATION: removed, not applied.
+    /\ UNCHANGED <<rApplied, ids>>
+--- END

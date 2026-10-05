@@ -1,0 +1,18 @@
+# Pairs with CausalOrder. The bounded applied-identity record evicts the merged write along with its
+# identity, so a dependent already applied no longer has its dependency.
+MODULE: CausalOrderEvictionForgetsTheWrite
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: evicting an identity from the applied-identity record also forgets the merged write
+PERTURBS: Forget
+BOUNDS: Parts = {1}
+
+--- FIND
+    /\ h \in ids /\ ids' = ids \ {h}
+    /\ UNCHANGED <<rApplied, dlq, lost, dls, bApplied, bBuf, bDead, srcv, wake, booted>>
+--- REPLACE
+    /\ h \in ids /\ ids' = ids \ {h}
+    \* MUTATION: the write goes too.
+    /\ rApplied' = rApplied \ {h}
+    /\ UNCHANGED <<dlq, lost, dls, bApplied, bBuf, bDead, srcv, wake, booted>>
+--- END

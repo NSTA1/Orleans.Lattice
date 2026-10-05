@@ -1,0 +1,18 @@
+# Pairs with CausalOrder. The shipper's durable cursor advances on send rather than on the receiver's
+# acknowledgement, so the watermark vouches for an entry the receiver has not applied.
+MODULE: CausalOrderShipAcksBeforeReceipt
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: the shipper acknowledges an entry as it sends it, so S passes a write the receiver never ran
+PERTURBS: ShipA
+BOUNDS: Parts = {1}
+
+--- FIND
+    /\ adr' = [adr EXCEPT ![p] = @ + 1]
+    /\ UNCHANGED Origin /\ UNCHANGED <<aack, bdeps, back, losses>> /\ UNCHANGED Rcv
+--- REPLACE
+    /\ adr' = [adr EXCEPT ![p] = @ + 1]
+    \* MUTATION: acknowledged on send.
+    /\ aack' = [aack EXCEPT ![p] = @ + 1]
+    /\ UNCHANGED Origin /\ UNCHANGED <<bdeps, back, losses>> /\ UNCHANGED Rcv
+--- END

@@ -3,11 +3,11 @@
   "refinement": "ReplicationCausalDelivery.Refinement.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 1,
+    "invariants": 2,
     "properties": 1,
     "actions": 5,
-    "mutations": 4,
-    "behaviourRows": 5,
-    "distinctStates": 19753
+    "mutations": 6,
+    "behaviourRows": 6,
+    "distinctStates": 19161
   }
 }
