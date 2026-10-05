@@ -111,6 +111,7 @@ internal sealed partial class TxRegistryGrain
     {
         await RefreshWalPurgeGuardAsync();
         await RefreshWalPurgeHoldAsync();
+        await RefreshCrossTreeHoldAsync();
         var pruned = PruneExpired(TimeProvider.GetUtcNow(), Retention);
         if (!pruned.Any)
         {

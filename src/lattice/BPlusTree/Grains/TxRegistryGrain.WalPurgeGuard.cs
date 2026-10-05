@@ -49,6 +49,14 @@ internal sealed partial class TxRegistryGrain
     private bool _walPurgeRefreshInFlight;
     private ILatticeReplicationContext? _replicationContext;
     private LatticeOptionsResolver? _optionsResolver;
+    private ICrossTreeDecisionHold? _crossTreeDecisionHold;
+
+    // Cross-tree sub-sagas the cross-tree decision hold has released (#4684).
+    // A grant is permanent, so the set only grows until the purge drops the
+    // saga; a cross-tree tombstone not in it is never purged.
+    private readonly HashSet<Guid> _crossTreeReleased = [];
+    private DateTimeOffset _crossTreeLastRefresh = DateTimeOffset.MinValue;
+    private bool _crossTreeRefreshInFlight;
 
     /// <summary>
     /// Highest sample generation the guard has seen every partition trim past:
@@ -84,6 +92,7 @@ internal sealed partial class TxRegistryGrain
     {
         _replicationContext = context.ActivationServices?.GetService<ILatticeReplicationContext>();
         _optionsResolver = context.ActivationServices?.GetService<LatticeOptionsResolver>();
+        _crossTreeDecisionHold = context.ActivationServices?.GetService<ICrossTreeDecisionHold>();
     }
 
     /// <summary>
@@ -103,7 +112,7 @@ internal sealed partial class TxRegistryGrain
             return true;
         }
 
-        if (_walPurgeHeld)
+        if (_walPurgeHeld || IsCrossTreeHeld(txid))
         {
             return false;
         }
@@ -143,6 +152,73 @@ internal sealed partial class TxRegistryGrain
             LogWalPurgeGuardRefreshFailed(logger, TreeId, ex);
         }
     }
+
+    /// <summary>
+    /// Asks the host's <see cref="ICrossTreeDecisionHold"/> about every expired
+    /// tombstone of a cross-tree sub-saga the WAL guard would otherwise let go
+    /// (issue #4684). The decision row is the only thing a receiver that
+    /// imports a participant tree can settle the tree's arrival at its
+    /// cross-tree barrier with, so it is kept until the replication layer
+    /// reports that no peer can still need it. A failed or refused check holds
+    /// the tombstone (fail closed); a host with no hold registered holds none.
+    /// </summary>
+    private async Task RefreshCrossTreeHoldAsync()
+    {
+        if (_crossTreeDecisionHold is null || _crossTreeRefreshInFlight || state.State.CrossTreeMemberships.Count == 0)
+        {
+            return;
+        }
+
+        var now = TimeProvider.GetUtcNow();
+        if (now - _crossTreeLastRefresh < WalPurgeRefreshInterval)
+        {
+            return;
+        }
+
+        _crossTreeRefreshInFlight = true;
+        _crossTreeLastRefresh = now;
+        try
+        {
+            _crossTreeReleased.RemoveWhere(txid => !state.State.ForgottenAt.ContainsKey(txid));
+            var retention = Retention;
+            foreach (var (txid, forgottenAt) in state.State.ForgottenAt.ToList())
+            {
+                if (_crossTreeReleased.Contains(txid)
+                    || !state.State.CrossTreeMemberships.TryGetValue(txid, out var membership)
+                    || (retention > TimeSpan.Zero && now - forgottenAt <= retention)
+                    || !IsWalPurgeCleared(txid))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (await _crossTreeDecisionHold.MayPurgeAsync(TreeId, txid, membership))
+                    {
+                        _crossTreeReleased.Add(txid);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LogWalPurgeGuardRefreshFailed(logger, TreeId, ex);
+                }
+            }
+        }
+        finally
+        {
+            _crossTreeRefreshInFlight = false;
+        }
+    }
+
+    /// <summary>
+    /// Whether the cross-tree decision hold still keeps the tombstone of
+    /// <paramref name="txid"/>: it is a sub-saga of a cross-tree write and the
+    /// hold has not released it.
+    /// </summary>
+    private bool IsCrossTreeHeld(Guid txid) =>
+        _crossTreeDecisionHold is not null
+        && state.State.CrossTreeMemberships.ContainsKey(txid)
+        && !_crossTreeReleased.Contains(txid);
 
     private bool HasClearedTombstone()
     {

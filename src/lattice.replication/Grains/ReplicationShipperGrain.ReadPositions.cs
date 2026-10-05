@@ -94,6 +94,13 @@ internal sealed partial class ReplicationShipperGrain : IWalOffsetConsumer
         if (!string.Equals(_registeredReadLog, log, StringComparison.Ordinal))
         {
             var previous = _registeredReadLog;
+            if (previous is null)
+            {
+                // A peer that ever attached holds cross-tree decisions until it
+                // is decommissioned, even once detached (#4684).
+                await _grainFactory.GetGrain<ICrossTreePeerEnrolmentGrain>(_treeName).EnrolAsync(_peerClusterId);
+            }
+
             await _grainFactory.GetGrain<IWalOffsetConsumerRegistryGrain>(log).RegisterAsync(Context.GrainId);
             _readPositions = new ReadPositions(log, LowerOf(_readPositions, log, CurrentPartitionPositions()));
             _registeredReadLog = log;

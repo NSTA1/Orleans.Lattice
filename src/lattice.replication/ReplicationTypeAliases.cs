@@ -333,4 +333,12 @@ public static class ReplicationTypeAliases
 
     // A receiver's record of the source lineage it last drained (#4673).
     internal const string ReplicationDrainedLineage = "olr.dn";
+
+    // Origin cross-tree decision purge hold (#4684).
+    internal const string ICrossTreeHoldTrackerGrain = "olr.ch";
+    internal const string CrossTreeHoldTrackerState = "olr.cs";
+    internal const string CrossTreeHoldBoundary = "olr.ck";
+    internal const string CrossTreeHoldSnapshot = "olr.cn";
+    internal const string ICrossTreePeerEnrolmentGrain = "olr.pe";
+    internal const string CrossTreePeerEnrolmentState = "olr.pn";
 }

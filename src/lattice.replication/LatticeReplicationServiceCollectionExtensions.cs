@@ -355,6 +355,10 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // Replaces the core's ungated default.
         builder.Services.AddSingleton<ITombstoneReapGate, ReplicationTombstoneReapGate>();
 
+        // Issue #4684: the origin keeps a cross-tree sub-saga's decision until
+        // every peer of every participant tree acknowledged past its terminal.
+        builder.Services.AddSingleton<ICrossTreeDecisionHold, ReplicationCrossTreeDecisionHold>();
+
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable
