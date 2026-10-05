@@ -221,14 +221,14 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
 
         try
         {
-            await foreach (var entry in _service.RequestSnapshotAsync(
+            await foreach (var item in _service.RequestSnapshotItemsAsync(
                 request.TreeName,
                 request.SourceClusterId,
                 request.FromAsOfHlc,
                 context.CancellationToken).ConfigureAwait(false))
             {
                 await responseStream
-                    .WriteAsync(new RemoteSnapshotStreamItemBox { Value = new RemoteSnapshotStreamItem { Entry = entry } })
+                    .WriteAsync(new RemoteSnapshotStreamItemBox { Value = item })
                     .ConfigureAwait(false);
             }
         }

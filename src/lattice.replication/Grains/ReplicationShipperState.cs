@@ -206,7 +206,17 @@ internal sealed class ReplicationShipperState
     [Id(10)]
     public long[]? ReseedRetainFrom { get; set; }
 
-    // [Id(11)] is taken by the #4534 detached-from-log slot.
+    /// <summary>
+    /// <see langword="true"/> once the peer was removed from the replication
+    /// topology (issue #4534): the shipper no longer holds the write-ahead log
+    /// for it - it has withdrawn from the log's offset consumers and released
+    /// its decision-purge holds - and, being off the log, ships only plain
+    /// writes until the peer returns and is re-seeded. Cleared when the peer
+    /// is added back. A state written before this slot decodes to
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(11)]
+    public bool DetachedFromLog { get; set; }
 
     /// <summary>
     /// Per partition, the first sequence of the encode-failure quarantine (issue

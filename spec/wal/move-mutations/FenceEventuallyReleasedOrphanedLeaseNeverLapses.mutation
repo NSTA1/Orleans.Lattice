@@ -13,13 +13,13 @@ PERTURBS: LeaseLapse
 DEADLOCK: off
 
 --- FIND
-    /\ dfence
+    /\ dfence # NoMove
     /\ ~lapsed
     /\ lapsed' = TRUE
 --- REPLACE
 \* MUTATION: only a live move's lease can lapse.
-    /\ dfence
+    /\ dfence # NoMove
     /\ ~lapsed
-    /\ move # "idle"
+    /\ move[dfence] \in {"fenced", "copied"}
     /\ lapsed' = TRUE
 --- END

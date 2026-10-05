@@ -1333,6 +1333,40 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string BootstrapOutcomeTimedOut = "timed_out";
 
+    /// <summary>Bootstrap delete reconcile outcome: synthetic tombstones were applied.</summary>
+    public const string BootstrapReconcileOutcomeReconciled = "reconciled";
+
+    /// <summary>Bootstrap delete reconcile outcome: scoped export skipped reconciliation.</summary>
+    public const string BootstrapReconcileOutcomeSkippedScoped = "skipped_scoped";
+
+    /// <summary>Bootstrap delete reconcile outcome: source generation changed during export.</summary>
+    public const string BootstrapReconcileOutcomeSkippedUnstable = "skipped_unstable";
+
+    /// <summary>Bootstrap delete reconcile outcome: source was deleted or purging.</summary>
+    public const string BootstrapReconcileOutcomeSkippedDeleted = "skipped_deleted";
+
+    /// <summary>Bootstrap delete reconcile outcome: source generation was unknown.</summary>
+    public const string BootstrapReconcileOutcomeSkippedUnknown = "skipped_unknown";
+
+    /// <summary>Bootstrap delete reconcile outcome: receiver lineage did not match source lineage.</summary>
+    public const string BootstrapReconcileOutcomeSkippedLineageMismatch = "skipped_lineage_mismatch";
+
+    /// <summary>Bootstrap delete reconcile outcome: receiver has no durable aligned lineage for the source.</summary>
+    public const string BootstrapReconcileOutcomeSkippedNeverAligned = "skipped_never_aligned";
+
+    /// <summary>Bootstrap delete reconcile outcome: tree is not last-writer-wins.</summary>
+    public const string BootstrapReconcileOutcomeSkippedNotLww = "skipped_not_lww";
+
+    /// <summary>Bootstrap delete reconcile outcome: durable owed retry was scheduled.</summary>
+    public const string BootstrapReconcileOutcomeOwedRetry = "owed_retry";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="BootstrapReconcile"/>: a receiver
+    /// that could not prove its copy derives from the source's lineage adopted it,
+    /// because the whole-tree export carried every source-origin key it held.
+    /// </summary>
+    public const string BootstrapReconcileOutcomeAligned = "aligned";
+
     /// <summary>
     /// Counter incremented every time the receiver-side bootstrap
     /// coordinator classifies an exception thrown by its snapshot
@@ -1374,6 +1408,18 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="BootstrapReadFenceForceLifted"/> counter.
     /// </summary>
     public const string BootstrapReadFenceForceLiftedName = "orleans.lattice.replication.bootstrap.read_fence_force_lifted";
+
+    /// <summary>
+    /// Counter incremented once per bootstrap delete-reconcile decision. Tagged
+    /// by <see cref="TagTree"/>, <see cref="TagOrigin"/>, and
+    /// <see cref="TagOutcome"/>.
+    /// </summary>
+    public static readonly Counter<long> BootstrapReconcile =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.reconcile", unit: "{pass}",
+            description: "Bootstrap delete-reconcile decisions for source-origin keys absent from an in-place re-bootstrap export.");
+
+    /// <summary>Canonical name of the <see cref="BootstrapReconcile"/> counter.</summary>
+    public const string BootstrapReconcileName = "orleans.lattice.replication.bootstrap.reconcile";
 
     // --- Anti-entropy peer digest probe (detect stage) --------------------------
 

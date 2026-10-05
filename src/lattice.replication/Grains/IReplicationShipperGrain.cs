@@ -83,4 +83,15 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     /// <param name="newPhysicalTreeId">The source tree's new physical identity.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stops holding the write-ahead log for a peer removed from the
+    /// replication topology (issue #4534): durably marks the shipper detached,
+    /// withdraws it from the log's offset consumers, and releases its saga
+    /// decision-purge hold. The shipper keeps shipping best effort, so a trim
+    /// may pass it; if the peer is added back
+    /// (<see cref="EnsureActiveAsync"/> re-attaches it) and a trim did pass
+    /// it, the peer must be re-seeded. Idempotent.
+    /// </summary>
+    Task DetachFromLogAsync(CancellationToken cancellationToken);
 }
