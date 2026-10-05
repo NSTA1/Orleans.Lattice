@@ -41,9 +41,8 @@ The queue never evicts. Every parked entry was acknowledged to its sender withou
 | Merge-mode or tenant-isolation gate rejection, lost dependency | The apply (or the batch run it belongs to) returns `Deferred = true`, so the sender keeps its cursor and re-ships. |
 | Causal-apply buffer overflow | The park fails, so the receiver does not acknowledge and the sender re-ships, as for any other DLQ enqueue failure. |
 | Causal-apply buffer drain (apply failure, lost dependency) | The entry stays parked in the buffer and the drain stops; the next drain retries it. |
-| Sender cannot encode a batch | The shipper does not advance its cursor past the batch and backs off (`dead-letter-refused`); it retries the park on the next pass. |
 
-The replication link that is being held back reports **Stalled** on the peer-status path (`ReplicationPeerStatusRow.DeadLetterFullSeconds` is non-null - `direction="outbound"` on the sender, `direction="inbound"` on the receiver) until a park succeeds again. Free capacity by replaying or discarding parked entries, or raise `DeadLetterQueueCapacity` for the tree. A sender whose `ParkPoisonedRecordAsync` path finds the queue full (a later prepare or terminal of a poisoned saga) still withholds the record from the peer; only the operator's copy is not kept, and the refusal is counted.
+The replication link that is being held back reports **Stalled** on the peer-status path (`ReplicationPeerStatusRow.DeadLetterFullSeconds` is non-null - `direction="outbound"` on the sender, `direction="inbound"` on the receiver) until a park succeeds again. Free capacity by replaying or discarding parked entries, or raise `DeadLetterQueueCapacity` for the tree.
 
 ### Alarm and operator escape for a stalled link
 

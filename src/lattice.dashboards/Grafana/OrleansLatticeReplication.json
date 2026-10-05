@@ -324,11 +324,6 @@
           "legendFormat": "refused (queue full) {{reason}}"
         },
         {
-          "refId": "P",
-          "expr": "sum by (outcome) (rate(orleans_lattice_replication_shipper_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
-          "legendFormat": "saga poisoned {{outcome}}"
-        },
-        {
           "refId": "D",
           "expr": "sum(rate(orleans_lattice_replication_apply_saga_deferred_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "saga record deferred"

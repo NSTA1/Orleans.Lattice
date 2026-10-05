@@ -369,13 +369,6 @@ internal sealed partial class ReplicationShipperGrain
                 continue;
             }
 
-            if (IsPoisonedSagaRecord(hold.Record))
-            {
-                // A prepare of this saga was dead-lettered, so the terminal is
-                // parked rather than released (#4494); the next merge parks it.
-                continue;
-            }
-
             hold.EmittedBatchId = _mergeBatchId;
             _drainBuffer.Add(hold.Record);
             _drainEncodedSegments.Add(new ArraySegment<byte>(hold.Payload));
@@ -448,9 +441,9 @@ internal sealed partial class ReplicationShipperGrain
             changed = true;
         }
 
-        // Retire a poisoned saga in the same state write as the cursor move past
-        // its last parked terminal (#4494).
-        if (RetireSettledPoisonedSagas())
+        // Retire the encode-failure quarantine in the same state write as the
+        // cursor move past it (#4614).
+        if (TryRetireEncodeQuarantine())
         {
             changed = true;
         }
