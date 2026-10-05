@@ -10063,6 +10063,22 @@ public static class LatticeMetrics
             description: "Count of WalCommitLogWriter append dispatches whose per-partition admission wait exceeded WalAppendDispatchTimeout.");
 
     /// <summary>
+    /// Counter of freshly authored local writes a WAL partition refused because
+    /// their HLC stamp was below the partition's clock floor (issue #4586),
+    /// tagged by <c>tree</c>, <c>shard</c> and <c>tenant</c>. A replicated
+    /// tree's partition publishes a floor that trails the wall clock by
+    /// <see cref="LatticeOptions.ReplicationClockFloorLag"/>, so a refusal means
+    /// a stamp was older than that lag when it reached the partition: clock skew
+    /// between silos, a write held up in the pipeline for longer than the lag, or
+    /// a caller-supplied idempotency key used after it expired. A refused
+    /// single-key write is re-stamped and retried; a sustained non-zero rate
+    /// calls for checking silo clock synchronisation and the lag.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFloorRefusals =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append.floor_refusals", unit: "{entry}",
+            description: "Freshly authored local writes a WAL partition refused because their stamp was below the partition's clock floor.");
+
+    /// <summary>
     /// Histogram of wall-clock ms spent waiting for a per-partition
     /// admission slot before the <c>WalCommitLogWriter</c> dispatch was
     /// allowed to link a new <c>PendingAppend</c> stamp. Tagged with
