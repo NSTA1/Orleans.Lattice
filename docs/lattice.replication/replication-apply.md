@@ -278,6 +278,18 @@ excluded, so a cross-tree batch spanning a mix of replicated and
 non-replicated trees stays valid - the barrier completes on the present
 subset rather than waiting forever on a tree that never ships here.
 
+The wait set is fixed when the barrier opens. The first terminal freezes it
+and the coordinator persists it; it is never recomputed from the
+receiver's live configuration (#4692). The applier still computes each
+terminal's wait set from the trees replicated here at that moment, so a
+configuration change between two terminals of one operation can hand a
+later terminal a different set. The coordinator logs that and keeps the
+frozen one. A tree that was not replicated here when the set froze, and
+whose terminal arrives later, joins the set itself (it is arriving, so it
+adds nothing to wait for) after the same cluster-identity check the freeze
+makes; once the barrier has decided, it is finalized with the decided
+verdict.
+
 Once a tree's per-source-shard gate is final, a cross-tree terminal does
 **not** flip that tree's registry directly. Instead the receiver durably
 registers the tree's local txid as delegated to a **receiver coordinator

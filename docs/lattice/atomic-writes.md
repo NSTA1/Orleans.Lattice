@@ -1647,7 +1647,10 @@ terminal is always in the set. A participating tree that is **not**
 replicated on this receiver is simply excluded, so a cross-tree batch
 spanning a mix of replicated and non-replicated trees completes its
 barrier on the present subset rather than blocking forever on a tree that
-will never arrive. The receiver thus preserves cross-tree atomic
+will never arrive. The set is fixed when the first terminal freezes it: a
+later terminal computed under a changed replication configuration does not
+change it, and a tree whose terminal arrives after it became replicated
+joins it (issue #4692). The receiver thus preserves cross-tree atomic
 visibility across exactly the trees it hosts, whatever subset of the
 batch that is.
 
