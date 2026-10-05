@@ -240,7 +240,8 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task Unpoisoned_saga_beside_a_poisoned_one_still_commits_on_the_peer()
     {
-        // Only the saga whose prepare was dead-lettered is withheld.
+        // Only the saga whose prepare was dead-lettered is withheld for good; the
+        // healthy saga ships once the peer has re-seeded.
         var (dlq, _) = RecordingDeadLetters();
         var (grain, _, feeds, stream) = CreateOrderingShipper(
             OrderingOptions(partitions: 1, batchSize: 1),
@@ -253,6 +254,12 @@ public partial class ReplicationShipperGrainTests
         feeds[0].Append(CommitEntry(poisoned, shardIndex: 0, shardCount: 1, ticks: 3));
         feeds[0].Append(CommitEntry(healthy, shardIndex: 0, shardCount: 1, ticks: 4));
 
+        await PumpTicksAsync(grain, 4);
+
+        // The poison asks the peer to re-seed (#4620); saga records are withheld
+        // until the peer echoes a bootstrap after the marker, then re-ship.
+        stream.EchoedBootstrapEpoch = () => long.MaxValue;
+        feeds[0].Append(MakeEntry("after-reseed", ticks: 5));
         await PumpTicksAsync(grain, 4);
 
         AssertSagaNeverCommittedOnThePeer(stream, poisoned);

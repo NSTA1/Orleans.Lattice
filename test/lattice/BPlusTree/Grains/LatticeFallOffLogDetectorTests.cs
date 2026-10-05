@@ -207,12 +207,8 @@ public sealed class LatticeFallOffLogDetectorTests
     [Test]
     public async Task ClassifyAsync_accepts_zero_checkpoint_without_triggering_WAL_trim()
     {
-        // The pre-existing default-0 path must remain a tail replay:
-        // a leaf whose in-memory state already covers offset 0 (i.e.
-        // the legacy semantics for materialiser-not-yet-engaged
-        // grains) is the gate that protects against the off-by-one
-        // the rebuild path hit. checkpoint > 0 is the only state
-        // where the WAL-trim trigger should fire.
+        // A checkpoint of 0 over an untrimmed WAL is a tail replay: offset
+        // 1, the first one still needed, survives.
         var (detector, _) = CreateDetector(head: 0, tail: 0);
         var options = await BuildOptionsAsync();
 
@@ -226,6 +222,29 @@ public sealed class LatticeFallOffLogDetectorTests
         Assert.That(decision, Is.EqualTo(FallOffLogDecision.TailReplay));
     }
 
+    /// <summary>
+    /// Issue #4433 (review finding F17): a durably recorded checkpoint of 0 still
+    /// needs offset 1, so a WAL trimmed past it has lost data. The leaf resolves an
+    /// unassigned scalar 0 to -1 before it calls the detector (#2703).
+    /// </summary>
+    [Test]
+    public async Task ClassifyAsync_with_zero_checkpoint_and_offset_one_trimmed_triggers_WAL_trim()
+    {
+        var (detector, _) = CreateDetector(head: 100, tail: 2);
+        var options = await BuildOptionsAsync(new LatticeOptions
+        {
+            ProjectionRebuildPolicy = ProjectionRebuildPolicy.SnapshotThenWal,
+        });
+
+        var decision = await detector.ClassifyAsync(
+            TreeId, ShardIndex,
+            checkpointOffset: 0,
+            checkpointAge: TimeSpan.Zero,
+            options,
+            CancellationToken.None);
+
+        Assert.That(decision, Is.EqualTo(FallOffLogDecision.SnapshotThenWal));
+    }
     [Test]
     public async Task ClassifyAsync_with_positive_checkpoint_below_tail_triggers_WAL_trim()
     {
