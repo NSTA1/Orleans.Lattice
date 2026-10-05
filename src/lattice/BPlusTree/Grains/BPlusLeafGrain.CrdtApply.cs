@@ -81,6 +81,87 @@ internal sealed partial class BPlusLeafGrain
             ?? FallbackCrdtShapeRegistry;
 
     /// <summary>
+    /// Joins <paramref name="incomingState"/> - a full CRDT state, possibly
+    /// version-enveloped - into this leaf's stored row for <paramref name="key"/>
+    /// under <paramref name="mode"/>, returning the raw (unenveloped) joined state
+    /// bytes, as the terminal drain fold returns its post-fold state. An absent or
+    /// tombstoned row joins as the empty state. The join is commutative,
+    /// associative and idempotent, so two copies of a key that each took
+    /// contributions the other did not hold converge on their union whatever order
+    /// or stamps they meet in (issues #4611, #4613). The caller stamps and installs
+    /// the result.
+    /// </summary>
+    private byte[] JoinCrdtStateIntoRow(string key, LatticeMergeMode mode, byte[] incomingState)
+    {
+        var treeId = RequireBoundTreeId(key, mode, "the CRDT state join");
+        var shape = ResolveCrdtShapeRegistry().TryGet(treeId, mode)
+            ?? throw new LatticeCrdtShapeNotRegisteredException(
+                "No CrdtShape is registered for tree '"
+                + treeId
+                + "' at mode '"
+                + mode
+                + "'. A CRDT row cannot be joined without a shape descriptor; register the OR-Map pair "
+                + "via ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) for OR-Map trees "
+                + "(closed-shape modes resolve through the global fallback).",
+                treeId);
+
+        var joined = Cache.TryGetRow(key, out var existing)
+            && !existing.IsTombstone
+            && existing.Value is { Length: > 0 } existingBytes
+            ? shape.DeserializeState(StripStateForFold(existingBytes))
+            : shape.CreateEmpty();
+        shape.MergeStates(joined, shape.DeserializeState(StripStateForFold(incomingState)));
+        return shape.SerializeState(joined);
+    }
+
+    /// <summary>
+    /// Joins a CRDT row a cross-shard migration imports into the row this leaf
+    /// already holds for <paramref name="key"/> (issue #4613), or returns
+    /// <see langword="false"/> when the key is not a live CRDT key on both sides,
+    /// so the caller keeps its last-writer-wins handling. A split's destination
+    /// takes the saga terminal's fold, a backstop or a direct apply at its own
+    /// stamp, while the source keeps taking writes the destination does not
+    /// mirror; the import that follows must keep both, which only a join does.
+    /// <para>
+    /// The key's mode is the one recorded when this leaf last folded or applied a
+    /// CRDT write to it, else the tree's declared mode. The joined row strictly
+    /// dominates both rows' stamps, so the last-writer-wins store installs it; it
+    /// keeps the stored row's migration flag, origin and vector clock, and the
+    /// later of the two expiries, as the CRDT apply path's expiry join does.
+    /// </para>
+    /// </summary>
+    private bool TryJoinMigratedCrdtRow(
+        string key,
+        LwwValue<byte[]> existing,
+        LwwValue<byte[]> incoming,
+        out LwwValue<byte[]> joined,
+        out LatticeMergeMode mode)
+    {
+        joined = default;
+        mode = LatticeMergeMode.LwwRegister;
+        if (existing.IsTombstone || incoming.IsTombstone || incoming.Value is not { Length: > 0 } incomingBytes)
+            return false;
+
+        mode = Cache.GetMergeMode(key) is { } recorded && recorded != LatticeMergeMode.LwwRegister
+            ? recorded
+            : ResolveMergeMode();
+        if (mode == LatticeMergeMode.LwwRegister)
+            return false;
+
+        var floor = state.State.Clock;
+        if (existing.Timestamp > floor) floor = existing.Timestamp;
+        if (incoming.Timestamp > floor) floor = incoming.Timestamp;
+        joined = LwwValue<byte[]>.Create(JoinCrdtStateIntoRow(key, mode, incomingBytes), HybridLogicalClock.Tick(floor)) with
+        {
+            IsMigrated = existing.IsMigrated,
+            ExpiresAtTicks = Math.Max(existing.ExpiresAtTicks, incoming.ExpiresAtTicks),
+            OriginClusterId = existing.OriginClusterId,
+            VectorClock = existing.VectorClock,
+        };
+        return true;
+    }
+
+    /// <summary>
     /// Resolves the tree id this leaf activation is bound to for a CRDT shape
     /// lookup, faulting with the typed
     /// <see cref="LatticeCrdtShapeNotRegisteredException"/> when the activation

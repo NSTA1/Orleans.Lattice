@@ -536,12 +536,38 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        // Non-prepared path: read the raw LwwValue (not the filtered VersionedValue)
-        // so the entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
-        // would drop TTL metadata, leaving the target shard with a non-expiring
-        // copy after the split commits. Decided by node TYPE so a corrupt
-        // RootIsLeaf flag over an internal root (issue 899) descends instead of
-        // blind-casting the internal root to IBPlusLeafGrain.
+        await ForwardCommittedEntryToSplitTargetAsync(target, key);
+    }
+
+    /// <summary>
+    /// After a successful non-atomic CRDT delta apply, forwards the key's
+    /// post-fold row to the split target when a split is moving the key's slot
+    /// (issue #4613), as <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>
+    /// does for a plain write. Without it a CRDT write the source takes in the
+    /// split window reaches the destination only through the final drain, after
+    /// the destination may have folded a saga's contribution of its own. The
+    /// destination joins the forwarded state into its row, so the forward and
+    /// the drain both converge on every contribution either copy took.
+    /// </summary>
+    private async Task ForwardLocalCrdtWriteToShadowIfNeededAsync(string key)
+    {
+        var target = TryResolveSplitShadowTarget(key);
+        if (target is null) return;
+        await ForwardCommittedEntryToSplitTargetAsync(target, key);
+    }
+
+    /// <summary>
+    /// Forwards the key's committed row to the split target as a cross-shard
+    /// migration import. Reads the raw <see cref="LwwValue{T}"/> (not the
+    /// filtered VersionedValue) so the entry's ExpiresAtTicks is forwarded
+    /// verbatim; the filtered path would drop TTL metadata, leaving the target
+    /// shard with a non-expiring copy after the split commits. Decided by node
+    /// TYPE so a corrupt RootIsLeaf flag over an internal root (issue 899)
+    /// descends instead of blind-casting the internal root to IBPlusLeafGrain.
+    /// A deleted or missing key is left to the cleanup phase.
+    /// </summary>
+    private async Task ForwardCommittedEntryToSplitTargetAsync(IShardRootGrain target, string key)
+    {
         var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : await TraverseToLeafAsync(key);

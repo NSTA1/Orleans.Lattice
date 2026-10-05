@@ -1082,6 +1082,9 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
+                // Issue #4613: mirror the post-fold row to the split target, as
+                // SetAsync does for a plain write.
+                await ForwardLocalCrdtWriteToShadowIfNeededAsync(key);
                 return result.Version;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1367,6 +1370,7 @@ internal sealed partial class ShardRootGrain(
                 flatSplit = await PromoteRootAsync(flatSplit);
             }
 
+            await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
             return;
         }
 
@@ -1436,6 +1440,22 @@ internal sealed partial class ShardRootGrain(
                 split = await PromoteRootAsync(split);
             }
         }
+
+        await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
+    }
+
+    /// <summary>
+    /// The batched form of the single-key CRDT apply's split forward (issue
+    /// #4613): each key whose slot a split is moving has its post-fold row
+    /// mirrored to the split target. A no-op outside a split window.
+    /// </summary>
+    private async Task ForwardCrdtBatchToShadowIfNeededAsync(List<KeyValuePair<string, byte[]>> deltas)
+    {
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var (key, _) in deltas)
+            await ForwardLocalCrdtWriteToShadowIfNeededAsync(key);
     }
 
     /// <summary>
