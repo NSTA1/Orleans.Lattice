@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: evicting an identity from the applied-identity record also forgets the merged write
 PERTURBS: Forget
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ h \in ids /\ ids' = ids \ {h}

@@ -6,7 +6,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: the floor is published with an offset read before the last append, so S passes a write below the floor
 PERTURBS: AdvanceFloor
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ pub' = [pub EXCEPT ![p] = <<floor[p] + 1, Len(alog[p])>>]

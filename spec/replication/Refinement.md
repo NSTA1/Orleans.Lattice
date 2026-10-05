@@ -112,7 +112,7 @@ remediation pull request.
 | Issue | Former production shape | Fixed by | Reproducing mutation |
 |-------|-------------------------|----------|----------------------|
 | #4463 | The bootstrap pin installed a drop floor at the frontier, losing writes the snapshot did not hold. | #4476 | `BootstrapHandoffLosesNothingPinnedFloor` |
-| #4464 | The causal buffer stranded or lost parked entries: the lost wakeup between check and park, the in-memory buffer, the pin replacing the vector, and the pin not draining. | #4483 | `EventualConvergenceParkLostWakeup`, `EventualConvergenceVolatileCausalBuffer`, `EventualConvergencePinSkipsDrain` |
+| #4464 | The causal buffer stranded or lost parked entries: the lost wakeup between check and park, the in-memory buffer, the pin replacing the vector, and the pin not draining. | #4483 | `EventualConvergenceParkLostWakeup`, `EventualConvergenceVolatileCausalBuffer`, `EventualConvergencePinSkipsDrain` |
 | #4586 | A dependency was met once the origin's high-water mark reached its HLC. The mark is the maximum HLC applied and an origin's HLCs arrive out of order, so a dependent was released before its dependency. | #4640, with the low watermark of #4650, #4663, #4658 and #4674 | `CausalOrderMaxHlcFrontier` |
 | #4465 | A duplicate of an entry still being parked was acknowledged, so the entry could be lost. | #4477 | `CursorNeverSkipsUnshippedDuplicateOfParkingAcked` |
 | #4504 | A snapshot bootstrap shipped no deletes, so a receiver re-bootstrapped in place after the source trimmed its log past a delete kept the old value. | #4544 | `EventualConvergenceSnapshotDropsDeletes` |

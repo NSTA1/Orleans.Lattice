@@ -5,7 +5,7 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: a full dead-letter queue evicts its oldest entry, which is then never replayed
 PERTURBS: ReceiveA
-BOUNDS: Parts = {1}, MaxDeadLetters = 2
+BOUNDS: NParts = 1, MaxDeadLetters = 2
 
 --- FIND
              /\ Cardinality(dlq) < DlqCap

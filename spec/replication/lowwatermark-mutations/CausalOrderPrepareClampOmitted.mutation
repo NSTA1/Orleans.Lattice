@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: S passes an acked prepare whose terminal is not acked, so a dependent is visible before the saga write
 PERTURBS: Heartbeat
-BOUNDS: Parts = {1}, Sagas = TRUE
+BOUNDS: NParts = 1, Sagas = TRUE
 
 --- FIND
     /\ SOf > srcv

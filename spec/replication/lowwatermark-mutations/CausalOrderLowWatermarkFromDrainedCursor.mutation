@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: S_p advances when the drained cursor, not the acked one, passes O, so a lost batch is counted as delivered
 PERTURBS: Pass
-BOUNDS: Parts = {1}, MaxLoss = 1
+BOUNDS: NParts = 1, MaxLoss = 1
 
 --- FIND
 pub[p][2] <= aack[p]

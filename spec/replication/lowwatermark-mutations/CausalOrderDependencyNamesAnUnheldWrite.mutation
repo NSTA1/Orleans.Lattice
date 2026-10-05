@@ -6,7 +6,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: a dependent names a write its author never held, which no watermark or identity can vouch for
 PERTURBS: AuthorB
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ Len(bdeps) < BWrites /\ t \in aCom

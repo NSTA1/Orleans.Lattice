@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: a transport loss is acknowledged as delivered, so S passes the lost entries
 PERTURBS: LoseA
-BOUNDS: Parts = {1}, MaxLoss = 1
+BOUNDS: NParts = 1, MaxLoss = 1
 
 --- FIND
     /\ adr' = [adr EXCEPT ![p] = aack[p]]

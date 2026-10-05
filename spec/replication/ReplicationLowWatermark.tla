@@ -27,7 +27,8 @@
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-Parts == {1, 2}
+NParts == 2
+Parts == 1..NParts
 MaxHlc == 2
 Hlcs == 1..MaxHlc
 Top == MaxHlc + 1
@@ -285,11 +286,21 @@ Stutter == Quiesced /\ UNCHANGED vars
 Next ==
     \/ \E p \in Parts, h \in Hlcs, s \in BOOLEAN : AuthorA(p, h, s)
     \/ \E h \in Hlcs, p \in Parts : CommitA(h, p)
-    \/ (\E p \in Parts : Upgrade(p)) \/ EnableFloor \/ Heartbeat \/ Bootstrap
-    \/ \E p \in Parts : AdvanceFloor(p) \/ Pass(p) \/ ShipA(p) \/ LoseA(p) \/ ReceiveA(p)
-    \/ \E h \in Hlcs : Replay(h) \/ Discard(h) \/ Forget(h)
+    \/ \E p \in Parts : Upgrade(p)
+    \/ EnableFloor
+    \/ Heartbeat
+    \/ Bootstrap
+    \/ \E p \in Parts : AdvanceFloor(p)
+    \/ \E p \in Parts : Pass(p)
+    \/ \E p \in Parts : ShipA(p)
+    \/ \E p \in Parts : LoseA(p)
+    \/ \E p \in Parts : ReceiveA(p)
+    \/ \E h \in Hlcs : Replay(h)
+    \/ \E h \in Hlcs : Discard(h)
+    \/ \E h \in Hlcs : Forget(h)
     \/ \E t \in Hlcs : AuthorB(t)
-    \/ ReceiveB \/ Drain
+    \/ ReceiveB
+    \/ Drain
     \/ Stutter
 
 (* Fairness: the gate opens once a is upgraded; floors follow the clock, *)

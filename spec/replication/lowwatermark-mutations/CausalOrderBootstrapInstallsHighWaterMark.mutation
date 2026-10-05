@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: the bootstrap installs a max-HLC frontier, which is not downward-closed
 PERTURBS: Bootstrap
-BOUNDS: Parts = {1}, Bootstraps = TRUE
+BOUNDS: NParts = 1, Bootstraps = TRUE
 
 --- FIND
     /\ srcv' = Max({srcv, SelfS})

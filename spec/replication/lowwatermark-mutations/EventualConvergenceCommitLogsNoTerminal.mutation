@@ -6,7 +6,7 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: a committed saga ships no terminal, so its write never becomes visible at the receiver
 PERTURBS: CommitA
-BOUNDS: Parts = {1}, Sagas = TRUE
+BOUNDS: NParts = 1, Sagas = TRUE
 
 --- FIND
     /\ alog' = [alog EXCEPT ![p] = Append(@, [k |-> "term", h |-> h])]

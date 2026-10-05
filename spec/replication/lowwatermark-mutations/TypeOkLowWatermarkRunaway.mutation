@@ -4,7 +4,7 @@ TARGET: TypeOK
 CLASS: Invariant
 SUMMARY: the recorded watermark leaves its domain
 PERTURBS: Heartbeat
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ srcv' = SOf

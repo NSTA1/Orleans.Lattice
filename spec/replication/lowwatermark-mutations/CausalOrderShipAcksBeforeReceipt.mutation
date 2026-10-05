@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: the shipper acknowledges an entry as it sends it, so S passes a write the receiver never ran
 PERTURBS: ShipA
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ adr' = [adr EXCEPT ![p] = @ + 1]

@@ -5,7 +5,7 @@ TARGET: CausalOrder
 CLASS: Invariant
 SUMMARY: a replay removes the dead-letter without applying it, so it is neither held nor applied
 PERTURBS: Replay
-BOUNDS: Parts = {1}
+BOUNDS: NParts = 1
 
 --- FIND
     /\ rApplied' = rApplied \cup {h} /\ ids' = ids \cup {h}
