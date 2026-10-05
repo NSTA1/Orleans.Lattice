@@ -155,7 +155,9 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeReplicationDeadLetters>(sp =>
             new LatticeReplicationDeadLetters(
                 sp.GetRequiredService<IGrainFactory>(),
-                sp.GetRequiredService<ReplicationApplier>()));
+                sp.GetRequiredService<ReplicationApplier>(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+                sp.GetRequiredService<ILogger<LatticeReplicationDeadLetters>>()));
 
         // The core AddLattice registers DefaultLatticeMergeModeResolver (returns
         // null for every tree). Swap that out for the per-tree resolver so

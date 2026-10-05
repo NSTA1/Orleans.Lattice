@@ -28,7 +28,70 @@ public partial class ShardRootGrainShadowForwardTests
         public required IShardRootGrain ShadowTarget { get; init; }
         public required FakePersistentState<ShardRootState> State { get; init; }
         public required IGrainFactory Factory { get; init; }
+
+        /// <summary>
+        /// The rows the substitute leaf stored, keyed by key, which its
+        /// <c>GetRawEntryAsync</c> returns: the resize mirror ships a plain write
+        /// as the row the local apply stored, at its own stamp (issue #4522).
+        /// </summary>
+        public required Dictionary<string, LwwEntry> Rows { get; init; }
     }
+
+    /// <summary>
+    /// Records the rows a substitute leaf stores for each write it takes, at a
+    /// strictly increasing stamp, and serves them from <c>GetRawEntryAsync</c>.
+    /// </summary>
+    private static Dictionary<string, LwwEntry> RecordLeafRows(IBPlusLeafGrain leaf, bool getOrSetWrites = true, bool setIfVersionWrites = true)
+    {
+        var rows = new Dictionary<string, LwwEntry>(StringComparer.Ordinal);
+        var counter = 0;
+        void Store(string key, byte[]? value, bool tombstone, long expiresAtTicks = 0)
+        {
+            lock (rows)
+            {
+                rows[key] = new LwwEntry
+                {
+                    Key = key,
+                    Value = value,
+                    Timestamp = new HybridLogicalClock { WallClockTicks = 1_000, Counter = ++counter },
+                    IsTombstone = tombstone,
+                    ExpiresAtTicks = expiresAtTicks,
+                };
+            }
+        }
+
+        leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())).Do(ci => Store((string)ci[0], (byte[])ci[1], false));
+        leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<long>())).Do(ci => Store((string)ci[0], (byte[])ci[1], false, (long)ci[2]));
+        leaf.When(l => l.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())).Do(ci =>
+        {
+            foreach (var e in (List<KeyValuePair<string, byte[]>>)ci[0]) Store(e.Key, e.Value, false);
+        });
+        leaf.When(l => l.GetOrSetAsync(Arg.Any<string>(), Arg.Any<byte[]>())).Do(ci =>
+        {
+            if (getOrSetWrites) Store((string)ci[0], (byte[])ci[1], false);
+        });
+        leaf.When(l => l.SetIfVersionAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>())).Do(ci =>
+        {
+            if (setIfVersionWrites) Store((string)ci[0], (byte[])ci[1], false);
+        });
+        leaf.When(l => l.DeleteAsync(Arg.Any<string>())).Do(ci => Store((string)ci[0], null, true));
+        leaf.When(l => l.DeleteTrackedAsync(Arg.Any<string>())).Do(ci => Store((string)ci[0], null, true));
+        leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(ci =>
+        {
+            lock (rows) return Task.FromResult<LwwEntry?>(rows.TryGetValue((string)ci[0], out var row) ? row : null);
+        });
+        return rows;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="rows"/> - a resize mirror's merge batch - carries
+    /// <paramref name="key"/> at the row the local apply stored.
+    /// </summary>
+    private static bool MirrorsRow(GrainHarness h, Dictionary<string, LwwValue<byte[]>> rows, string key) =>
+        rows.TryGetValue(key, out var mirrored)
+        && h.Rows.TryGetValue(key, out var stored)
+        && mirrored.Timestamp == stored.Timestamp
+        && mirrored.IsTombstone == stored.IsTombstone;
 
     private static GrainHarness CreateHarness(
         FakePersistentState<ShardRootState>? state = null,
@@ -62,7 +125,7 @@ public partial class ShardRootGrainShadowForwardTests
             .Returns(Task.FromResult(new CasResult { Success = setIfVersionSucceeds, Split = null }));
         leaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
-        leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
+        var rows = RecordLeafRows(leaf, getOrSetWrites: !getOrSetReturnsExisting, setIfVersionWrites: setIfVersionSucceeds);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
         var cache = Substitute.For<ILeafCacheGrain>();
@@ -90,6 +153,7 @@ public partial class ShardRootGrainShadowForwardTests
             ShadowTarget = shadowTarget,
             State = state,
             Factory = factory,
+            Rows = rows,
         };
     }
 
@@ -464,8 +528,8 @@ public partial class ShardRootGrainShadowForwardTests
         Assert.That(async () => await h.Grain.GetAsync("k"), Throws.Nothing);
         await h.Grain.SetAsync("k", [1]);
 
-        // And the write was forwarded.
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        // And the write was mirrored.
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     [Test]
@@ -477,7 +541,7 @@ public partial class ShardRootGrainShadowForwardTests
         Assert.That(async () => await h.Grain.GetAsync("k"), Throws.Nothing);
         await h.Grain.SetAsync("k", [1]);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     // ============================================================================
@@ -501,7 +565,10 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.SetAsync("k", [1, 2, 3]);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Is<byte[]>(b => b.SequenceEqual(new byte[] { 1, 2, 3 })));
+        // Issue #4522: mirrored as the row the local apply stored, at its stamp.
+        await h.ShadowTarget.Received().MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k") && d["k"].Value!.SequenceEqual(new byte[] { 1, 2, 3 })), false);
+        await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
     }
 
     [Test]
@@ -512,7 +579,7 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.SetAsync("k", [9]);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     [Test]
@@ -524,7 +591,8 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.SetAsync("k", [1], expiresAt);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>(), expiresAt);
+        await h.ShadowTarget.Received().MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k") && d["k"].ExpiresAtTicks == expiresAt), false);
     }
 
     [Test]
@@ -535,7 +603,9 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.DeleteAsync("k");
 
-        await h.ShadowTarget.Received().DeleteAsync("k");
+        // The tombstone row, at the local delete's stamp (issue #4522).
+        await h.ShadowTarget.Received().MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k") && d["k"].IsTombstone), false);
     }
 
     [Test]
@@ -557,20 +627,25 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.GetOrSetAsync("k", [1]);
 
-        await h.ShadowTarget.Received().GetOrSetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
+        await h.ShadowTarget.DidNotReceive().GetOrSetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
     }
 
     [Test]
-    public async Task GetOrSetAsync_forwards_during_draining_when_key_is_already_live()
+    public async Task GetOrSetAsync_does_not_mirror_when_key_is_already_live()
     {
-        // GetOrSet forwards semantic intent even when no local write happens,
-        // so the destination converges on the same "existing-or-set" outcome.
+        // Issue #4522: no write happened here, so there is nothing to mirror.
+        // Re-running GetOrSet on the destination could write the caller's value
+        // there - on the destination's own clock - while this copy kept its
+        // existing one; the existing row reaches the destination through the
+        // drain or the mirror of the write that stored it.
         var h = CreateHarness(getOrSetReturnsExisting: true);
         SetShadowPhase(h.State, ShadowForwardPhase.Draining);
 
         await h.Grain.GetOrSetAsync("k", [1]);
 
-        await h.ShadowTarget.Received().GetOrSetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().GetOrSetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
     }
 
     [Test]
@@ -581,7 +656,7 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.SetIfVersionAsync("k", [1], HybridLogicalClock.Zero);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     [Test]
@@ -594,6 +669,7 @@ public partial class ShardRootGrainShadowForwardTests
 
         Assert.That(result, Is.False);
         await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
     }
 
     [Test]
@@ -642,10 +718,11 @@ public partial class ShardRootGrainShadowForwardTests
 
         await h.Grain.SetManyAsync(entries);
 
-        // Batched-forward contract: exactly one t.SetManyAsync call for the whole
-        // batch, not one per entry. Per-entry t.SetAsync calls must not occur.
-        await h.ShadowTarget.Received(1).SetManyAsync(
-            Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 3));
+        // Batched-forward contract: exactly one merge for the whole batch, of
+        // the rows the local apply stored (issue #4522), not one per entry.
+        await h.ShadowTarget.Received(1).MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.Count == 3 && MirrorsRow(h, d, "k1") && MirrorsRow(h, d, "k2") && MirrorsRow(h, d, "k3")), false);
+        await h.ShadowTarget.DidNotReceive().SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>());
         await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
     }
 

@@ -86,6 +86,7 @@ internal static class TypeAliases
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
+    internal const string DiscardedSagaPrepare = "ol.dsp";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
     internal const string LeafSnapshotSegment = "ol.lss";
@@ -821,4 +822,3 @@ internal static class TypeAliases
     /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
     internal const string WalOffsetConsumerRegistryState = "ol.wcs";
 }
-

@@ -93,6 +93,16 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "zero; a value of one parks an entry on the first failure.");
         }
 
+        if (options.SagaDeferralTimeout <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.SagaDeferralTimeout)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "The receiver uses this wall-clock bound to decide when a repeatedly deferred saga prepare "
+                + "should poison its saga and unblock the origin link; a non-positive bound would poison "
+                + "immediately or have no meaningful timeout.");
+        }
+
         if (options.DeadLetterQueueCapacity < 1)
         {
             return ValidateOptionsResult.Fail(
@@ -590,4 +600,3 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
         return ValidateOptionsResult.Success;
     }
 }
-
