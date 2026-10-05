@@ -51,6 +51,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();
@@ -207,6 +209,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
@@ -224,6 +228,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
@@ -241,6 +247,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
@@ -258,6 +266,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
@@ -276,6 +286,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();

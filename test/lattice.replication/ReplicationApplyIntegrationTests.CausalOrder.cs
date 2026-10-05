@@ -60,6 +60,37 @@ public partial class ReplicationApplyIntegrationTests
     }
 
     [Test]
+    public async Task A_delivery_through_a_binding_that_carries_no_source_frontier_vouches_for_nothing()
+    {
+        // #4586 part 2b: only the gRPC receive path reads the source frontier.
+        // An in-process binding delivers through the applier alone, so the
+        // tree frontier records no watermark, the origin's aggregate stays at
+        // zero, and a dependency whose identity the tree no longer remembers
+        // waits instead of being met by a watermark nobody shipped.
+        const string tree = "ri-causal-no-frontier";
+        const string origin = "site-h";
+        var applier = CreateSiteBApplier();
+        var w = RecentHlc(TimeSpan.TicksPerSecond * 2);
+        Assert.That((await applier.ApplyAsync(LwwSet(tree, "w", new byte[] { 1 }, w) with { OriginClusterId = origin })).Applied, Is.True);
+        await _fixture.SiteB.Client.GetGrain<IReplicationHighWaterMarkGrain>(tree).ResetAppliedIdentitiesAsync();
+
+        var dependent = LwwSet(tree, "b", new byte[] { 2 }, RecentHlc(0)) with
+        {
+            VectorClock = new VersionVector { Entries = { [origin] = w } },
+        };
+        var result = await applier.ApplyAsync(dependent);
+        var frontier = await _fixture.SiteB.Client.GetGrain<IReplicationTreeFrontierGrain>(tree).GetAsync();
+        var aggregate = await _fixture.SiteB.Client.GetGrain<IReplicationOriginFrontierGrain>(origin).GetLowWatermarkAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.False, "nothing vouched for w once its identity was forgotten");
+            Assert.That(frontier.LowWatermarks, Is.Empty);
+            Assert.That(aggregate, Is.EqualTo(HybridLogicalClock.Zero));
+        });
+    }
+
+    [Test]
     public async Task A_batched_entry_does_not_apply_before_its_dependency_when_a_later_write_of_the_origin_arrived_first()
     {
         const string tree = "ri-causal-order-batch";
@@ -105,7 +136,7 @@ public partial class ReplicationApplyIntegrationTests
         // The origin's low watermark passes a1: every write of the origin below
         // it was acknowledged here, and none is held.
         await _fixture.SiteB.Client.GetGrain<IReplicationOriginFrontierGrain>(origin)
-            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), CancellationToken.None);
+            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), generation: 0, CancellationToken.None);
         await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(dependentTree).DrainAsync();
 
         Assert.That((await lattice.GetWithVersionAsync("b")).Value, Is.EqualTo(new byte[] { 2 }));
@@ -131,7 +162,7 @@ public partial class ReplicationApplyIntegrationTests
 
         // The low watermark passes a1, but a1 is held, not applied.
         await _fixture.SiteB.Client.GetGrain<IReplicationOriginFrontierGrain>(origin)
-            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), CancellationToken.None);
+            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), generation: 0, CancellationToken.None);
         await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(dependentTree).DrainAsync();
         Assert.That((await lattice.GetWithVersionAsync("b")).Value, Is.Null, "acknowledged is not applied while a1 is parked");
 

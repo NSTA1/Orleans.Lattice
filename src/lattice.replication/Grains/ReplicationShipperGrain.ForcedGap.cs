@@ -104,7 +104,67 @@ internal sealed partial class ReplicationShipperGrain
         state.State.ReseedRetainFrom = retain;
         state.State.ReseedRequiredEpoch = epoch;
         state.State.ReseedRequiredSinceUtcTicks = _cursorFlushClock.GetUtcNow().UtcTicks;
+
+        // Marked while a silo predates the purge hold: an export it opens
+        // cannot settle the re-seed (#4664).
+        if (!AllSilosHonourPurgeHolds())
+        {
+            state.State.ReseedSpansPreHoldSilo = true;
+        }
+
         return epoch;
+    }
+
+    /// <summary>
+    /// The replay that follows a rewind is exact only if every registry
+    /// honoured the replay's purge hold for the whole window from the re-seed
+    /// marker to the snapshot of the export that settles it (#4533, #4664). A
+    /// registry that predates the hold may purge a decision the export's saga
+    /// still needs; the replay filter would then withhold the saga whole and
+    /// strand the prepared rows the peer restaged. While the peer is off the
+    /// log, a tick that sees such a silo records it durably and defers; the
+    /// first tick that sees every silo honour the hold raises the marker to
+    /// the tree's current export epoch, so only an export opened after that
+    /// point settles the re-seed. Returns <see langword="true"/> when this
+    /// tick must not consider an echo.
+    /// </summary>
+    private async Task<bool> GuardPreHoldWindowAsync()
+    {
+        if (!ReseedRequired)
+        {
+            return false;
+        }
+
+        if (!AllSilosHonourPurgeHolds())
+        {
+            LogPurgeHoldUnsupported();
+            if (!state.State.ReseedSpansPreHoldSilo)
+            {
+                state.State.ReseedSpansPreHoldSilo = true;
+                await state.WriteStateAsync();
+            }
+
+            return true;
+        }
+
+        if (!state.State.ReseedSpansPreHoldSilo)
+        {
+            return false;
+        }
+
+        var epoch = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName).GetAsync();
+        if (state.State.ReseedRequiredEpoch is { } marker && epoch > marker)
+        {
+            state.State.ReseedRequiredEpoch = epoch;
+        }
+
+        state.State.ReseedSpansPreHoldSilo = false;
+        await state.WriteStateAsync();
+        Logger.LogWarning(
+            "{Context}: every silo now honours the decision-purge hold. An export drained before then may lack a decision "
+            + "an older registry purged, so the peer must be re-seeded from a snapshot export after epoch {Epoch}.",
+            LogContext, state.State.ReseedRequiredEpoch);
+        return true;
     }
 
     /// <summary>Each partition's lowest retained sequence (its next sequence when empty).</summary>
@@ -146,6 +206,14 @@ internal sealed partial class ReplicationShipperGrain
     {
         var echo = _reseedEchoThisTick;
         _reseedEchoThisTick = null;
+
+        // Before any echo is considered: an export drained while a silo
+        // predated the purge hold never settles the re-seed (#4664).
+        if (await GuardPreHoldWindowAsync())
+        {
+            return;
+        }
+
         if (echo is not { } echoedThisTick)
         {
             return;
@@ -161,15 +229,6 @@ internal sealed partial class ReplicationShipperGrain
             || echoed <= marker
             || state.State.DetachedFromLog)
         {
-            return;
-        }
-
-        // The replay that follows the rewind is exact only while every
-        // registry honours the replay's purge hold (#4533): stay off the log,
-        // withholding saga records, until no silo predates it.
-        if (!AllSilosHonourPurgeHolds())
-        {
-            LogPurgeHoldUnsupported();
             return;
         }
 
@@ -217,10 +276,13 @@ internal sealed partial class ReplicationShipperGrain
         Array.Clear(_ackedNext);
         state.State.ReseedRequiredEpoch = null;
         state.State.ReseedRetainFrom = null;
+        state.State.ReseedSpansPreHoldSilo = false;
         // Re-shipping from the lowest retained entry is a replay whose
         // snapshot carries any saga it withholds (#4533).
         await BeginReplayFilterAsync(_partitionCount, carried: true);
         state.State.ReseedRequiredSinceUtcTicks = 0;
+        // The re-seed settled what the applied low watermark was clamped on (#4586).
+        await OnReseedRewoundForFrontierAsync(echoed);
         await state.WriteStateAsync();
         ReportReseedState();
 

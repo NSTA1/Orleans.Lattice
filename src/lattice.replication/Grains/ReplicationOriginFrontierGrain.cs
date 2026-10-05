@@ -17,7 +17,22 @@ internal sealed class ReplicationOriginFrontierGrain(
     /// <summary>Prefix of a dead-letter queue source.</summary>
     internal const string DeadLetterSourcePrefix = "d|";
 
-    private HybridLogicalClock _lowWatermark;
+    /// <summary>
+    /// Prefix of a bootstrap export source: writes the export's source cluster
+    /// held without applying when it opened the export, so the tree that
+    /// installed the export lacks them until it applies them itself.
+    /// </summary>
+    internal const string ExportSourcePrefix = "x|";
+
+    /// <summary>
+    /// The longest a raised aggregate stays unpersisted while calls keep
+    /// arriving. A lagging stored aggregate only delays dependents after a
+    /// restart, so it is not written on every shipment.
+    /// </summary>
+    internal static readonly TimeSpan AggregatePersistInterval = TimeSpan.FromSeconds(5);
+
+    private bool _aggregateDirty;
+    private long _aggregatePersistedAt = Environment.TickCount64;
 
     /// <inheritdoc />
     public IGrainContext GrainContext => context;
@@ -30,25 +45,158 @@ internal sealed class ReplicationOriginFrontierGrain(
     /// <summary>The source name of <paramref name="treeId"/>'s dead-letter queue.</summary>
     internal static string DeadLetterSource(string treeId) => DeadLetterSourcePrefix + treeId;
 
+    /// <summary>The source name of the writes <paramref name="treeId"/>'s last installed export lacked.</summary>
+    internal static string ExportSource(string treeId) => ExportSourcePrefix + treeId;
+
     /// <inheritdoc />
-    public Task<bool> RecordLowWatermarkAsync(HybridLogicalClock lowWatermark, CancellationToken cancellationToken)
+    public async Task<bool> RecordLowWatermarkAsync(HybridLogicalClock lowWatermark, long generation, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (lowWatermark <= _lowWatermark)
+        var current = state.State;
+        if (generation < current.AggregateGeneration || generation < current.MinGeneration)
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        _lowWatermark = lowWatermark;
-        return Task.FromResult(true);
+        if (generation == current.AggregateGeneration && lowWatermark <= current.AggregateLowWatermark)
+        {
+            return false;
+        }
+
+        // A newer generation replaces the value, which may lower it: the older
+        // generation's aggregate may count a tree's coverage from before its
+        // lineage changed.
+        current.AggregateLowWatermark = lowWatermark;
+        current.AggregateGeneration = generation;
+        _aggregateDirty = true;
+        if (Environment.TickCount64 - _aggregatePersistedAt >= (long)AggregatePersistInterval.TotalMilliseconds)
+        {
+            await PersistAggregateAsync().ConfigureAwait(true);
+        }
+
+        return true;
     }
 
     /// <inheritdoc />
     public Task<HybridLogicalClock> GetLowWatermarkAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_lowWatermark);
+        return Task.FromResult(EffectiveLowWatermark);
     }
+
+    /// <inheritdoc />
+    public async Task SetTreeCapAsync(string treeId, HybridLogicalClock cap, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var caps = state.State.TreeCaps;
+        var had = caps.TryGetValue(treeId, out var previous);
+        if (had && previous == cap)
+        {
+            return;
+        }
+
+        caps[treeId] = cap;
+        try
+        {
+            await WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            if (had)
+            {
+                caps[treeId] = previous;
+            }
+            else
+            {
+                caps.Remove(treeId);
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task LiftTreeCapAsync(string treeId, long generation, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var current = state.State;
+        if (!current.TreeCaps.TryGetValue(treeId, out var previousCap))
+        {
+            return;
+        }
+
+        var previousMin = current.MinGeneration;
+        var previousValue = current.AggregateLowWatermark;
+        var previousGeneration = current.AggregateGeneration;
+        current.TreeCaps.Remove(treeId);
+        current.MinGeneration = Math.Max(previousMin, generation);
+        if (current.AggregateGeneration < current.MinGeneration)
+        {
+            current.AggregateLowWatermark = HybridLogicalClock.Zero;
+            current.AggregateGeneration = current.MinGeneration;
+        }
+
+        try
+        {
+            await WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            current.TreeCaps[treeId] = previousCap;
+            current.MinGeneration = previousMin;
+            current.AggregateLowWatermark = previousValue;
+            current.AggregateGeneration = previousGeneration;
+            throw;
+        }
+    }
+
+    /// <summary>The recorded aggregate, capped by every tree not yet re-covered.</summary>
+    private HybridLogicalClock EffectiveLowWatermark
+    {
+        get
+        {
+            var effective = state.State.AggregateLowWatermark;
+            foreach (var cap in state.State.TreeCaps.Values)
+            {
+                if (cap < effective)
+                {
+                    effective = cap;
+                }
+            }
+
+            return effective;
+        }
+    }
+
+    /// <summary>Writes the state, which also persists any raised aggregate.</summary>
+    private async Task WriteStateAsync()
+    {
+        await state.WriteStateAsync().ConfigureAwait(true);
+        _aggregateDirty = false;
+        _aggregatePersistedAt = Environment.TickCount64;
+    }
+
+    private async Task PersistAggregateAsync()
+    {
+        try
+        {
+            await WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            // Best effort: the raised aggregate stays live and is written again
+            // on the next interval or at deactivation; a lagging stored value
+            // only delays dependents after a restart.
+        }
+    }
+
+    /// <inheritdoc />
+    public Task OnDeactivateAsync(DeactivationReason reason, CancellationToken token) =>
+        _aggregateDirty ? PersistAggregateAsync() : Task.CompletedTask;
 
     /// <inheritdoc />
     public async Task SetHeldAsync(string source, IReadOnlyCollection<HybridLogicalClock> held, CancellationToken cancellationToken)
@@ -75,7 +223,7 @@ internal sealed class ReplicationOriginFrontierGrain(
 
         try
         {
-            await state.WriteStateAsync().ConfigureAwait(true);
+            await WriteStateAsync().ConfigureAwait(true);
         }
         catch
         {
@@ -114,7 +262,7 @@ internal sealed class ReplicationOriginFrontierGrain(
 
         try
         {
-            await state.WriteStateAsync().ConfigureAwait(true);
+            await WriteStateAsync().ConfigureAwait(true);
         }
         catch
         {
@@ -134,13 +282,14 @@ internal sealed class ReplicationOriginFrontierGrain(
         cancellationToken.ThrowIfCancellationRequested();
 
         var verdicts = new CausalDependencyVerdict[required.Count];
+        var lowWatermark = EffectiveLowWatermark;
         List<(string Source, HybridLogicalClock Identity)>? stale = null;
         for (var i = 0; i < required.Count; i++)
         {
             var t = required[i];
             var lost = state.State.Lost.Contains(t);
             var held = false;
-            if (!lost && t < _lowWatermark)
+            if (!lost && t < lowWatermark)
             {
                 foreach (var (source, identities) in state.State.HeldBySource)
                 {
@@ -159,7 +308,7 @@ internal sealed class ReplicationOriginFrontierGrain(
                 }
             }
 
-            verdicts[i] = CausalFrontierCore.Decide(t, _lowWatermark, held, lost);
+            verdicts[i] = CausalFrontierCore.Decide(t, lowWatermark, held, lost);
         }
 
         if (stale is not null)
@@ -192,6 +341,15 @@ internal sealed class ReplicationOriginFrontierGrain(
                 .IsHoldingAsync(Origin, t, cancellationToken).ConfigureAwait(true);
         }
 
+        if (source.StartsWith(ExportSourcePrefix, StringComparison.Ordinal))
+        {
+            // Held until the tree applies the write itself. An identity the tree
+            // has since forgotten stays held: that only delays the dependent.
+            var tree = source[ExportSourcePrefix.Length..];
+            return !await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(tree)
+                .HasAppliedAsync(Origin, t).ConfigureAwait(true);
+        }
+
         // An unknown source cannot be confirmed either way: keep treating it as held.
         return true;
     }
@@ -218,7 +376,7 @@ internal sealed class ReplicationOriginFrontierGrain(
         {
             try
             {
-                await state.WriteStateAsync().ConfigureAwait(true);
+                await WriteStateAsync().ConfigureAwait(true);
             }
             catch
             {

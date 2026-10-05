@@ -348,8 +348,8 @@ invariants are checked.
   under sustained traffic.
 * Shadow-forwarding on every source shard - the workload's live point
   writes during the drain must be mirrored to the destination with their
-  original HLCs (the forward carries last-writer-wins writes only; typed
-  CRDT deltas and bulk appends are not mirrored).
+  original HLCs (typed CRDT deltas and bulk appends are mirrored as the
+  rows they stored, and a CRDT row is joined on the destination).
 * Alias swap - mid-flight `GetAsync` / `SetAsync` on a stateless-worker
   `LatticeGrain` activation holding a stale alias must transparently
   re-resolve and retry.
@@ -482,7 +482,7 @@ never a partial subset.
 | Invariant | Mechanism under test |
 |---|---|
 | Saga prepares survive a mid-flight shard split | Source shard's shadow-forward pipeline mirrors prepared entries to the destination during the split's drain phase; saga terminal-broadcast retries onto the new owner via `StaleShardRoutingException` |
-| Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every last-writer-wins write (including saga prepares; typed CRDT deltas and bulk appends are not mirrored) to the destination physical tree during the snapshot drain; the alias swap is observed via the stale tree-routing signal and the saga terminal-broadcast retries onto the new owner |
+| Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every write (including saga prepares, typed CRDT deltas and bulk appends) to the destination physical tree during the snapshot drain; the alias swap is observed via the stale tree-routing signal and the saga terminal-broadcast retries onto the new owner |
 | Saga prepares survive a mid-flight online reshard | `TreeReshardGrain` migration loop dispatches per-shard splits; the retroactive prepared-mutation sweep at `BeginShadowWrite` and the terminal-fan-out shadow-forward fallback together mirror prepares and the saga's `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup; the registry's `TxDecisionRetention` tombstone window absorbs duplicate terminals |
 
 ### Workload (per fixture)

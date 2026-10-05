@@ -29,7 +29,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Any other write is forwarded as the rows it left here - value, tombstone and
 /// expiry at this copy's stamp - through a last-writer-wins merge, so R never
 /// re-mints it. The merge advances R's leaf clock past each stamp, so a write R
-/// mints after the swap still sorts above them.
+/// mints after the swap still sorts above them. A typed CRDT delta apply and a
+/// bulk append mirror this way too, and R joins a mirrored CRDT row into a CRDT
+/// row it holds of its own rather than resolving last-writer-wins (issue #4618).
 /// </description></item>
 /// </list>
 /// <para>
@@ -75,14 +77,48 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        var rows = await AppliedRowsAsync(keys);
-        if (rows.Count == 0)
+        await MirrorAppliedRowsAsync(keys);
+    }
+
+    /// <summary>
+    /// Mirrors the rows this shard's leaves now hold for <paramref name="keys"/>
+    /// to the resize destination, at this copy's own stamps. A no-op when no
+    /// resize mirror is active. The write paths that carry no forwardable
+    /// operation of their own - a typed CRDT delta apply, and the retry of a bulk
+    /// append - mirror through it (issue #4618). <paramref name="joinCrdt"/>
+    /// is passed to <see cref="MirrorRowsAsync"/>.
+    /// </summary>
+    private async Task MirrorAppliedRowsAsync(IReadOnlyCollection<string> keys, bool joinCrdt = true)
+    {
+        if (keys.Count == 0 || TryGetShadowTarget() is null)
             return;
 
-        await TrackShadowForward(
-            rows,
-            static (t, s) => t.MergeManyAsync(s),
-            static s => ShadowForwardRefusal.PerEntry(s));
+        await MirrorRowsAsync(await AppliedRowsAsync(keys), joinCrdt);
+    }
+
+    /// <summary>
+    /// Mirrors <paramref name="rows"/> - rows this shard has just stored, at its
+    /// own stamps - to the resize destination through a whole-row merge. The
+    /// merge joins a CRDT row into the destination's own (issue #4618): the
+    /// destination folds a mirrored saga terminal at its own stamp, so a row
+    /// stamped here below that fold can still carry a contribution the fold
+    /// lacks, and a last-writer-wins merge would drop it. A bulk append passes
+    /// <paramref name="joinCrdt"/> <see langword="false"/>: it stored its rows
+    /// here last-writer-wins, so the destination applies them the same way. A
+    /// no-op when no resize mirror is active.
+    /// </summary>
+    private async Task MirrorRowsAsync(Dictionary<string, LwwValue<byte[]>> rows, bool joinCrdt = true)
+    {
+        if (rows.Count == 0 || TryGetShadowTarget() is null)
+            return;
+
+        using (joinCrdt ? LatticeCrdtJoinMergeContext.BeginScope() : null)
+        {
+            await TrackShadowForward(
+                rows,
+                static (t, s) => t.MergeManyAsync(s),
+                static s => ShadowForwardRefusal.PerEntry(s));
+        }
     }
 
     /// <summary>

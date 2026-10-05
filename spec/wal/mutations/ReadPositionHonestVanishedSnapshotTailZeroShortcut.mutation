@@ -1,0 +1,34 @@
+# Pairs with ReadPositionHonest. A leaf whose snapshot vanished starts cold
+# whenever the WAL's tail still reads 0. The pin store keeps the entitlement the
+# vanished snapshot licensed, so the GC trims the prefix during the cold rebuild
+# and the leaf reads past an owned write it never holds (the #4653 review's
+# depth-18 trace). The base fails closed whatever the tail. Production analogue:
+# #4653's perturbation M9, red on
+# VanishedSnapshotColdStartIntegrationTests.A_cold_start_over_a_vanished_snapshot_fails_closed_even_when_the_tail_is_untrimmed_at_activation.
+MODULE: ReadPositionHonestVanishedSnapshotTailZeroShortcut
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a vanished snapshot starts cold while the tail reads 0, and the GC trims under the rebuild
+PERTURBS: Activate
+
+--- FIND
+    /\ ~stale[l]
+    /\ ~SnapshotVanished(l)
+--- REPLACE
+\* MUTATION: the cold start is allowed while nothing has been trimmed yet.
+    /\ ~stale[l]
+    /\ ~(SnapshotVanished(l) /\ tail > 0)
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the snapshot vanishes and its leaf stops: two faults.
+MaxFaults == 2
+--- END
