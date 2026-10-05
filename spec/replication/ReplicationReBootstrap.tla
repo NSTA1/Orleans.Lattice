@@ -153,8 +153,8 @@ Deliver(e) ==
 
 (***************************************************************************)
 (* Trim: s trims its log past entries r has not received. Those entries   *)
-(* will never be shipped; the stream resumes after them, and              *)
-(* LatticeFallOffLogDetector requests a full re-bootstrap.                *)
+(* will never be shipped; the stream resumes after them, and s's shipper,  *)
+(* whose read finds the gap, requests a full re-bootstrap (#4599).         *)
 (***************************************************************************)
 Trim ==
     /\ ~fellOff
@@ -164,8 +164,9 @@ Trim ==
     /\ UNCHANGED <<authored, wal, reg, clk, reaped, booted, scopedDone, topo, gen, restored, ex>>
 
 (***************************************************************************)
-(* Reap: s compacts a tombstone away once its grace period has passed, by *)
-(* which time no write it beats is still on its way to s.                 *)
+(* Reap: s compacts a tombstone away once no write it beats is still on   *)
+(* its way to s. Production waits only for the wall-clock grace period    *)
+(* (#4615, mutation EventualConvergenceReapInsideGrace).                  *)
 (***************************************************************************)
 Reap ==
     /\ reg[s].present
