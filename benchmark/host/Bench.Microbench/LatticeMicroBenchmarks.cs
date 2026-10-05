@@ -4736,5 +4736,8 @@ internal sealed class BenchLeafRowRecordGrain : ILeafRowRecordGrain
     public Task RecordAsync(string? treeId) => Task.CompletedTask;
 
     /// <inheritdoc />
+    public Task MarkPurgeClearedAsync() => Task.CompletedTask;
+
+    /// <inheritdoc />
     public Task ClearAsync() => Task.CompletedTask;
 }

@@ -1130,26 +1130,38 @@ was lost, and nothing on the leaf can always tell the two apart. So
 the leaf does not guess: it serves data, and writes a first row, only
 when the call that reaches it carries a create intent naming it. The
 paths that create leaves carry one: a shard creating its root leaf, a
-leaf split creating its sibling, a bulk load or append creating its
-leaves, and recovery re-creating the leaves an interrupted purge
-cleared (only on a shard whose purge had begun clearing its leaves,
-which the shard records before its first leaf clear). The intent is a
-reserved request-context key, so an external client cannot assert it.
-Any other call to a leaf with no row - a read, a write, the write-path
-re-bind of an unbound leaf - fails **closed** with
-`LeafStateRowLostException`, which implements `ILatticeLeafUnavailable`.
+leaf split creating its sibling, and a bulk load or append creating its
+leaves. The intent is a reserved request-context key, so an external
+client cannot assert it. Any other call to a leaf with no row - a read,
+a write, the write-path re-bind of an unbound leaf - fails **closed**
+with `LeafStateRowLostException`, which implements
+`ILatticeLeafUnavailable`.
 
 As defence in depth a leaf also keeps a small row record, in a separate
 row keyed by the leaf. It is made durable before the leaf's first state
 write (and before the next write of a leaf whose row predates it), and
-deleted only after the leaf's row is deliberately cleared. A create
-intent for a leaf whose row record, or snapshot, survives is refused:
-that is a creator about to replace a lost row with an empty one.
+deleted after the leaf's row is deliberately cleared by a retirement, an
+empty-leaf reclaim or an orphan repair. A create intent for a leaf whose
+row record, or snapshot, survives is refused: that is a creator about to
+replace a lost row with an empty one.
+
+**Recovering a tree whose purge was interrupted** re-creates, empty,
+exactly the leaves the purge cleared (issue #4700). A purge clears a
+leaf by first marking that leaf's row record as cleared by the purge,
+durably, then clearing the leaf; the marked record is kept. Recovery
+visits every leaf the shard still routes to: a leaf with a row is
+re-bound, a rowless leaf whose record carries the purge's mark is
+re-created empty (anything its interrupted clear left behind, such as
+its snapshot, is deleted first), and any other rowless leaf - one the
+purge never reached, whose row may have been lost - is not re-created
+and fails closed. The work is paged, so no leaf is skipped however
+large the shard. A recovery that cannot read a leaf's record fails and
+can be retried. Once a shard is fully purged, the purge deletes the
+records it marked.
 
 The write-path re-bind of issue #1744 still repairs a leaf that keeps
 its row but lost its tree id. A leaf deliberately cleared while routing
-still names it (a purge that died part-way, outside recovery) fails
-closed like a lost one.
+still names it, outside a purge, fails closed like a lost one.
 
 The condition does not clear by itself, and a projection rebuild cannot
 repair it, because the rebuild needs the binding and key range the row

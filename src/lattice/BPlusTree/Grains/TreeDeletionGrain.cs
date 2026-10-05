@@ -246,6 +246,21 @@ internal sealed partial class TreeDeletionGrain(
         await RecoverPhysicalAsync();
     }
 
+    /// <summary>
+    /// Re-binds every node of one shard, a bounded page of leaves per call, until
+    /// the shard reports it is done (issue #4700): no leaf a purge cleared is left
+    /// behind by a truncated pass.
+    /// </summary>
+    private static async Task ReseedShardAsync(IShardRootGrain shard)
+    {
+        var next = 0;
+        do
+        {
+            next = await shard.ReseedNodeBindingsAsync(next);
+        }
+        while (next >= 0);
+    }
+
     public async Task RecoverPhysicalAsync()
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -298,7 +313,7 @@ internal sealed partial class TreeDeletionGrain(
         for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
-            reseeds[i] = shard.ReseedNodeBindingsAsync();
+            reseeds[i] = ReseedShardAsync(shard);
         }
         await Task.WhenAll(reseeds);
 

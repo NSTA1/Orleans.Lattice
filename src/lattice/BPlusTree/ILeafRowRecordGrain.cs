@@ -23,11 +23,19 @@ internal interface ILeafRowRecordGrain : IGrainWithGuidKey
     Task<LeafRowRecordState?> GetAsync();
 
     /// <summary>
-    /// Records that a state row is being written for the leaf. Idempotent; returns
-    /// once the provider has durably accepted the record.
+    /// Records that a state row is being written for the leaf, and resets any
+    /// <see cref="LeafRowRecordState.PurgeCleared"/> mark. Idempotent; returns once
+    /// the provider has durably accepted the record.
     /// </summary>
     /// <param name="treeId">The tree the leaf is bound to, for diagnostics; <see langword="null"/> when unbound.</param>
     Task RecordAsync(string? treeId);
+
+    /// <summary>
+    /// Marks the record <see cref="LeafRowRecordState.PurgeCleared"/>: a purge has
+    /// committed to clear the leaf (issue #4700). Written before the leaf's row is
+    /// deleted; returns once the provider has durably accepted it.
+    /// </summary>
+    Task MarkPurgeClearedAsync();
 
     /// <summary>Deletes the record, after the leaf's row has been deliberately cleared.</summary>
     Task ClearAsync();

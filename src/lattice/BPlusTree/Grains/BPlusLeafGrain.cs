@@ -4579,9 +4579,24 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private bool _leafStateCleared;
 
-    public async Task ClearGrainStateAsync()
+    public Task ClearGrainStateAsync() => ClearGrainStateCoreAsync(forPurge: false);
+
+    /// <inheritdoc />
+    public Task ClearGrainStateForPurgeAsync() => ClearGrainStateCoreAsync(forPurge: true);
+
+    private async Task ClearGrainStateCoreAsync(bool forPurge)
     {
         using var routingMutation = EnterLeafRoutingMutation();
+
+        // A purge commits to clearing this leaf before anything is cleared (issue
+        // #4700): the mark is what lets a recovery of the tree re-create the leaf
+        // empty, and tell it apart from a leaf whose row was lost. A failure here
+        // clears nothing, and the purge retries.
+        if (forPurge && RowRecord is { } purgeRecord)
+        {
+            await purgeRecord.MarkPurgeClearedAsync();
+        }
+
         // Retire the replay BEFORE the clear (issue #2871). The replay now runs
         // concurrently with requests, so an in-flight one would otherwise
         // re-hydrate the cache from the WAL immediately after this clear -
@@ -4646,7 +4661,12 @@ internal sealed partial class BPlusLeafGrain(
             // The row record goes last of all (issue #4654): until it is deleted, a
             // rowless activation of this leaf fails closed, so an interrupted clear
             // never leaves a leaf that reads as empty while its snapshot survives.
-            await ClearRowRecordAsync();
+            // A purge keeps it, marked as cleared by the purge, for recovery to
+            // find (issue #4700); the purge deletes it once the shard is purged.
+            if (!forPurge)
+            {
+                await ClearRowRecordAsync();
+            }
         }
         finally
         {

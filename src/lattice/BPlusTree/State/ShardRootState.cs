@@ -382,15 +382,17 @@ internal sealed class ShardRootState
     [Id(24)] public bool BootstrapReadFenced { get; set; }
 
     /// <summary>
-    /// Whether a purge (or retirement) of this shard has begun clearing the leaves
-    /// it routes to (issue #4654). Made durable before the first leaf is cleared,
-    /// so a purge that dies part-way leaves it set. A leaf with no state row cannot
-    /// otherwise be told apart from one whose row was lost, so recovery re-creates
-    /// the shard's rowless leaves empty only when this is set - when the operator
-    /// had chosen to discard their data - and clears it once it has. State
-    /// persisted before the field existed deserializes to <c>false</c>.
+    /// The leaves whose row records a completed purge of this shard marked as
+    /// cleared by the purge, still to be deleted (issue #4700). Written in the same
+    /// write as the purge tombstone, and dropped once every record is deleted, so a
+    /// purge that dies after its tombstone leaves the work for its retry. Purge
+    /// recovery never reads it: each cleared leaf carries its own mark.
+    /// <para>
+    /// <c>[Id(25)]</c> held the shard-wide <c>LeafClearsBegun</c> flag, retired by
+    /// issue #4700 and never to be reused.
+    /// </para>
     /// </summary>
-    [Id(25)] public bool LeafClearsBegun { get; set; }
+    [Id(26)] public List<GrainId>? PurgeClearedLeafRecords { get; set; }
 }
 
 /// <summary>
