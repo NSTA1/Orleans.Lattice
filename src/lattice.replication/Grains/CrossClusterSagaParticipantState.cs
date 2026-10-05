@@ -54,4 +54,13 @@ internal sealed class CrossClusterSagaParticipantState
     /// <see cref="SagaControlResponse.Detail"/>. May be <see langword="null"/>.
     /// </summary>
     [Id(7)] public string? Detail { get; set; }
+
+    /// <summary>
+    /// The backup set the saga restores as one unit, or <see langword="null"/>
+    /// for a single-tree restore. Persisted at prepare so a decision this
+    /// participant applies on its own - learned by querying the coordinator after
+    /// its fence timer fired, or forced by an operator - reaches every member tree
+    /// exactly as the coordinator's delivery would (issue #4637).
+    /// </summary>
+    [Id(8)] public string? SetId { get; set; }
 }

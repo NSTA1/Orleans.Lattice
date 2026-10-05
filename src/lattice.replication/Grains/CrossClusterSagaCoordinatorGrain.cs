@@ -203,6 +203,47 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<CrossClusterSagaDecision> ResolveDecisionForParticipantAsync(string participantClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(participantClusterId);
+
+        // Never started here, or retention has cleared it: this coordinator
+        // prepared nobody under the saga, so there is no commit to protect. A
+        // later run re-prepares every participant, and the one that compensated
+        // on this answer votes abort from its recorded state.
+        if (state.State.Phase == CrossClusterSagaPhase.NotStarted)
+        {
+            return Task.FromResult(CrossClusterSagaDecision.Aborted);
+        }
+
+        // The requester is the authenticated origin; it must be one of the
+        // participants this coordinator recorded (never trust the wire).
+        var member = false;
+        foreach (var participant in state.State.Participants)
+        {
+            if (string.Equals(participant.ClusterId, participantClusterId, StringComparison.Ordinal))
+            {
+                member = true;
+                break;
+            }
+        }
+
+        if (!member)
+        {
+            Logger.LogWarning(
+                "Cross-cluster saga {SagaId}: refused a decision query from cluster {Cluster}, which is not a participant.",
+                SagaId, participantClusterId);
+            throw new UnauthorizedAccessException(
+                $"Cluster '{participantClusterId}' is not a participant of cross-cluster saga '{SagaId}'.");
+        }
+
+        // Read-only on purpose: the coordinator's own prepare pass records the
+        // decision, and bounds a pending one with its prepare deadline, so a
+        // query never races that pass for the single decision write.
+        return GetDecisionAsync();
+    }
+
+    /// <inheritdoc />
     public Task<bool> IsCompleteAsync() =>
         Task.FromResult(state.State.Phase is CrossClusterSagaPhase.Completed or CrossClusterSagaPhase.NotStarted);
 
@@ -356,18 +397,45 @@ internal sealed class CrossClusterSagaCoordinatorGrain(
         var request = BuildRequest();
 
         var finalizeTasks = new List<Task<SagaControlResponse>>(participants.Count);
+        var finalized = new List<string>(participants.Count);
         foreach (var p in participants)
         {
             // Only participants that prepared (voted Commit) hold state to
             // finalize. A participant that voted Abort already self-terminated
             // locally, so skipping it avoids a needless round-trip.
             if (p.Vote != SagaVote.Commit) continue;
+            finalized.Add(p.ClusterId);
             finalizeTasks.Add(commit
                 ? _controlChannel.CommitAsync(p.ClusterId, request)
                 : _controlChannel.AbortAsync(p.ClusterId, request));
         }
 
-        await Task.WhenAll(finalizeTasks);
+        var responses = await Task.WhenAll(finalizeTasks);
+
+        // A participant answers with its durable phase, and one that refused the
+        // decision - it had already reached the other terminal phase - has not
+        // applied it. The saga is then split across clusters, which is never a
+        // success (issue #4637): fail loudly and stay un-completed, so the
+        // keepalive keeps re-delivering and the outcome is never reported as one.
+        var expected = commit ? SagaPhase.Committed : SagaPhase.Aborted;
+        List<string>? refused = null;
+        for (var i = 0; i < responses.Length; i++)
+        {
+            if (responses[i].Phase != expected)
+                (refused ??= []).Add($"{finalized[i]} ({responses[i].Phase})");
+        }
+
+        if (refused is not null)
+        {
+            var message =
+                $"Cross-cluster saga '{SagaId}' decided {(commit ? "commit" : "abort")}, but cluster(s) " +
+                $"{string.Join(", ", refused)} refused it: the saga is split across clusters and needs operator repair.";
+            Logger.LogError(
+                "Cross-cluster saga {SagaId}: participant(s) {Refused} refused the {Decision} decision; the saga is not complete.",
+                SagaId, string.Join(", ", refused), commit ? "commit" : "abort");
+            state.State.FailureMessage = message;
+            throw new InvalidOperationException(message);
+        }
 
         state.State.Phase = CrossClusterSagaPhase.Completed;
         await state.WriteStateAsync();

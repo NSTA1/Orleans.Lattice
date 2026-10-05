@@ -472,6 +472,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.saga.participant.commits` | counter (`{commit}`) | `reason`, `tenant` | Coordinated restore: participant votes, commits and aborts (rate) |
 | `orleans.lattice.replication.saga.participant.aborts` | counter (`{abort}`) | `reason`, `tenant` | Coordinated restore: participant votes, commits and aborts (rate) |
 | `orleans.lattice.replication.saga.compensations` | counter (`{compensation}`) | `cause`, `tenant` | Coordinated restore: saga compensations (rate by cause) |
+| `orleans.lattice.replication.saga.participant.fence_held_age` | gauge (`s`) | `reason`, `tenant` | Coordinated restore: cutover fences held past their window (age, s). Recorded only while a prepared participant holds its fence past the window waiting for the coordinator's decision (`decision_pending`, `coordinator_unreachable`), so an empty panel is healthy |
 
 ## `orleans.lattice.auth` meter
 

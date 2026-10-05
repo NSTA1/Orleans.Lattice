@@ -19,6 +19,9 @@ internal sealed class RecordingSagaParticipant(SagaVote prepareVote = SagaVote.C
     /// <summary>Number of times <see cref="AbortAsync"/> was invoked.</summary>
     public int AbortCount { get; private set; }
 
+    /// <summary>The request of the most recent <see cref="CommitAsync"/>, or <see langword="null"/>.</summary>
+    public SagaControlRequest? LastCommitRequest { get; private set; }
+
     /// <summary>The vote this double returns from <see cref="PrepareAsync"/>.</summary>
     public SagaVote PrepareVote { get; set; } = prepareVote;
 
@@ -33,6 +36,7 @@ internal sealed class RecordingSagaParticipant(SagaVote prepareVote = SagaVote.C
     public Task CommitAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
     {
         CommitCount++;
+        LastCommitRequest = request;
         return Task.CompletedTask;
     }
 

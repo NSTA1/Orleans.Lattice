@@ -55,7 +55,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task Retention_expiry_clears_the_coordinator_state()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var (grain, state, _, _) = CreateGrain(channel: channel);
         await Run(grain, "site-a");
@@ -76,7 +76,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task A_keepalive_resume_fault_is_swallowed_so_the_reminder_keeps_beating()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         channel.PrepareAsync("site-a", Arg.Any<SagaControlRequest>())
             .Returns(Task.FromException<SagaControlResponse>(new TimeoutException("still down")));
         var (grain, state, _, _) = CreateGrain(PreparingState("site-a"), channel);
@@ -128,7 +128,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task The_prepare_progress_deadline_aborts_a_saga_no_participant_ever_answers()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var state = PreparingState("site-a");
 
@@ -166,7 +166,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
         // the length-prefixed hash runs. A fingerprint that silently truncated
         // here would let two different targets re-attach to one in-flight saga id.
         var longTree = new string('t', 1024);
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         channel.PrepareAsync("site-a", Arg.Any<SagaControlRequest>())
             .Returns(Task.FromException<SagaControlResponse>(new TimeoutException("transport")));
         var (grain, state, _, _) = CreateGrain(channel: channel);
@@ -197,7 +197,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
         // The keepalive only accelerates crash recovery. Failing the saga because
         // the reminder service is down would turn a recoverable outage into a
         // refused cutover.
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var (grain, state, _, _) = CreateGrain(
             channel: channel, reminderRegistry: FaultingReminders(faultRegister: true));
@@ -214,7 +214,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task Unregistering_the_keepalive_survives_a_reminder_service_fault()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var (grain, state, _, _) = CreateGrain(
             channel: channel, reminderRegistry: FaultingReminders(faultGet: true));

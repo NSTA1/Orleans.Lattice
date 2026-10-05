@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
@@ -23,13 +24,18 @@ namespace Orleans.Lattice.Replication.Grains;
 ///   <item><description><b>Commit / Abort.</b> Deliver the coordinator decision
 ///   to each participant, cancel the fence, and persist the terminal
 ///   phase.</description></item>
-///   <item><description><b>Fence expiry.</b> If the decision never arrives
-///   before the fence deadline, auto-compensate (roll back) - the
-///   coordinator-loss safety net. The compensation request is rebuilt from the
-///   persisted state, which records no set id, so the net is complete for a
-///   single-tree restore only: a backup-set restore's compensation reaches the
-///   restore participant as a single-tree abort that lifts the fence but leaves
-///   the member shadows in place.</description></item>
+///   <item><description><b>Fence expiry.</b> If the decision has not arrived
+///   by the fence deadline, ask the coordinator for the saga's durable decision
+///   and apply it: commit on <c>Committed</c>, compensate on <c>Aborted</c>
+///   (issue #4637). A participant that voted commit never compensates on its
+///   timer alone, because the coordinator may already have committed the other
+///   clusters. While the decision is pending or the coordinator cannot be
+///   reached, the participant keeps its prepared state and fence, reports the
+///   fence's age on <see cref="SagaParticipantFenceCensus.FenceHeldAge"/>, and
+///   re-asks on every fence tick; an operator can resolve it through
+///   <see cref="OperatorResolveAsync"/>. The request used is rebuilt from the
+///   persisted state, set id included, so a backup-set decision reaches every
+///   member tree.</description></item>
 /// </list>
 /// The fence is durable because it is anchored on an Orleans reminder (grain
 /// timers do not survive deactivation); retention cleanup reuses the
@@ -48,6 +54,13 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// concern.
     /// </summary>
     private static readonly TimeSpan FenceWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Bound on one decision query to the coordinator. A query that outlasts it
+    /// is treated as an unreachable coordinator: the fence stays up and the
+    /// query is repeated on the next tick.
+    /// </summary>
+    private static readonly TimeSpan DecisionQueryTimeout = TimeSpan.FromSeconds(30);
 
     private readonly IReadOnlyList<ISagaParticipant> _participants;
     private readonly IOptionsMonitor<LatticeOptions> _optionsMonitor;
@@ -112,28 +125,137 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
             return;
         }
 
-        // Coordinator-loss safety net: the decision never arrived before the
-        // fence expired. Auto-compensate (roll back) so the prepared action
-        // does not leak, and record the abort. The request is rebuilt from the
-        // persisted state, which carries no set id, so for a backup-set restore
-        // this reaches the restore participant as a single-tree abort: the fence
-        // is lifted but the member shadows are not garbage collected.
-        Logger.LogWarning(
-            "Cross-cluster saga participant {SagaId}: cutover fence expired without a coordinator " +
-            "decision; auto-compensating.",
-            SagaId);
-        LatticeReplicationMetrics.SagaCompensations.Add(1,
-            new KeyValuePair<string, object?>(
-                LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseCoordinatorLoss),
-            LatticeTenantLabel.Platform);
-        await CompensateParticipantsAsync();
-        _state.State.Phase = SagaPhase.Aborted;
-        _state.State.Vote = SagaVote.Abort;
-        _state.State.Detail = "Cutover fence expired without a coordinator decision; auto-compensated.";
-        _state.State.FenceDeadlineTicks = 0;
-        await _state.WriteStateAsync();
-        await UnregisterFenceAsync();
-        await SlideTtlAsync();
+        // The fence expired before the decision arrived. This participant voted
+        // commit, so the coordinator may already have committed every other
+        // cluster: compensating on the timer alone would leave this one on the
+        // pre-restore tree while the others serve the restored copy (issue
+        // #4637). Ask the coordinator for its durable decision instead.
+        var (decision, fault) = await QueryCoordinatorDecisionAsync();
+        switch (decision)
+        {
+            case CrossClusterSagaDecision.Committed:
+                Logger.LogWarning(
+                    "Cross-cluster saga participant {SagaId}: cutover fence expired; the coordinator reports the saga committed. Committing.",
+                    SagaId);
+                await ApplyCommitAsync(RequestFromState());
+                return;
+
+            case CrossClusterSagaDecision.Aborted:
+                Logger.LogWarning(
+                    "Cross-cluster saga participant {SagaId}: cutover fence expired; the coordinator reports the saga aborted. Compensating.",
+                    SagaId);
+                await ApplyAbortAsync(RequestFromState(), LatticeReplicationMetrics.SagaCauseVoteAbort,
+                    "Aborted by coordinator decision, learned after the cutover fence expired.");
+                return;
+
+            case CrossClusterSagaDecision.InFlight:
+                SagaParticipantFenceCensus.Hold(
+                    SagaId, _state.State.FenceDeadlineTicks, SagaParticipantFenceCensus.ReasonDecisionPending);
+                Logger.LogWarning(
+                    "Cross-cluster saga participant {SagaId}: cutover fence expired while coordinator {Coordinator} is still deciding; keeping the fence up.",
+                    SagaId, _state.State.CoordinatorClusterId);
+                return;
+
+            default:
+                SagaParticipantFenceCensus.Hold(
+                    SagaId, _state.State.FenceDeadlineTicks, SagaParticipantFenceCensus.ReasonCoordinatorUnreachable);
+                Logger.LogError(fault,
+                    "Cross-cluster saga participant {SagaId}: cutover fence expired and coordinator {Coordinator} cannot be reached; " +
+                    "keeping the fence up rather than risk a mixed outcome. Restore the coordinator's reachability, or resolve the " +
+                    "participant with ILatticeReplicationAdmin.ResolveCrossClusterSagaParticipantAsync once the coordinator is lost.",
+                    SagaId, _state.State.CoordinatorClusterId);
+                return;
+        }
+    }
+
+    /// <summary>
+    /// Asks the saga's coordinator cluster for its durable decision. Returns the
+    /// decision, or <see langword="null"/> with the fault when the coordinator
+    /// cannot be reached: no transport registered, the transport predates the
+    /// verb, the call failed or timed out, or the coordinator refused the query.
+    /// </summary>
+    private async Task<(CrossClusterSagaDecision? Decision, Exception? Fault)> QueryCoordinatorDecisionAsync()
+    {
+        var channel = GrainContext.ActivationServices?.GetService<ISagaControlChannel>();
+        if (channel is null || string.IsNullOrEmpty(_state.State.CoordinatorClusterId))
+        {
+            return (null, null);
+        }
+
+        try
+        {
+            using var timeout = new CancellationTokenSource(DecisionQueryTimeout);
+            var response = await channel
+                .GetDecisionAsync(_state.State.CoordinatorClusterId, RequestFromState(), timeout.Token)
+                .WaitAsync(timeout.Token);
+            return (response.Phase switch
+            {
+                SagaPhase.Committed => CrossClusterSagaDecision.Committed,
+                SagaPhase.Aborted => CrossClusterSagaDecision.Aborted,
+                _ => CrossClusterSagaDecision.InFlight,
+            }, null);
+        }
+        catch (Exception ex)
+        {
+            return (null, ex);
+        }
+    }
+
+    /// <summary>
+    /// <b>Operator override</b> for a participant whose coordinator is lost
+    /// (issue #4637). Asks the coordinator first; if it answers with a decision,
+    /// that decision is applied whatever was requested, and a request that
+    /// contradicts it is refused. If the coordinator is still deciding, nothing
+    /// changes and the call is refused, because the coordinator will decide. Only
+    /// when the coordinator cannot be reached is <paramref name="commit"/>
+    /// applied. Returns <see langword="true"/> when this call moved the
+    /// participant to a terminal phase, <see langword="false"/> when it was
+    /// already terminal.
+    /// </summary>
+    public async Task<bool> OperatorResolveAsync(bool commit)
+    {
+        if (_state.State.Phase != SagaPhase.Prepared)
+        {
+            if (_state.State.Phase == (commit ? SagaPhase.Committed : SagaPhase.Aborted))
+                return false;
+            throw new InvalidOperationException(
+                $"Cross-cluster saga participant '{SagaId}' is {_state.State.Phase}; it cannot be resolved to {(commit ? "commit" : "abort")}.");
+        }
+
+        var (decision, _) = await QueryCoordinatorDecisionAsync();
+        switch (decision)
+        {
+            case CrossClusterSagaDecision.Committed:
+                await ApplyCommitAsync(RequestFromState());
+                if (!commit)
+                    throw new InvalidOperationException(
+                        $"The coordinator of saga '{SagaId}' decided commit; the participant was committed and the requested abort was refused.");
+                return true;
+
+            case CrossClusterSagaDecision.Aborted:
+                await ApplyAbortAsync(RequestFromState(), LatticeReplicationMetrics.SagaCauseVoteAbort,
+                    "Aborted by coordinator decision, learned by an operator resolution.");
+                if (commit)
+                    throw new InvalidOperationException(
+                        $"The coordinator of saga '{SagaId}' decided abort; the participant was compensated and the requested commit was refused.");
+                return true;
+
+            case CrossClusterSagaDecision.InFlight:
+                throw new InvalidOperationException(
+                    $"The coordinator of saga '{SagaId}' is reachable and still deciding; the participant was left prepared. Let the coordinator decide.");
+        }
+
+        if (commit)
+        {
+            await ApplyCommitAsync(RequestFromState());
+        }
+        else
+        {
+            await ApplyAbortAsync(RequestFromState(), LatticeReplicationMetrics.SagaCauseCoordinatorLoss,
+                "Compensated by an operator after the coordinator was lost.");
+        }
+
+        return true;
     }
 
     /// <inheritdoc />
@@ -141,8 +263,10 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     {
         // Zero-prime both members of the compensation-cause taxonomy before the
         // idempotent re-attach below can return (issue #2918). Both arms are
-        // reachable only from SagaPhase.Prepared - `vote-abort` from AbortAsync
-        // and `coordinator-loss` from the fence-expiry reminder - so the prepare
+        // reachable only from SagaPhase.Prepared - `vote-abort` from a
+        // coordinator abort decision (delivered, or learned after the fence
+        // expired) and `coordinator-loss` from an operator's resolution of a
+        // participant whose coordinator was lost (issue #4637) - so the prepare
         // entry point is exactly the population that can arm either, and is the
         // same execution path rather than a constructor that proves only that
         // the type loaded.
@@ -185,6 +309,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         _state.State.TargetTree = request.TargetTree;
         _state.State.ManifestId = request.ManifestId;
         _state.State.CoordinatorClusterId = request.CoordinatorClusterId;
+        _state.State.SetId = request.SetId;
 
         // No local participant hosts anything for this saga: the safe default is
         // to vote abort (nothing prepared, nothing to commit).
@@ -250,32 +375,18 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         switch (_state.State.Phase)
         {
             case SagaPhase.Prepared:
-                // Every participant voted commit, so the decision is already
-                // made and delivery is unconditional: no participant's commit
-                // can change whether another's is issued, and each targets its
-                // own resource. The serial loop therefore paid one round-trip
-                // latency per participant to deliver a decision that was fixed
-                // before the loop began. Group atomicity is unchanged - the
-                // wave still settles completely before the terminal phase is
-                // persisted, so a fault in any participant surfaces before
-                // Committed is written, exactly as when it was serial.
-                await BoundedFanOut.ForEachAsync(_participants, BoundedFanOut.DefaultWidth,
-                    participant => participant.CommitAsync(request));
-                _state.State.Phase = SagaPhase.Committed;
-                _state.State.FenceDeadlineTicks = 0;
-                _state.State.Detail = null;
-                await _state.WriteStateAsync();
-                await UnregisterFenceAsync();
-                await SlideTtlAsync();
+                await ApplyCommitAsync(request);
                 break;
             case SagaPhase.Committed:
                 // Idempotent duplicate commit.
                 break;
             default:
                 // Commit for a saga that was never prepared, or that already
-                // aborted / compensated (for example after a fence expiry). The
-                // decision is not applied; the durable phase is returned so the
-                // coordinator observes the conflict.
+                // aborted. A participant that voted commit compensates only on
+                // the coordinator's abort decision, so this is a conflict the
+                // coordinator must not count as delivered: the decision is not
+                // applied, and the durable phase is returned so it observes the
+                // refusal (issue #4637).
                 Logger.LogWarning(
                     "Cross-cluster saga participant {SagaId}: commit received in phase {Phase}; not applied.",
                     SagaId, _state.State.Phase);
@@ -291,18 +402,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         switch (_state.State.Phase)
         {
             case SagaPhase.Prepared:
-                await CompensateParticipantsAsync(request);
-                LatticeReplicationMetrics.SagaCompensations.Add(1,
-                    new KeyValuePair<string, object?>(
-                        LatticeReplicationMetrics.TagCause, LatticeReplicationMetrics.SagaCauseVoteAbort),
-                    LatticeTenantLabel.Platform);
-                _state.State.Phase = SagaPhase.Aborted;
-                _state.State.Vote = SagaVote.Abort;
-                _state.State.FenceDeadlineTicks = 0;
-                _state.State.Detail = "Aborted by coordinator decision.";
-                await _state.WriteStateAsync();
-                await UnregisterFenceAsync();
-                await SlideTtlAsync();
+                await ApplyAbortAsync(request, LatticeReplicationMetrics.SagaCauseVoteAbort, "Aborted by coordinator decision.");
                 break;
             case SagaPhase.None:
                 // Abort for a saga that was never prepared: record aborted so a
@@ -334,9 +434,52 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         Task.FromResult(BuildStatusResponse());
 
     /// <summary>
+    /// Commits every local participant and records the Committed phase. Every
+    /// participant voted commit, so the decision is already made and delivery is
+    /// unconditional: no participant's commit can change whether another's is
+    /// issued, and each targets its own resource, so they are issued in bounded
+    /// overlapped waves. Group atomicity holds - the wave settles completely
+    /// before the terminal phase is persisted, so a fault in any participant
+    /// surfaces before Committed is written.
+    /// </summary>
+    private async Task ApplyCommitAsync(SagaControlRequest request)
+    {
+        await BoundedFanOut.ForEachAsync(_participants, BoundedFanOut.DefaultWidth,
+            participant => participant.CommitAsync(request));
+        _state.State.Phase = SagaPhase.Committed;
+        _state.State.FenceDeadlineTicks = 0;
+        _state.State.Detail = null;
+        await _state.WriteStateAsync();
+        SagaParticipantFenceCensus.Release(SagaId);
+        await UnregisterFenceAsync();
+        await SlideTtlAsync();
+    }
+
+    /// <summary>
+    /// Compensates every local participant and records the Aborted phase,
+    /// counting the compensation under <paramref name="cause"/>.
+    /// </summary>
+    private async Task ApplyAbortAsync(SagaControlRequest request, string cause, string detail)
+    {
+        await CompensateParticipantsAsync(request);
+        LatticeReplicationMetrics.SagaCompensations.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagCause, cause),
+            LatticeTenantLabel.Platform);
+        _state.State.Phase = SagaPhase.Aborted;
+        _state.State.Vote = SagaVote.Abort;
+        _state.State.FenceDeadlineTicks = 0;
+        _state.State.Detail = detail;
+        await _state.WriteStateAsync();
+        SagaParticipantFenceCensus.Release(SagaId);
+        await UnregisterFenceAsync();
+        await SlideTtlAsync();
+    }
+
+    /// <summary>
     /// Compensates (rolls back) every local participant, swallowing per-participant
-    /// abort faults so one failure does not strand the others. Used by both the
-    /// coordinator-driven abort and the fence-expiry auto-compensation.
+    /// abort faults so one failure does not strand the others. Used by the
+    /// coordinator-driven abort, an abort learned after the fence expired, and an
+    /// operator resolution.
     /// <para>
     /// Issued in bounded overlapped waves. The compensations are mutually
     /// independent (each participant rolls back only its own resource) and
@@ -348,8 +491,6 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// caller's terminal-phase write remains group-atomic.
     /// </para>
     /// </summary>
-    private Task CompensateParticipantsAsync() => CompensateParticipantsAsync(RequestFromState());
-
     private Task CompensateParticipantsAsync(SagaControlRequest request) =>
         BoundedFanOut.ForEachAsync(_participants, BoundedFanOut.DefaultWidth,
             participant => SafeAbortAsync(participant, request));
@@ -369,8 +510,9 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     }
 
     /// <summary>
-    /// Rebuilds the control request from persisted identity fields. The set id is
-    /// not persisted, so a rebuilt request never carries one.
+    /// Rebuilds the control request from persisted identity fields, set id
+    /// included (state written before #4637 carries none, so such a saga's
+    /// rebuilt request takes the single-tree path).
     /// </summary>
     private SagaControlRequest RequestFromState() => new()
     {
@@ -378,6 +520,7 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
         TargetTree = _state.State.TargetTree,
         ManifestId = _state.State.ManifestId,
         CoordinatorClusterId = _state.State.CoordinatorClusterId,
+        SetId = _state.State.SetId,
     };
 
     /// <summary>Builds a prepare-style response carrying the supplied vote.</summary>

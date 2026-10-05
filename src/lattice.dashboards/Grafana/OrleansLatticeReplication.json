@@ -1596,7 +1596,7 @@
     },    {
       "id": 64,
       "title": "Coordinated restore: saga compensations (rate by cause)",
-      "description": "Rate of coordinated-restore compensations (rollbacks), split by cause (orleans.lattice.replication.saga.compensations). vote-abort = a coordinator-driven rollback after at least one participant voted abort (an all-or-nothing rollback of every prepared cluster); coordinator-loss = a participant's own cutover-fence-expiry auto-compensation after the coordinator decision never arrived. A non-zero coordinator-loss series is the operator-actionable signal that a coordinator cluster is being lost mid-saga and the bounded fence timer is the only thing preventing a leaked prepared restore.",
+      "description": "Rate of coordinated-restore compensations (rollbacks), split by cause (orleans.lattice.replication.saga.compensations). vote-abort = a rollback on the coordinator's abort decision, delivered or learned by a participant that asked after its cutover fence expired (an all-or-nothing rollback of every prepared cluster); coordinator-loss = an operator resolved a participant to abort through ILatticeReplicationAdmin.ResolveCrossClusterSagaParticipantAsync while its coordinator could not be reached. A prepared participant never compensates on its fence timer alone (issue #4637): while the coordinator cannot be reached it keeps its fence and raises the fence-held age gauge instead.",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 211 },
@@ -2127,6 +2127,35 @@
       "gridPos": { "h": 7, "w": 12, "x": 12, "y": 379 },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_replication_bootstrap_read_fence_force_lifted_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
+      ]
+    },
+    {
+      "id": 4637,
+      "title": "Coordinated restore: cutover fences held past their window (age, s)",
+      "description": "Age in seconds of the oldest cross-cluster saga cutover fence a prepared participant still holds past its five-minute window, per reason (orleans.lattice.replication.saga.participant.fence_held_age). A participant that voted commit no longer compensates on its timer alone (issue #4637): it asks the coordinator for the saga's decision. reason=decision_pending means the coordinator answered that it is still collecting votes, which it bounds with its own prepare deadline; reason=coordinator_unreachable means the coordinator could not be reached and is the alarm - the restore cannot finish on this cluster until the coordinator is reachable again or an operator resolves the participant with ILatticeReplicationAdmin.ResolveCrossClusterSagaParticipantAsync. Recorded only while a fence is held, so an empty panel is the healthy reading.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 393
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (reason) (orleans_lattice_replication_saga_participant_fence_held_age_seconds{cluster=~\"$cluster\",instance=~\"$silo\"})",
+          "legendFormat": "{{reason}}"
+        }
       ]
     }
   ]
