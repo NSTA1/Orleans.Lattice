@@ -93,12 +93,30 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "zero; a value of one parks an entry on the first failure.");
         }
 
+        if (options.SagaDeferralTimeout <= TimeSpan.Zero)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.SagaDeferralTimeout)} "
+                + $"must be strictly greater than {nameof(TimeSpan)}.{nameof(TimeSpan.Zero)} ({scope}). "
+                + "The receiver uses this wall-clock bound to decide when a repeatedly deferred saga prepare "
+                + "should poison its saga and unblock the origin link; a non-positive bound would poison "
+                + "immediately or have no meaningful timeout.");
+        }
+
         if (options.DeadLetterQueueCapacity < 1)
         {
             return ValidateOptionsResult.Fail(
                 $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.DeadLetterQueueCapacity)} "
                 + $"must be at least 1 ({scope}). A zero-capacity queue cannot accept the "
                 + "very entry the apply pipeline is trying to park.");
+        }
+
+        if (options.CausalAppliedIdentityCapacity is < 1 or > 1_048_576)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.CausalAppliedIdentityCapacity)} "
+                + $"must be between 1 and 1048576 ({scope}). It bounds the applied write identities a receiver "
+                + "remembers per tree and origin to release causal dependents at once.");
         }
 
         if (options.CausalBufferMaxEntries < 1)
@@ -590,4 +608,3 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
         return ValidateOptionsResult.Success;
     }
 }
-

@@ -1,4 +1,4 @@
-# Pairs with BootstrapHandoffLosesNothing. Reproduces current production: the
+# Pairs with BootstrapHandoffLosesNothing. Reproduces production before #4476 (#4463): the
 # handoff pins a drop floor equal to the frontier. The frontier's coordinate
 # for a third origin is the source's HWM for it, a maximum over an origin's
 # writes delivered in non-monotonic HLC order, so the source can hold a's

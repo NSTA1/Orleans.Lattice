@@ -731,15 +731,20 @@ internal sealed partial class ShardRootGrain
         var slot = ShardMap.GetVirtualSlot(key, vsc.Value);
         var pending = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
             .GetPendingMutationsForSlotsAsync(new[] { slot }, vsc.Value);
-        if (pending is not { Count: > 0 })
-            return (null, null);
 
-        foreach (var snapshot in pending)
+        if (pending is { Count: > 0 })
         {
-            if (snapshot.TransactionId == transactionId
-                && snapshot.StampIsOriginal
-                && string.Equals(snapshot.Key, key, StringComparison.Ordinal))
+            foreach (var snapshot in pending)
             {
+                if (snapshot.TransactionId != transactionId
+                    || !string.Equals(snapshot.Key, key, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!snapshot.StampIsOriginal)
+                    return (null, null);
+
                 var stamps = new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal)
                 {
                     [key] = snapshot.Timestamp,
@@ -748,7 +753,15 @@ internal sealed partial class ShardRootGrain
             }
         }
 
-        return (null, null);
+        // The local prepare this forward follows is not on the leaf the key now
+        // routes to: a leaf split moved the key after the prepare landed, and the
+        // bucket stays on the donor. Its marking is unknown here, and forwarding
+        // the prepare and its shadow marker unstamped could pair an unstamped
+        // marker with a marked bucket the split sweep delivers for the same key -
+        // a marker the destination could then never release once the terminal
+        // has come and gone (issue #4545). Fail the forward instead; the caller
+        // re-routes and prepares again on the leaf that holds the key.
+        throw new StaleShardRoutingException(-1, -1, -1);
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

@@ -1,4 +1,4 @@
-# Pairs with EventualConvergence. Reproduces current production: the causal
+# Pairs with EventualConvergence. Reproduces production before #4483 (#4464): the causal
 # buffer lives in the applier's memory, and a parked entry has already been
 # acknowledged to its shipper, so a restart of the receiver loses it and
 # nothing re-sends it.
@@ -18,7 +18,7 @@ BOUNDS: MaxHlc = 1
 --- END
 
 --- FIND
-    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, buf, booted>>
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, buf, booted, skipped, requested>>
 --- REPLACE
-    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, booted>>
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, booted, skipped, requested>>
 --- END

@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -36,7 +37,14 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
     /// parked is a no-op. Returns the number of entries still parked.
     /// </summary>
     /// <param name="entry">The record to park.</param>
-    Task<int> ParkAsync(WalRecord entry);
+    /// <param name="admissionEpoch">
+    /// The tree's receive-fence epoch, read uncached while the fence was not
+    /// paused (issue #4593). The drain stamps the entry's apply with it, so a
+    /// restored copy refuses - and the drain then discards - an entry parked
+    /// before its restore paused receiving. A re-park of an already parked entry
+    /// keeps the epoch it was first parked under.
+    /// </param>
+    Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0);
 
     /// <summary>
     /// Applies, in FIFO order and to a fixed point, every parked entry whose
@@ -48,4 +56,15 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
 
     /// <summary>Returns the number of entries currently parked.</summary>
     Task<int> CountAsync();
+
+    /// <summary>
+    /// Whether the durable buffer holds a parked write of
+    /// <paramref name="originClusterId"/> at <paramref name="timestamp"/> (issue
+    /// #4586). Answered from the persisted entries, which a drain removes only
+    /// after the entry was applied or dead-lettered, so it never reports a held
+    /// write released early. Interleaves, so the origin frontier grain can ask
+    /// while this grain waits on it.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp);
 }

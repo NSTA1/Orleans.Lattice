@@ -115,6 +115,61 @@ Two guarantees make this safe under failure:
   separately bounds the prepare phase: it aborts a saga whose prepare is still
   being retried an hour after the saga started.
 
+### Restored copies are born receive-closed
+
+Pausing receiving is not enough on its own. The applier consults the tree's
+receive fence once per entry, through a short per-silo cache, so an entry can
+pass that check just before the pause and reach the tree just after the alias
+swap - or, if it is slow enough, after the saga's lift
+([#4593](https://github.com/NSTA1/Orleans.Lattice/issues/4593)). An entry the
+receiver parked in its causal-apply buffer before the pause can likewise drain
+after the lift. Three rules make the restored copy unreachable to all of them:
+
+- **Admissions carry the fence epoch.** Every pause of a tree's receive fence
+  bumps its epoch, and each answer the receive gate gives carries the epoch it
+  was read under. The applier stamps every entry it admits with that epoch.
+  A park re-reads the fence uncached and defers an entry the fence is in fact
+  paused for, or whose admission a pause has since superseded, so a parked
+  entry carries the epoch current when it was parked; the drain stamps it.
+- **Closed before it is routable, at the pause's epoch.** The commit's fence
+  engage pauses receiving first, then closes each restored physical copy with
+  the epoch of that pause as the copy's minimum admission epoch, and only then
+  does the alias swap run. Only the fence lift that resumes receiving - the
+  abort or terminal lift, or the lift on observed global completion - opens the
+  copy; the write-fence deadline self-lift and the local write unblock leave it
+  closed. The closed set is recorded durably before the copy is closed, so a
+  crash, a re-driven commit or an abort between the close and the lift still
+  opens it. The minimum admission epoch survives the open.
+- **Checked on every routing resolution.** Every replicated write path on the
+  tree's apply seam - point and batched writes and deletes, range deletes, CRDT
+  deltas, saga prepares, terminals and cross-tree finalizes, and the snapshot
+  bootstrap import, which enters through the same applier - resolves its route
+  under a replication-apply mark, and every resolution under that mark checks
+  the resolved copy: it refuses a closed copy, and an open one whose minimum
+  admission epoch is above the apply's stamp (an apply with no stamp fails
+  closed). A write that was routed to the replaced copy is redirected by that
+  copy and re-resolves onto the restored one, so it meets the check there. A
+  copy only moves from closed to open and its epoch is fixed once open, so a
+  routing activation caches an open answer and always re-reads a closed one.
+
+A refused live entry is deferred, exactly as the receive fence defers it, and
+the sender re-ships it. That cannot re-advance the cut: every pre-cutover entry
+sits in a retired log, and a shipper re-resolves its source and rebinds to its
+restored copy before it sends after the saga (#4490), so a retired log is never
+shipped again. A post-cutover entry that was refused only because a stale cache
+stamped it is re-admitted with a fresh epoch and lands, which is where it
+belongs. A parked entry the copy refuses as admitted before the restore is
+discarded instead: no peer ships a post-cutover write before the saga completes
+globally, so an entry parked before the receiver's pause is a pre-cutover write,
+and the restore excludes it.
+
+A copy that stays closed defers every replicated write to its tree. Alarm on
+`orleans.lattice.restore.copy_receive_closed_age` (see
+[Metrics](../lattice/metrics.md#restored-copy-receive-fence-sourced-from-copyreceivefencegrain-and-latticegrain)):
+it reports how long each closed copy has been closed, and
+`orleans.lattice.restore.copy_receive_fenced` counts the applies it refused, by
+reason.
+
 ## Reliability under duress
 
 Every participant runs an **admission pre-flight** before it builds a shadow: it

@@ -38,7 +38,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         apply.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(new ApplyResult

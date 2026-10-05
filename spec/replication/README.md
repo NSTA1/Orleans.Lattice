@@ -38,7 +38,11 @@ replication says nothing about it.
   the writes the source applied from peers. The local-origin cycle-break skips
   those (`ShipSkip`); any entry above the cursor may be sent, re-sent and
   delivered in any order, and the cursor moves only on the acknowledgement of
-  the next entry (`Deliver`).
+  the next entry (`Deliver`). A trim past the cursor (`Trim`) and a batch the
+  shipper cannot encode (`ShipDeadLetter`) move the cursor past entries it
+  never sent, and each requests a re-seed of the peer. Content-hash elision
+  lets the receiver acknowledge an entry it already reflects without its
+  payload (`Elide`).
 - **The receiver's apply pipeline**, in production's order (`Deliver`): the
   receiver-side cycle-break, the shadow-forward identity cache, the causal dependency check (`Park`, `Drain`), the merge and
   the monotone high-water mark; dead-lettering of failed applies and evicted
@@ -46,10 +50,9 @@ replication says nothing about it.
   receiver restart that loses volatile state (`Restart`).
 - **Bootstrap** of one cluster from a snapshot of another, and the stream
   handoff the pin establishes (`Bootstrap`). The bootstrap may run in place
-  over a copy the receiver already holds, after the source trimmed its log
-  past the receiver's cursor, which is when the fall-off detector requests
-  one: the stream resumes at the trim point, and what lay behind it arrives
-  only in the snapshot.
+  over a copy the receiver already holds, after a re-seed request: what the
+  stream skipped arrives only in the snapshot. An operator may also request it
+  at any time.
 - **Merge modes** as join-homomorphisms from the set of merged writes:
   last-writer-wins and a grow-only counter.
 - **The transport** loses, duplicates, reorders and delays. A partition is a
@@ -150,6 +153,13 @@ lands as the check that reintroducing it is caught:
   receiver re-bootstrapped in place after the source trimmed its log past a
   delete kept the deleted key's old value
   (`EventualConvergenceSnapshotDropsDeletes`).
+- #4585, fixed by #4602 - content-hash elision elided on the key's bytes
+  alone, so a newer write with the same bytes was never applied
+  (`DedupNeverDropsNewElidesByContent`).
+- #4587, fixed by #4599 - the only fall-off probe read the receiver's own
+  WAL, so a source trim past the receiver's cursor requested no re-bootstrap
+  (`EventualConvergenceTrimNeverRebootstraps`, and
+  `EventualConvergenceFallOffUndetected` in the re-bootstrap companion).
 - #4604 - the snapshot drain ignored a deferred apply, so a row the applier
   deferred (a coordinated restore's receive fence, an in-flight duplicate) was
   dropped and the handoff pinned past it
@@ -160,6 +170,14 @@ fixes.
 
 ## Open production gaps
 
+- #4614 - a batch the shipper cannot encode is dead-lettered on the sender
+  and skipped, and nothing re-seeds the peer
+  (`EventualConvergenceShipDeadLetterNeverReseeds`).
+- #4615 - a tombstone is reaped on the wall clock alone, so a write it beats
+  that arrives later resurrects the key (`EventualConvergenceReapInsideGrace`,
+  in the re-bootstrap companion).
+- #4586 - the causal dependency check compares against a high-water mark that
+  is not downward-closed; no property checks causal order until its fix.
 - #4537 - an in-place re-bootstrap cannot reconcile a delete whose source
   tombstone was reaped (`EventualConvergenceReapedDeleteNotReconciled`, in
   the re-bootstrap companion).
@@ -183,8 +201,8 @@ two-arm experiment, in CI; see [the spec README](../README.md#ci-decision).
 ## Last checked
 
 On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
-`Replication.cfg` held with deadlock checking on, over 241,332 distinct states
-(1,309,271 generated) at a complete-search depth of 17. Every property in
+`Replication.cfg` held with deadlock checking on, over 308,258 distinct states
+(1,604,442 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
 held over 56,135 distinct states (163,127 generated) at a depth of 17.
@@ -200,6 +218,6 @@ This table is the one place this directory states them; see
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `Replication` | 4 | 3 | 11 | 19 | 16 | 241,332 |
+| `Replication` | 4 | 3 | 14 | 22 | 19 | 308,258 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
 | `ReplicationReBootstrap` | 2 | 1 | 10 | 12 | 11 | 56,135 |

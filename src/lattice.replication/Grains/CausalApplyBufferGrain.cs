@@ -32,6 +32,11 @@ internal sealed class CausalApplyBufferGrain(
     : ICausalApplyBufferGrain, IGrainBase
 {
     private CausalApplyBuffer? _buffer;
+
+    // The receive-fence epoch each parked entry was admitted under (issue
+    // #4593), keyed by the buffer's dedup identity. Mirrors the persisted
+    // ParkedCausalEntry.AdmissionEpoch and is rebuilt with the buffer.
+    private readonly Dictionary<CausalApplyBuffer.EntryKey, long> _epochs = new();
     private string? _treeId;
 
     /// <inheritdoc />
@@ -40,7 +45,7 @@ internal sealed class CausalApplyBufferGrain(
     private string TreeId => _treeId ??= context.GrainId.Key.ToString() ?? string.Empty;
 
     /// <inheritdoc />
-    public async Task<int> ParkAsync(WalRecord entry)
+    public async Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0)
     {
         var buffer = EnsureLoaded();
         var resolved = options.Get(TreeId);
@@ -52,6 +57,12 @@ internal sealed class CausalApplyBufferGrain(
 
         if (outcome != AddOutcome.Duplicate)
         {
+            _epochs[CausalApplyBuffer.EntryKey.From(entry)] = admissionEpoch;
+            foreach (var displaced in evicted)
+            {
+                _epochs.Remove(CausalApplyBuffer.EntryKey.From(displaced));
+            }
+
             try
             {
                 if (outcome == AddOutcome.AddedWithEviction && evicted.Count > 0)
@@ -80,6 +91,11 @@ internal sealed class CausalApplyBufferGrain(
             }
         }
 
+        // Issue #4586: the origin's frontier lists the write as held before the
+        // caller acknowledges it - also for a duplicate, whose first publication
+        // may have failed - or a dependent could be released while it sits here.
+        await PublishHeldAsync(entry.OriginClusterId, strict: true).ConfigureAwait(true);
+
         // Re-check after the insert: an advance whose drain ran between the
         // caller's dependency check and this park would otherwise leave the
         // entry parked with its dependencies already met (the lost wakeup).
@@ -102,6 +118,58 @@ internal sealed class CausalApplyBufferGrain(
 
     /// <inheritdoc />
     public Task<int> CountAsync() => Task.FromResult(EnsureLoaded().Count);
+
+    /// <inheritdoc />
+    public Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        foreach (var parked in state.State.Entries)
+        {
+            if (parked.Entry.Timestamp == timestamp
+                && string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                return Task.FromResult(true);
+            }
+        }
+
+        return Task.FromResult(false);
+    }
+
+    /// <summary>
+    /// Publishes every write of <paramref name="originClusterId"/> the durable
+    /// buffer holds to the origin's frontier (issue #4586). Strict publication
+    /// throws on failure; a best-effort one - after a removal, when a stale
+    /// listing only delays a dependent until the frontier confirms it here - does
+    /// not.
+    /// </summary>
+    private async Task PublishHeldAsync(string? originClusterId, bool strict)
+    {
+        if (string.IsNullOrEmpty(originClusterId)
+            || string.Equals(originClusterId, options.Get(TreeId).ClusterId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var held = new HashSet<HybridLogicalClock>();
+        foreach (var parked in state.State.Entries)
+        {
+            if (string.Equals(parked.Entry.OriginClusterId, originClusterId, StringComparison.Ordinal))
+            {
+                held.Add(parked.Entry.Timestamp);
+            }
+        }
+
+        try
+        {
+            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+                .SetHeldAsync(ReplicationOriginFrontierGrain.BufferSource(TreeId), held, CancellationToken.None)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex) when (!strict && ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Publishing the held writes of origin {Origin} for tree {Tree} failed; the frontier confirms them on demand", originClusterId, TreeId);
+        }
+    }
 
     /// <inheritdoc />
     public Task OnDeactivateAsync(DeactivationReason reason, CancellationToken token)
@@ -158,7 +226,7 @@ internal sealed class CausalApplyBufferGrain(
                 {
                     try
                     {
-                        await applier.ApplyDrainedEntryAsync(ent, CancellationToken.None).ConfigureAwait(true);
+                        await applier.ApplyDrainedEntryAsync(ent, EpochOf(ent), CancellationToken.None).ConfigureAwait(true);
                     }
                     catch (TxDecisionGateRefusedException gated)
                         when (gated.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
@@ -170,6 +238,26 @@ internal sealed class CausalApplyBufferGrain(
                         // parked, so the next drain (or maintenance tick) re-applies
                         // it once the capture releases the registry. Re-applying an
                         // entry this pass already applied is idempotent at the leaf.
+                        deferred = true;
+                        break;
+                    }
+                    catch (CopyReceiveFencedException fenced) when (fenced.AdmittedBeforeRestore)
+                    {
+                        // Issue #4593: the entry was parked before a coordinated
+                        // restore paused receiving, and the tree now serves the
+                        // restored copy. No peer ships a post-cutover write before
+                        // the saga completes globally, so the entry is a
+                        // pre-cutover write, and the restore excludes it: discard
+                        // it rather than re-advance the restored cut.
+                        logger.LogInformation(
+                            "Causal-apply buffer for tree {Tree} discarded an entry parked before a coordinated restore (key {Key}).",
+                            TreeId, ent.Key);
+                    }
+                    catch (CopyReceiveFencedException)
+                    {
+                        // Issue #4593: the entry routed to a restored copy a
+                        // coordinated restore still holds closed. Not a fault:
+                        // stop and leave it parked until the copy opens.
                         deferred = true;
                         break;
                     }
@@ -194,6 +282,22 @@ internal sealed class CausalApplyBufferGrain(
                 {
                     Rebuild();
                     return;
+                }
+
+                foreach (var ent in ready)
+                {
+                    if (keepParked is null || !keepParked.Contains(ent))
+                    {
+                        _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                    }
+                }
+
+                foreach (var ent in lost)
+                {
+                    if (keepParked is null || !keepParked.Contains(ent))
+                    {
+                        _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                    }
                 }
 
                 if (keepParked is not null)
@@ -226,6 +330,9 @@ internal sealed class CausalApplyBufferGrain(
             throw;
         }
     }
+
+    private long EpochOf(WalRecord entry) =>
+        _epochs.TryGetValue(CausalApplyBuffer.EntryKey.From(entry), out var epoch) ? epoch : 0;
 
     /// <summary>
     /// Dead-letters <paramref name="entry"/>, or returns <see langword="false"/>
@@ -311,9 +418,11 @@ internal sealed class CausalApplyBufferGrain(
         }
 
         var buffer = new CausalApplyBuffer(TreeId);
+        _epochs.Clear();
         foreach (var parked in state.State.Entries)
         {
             buffer.Restore(parked.Entry, parked.ParkedAtTicks);
+            _epochs.TryAdd(CausalApplyBuffer.EntryKey.From(parked.Entry), parked.AdmissionEpoch);
         }
 
         _buffer = buffer;
@@ -333,7 +442,7 @@ internal sealed class CausalApplyBufferGrain(
         var entries = new List<ParkedCausalEntry>(snapshot.Count);
         foreach (var (entry, parkedAtTicks) in snapshot)
         {
-            entries.Add(new ParkedCausalEntry { Entry = entry, ParkedAtTicks = parkedAtTicks });
+            entries.Add(new ParkedCausalEntry { Entry = entry, ParkedAtTicks = parkedAtTicks, AdmissionEpoch = EpochOf(entry) });
         }
 
         var previous = state.State.Entries;
@@ -346,6 +455,22 @@ internal sealed class CausalApplyBufferGrain(
         {
             state.State.Entries = previous;
             throw;
+        }
+
+        // Issue #4586: a write removed from the buffer (applied, or moved to the
+        // dead-letter queue, which published it first) leaves its origin's held set.
+        var removedOrigins = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var parked in previous)
+        {
+            if (!string.IsNullOrEmpty(parked.Entry.OriginClusterId))
+            {
+                removedOrigins.Add(parked.Entry.OriginClusterId);
+            }
+        }
+
+        foreach (var origin in removedOrigins)
+        {
+            await PublishHeldAsync(origin, strict: false).ConfigureAwait(true);
         }
     }
 }

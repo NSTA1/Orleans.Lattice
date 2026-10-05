@@ -86,7 +86,7 @@ public partial class ReplicationApplierTests
         // tree-b.
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(Arg.Any<string>()).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);

@@ -136,6 +136,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         var destinationRegistry = Substitute.For<ITxRegistryGrain>();
         destinationRegistry.GetStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
         destinationRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.InFlight));
+        destinationRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([SourceShardIndex]));
         destinationFactory.GetGrain<ITxRegistryGrain>(Arg.Any<string>()).Returns(destinationRegistry);
 
         var destinationRootContext = Substitute.For<IGrainContext>();
@@ -172,6 +173,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         var sourceLeaf = Substitute.For<IBPlusLeafGrain>();
         sourceLeaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
         sourceLeaf.GetNextSiblingAsync().Returns(Task.FromResult<GrainId?>(null));
+        StubLocalPrepareLookup(sourceLeaf);
         sourceFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(sourceLeaf);
         sourceFactory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(Substitute.For<ILeafCacheGrain>());
 
@@ -234,11 +236,14 @@ public partial class ShardRootGrainSplitShadowForwardTests
         //
         // Since issue #4385 a destination leaf that remembers the saga's
         // terminal refuses the late prepare (see the next test), and since
-        // issue #4445 one that has forgotten it asks the registry. So the
-        // action is realised only where the leaf's current activation does not
-        // know the terminal (it landed before a reactivation) AND the registry
-        // does not report the decision - here it answers InFlight, standing in
-        // for a row pruned past retention.
+        // issue #4445 one that has forgotten it asks the registry. Since issue
+        // #4632 a saga the registry cannot place but holds no participant row
+        // for is known forgotten and refused too. So the action is realised only
+        // where the leaf's current activation does not know the terminal (it
+        // landed before a reactivation) AND the registry can neither report the
+        // decision nor rule the saga out - here it answers InFlight with a row
+        // present, standing in for registry state a fault keeps the leaf from
+        // reading past (the refusal fails open).
         var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
         var txid = Guid.NewGuid();
 
@@ -282,6 +287,34 @@ public partial class ShardRootGrainSplitShadowForwardTests
         // replay here, so it holds no row for the key at all.)
         Assert.That(h.DestinationLeaf.EntriesForTest.ContainsKey("k"), Is.False,
             "The forwarded prepared value must be bucketed, never published into the destination's visible Entries.");
+    }
+
+    [Test]
+    public async Task Hot_path_shadow_forward_after_a_destination_reactivation_installs_no_orphan_when_the_saga_was_forgotten()
+    {
+        // Issue #4632. The detector above once the saga has been forgotten and
+        // its decision pruned: the registry can only answer InFlight, but the
+        // saga's participant row went with the forget, so the reactivated
+        // destination leaf refuses the late forward instead of installing a
+        // bucket that nothing would ever settle.
+        var h = CreateHotPathOrphanHarness(ShardSplitPhase.Swap);
+        h.DestinationRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>([]));
+        var txid = Guid.NewGuid();
+
+        await h.DestinationLeaf.SetAsync("k", [99]);
+        await h.DestinationLeaf.ApplyTxTerminalAsync(txid, committed: true, committedValues: null);
+        h.DestinationLeaf = h.ReactivateDestinationLeaf();
+        await h.DestinationLeaf.SetAsync("k", [22]);
+
+        await PreparedShardSetAsync(h.Source, txid, "k", [11]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.DestinationLeaf.PendingTransactionCount, Is.Zero,
+                "a late forward of a forgotten saga must not leave a bucket on the reactivated destination");
+            Assert.That(h.DestinationLeaf.EntriesForTest["k"].Value, Is.EqualTo(new byte[] { 22 }));
+        });
+        await h.DestinationRegistry.Received().GetParticipantsAsync(txid);
     }
 
     [Test]

@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// Extracted from <c>ReplicationShipperGrain</c> so the decision the replication TLA+ module
 /// (<c>spec/replication/Replication.tla</c>, actions <c>ShipSkip</c> and <c>Deliver</c>) and the
-/// replication Coyote models check is the one the shipper runs. Both members are allocation-free
+/// replication Coyote models check is the one the shipper runs. Every member is allocation-free
 /// and run once per drained WAL entry.
 /// </para>
 /// </summary>
@@ -40,6 +40,18 @@ internal static class ReplicationShipEligibility
 
         return string.Equals(originClusterId, localClusterId, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// Whether this drain tick is the one-time legacy-migration tick: a state persisted by a
+    /// pre-partition-cursor build carries a non-zero scalar cursor but no partition cursors, so
+    /// every partition would resume from sequence 0 and re-ship the already-shipped prefix. Only
+    /// on this tick may <see cref="IsBelowLegacyScalarCursor"/> drop on the scalar cursor.
+    /// </summary>
+    /// <param name="scalarCursor">The shipper's persisted scalar HLC cursor.</param>
+    /// <param name="partitionCursorCount">How many partition cursors the shipper has saved.</param>
+    /// <returns><see langword="true"/> on the legacy-migration tick.</returns>
+    public static bool IsLegacyMigrationTick(HybridLogicalClock scalarCursor, int partitionCursorCount) =>
+        scalarCursor != HybridLogicalClock.Zero && partitionCursorCount == 0;
 
     /// <summary>
     /// Whether the scalar HLC cursor drops an entry the partition merge has already consumed.

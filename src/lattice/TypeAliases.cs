@@ -86,6 +86,7 @@ internal static class TypeAliases
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
+    internal const string DiscardedSagaPrepare = "ol.dsp";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
     internal const string LeafSnapshotSegment = "ol.lss";
@@ -681,6 +682,13 @@ internal static class TypeAliases
     internal const string WalMaterialiserPinState = "ol.wps";
     internal const string WalMaterialiserPinReport = "ol.wpr";
 
+    // Decision-purge hold (#4533, #4534): a per-tree record of replication
+    // consumers that need every saga decision kept, which suspends the
+    // transaction registry's decision purges until each removes its hold.
+    internal const string IWalPurgeHoldGrain = "ol.wph";
+    internal const string WalPurgeHoldState = "ol.whs";
+    internal const string WalPurgeHold = "ol.whh";
+
     // Materialised views (Phase 1): the projected-write value type and its
     // effect-kind enum are the core serializable surface; the view
     // maintainer's durable checkpoint state lives in the replication package
@@ -761,6 +769,18 @@ internal static class TypeAliases
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
 
+    /// <summary>
+    /// Alias for one leaf's durable record of the keys a saga's terminal settled
+    /// on it (issue #4545).
+    /// </summary>
+    internal const string AppliedTerminalWitness = "ol.atw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar grain interface (issue #4545).</summary>
+    internal const string ILeafTerminalWitnessGrain = "ol.gtw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar state (issue #4545).</summary>
+    internal const string LeafTerminalWitnessState = "ol.ltw";
+
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 
@@ -813,5 +833,18 @@ internal static class TypeAliases
 
     /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
     internal const string WalOffsetConsumerRegistryState = "ol.wcs";
-}
 
+    // Restored-copy receive fence (issue #4593)
+
+    /// <summary>Alias for the per-physical-copy receive fence grain interface.</summary>
+    internal const string ICopyReceiveFenceGrain = "ol.qfg";
+
+    /// <summary>Alias for the per-physical-copy receive fence state.</summary>
+    internal const string CopyReceiveFenceState = "ol.qfs";
+
+    /// <summary>Alias for the closed-copy replication apply refusal.</summary>
+    internal const string CopyReceiveFenced = "ol.qfx";
+
+    /// <summary>Alias for the per-physical-copy receive fence status.</summary>
+    internal const string CopyReceiveFenceStatus = "ol.qft";
+}

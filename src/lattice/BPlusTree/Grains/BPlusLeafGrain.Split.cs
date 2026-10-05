@@ -1050,7 +1050,9 @@ internal sealed partial class BPlusLeafGrain
                 siblingId);
         }
 
-        await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+        // The witness for the moved keys rides the sibling's birth write below.
+        await EnsureTerminalWitnessHydratedAsync();
+        var siblingInit = new SiblingInitialization
         {
             TreeId = state.State.TreeId!,
             ShardIndex = state.State.ShardIndex,
@@ -1079,7 +1081,14 @@ internal sealed partial class BPlusLeafGrain
             // SetCheckpointOffsetHintsAsync stamps below, so the pin and the
             // sibling's projection checkpoint start life in agreement.
             WalHeadsAtBirth = resolvedHeads,
-        });
+
+            // The donor's applied-terminal witnesses for the moved keys (issue
+            // #4545), adopted before any migrated row or shadow marker reaches the
+            // sibling, so a delayed marker for a saga whose terminal the donor
+            // already applied to one of those keys is recognised there too.
+            TerminalWitnesses = CollectTerminalWitnessesForSibling(splitKey),
+        };
+        await newLeaf.InitializeSiblingAsync(siblingInit);
 
         // Join the back-pointer fixup before mutating the donor's own
         // state so a thrown fixup surfaces here (and not on a later
@@ -1256,6 +1265,21 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitInFlight = false;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
+        // A terminal can interleave with the transfer above (the leaf mutation
+        // surface is [AlwaysInterleave]) and, while this leaf still declared the
+        // moved range, settle a moved key here and record its witness on this
+        // leaf only - after the sibling adopted the witnesses sent at its birth
+        // (issue #4545). The span has just narrowed, so from here on such a
+        // terminal is re-routed to the sibling, which records the witness itself;
+        // what was recorded before is re-sent now, before any write can persist
+        // the narrowed span. The sibling adopts it as a union and makes it
+        // durable in its own sidecar before this call returns.
+        var movedWitnesses = CollectTerminalWitnessesForSibling(splitKey);
+        if (HasWitnessNotIn(movedWitnesses, siblingInit.TerminalWitnesses))
+        {
+            await newLeaf.InitializeSiblingAsync(siblingInit with { TerminalWitnesses = movedWitnesses });
+        }
+
         // Advance the donor's per-partition projection checkpoints to
         // the WAL heads captured at split time.
         //
@@ -1362,6 +1386,8 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        // The marker transfer reads the applied-terminal witness (issue #4545).
+        await EnsureTerminalWitnessHydratedAsync();
         var bySaga = CollectShadowMarkers(movedKeys);
         if (bySaga is null)
             return;
@@ -1412,7 +1438,7 @@ internal sealed partial class BPlusLeafGrain
                 {
                     foreach (var txid in sagas)
                     {
-                        if (IsRecentlyTerminal(txid))
+                        if (IsTerminalWitnessed(txid, key))
                             continue;
                         AddSagaKeyMarker(ref bySaga, txid, key, ShadowMarkerStamp(key, txid));
                     }
@@ -1430,6 +1456,10 @@ internal sealed partial class BPlusLeafGrain
                 ?? new HashSet<string>(movedKeys, StringComparer.Ordinal);
             foreach (var (txid, bucket) in _pendingTx!)
             {
+                // Per saga, unlike the marker loop above: a terminal drains every
+                // bucket of its saga present at that moment, so a bucket that
+                // outlives the saga's terminal here is a late orphan the next
+                // delivery discards, and it needs no isolation on the sibling.
                 if (IsRecentlyTerminal(txid))
                     continue;
 

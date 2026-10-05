@@ -1,0 +1,17 @@
+# Pairs with RestoreConverges, under the fairness Spec asserts. A receive-gate
+# cache that re-reads the fence but keeps the epoch it first read stamps every
+# later admission with a pre-restore epoch, so the restored copy refuses every
+# post-cutover write for good and the clusters never converge. Its code analogue
+# (the cache dropping the epoch) turns ReplicationReceiveGateTests red.
+MODULE: RestoreConvergesGateCacheKeepsStaleEpoch
+TARGET: RestoreConverges
+CLASS: Temporal
+SUMMARY: the receive-gate cache never refreshes the epoch it stamps
+PERTURBS: Refresh
+
+--- FIND
+    /\ seen' = [seen EXCEPT ![c] = [open |-> recvOn[c], ep |-> epoch[c]]]
+--- REPLACE
+    \* MUTATION: the cached epoch is never refreshed.
+    /\ seen' = [seen EXCEPT ![c] = [open |-> recvOn[c], ep |-> seen[c].ep]]
+--- END

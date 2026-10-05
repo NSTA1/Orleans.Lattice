@@ -1218,6 +1218,7 @@ internal sealed partial class TxRegistryGrain(
         // Advance the decision-purge guard before this call mutates anything,
         // so the prune below sees its latest cleared generation (#4508).
         await RefreshWalPurgeGuardAsync();
+        await RefreshWalPurgeHoldAsync();
 
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;
@@ -1449,12 +1450,42 @@ internal sealed partial class TxRegistryGrain(
         }
     }
 
+    /// <summary>
+    /// Whether the participant registration being served is a forwarded prepare's
+    /// (<see cref="LatticeForwardedPrepareContext"/>) for a saga this cluster
+    /// authored (no <see cref="LatticeOriginContext"/>) whose decision this
+    /// registry records. Such a registration joins an existing row but never
+    /// creates one (issue #4632): the saga's coordinator holds the row from
+    /// before its first prepare until <see cref="ForgetAsync"/>, so an absent row
+    /// means the saga was forgotten, and a late forward that recreated it would
+    /// make the forgotten saga read as live to the destination leaf's refusal.
+    /// A replicated prepare's saga is never forgotten here, and its row may be
+    /// held by another registry, so its registration is unchanged.
+    /// </summary>
+    private bool JoinsOnly() =>
+        LatticeOriginContext.Current is null
+        && LatticeForwardedPrepareContext.RegistryTreeId is { } registryTreeId
+        && string.Equals(registryTreeId, TreeId, StringComparison.Ordinal);
+
     /// <inheritdoc />
     public async Task RegisterParticipantAsync(Guid txid, int shardIndex)
     {
         var createdSet = false;
         if (!state.State.Participants.TryGetValue(txid, out var set))
         {
+            if (JoinsOnly())
+            {
+                // A forwarded prepare of a locally authored saga only joins the
+                // row its coordinator holds from before its first prepare until
+                // ForgetAsync. With no row the saga is forgotten, and recreating
+                // the row would make it read as live again (issue #4632).
+                if (!await WhenDurableAsync(txid))
+                {
+                    await RegisterParticipantAsync(txid, shardIndex);
+                }
+                return;
+            }
+
             set = [];
             state.State.Participants[txid] = set;
             createdSet = true;

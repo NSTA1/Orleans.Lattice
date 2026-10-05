@@ -251,7 +251,7 @@ public class GrpcPushTransportClientIntegrationTests
     [Test]
     public async Task ExchangeContentManifestAsync_returns_a_plan_over_the_wire()
     {
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("self", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
@@ -328,7 +328,7 @@ public class GrpcPushTransportClientIntegrationTests
         // sole production caller (ReplicationDigestProbeGrain) passes
         // options.ClusterId for exactly that reason.
         var clock = new HybridLogicalClock { WallClockTicks = 7777, Counter = 2 };
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("self", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(clock));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);

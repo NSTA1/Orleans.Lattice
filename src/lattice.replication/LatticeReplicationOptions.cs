@@ -177,6 +177,27 @@ public class LatticeReplicationOptions
     public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
 
     /// <summary>
+    /// Wall-clock bound on how long the receiver defers a saga prepare that
+    /// exhausted <see cref="MaxApplyRetries"/> before it poisons the whole saga
+    /// on that receiver and parks the prepare with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/>. Defaults to
+    /// <see cref="DefaultSagaDeferralTimeout"/>. A silo restart restarts the
+    /// in-memory deferral clock, which can only defer longer; it never poisons a
+    /// record earlier than a continuously-running silo would have done. Must be
+    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// <para>
+    /// The bound applies only to prepares. A deferred
+    /// <see cref="MutationKind.TxCommit"/> or <see cref="MutationKind.TxAbort"/>
+    /// terminal is never poisoned by timeout, because a terminal may be the
+    /// record that completes the receiver-side tally after the registry decision
+    /// was already recorded; poisoning it would strand the saga's buckets under
+    /// a recorded commit. Fix the terminal's apply failure or re-bootstrap the
+    /// tree from the origin.
+    /// </para>
+    /// </summary>
+    public TimeSpan SagaDeferralTimeout { get; set; } = DefaultSagaDeferralTimeout;
+
+    /// <summary>
     /// Maximum number of <see cref="DeadLetterEntry"/> records the
     /// per-tree dead-letter queue retains. When the queue is full a new
     /// enqueue is refused rather than evicting a parked entry (issue #4603):
@@ -208,6 +229,24 @@ public class LatticeReplicationOptions
     /// </para>
     /// </summary>
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
+
+    /// <summary>
+    /// How many applied write identities <c>(origin, HLC)</c> the receiver
+    /// remembers per tree and origin, so an entry whose causal dependency names
+    /// one of them is released at once (issue #4586). Each identity costs a few
+    /// dozen bytes of memory on the tree's high-water-mark activation; the
+    /// record is not persisted. When an identity has been forgotten - evicted
+    /// past this capacity, or lost to a reactivation - a dependent waits for the
+    /// origin's shipped low watermark to pass it instead, which trails the
+    /// origin's wall clock by its <c>LatticeOptions.ReplicationClockFloorLag</c>.
+    /// So the capacity trades memory for latency only, never correctness.
+    /// Defaults to <see cref="DefaultCausalAppliedIdentityCapacity"/>; must be
+    /// between <c>1</c> and <c>1_048_576</c>.
+    /// </summary>
+    public int CausalAppliedIdentityCapacity { get; set; } = DefaultCausalAppliedIdentityCapacity;
+
+    /// <summary>Default value for <see cref="CausalAppliedIdentityCapacity"/> (16,384 per tree and origin).</summary>
+    public const int DefaultCausalAppliedIdentityCapacity = 16_384;
 
     /// <summary>
     /// Maximum estimated cumulative byte size of every entry parked
@@ -1603,6 +1642,14 @@ public class LatticeReplicationOptions
     /// transient faults without dragging an origin cursor for hours.
     /// </summary>
     public const int DefaultMaxApplyRetries = 5;
+
+    /// <summary>
+    /// Default value for <see cref="SagaDeferralTimeout"/>: fifteen minutes.
+    /// Long enough for ordinary transient receiver failures to clear and short
+    /// enough that a permanently-unappliable prepare raises an alarm and unblocks
+    /// the origin link within an operator-visible window.
+    /// </summary>
+    public static readonly TimeSpan DefaultSagaDeferralTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Default value for <see cref="DeadLetterQueueCapacity"/>: 1000
