@@ -823,6 +823,34 @@ Beside every batch, and on an idle link's liveness probe, the shipper ships `Rep
 
 A rebind discards the floors of the retired log. A replay filter a rebind begins clears once every partition has passed its horizon. A partition never consumed counts as being at offset 0, so it no longer holds the filter open ([#4656](https://github.com/NSTA1/Orleans.Lattice/issues/4656)).
 
+### Tombstone reap gate
+
+[Tombstone compaction](../lattice/tombstone-compaction.md) reaps a tombstone once it is older than `TombstoneGracePeriod`. On its own that is a wall-clock bound. A write older than a delete can be delivered after the delete's tombstone was reaped, after a partition, a paused shipper or a stalled link that lasted longer than the grace period. It then finds no tombstone and resurrects the key on that replica only ([#4615](https://github.com/NSTA1/Orleans.Lattice/issues/4615)).
+
+`AddLatticeReplication` therefore registers a reap gate (`ReplicationTombstoneReapGate`). Each compaction batch of a replicated tree reads a ceiling from it. A tombstone, or a TTL-expired entry, is reaped only when it is past the grace period **and** stamped strictly below the ceiling `min(D, P)`:
+
+- **D: nothing it beats is still on its way here.** This bound covers every origin that has pushed the tree here, and every configured peer.
+  - It is the receiver tree frontier's applied low watermark for the origin: every write of the origin below it is applied here.
+  - It is clamped below every write of the origin that the tree's causal-apply buffer or dead-letter queue still holds, or that the last installed export lacked.
+  - A write marked lost is never applied, so it holds nothing back. A dead letter clamps until an operator discards it, at which point it is lost.
+  - An origin with no exact watermark makes D zero: the tree is degraded, the origin is pending, or its re-seed is outstanding.
+  - An origin's clock floor also bounds every write it authors later, so D covers a write that has not been authored yet.
+- **P: every peer applied every delete this cluster stamped below it.** This bound covers every configured peer.
+  - It is the peer's shipper reap watermark: the [applied low watermark](#applied-low-watermark-what-the-shipper-vouches-for), computed the same way but never shipped. It is withheld while the peer is off the log.
+  - A peer whose re-seed rewind passed a trimmed delete record counts once its watermark resumes past it, because the re-seed export carried the tombstone as a committed delete.
+  - A peer that has no watermark yet makes P zero.
+  - The reap watermark is not frozen by a key filter: it claims only the peer's in-scope writes, and the peer never holds an out-of-scope key. Any change to the filter withholds it until the cursor covers a floor read under the new scope, so a key brought into scope is never reaped on the strength of the old one.
+
+A tombstone the ceiling keeps counts as still inside the grace window, so its leaf re-scans it on a later pass. A tree replication is not enabled for, or a replicated tree with no peer and no origin, reaps on the grace period alone. A failure to read the ceiling reaps nothing.
+
+The gate trades storage for convergence. Tombstones accumulate on a replicated tree for as long as:
+- any origin is degraded or pending;
+- a write is parked or dead-lettered;
+- a peer is off the log;
+- a peer is unreachable.
+
+A peer that is gone for good blocks every reap of its trees until it is removed from the topology and detached (see [`WalRetention`](configuration.md#walretention)). The `orleans.lattice.replication.tombstone_reap.bound` counter reports which constraint bounds each ceiling (see [Observability](observability.md)).
+
 ### Deferred cursor persistence
 
 Cursor advances are amortised across `ShipCursorWriteInterval`

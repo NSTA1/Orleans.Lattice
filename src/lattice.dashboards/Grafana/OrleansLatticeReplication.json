@@ -2220,6 +2220,33 @@
       ]
     },
     {
+      "id": 45863,
+      "title": "Tombstone reap ceilings by bound - issue #4615",
+      "description": "Tombstone reap ceilings the replication reap gate computed for replicated trees, by the constraint that bound each one. degraded_origin: an origin has no exact applied low watermark here, so nothing is reaped. peer_frontier: a peer's shipper reap watermark bounds it; a zero one (the peer is off the log or has none yet) reaps nothing. origin_frontier: an origin's watermark bounds it. held_entry: a parked, dead-lettered or export-missing write bounds it. A tree whose ceilings stay bound by one reason accumulates tombstones.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 1007
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_tombstone_reap_bound_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__rate_interval]))",
+          "legendFormat": "{{reason}}"
+        }
+      ]
+    },
+    {
       "id": 45864,
       "title": "Batches refused for their source lineage - issue #4673",
       "description": "Pushed batches the receiver refused because the sender read them under a source lineage this tree does not hold. stale_lineage: the batch's lineage is not the one this tree last drained from the origin. replaced: this tree's contents were replaced since that drain. The sender retries and re-seeds the peer when its binding is current, so a sustained rate is a link stalled on a re-seed.",

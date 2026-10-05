@@ -295,6 +295,27 @@ public sealed class LatticeWalGc(
         // publish a second minimum taken over the consumers this one does NOT
         // cover, which is what makes the offset axis safe to grant entitlement
         // with rather than only to subtract it with.
+        //
+        // Override holds (issue #4641), and the head bound they need. A leaf that
+        // appends a write stamped below its own clock - a replication apply, a
+        // range delete's issue stamp, a carried copy, a reap - can put it below
+        // the frontier it last published by an empty release, and the pin
+        // store's max merge can never lower that frontier, so every stamp-based
+        // arm would admit it. The leaf therefore raises a durable hold first, and
+        // a held consumer whose offset is still the -1 sentinel is read below as
+        // a Zero block pin. Three reads, and their ORDER is the proof:
+        //
+        //   1. Each partition's head, so this pass never trims past it. A write
+        //      appended after this read is past it, whatever its stamp.
+        //   2. The holds. A hold raised before this read is seen; one raised
+        //      after it guards a write appended after it, so past the bound.
+        //   3. The offset census. The store drops a hold only in the write that
+        //      lands its consumer's first real offset, so a hold missing at (2)
+        //      for that reason is always matched by a real offset at (3), and the
+        //      offset-floor stop protects everything above it.
+        var trimHeadBounds = await ReadTrimHeadBoundsAsync(
+            treeName, partitions, ResolvePartitionProvider, cancellationToken).ConfigureAwait(false);
+        var overrideHolds = await ReadOverrideHoldsAsync(treeName).ConfigureAwait(false);
         var offsetCoverage = await ComputeMaterialiserOffsetFloorAsync(treeName).ConfigureAwait(false);
         var offsetFloor = offsetCoverage.Floor;
         RecordDurableFloorProgress(treeName, offsetFloor);
@@ -308,7 +329,7 @@ public sealed class LatticeWalGc(
         var floorResult = await ApplyDurableMaterialiserFloorAsync(
             treeName, minCursor, partitions, offsetCoverage.CoveredConsumerIds,
             offsetCoverage.AbstainedConsumerIds, cancellationToken,
-            ResolvePartitionProvider).ConfigureAwait(false);
+            ResolvePartitionProvider, overrideHolds).ConfigureAwait(false);
         // Fail closed when either durable census could not be read (issue
         // #3576). The two reads are the ONLY evidence of the retention holders
         // the in-memory registry cannot see - dormant leaves after a restart,
@@ -321,7 +342,8 @@ public sealed class LatticeWalGc(
         // folded into floorResult; an offset read failure is folded here,
         // keeping whatever blocker attribution the pin plane produced so the
         // scheduler's blocked-leaf remedy still has names to act on.
-        var censusUnavailable = floorResult.CensusUnavailable || offsetCoverage.Unavailable;
+        var holdCensusUnavailable = overrideHolds is null;
+        var censusUnavailable = floorResult.CensusUnavailable || offsetCoverage.Unavailable || holdCensusUnavailable;
         if (censusUnavailable)
         {
             if (!floorResult.CensusUnavailable)
@@ -339,7 +361,7 @@ public sealed class LatticeWalGc(
 
             var plane = floorResult.PinCensusUnreadable
                 ? (offsetCoverage.Unavailable ? "pin and offset" : "pin")
-                : "offset";
+                : offsetCoverage.Unavailable ? "offset" : "override hold";
             services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
                 "WAL GC pass for tree {Tree} trimmed nothing: the durable materialiser {Plane} census could not be "
                 + "read, so the retention floor is unknown and the pass fails closed. The next pass retries.",
@@ -731,7 +753,7 @@ public sealed class LatticeWalGc(
                     tenantTag);
             }
 
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), PartitionTtlCeiling(partition), causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken, ForcedTrimHold(partition)).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), PartitionTtlCeiling(partition), causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, trimHeadBounds[partition], cancellationToken, ForcedTrimHold(partition)).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
@@ -900,7 +922,8 @@ public sealed class LatticeWalGc(
         IReadOnlySet<string>? coveredConsumerIds,
         IReadOnlySet<string>? abstainedConsumerIds,
         CancellationToken cancellationToken,
-        Func<int, IWalStorageProvider?>? resolvePartitionProvider)
+        Func<int, IWalStorageProvider?>? resolvePartitionProvider,
+        IReadOnlySet<string>? overrideHolds = null)
     {
         var factory = GrainFactory;
         if (factory is null)
@@ -1099,8 +1122,21 @@ public sealed class LatticeWalGc(
         List<string>? blockingConsumerIds = null;
         sbyte[]? walEmptyByPartition = null;
 
-        foreach (var (consumerId, pin) in pins)
+        foreach (var (consumerId, storedPin) in pins)
         {
+            // An override hold (issue #4641) demotes a pin the offset floor does
+            // not cover to the Zero block pin, which the monotonic-max store
+            // cannot do itself: the leaf has appended, or is about to append, a
+            // write stamped below the frontier it published by an empty release.
+            // Read exactly as a block pin from here on - it holds its partition
+            // against every arm and is named as a blocker - except that it is
+            // named even while the leaf is in the registry, because only the
+            // blocked-leaf remedy's drive to coverage releases it.
+            var held = overrideHolds is not null
+                && overrideHolds.Contains(consumerId)
+                && (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId));
+            var pin = held ? HybridLogicalClock.Zero : storedPin;
+
             // The retention ceiling never overtakes a leaf (issue #4622). A leaf
             // pin the durable offset floor does not cover caps its partition's
             // retention ceiling at its frontier F. F was published by an empty
@@ -1152,7 +1188,10 @@ public sealed class LatticeWalGc(
             // (possibly staler) must not raise the floor. "Present" means a
             // real cursor: a Zero-cursor registration is not in this set
             // (issue #3416), so its pin is read below like an absent one's.
-            if (present.Contains(consumerId))
+            // A held consumer is read below too (issue #4641): its registry
+            // cursor is the leaf's clock, which is no floor for a write stamped
+            // below it.
+            if (present.Contains(consumerId) && !held)
             {
                 continue;
             }
@@ -1645,6 +1684,103 @@ public sealed class LatticeWalGc(
         public bool IsRetentionHeld(int partition, HybridLogicalClock ttlCeiling)
             => RetentionCeilingFor(partition, ttlCeiling) is not { } effective || effective < ttlCeiling;
     }
+
+    /// <summary>
+    /// Reads every partition's WAL head before the override holds are read
+    /// (issue #4641), as the bound no trim of this pass may pass. A partition
+    /// whose provider is unresolvable or whose head read fails gets <c>-1</c>,
+    /// so nothing in it is trimmed this pass: a bound that cannot be established
+    /// fails closed.
+    /// </summary>
+    private async Task<long[]> ReadTrimHeadBoundsAsync(
+        string treeName,
+        int partitions,
+        Func<int, IWalStorageProvider?> resolvePartitionProvider,
+        CancellationToken cancellationToken)
+    {
+        var bounds = new long[Math.Max(1, partitions)];
+        for (var partition = 0; partition < bounds.Length; partition++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (resolvePartitionProvider(partition) is not { } provider)
+            {
+                bounds[partition] = -1;
+                continue;
+            }
+
+            try
+            {
+                bounds[partition] = await provider
+                    .GetHighestOffsetAsync(treeName, partition, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                bounds[partition] = -1;
+                services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                    ex,
+                    "WAL GC could not read the head of partition {Partition} of tree {Tree}; the partition is not trimmed on this pass.",
+                    partition,
+                    treeName);
+            }
+        }
+
+        return bounds;
+    }
+
+    /// <summary>
+    /// Reads and unions the override holds (issue #4641) of
+    /// <paramref name="treeName"/> across every pin shard plus the legacy
+    /// unsuffixed key, exactly the keys <see cref="ReadDurablePinsAsync"/> reads.
+    /// A hold anywhere counts: a stranded one only over-retains, and only until
+    /// its consumer's offset becomes real, after which the floor ignores it.
+    /// Returns an empty set when there is no grain factory (no durable census
+    /// exists to hold against), and <see langword="null"/> when any shard could
+    /// not be read, which fails the pass closed.
+    /// </summary>
+    private async Task<IReadOnlySet<string>?> ReadOverrideHoldsAsync(string treeName)
+    {
+        var factory = GrainFactory;
+        if (factory is null)
+        {
+            return EmptyOverrideHolds;
+        }
+
+        try
+        {
+            var shardCount = WalMaterialiserPinRouting.ResolveShardCount(optionsMonitor);
+            var keys = WalMaterialiserPinRouting.EnumerateReadKeys(treeName, shardCount);
+            var reads = new Task<IReadOnlyCollection<string>>[keys.Count];
+            for (var i = 0; i < keys.Count; i++)
+            {
+                reads[i] = factory.GetGrain<IWalMaterialiserPinGrain>(keys[i]).GetOverrideHoldsAsync();
+            }
+
+            var results = await Task.WhenAll(reads).ConfigureAwait(false);
+            HashSet<string>? union = null;
+            for (var i = 0; i < results.Length; i++)
+            {
+                if (results[i] is not { Count: > 0 } holds)
+                {
+                    continue;
+                }
+
+                union ??= new HashSet<string>(StringComparer.Ordinal);
+                union.UnionWith(holds);
+            }
+
+            return union ?? EmptyOverrideHolds;
+        }
+        catch (Exception ex)
+        {
+            services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                ex, "WAL GC override-hold census unavailable for tree {Tree}: the holds could not be read.", treeName);
+            return null;
+        }
+    }
+
+    /// <summary>The empty override-hold census, shared so a pass with no holds allocates nothing.</summary>
+    private static readonly IReadOnlySet<string> EmptyOverrideHolds = new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Reads and unions the durable leaf-materialiser pins for
@@ -2776,6 +2912,7 @@ public sealed class LatticeWalGc(
         WalGcOffsetAdmission? offsetAdmission,
         long? consumerOffsetFloor,
         bool durabilityHold,
+        long scanHeadBound,
         CancellationToken cancellationToken,
         Func<long, Task>? beforeTrim = null)
     {
@@ -2793,10 +2930,24 @@ public sealed class LatticeWalGc(
 
             var pageEntries = 0;
             var lastSeenOffset = fromOffsetExclusive;
+            var boundReached = false;
             await foreach (var walEntry in provider
                 .ReadAsync(treeId, shardIndex, fromOffsetExclusive, ScanPageSize, cancellationToken)
                 .ConfigureAwait(false))
             {
+                // Head bound (issue #4641). The pass read this partition's head
+                // BEFORE it read the override holds, and a leaf raises its hold
+                // durably BEFORE it appends a write stamped below its clock, so any
+                // such write past the head was appended after a hold this pass may
+                // not have seen. It is left for the next pass, which will see the
+                // hold. Ends the scan as running out of entries does: nothing past
+                // the bound is retained on this pass's account.
+                if (walEntry.Offset > scanHeadBound)
+                {
+                    boundReached = true;
+                    break;
+                }
+
                 pageEntries++;
                 entriesSeen++;
                 lastSeenOffset = walEntry.Offset;
@@ -2870,6 +3021,11 @@ public sealed class LatticeWalGc(
                     stop = true;
                     break;
                 }
+            }
+
+            if (boundReached)
+            {
+                break;
             }
 
             if (stop)
