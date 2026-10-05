@@ -731,7 +731,7 @@ internal sealed partial class BPlusLeafGrain(
             // loop re-fans under a fresh snapshot.
             if (lww.IsMigrated && TryGetShadowedSagas(key, out var sagas))
             {
-                return await GetWithShadowedMigratedAsync(key, lww.Value, sagas);
+                return await GetWithShadowedMigratedAsync(key, lww.Value, lww.Timestamp, sagas);
             }
 #if LATTICE_DIAG
             // DIAG: single-key read-return path.
@@ -759,9 +759,9 @@ internal sealed partial class BPlusLeafGrain(
     /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
     /// retry loop re-fans under a fresh snapshot.
     /// </summary>
-    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HashSet<Guid> sagas)
+    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
-        if (await IsShadowedReadSafeAsync(sagas))
+        if (await IsShadowedReadSafeAsync(key, rowStamp, sagas))
         {
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG read1-shadow-pass] gid={context.GrainId} key={key} valRound={DiagDecodeRound(migratedValue)}");
@@ -1079,7 +1079,7 @@ internal sealed partial class BPlusLeafGrain(
                 // is installed.
                 if (lww.IsMigrated && TryGetShadowedSagas(key, out var shadowSagas))
                 {
-                    if (!await IsShadowedReadSafeAsync(shadowSagas))
+                    if (!await IsShadowedReadSafeAsync(key, lww.Timestamp, shadowSagas))
                     {
 #if LATTICE_DIAG
                         DiagSink.Write($"[DIAG read-shadow-stale] silo={DiagSiloTag} gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");
@@ -1238,8 +1238,9 @@ internal sealed partial class BPlusLeafGrain(
         var isPrepared = LatticePreparedContext.Current;
         HybridLogicalClock stamp;
         var stampOriginal = false;
+        var stampCarried = false;
         if (isPrepared)
-            (stamp, stampOriginal) = MintPreparedStamp(key);
+            (stamp, stampOriginal, stampCarried) = MintPreparedStamp(key);
         else
             stamp = AdvanceClockOrOverride();
         if (!isPrepared)
@@ -1270,6 +1271,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                IsMigrated = stampCarried,
             };
 
         var options = await GetOptionsAsync();
@@ -1761,11 +1763,13 @@ internal sealed partial class BPlusLeafGrain(
             var value = entries[i].Value;
             HybridLogicalClock stamp;
             var stampOriginal = routeOriginal;
+            var stampCarried = false;
             if (hasCarriedStamps && LatticeOriginalPrepareStampContext.TryGetStamp(key, out var carried))
             {
                 state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, carried);
                 stamp = carried;
                 stampOriginal = true;
+                stampCarried = true;
             }
             else
             {
@@ -1779,12 +1783,14 @@ internal sealed partial class BPlusLeafGrain(
                     {
                         OriginClusterId = origin,
                         VectorClock = vectorClock,
+                        IsMigrated = stampCarried,
                     }
                 : LwwValue<byte[]>.CreateWithExpiry(value, stamp, 0L)
                     with
                     {
                         OriginClusterId = origin,
                         VectorClock = vectorClock,
+                        IsMigrated = stampCarried,
                     };
             values[i] = lww;
             int atomicBatchIndexForEntry;
@@ -1826,6 +1832,7 @@ internal sealed partial class BPlusLeafGrain(
                 IsPrepared = isPrepared,
                 ShardIndex = shardIndex,
                 PrepareStampOriginal = isPrepared && stampOriginal,
+                IsMigrated = lww.IsMigrated,
             };
         }
 
@@ -2126,8 +2133,9 @@ internal sealed partial class BPlusLeafGrain(
         // CommitSetAsync for the full invariant.
         HybridLogicalClock stamp;
         var stampOriginal = false;
+        var stampCarried = false;
         if (isPrepared)
-            (stamp, stampOriginal) = MintPreparedStamp(key);
+            (stamp, stampOriginal, stampCarried) = MintPreparedStamp(key);
         else
             stamp = AdvanceClockOrOverride();
         // Prepared deletes route to the pending-tx map and skip the
@@ -2141,6 +2149,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                IsMigrated = stampCarried,
             };
         var delta = LatticeDeltaContext.Current;
         var batch = LatticeAtomicBatchContext.Current;
@@ -2173,6 +2182,7 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchIndex = batch?.Index ?? 0,
                 IsPrepared = isPrepared,
                 PrepareStampOriginal = stampOriginal,
+                IsMigrated = tombstone.IsMigrated,
             };
             await writer.AppendAsync(entry);
         }
@@ -3619,6 +3629,9 @@ internal sealed partial class BPlusLeafGrain(
                     IsPrepared = false,
                     IsMerge = true,
                     ShardIndex = shardIndex,
+                    // Mirrors the IsMigrated=true the apply step stores, so replay
+                    // restores the provenance a later import is judged by (#4564).
+                    IsMigrated = true,
                 };
             }
         }
@@ -4345,6 +4358,7 @@ internal sealed partial class BPlusLeafGrain(
                     IsPrepared = false,
                     IsMerge = true,
                     ShardIndex = shardIndex,
+                    IsMigrated = toStore.IsMigrated,
                 };
             }
         }

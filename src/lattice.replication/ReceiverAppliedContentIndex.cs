@@ -1,14 +1,23 @@
 namespace Orleans.Lattice.Replication;
 
 /// <summary>
-/// Receiver-side, in-process index mapping a replicated key to the
-/// <see cref="ReplicationContentHash"/> of the value the receiver most
-/// recently applied for it, partitioned per logical tree and bounded by a
-/// least-recently-used eviction policy within each tree. It answers the
-/// single question the content-manifest exchange handler asks - "do I
-/// already hold byte-identical content for this key?" - so the receiver
-/// can report the subset of a sender's manifest it is missing and let the
-/// sender elide the rest.
+/// Receiver-side, in-process index mapping a replicated key to the write the
+/// receiver most recently merged for it: the
+/// <see cref="ReplicationContentHash"/> of its value together with its source
+/// identity (origin cluster id and source HLC). Partitioned per logical tree and
+/// bounded by a least-recently-used eviction policy within each tree. It answers
+/// the content-manifest exchange handler's first question - "did I already merge
+/// exactly this write?" - so the receiver can report the subset of a sender's
+/// manifest it is missing and let the sender elide the rest.
+/// <para>
+/// A hit is a candidate, not a verdict (#4585). Bytes alone say nothing about
+/// last-writer-wins order: the same value at a newer version, from another origin,
+/// or recorded from a merge that lost at the leaf must still ship. The handler
+/// therefore elides only an entry whose exact source identity was recorded here
+/// <em>and</em> whose key the leaf still holds at that version or a newer one, so
+/// a record left stale by anything that lowers the leaf (a restore or its revert,
+/// a purge and recreate, an alias rebind, a clearing bootstrap) never elides.
+/// </para>
 /// <para>
 /// The index is a <b>best-effort cache</b>, never a correctness oracle. A
 /// key that is absent (cold start, never applied, or evicted) is simply
@@ -36,8 +45,9 @@ internal sealed class ReceiverAppliedContentIndex
     private readonly Dictionary<string, TreePartition> _trees = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Records that the receiver has applied value content with digest
-    /// <paramref name="contentHash"/> for <paramref name="key"/> on the
+    /// Records that the receiver has merged the write of
+    /// <paramref name="originClusterId"/> at <paramref name="hlc"/>, whose value
+    /// has digest <paramref name="contentHash"/>, for <paramref name="key"/> on the
     /// tree named <paramref name="treeId"/>, promoting the key to
     /// most-recently-used within that tree's partition and evicting the
     /// least-recently-used key when the partition exceeds
@@ -49,11 +59,13 @@ internal sealed class ReceiverAppliedContentIndex
     /// <param name="treeId">The logical tree the applied entry belongs to. Must be non-null.</param>
     /// <param name="key">The applied key. Must be non-null.</param>
     /// <param name="contentHash">The FNV-1a digest of the applied value bytes.</param>
+    /// <param name="originClusterId">The applied write's origin cluster id.</param>
+    /// <param name="hlc">The applied write's source HLC.</param>
     /// <param name="capacity">
     /// Maximum number of distinct keys this tree's partition retains.
     /// Values below <c>1</c> are treated as <c>1</c>.
     /// </param>
-    public void RecordSet(string treeId, string key, ulong contentHash, int capacity)
+    public void RecordSet(string treeId, string key, ulong contentHash, string? originClusterId, HybridLogicalClock hlc, int capacity)
     {
         ArgumentNullException.ThrowIfNull(treeId);
         ArgumentNullException.ThrowIfNull(key);
@@ -66,7 +78,7 @@ internal sealed class ReceiverAppliedContentIndex
                 partition = new TreePartition();
                 _trees[treeId] = partition;
             }
-            partition.Set(key, contentHash, bounded);
+            partition.Set(key, new ReceiverHeldContent(contentHash, originClusterId, hlc), bounded);
         }
     }
 
@@ -113,17 +125,17 @@ internal sealed class ReceiverAppliedContentIndex
     }
 
     /// <summary>
-    /// Looks up the content digest the receiver most recently applied for
+    /// Looks up the write the receiver most recently merged for
     /// <paramref name="key"/> on the tree named <paramref name="treeName"/>.
-    /// Returns <see langword="true"/> and the recorded digest when the key
-    /// is held, promoting it to most-recently-used; returns
-    /// <see langword="false"/> (with <paramref name="contentHash"/> set to
-    /// <c>0</c>) when the key is cold, evicted, or deleted.
+    /// Returns <see langword="true"/> and its digest and source identity when
+    /// the key is recorded, promoting it to most-recently-used; returns
+    /// <see langword="false"/> (with <paramref name="held"/> set to its default)
+    /// when the key is cold, evicted, or deleted.
     /// </summary>
     /// <param name="treeName">The logical tree to query. Must be non-null.</param>
     /// <param name="key">The key to look up. Must be non-null.</param>
-    /// <param name="contentHash">The recorded content digest when held.</param>
-    public bool TryGetContentHash(string treeName, string key, out ulong contentHash)
+    /// <param name="held">The recorded digest and source identity when recorded.</param>
+    public bool TryGetContent(string treeName, string key, out ReceiverHeldContent held)
     {
         ArgumentNullException.ThrowIfNull(treeName);
         ArgumentNullException.ThrowIfNull(key);
@@ -131,12 +143,12 @@ internal sealed class ReceiverAppliedContentIndex
         lock (_gate)
         {
             if (_trees.TryGetValue(treeName, out var partition)
-                && partition.TryGet(key, out contentHash))
+                && partition.TryGet(key, out held))
             {
                 return true;
             }
         }
-        contentHash = 0UL;
+        held = default;
         return false;
     }
 
@@ -157,7 +169,7 @@ internal sealed class ReceiverAppliedContentIndex
     }
 
     /// <summary>
-    /// Per-tree bounded LRU map of key to content digest. Not thread-safe
+    /// Per-tree bounded LRU map of key to recorded write. Not thread-safe
     /// on its own; every access is serialized by the owning index's lock.
     /// </summary>
     private sealed class TreePartition
@@ -167,11 +179,11 @@ internal sealed class ReceiverAppliedContentIndex
 
         public int Count => _order.Count;
 
-        public void Set(string key, ulong contentHash, int capacity)
+        public void Set(string key, ReceiverHeldContent content, int capacity)
         {
             if (_index.TryGetValue(key, out var existing))
             {
-                existing.Value = new KeyHash(key, contentHash);
+                existing.Value = new KeyHash(key, content);
                 _order.Remove(existing);
                 _order.AddLast(existing);
                 // A hit never grows the partition, so only a capacity that
@@ -193,13 +205,13 @@ internal sealed class ReceiverAppliedContentIndex
             {
                 _index.Remove(lru.Value.Key);
                 _order.Remove(lru);
-                lru.Value = new KeyHash(key, contentHash);
+                lru.Value = new KeyHash(key, content);
                 _order.AddLast(lru);
                 _index[key] = lru;
             }
             else
             {
-                _index[key] = _order.AddLast(new KeyHash(key, contentHash));
+                _index[key] = _order.AddLast(new KeyHash(key, content));
             }
 
             Trim(capacity);
@@ -221,16 +233,16 @@ internal sealed class ReceiverAppliedContentIndex
             }
         }
 
-        public bool TryGet(string key, out ulong contentHash)
+        public bool TryGet(string key, out ReceiverHeldContent content)
         {
             if (_index.TryGetValue(key, out var node))
             {
-                contentHash = node.Value.Hash;
+                content = node.Value.Content;
                 _order.Remove(node);
                 _order.AddLast(node);
                 return true;
             }
-            contentHash = 0UL;
+            content = default;
             return false;
         }
 
@@ -242,6 +254,6 @@ internal sealed class ReceiverAppliedContentIndex
             }
         }
 
-        private readonly record struct KeyHash(string Key, ulong Hash);
+        private readonly record struct KeyHash(string Key, ReceiverHeldContent Content);
     }
 }

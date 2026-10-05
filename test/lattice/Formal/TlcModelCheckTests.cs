@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
@@ -107,6 +110,21 @@ public sealed class TlcModelCheckTests
     private static readonly int TlcWorkers = Math.Max(1, Environment.ProcessorCount / TlcConcurrency);
 
     private static readonly SemaphoreSlim TlcSlots = new(TlcConcurrency, TlcConcurrency);
+
+    /// <summary>
+    /// Control-arm results, once per distinct input within this test process.
+    /// Every mutation of a module that targets the same property with the same
+    /// TLC options builds a byte-identical control run - the unmutated base
+    /// under the same single-property cfg - so it is run once and shared. The
+    /// key is a hash of everything TLC reads (the module and its siblings, the
+    /// cfg and the options), so two inputs that differ in anything are two
+    /// runs. The <see cref="Lazy{T}"/> runs the first request and makes every
+    /// concurrent one wait for it, and a run that fails or throws - a timeout
+    /// included - is cached as such, so every case sharing that control fails
+    /// rather than only the first. Process-local by design: nothing is reused
+    /// across runs.
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, Lazy<TlcResult>> ControlRuns = new(StringComparer.Ordinal);
 
     /// <summary>TLC's switch that defers every liveness check to the end of the state search.</summary>
     private static readonly string[] LivenessAtEnd = ["-lncheck", "final"];
@@ -248,7 +266,8 @@ public sealed class TlcModelCheckTests
     /// The paired mutation for one property, run as a two-arm experiment.
     /// <para>
     /// Arm 1 (control) runs the generated single-property cfg against the
-    /// unmutated base and requires it to be clean. This is what stops the test
+    /// unmutated base and requires it to be clean. Mutations that build the
+    /// same control share one run of it (see <see cref="ControlRuns"/>). This is what stops the test
     /// passing for the wrong reason. Without it, a mutation that broke the
     /// module outright, or a property already violated on the base, would
     /// produce a red mutant and read as a successful pairing.
@@ -262,6 +281,13 @@ public sealed class TlcModelCheckTests
     /// bare exit-code check would have accepted it. TLC does not name the
     /// property for a temporal violation, so for those the guard is the
     /// single-property cfg plus the violation count asserted below.
+    /// </para>
+    /// <para>
+    /// A mutation may declare <c>BOUNDS:</c> to run its mutant on a smaller
+    /// instance (<see cref="SpecMutation.Bounds"/>). Only arms 2 and 3 use it;
+    /// arm 1 is built without it, so the control is unchanged, and an override
+    /// that shrinks the instance below the violation leaves arm 2 clean and
+    /// fails here like any mutation that does not fire.
     /// </para>
     /// <para>
     /// Arm 3 runs only for a mutation that declares <c>DEADLOCK: off</c>, and
@@ -281,7 +307,10 @@ public sealed class TlcModelCheckTests
         var baseSpec = module.ReadSpecification();
         var config = mutation.BuildConfig(module.ReadConfig());
 
-        var control = RunTlc(module, baseSpec, config, module.Name, mutation.TlcOptions);
+        // The control arm always runs at the module's own bounds. A mutation's
+        // BOUNDS header shrinks only the mutant arm's instance, so "the property
+        // holds on the base" is still decided over the full model.
+        var control = RunControl(module, baseSpec, config, mutation.TlcOptions);
         Assert.That(
             control.Output,
             Does.Contain(CleanBanner),
@@ -291,7 +320,8 @@ public sealed class TlcModelCheckTests
             + Environment.NewLine + control.Output);
 
         var mutantSpec = mutation.Apply(baseSpec, module.Name);
-        var mutant = RunTlc(module, mutantSpec, config, mutation.Module, mutation.TlcOptions);
+        var mutantConfig = mutation.BuildMutantConfig(module.ReadConfig());
+        var mutant = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, mutation.TlcOptions);
 
         Assert.That(
             mutant.ExitCode,
@@ -323,7 +353,7 @@ public sealed class TlcModelCheckTests
             // reachable. Left to TLC's default, a periodic mid-search liveness
             // check can report the target first on a slow machine, and the arm
             // would then fail for timing rather than for the declaration.
-            var withDeadlockCheck = RunTlc(module, mutantSpec, config, mutation.Module, LivenessAtEnd);
+            var withDeadlockCheck = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, LivenessAtEnd);
             Assert.That(
                 withDeadlockCheck.Output,
                 Does.Contain(DeadlockBanner),
@@ -337,7 +367,7 @@ public sealed class TlcModelCheckTests
     /// <summary>
     /// The discovery control for the TLC gates: every TLC gate, found by
     /// signature rather than listed, is run over a module built in a temp
-    /// directory and must pass; then each broken copy - a silent mutation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate
+    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS would break the base must still pass, which proves the control arm never sees them
     /// that owns the fault. The toolchain-free gates have the same control in
     /// <see cref="SpecModuleDiscoveryControlTests"/>.
     /// </summary>
@@ -372,6 +402,40 @@ public sealed class TlcModelCheckTests
                 Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
                 Does.Contain("model-checked CLEAN"),
                 "a mutation that changes the text but not the behaviour passed the pairing gate.");
+        }
+
+        using (var undersized = SyntheticSpecModule.Create())
+        {
+            // A bound that shrinks the instance below the violation: with Wrap
+            // = 1 the late wrap keeps x in 0..1, so the mutant is clean.
+            undersized.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "PERTURBS: Step\n",
+                "PERTURBS: Step\nBOUNDS: Wrap = 1\n");
+            var module = undersized.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("model-checked CLEAN"),
+                "a mutation whose BOUNDS shrink the instance below its violation passed the pairing gate.");
+        }
+
+        using (var controlKeepsBase = SyntheticSpecModule.Create())
+        {
+            // A bound under which the BASE violates the target too: with Wrap =
+            // 4 the unmutated step reaches 3, outside TypeOK. The mutant still
+            // fires, and the gate passes only because the control arm never
+            // sees the bound and checks the base at Wrap = 3.
+            controlKeepsBase.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "PERTURBS: Step\n",
+                "PERTURBS: Step\nBOUNDS: Wrap = 4\n");
+            var module = controlKeepsBase.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                SpecModuleGates.Run(gate, module, this),
+                Is.GreaterThan(0),
+                "the pairing gate ran no case for a mutation declaring BOUNDS.");
         }
 
         using (var miscounted = SyntheticSpecModule.Create())
@@ -472,6 +536,31 @@ public sealed class TlcModelCheckTests
     /// <c>.tla</c> of the module is copied in first, so a module that extends
     /// or instantiates a sibling resolves it.
     /// </summary>
+    /// <summary>
+    /// Runs a mutation's control arm through <see cref="ControlRuns"/>: once
+    /// per distinct input in this process, shared by every case that builds
+    /// the same one.
+    /// </summary>
+    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options)
+    {
+        var key = new StringBuilder()
+            .Append(module.SpecificationPath).Append('\0')
+            .Append(baseSpec).Append('\0')
+            .Append(config).Append('\0')
+            .AppendJoin(' ', options).Append('\0');
+        foreach (var (name, text) in module.ReadSiblingSpecifications().OrderBy(s => s.Key, StringComparer.Ordinal))
+        {
+            key.Append(name).Append('\0').Append(text).Append('\0');
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
+        return ControlRuns
+            .GetOrAdd(hash, _ => new Lazy<TlcResult>(
+                () => RunTlc(module, baseSpec, config, module.Name, options),
+                LazyThreadSafetyMode.ExecutionAndPublication))
+            .Value;
+    }
+
     private TlcResult RunTlc(
         SpecModule module,
         string moduleText,
@@ -537,7 +626,20 @@ public sealed class TlcModelCheckTests
             if (!process.WaitForExit((int)RunTimeout.TotalMilliseconds))
             {
                 process.Kill(entireProcessTree: true);
-                Assert.Fail($"TLC did not finish within {RunTimeout.TotalMinutes} minutes for {moduleName}.");
+
+                // The last progress line tells a hang (no progress, or none for
+                // minutes) from a state explosion (states still climbing), which
+                // the bare timeout cannot. The streams close once the process
+                // dies, so the drain finishes promptly; it is bounded anyway.
+                var partial = stdout.Wait(TimeSpan.FromSeconds(10)) ? stdout.Result : string.Empty;
+                var progress = partial
+                    .ReplaceLineEndings("\n")
+                    .Split('\n')
+                    .LastOrDefault(l => l.StartsWith("Progress(", StringComparison.Ordinal))
+                    ?? "(TLC reported no progress line)";
+                Assert.Fail(
+                    $"TLC did not finish within {RunTimeout.TotalMinutes} minutes for {moduleName}. "
+                    + $"Its last progress line was: {progress}");
             }
 
             var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());

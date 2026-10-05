@@ -2,8 +2,8 @@
 # write acknowledged after a saga's prepare P on the same leaf is stamped above
 # P. A later write stamped below P loses to the saga's drain and to the
 # committed-values backstop, both last-writer-wins at P. Production's known
-# exceptions are a DeleteRange stamped at its issue (#4530) and an idempotent
-# retry that reuses its issue stamp. The edit lies in WVal, the operator that
+# exception is an idempotent retry that reuses its issue stamp; a DeleteRange
+# stamped at its issue was one until #4568 (#4530). The edit lies in WVal, the operator that
 # stamps the later write, so the mutation declares no PERTURBS.
 MODULE: NoKeyLostLaterWriteBelowP
 TARGET: NoKeyLost

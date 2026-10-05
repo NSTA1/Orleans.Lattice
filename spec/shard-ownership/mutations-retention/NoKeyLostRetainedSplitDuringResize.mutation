@@ -1,0 +1,18 @@
+# Pairs with NoKeyLost. Production before #4452 was fixed (#4466): an adaptive
+# split may open while a resize is in flight or its undo is pending, so the
+# resize neither captures nor fences the split target, and an acknowledged
+# write is lost once the registry retires the saga's row. #4478 relaxed the
+# hold only once the resize has completed, which the base's SplitBegin admits.
+MODULE: NoKeyLostRetainedSplitDuringResize
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a split opens while a resize is in flight, so the resize neither captures nor fences its target
+PERTURBS: SplitBegin
+
+--- FIND
+    /\ rz \in {"idle", "retired", "purged", "undone"}
+    /\ rmap = s1
+--- REPLACE
+\* MUTATION: no interlock with an in-flight resize.
+    /\ rmap = s1
+--- END

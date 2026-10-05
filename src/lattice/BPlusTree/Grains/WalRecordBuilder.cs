@@ -56,6 +56,7 @@ internal static class WalRecordBuilder
             AtomicBatchIndex = batch?.Index ?? 0,
             IsPrepared = isPrepared,
             ShardIndex = shardIndex,
+            IsMigrated = committed.IsMigrated,
         };
     }
 
@@ -90,6 +91,7 @@ internal static class WalRecordBuilder
             AtomicBatchIndex = batch?.Index ?? 0,
             IsPrepared = isPrepared,
             ShardIndex = shardIndex,
+            IsMigrated = tombstone.IsMigrated,
         };
     }
 

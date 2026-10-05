@@ -663,6 +663,14 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// the final classified-transient exception verbatim so the
     /// same catch block records the failure outcome.
     /// </para>
+    /// <para>
+    /// An entry the applier defers (<see cref="ApplyResult.Deferred"/>) ends
+    /// the attempt with a <see cref="LatticeBootstrapEntryDeferredException"/>,
+    /// which consumes a slot of the same budget whatever the host's classifier
+    /// says (issue #4604). Once the budget is spent the bootstrap fails with the
+    /// import already started, so the read fence stays up and the bootstrap is
+    /// re-driven until a drain applies every entry.
+    /// </para>
     /// </summary>
     private async Task DrainSnapshotAsync()
     {
@@ -686,7 +694,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 await DrainSnapshotOnceAsync(CancellationToken.None).ConfigureAwait(true);
                 return;
             }
-            catch (Exception ex) when (attempt < maxAttempts && classifier(ex))
+            catch (Exception ex) when (attempt < maxAttempts
+                && (ex is LatticeBootstrapEntryDeferredException || classifier(ex)))
             {
                 var delay = ComputeBackoff(attempt, initial, max);
                 if (delay > TimeSpan.Zero)
@@ -936,7 +945,24 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 continue;
             }
 
-            await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            if (applied.Deferred)
+            {
+                // Issue #4604. Deferred means "not applied by this delivery and
+                // must be re-shipped", and the drain is the delivery: nothing
+                // else re-sends a snapshot row, and completing the drain would
+                // pin the frontier past it. Stop here - before the entry is
+                // counted or its clock folded into the handoff seal - and fail
+                // the attempt, so the full snapshot is re-exported and
+                // re-drained once whatever deferred it (a coordinated restore's
+                // receive fence, a restored copy's fence, an in-flight
+                // duplicate) has let go. Re-applying the overlap is a no-op.
+                Logger.LogWarning(
+                    "Bootstrap drain of tree '{TreeName}' from source '{SourceClusterId}': the applier deferred the snapshot entry for key '{Key}', so this attempt stops and the snapshot is re-drained rather than completing past it",
+                    treeName, sourceClusterId, entry.Key);
+                throw new LatticeBootstrapEntryDeferredException(treeName, entry.Key);
+            }
+
             state.State.EntriesApplied++;
 
             // Bootstrap progress instruments: increment once per

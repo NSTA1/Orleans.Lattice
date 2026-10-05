@@ -11,9 +11,9 @@ namespace Orleans.Lattice.Replication;
 ///   <item><see cref="BuildManifest"/> - sender: hash the eligible entries
 ///   of a drained batch into a per-entry manifest.</item>
 ///   <item><see cref="ComputeMissingSet"/> - receiver: compare a manifest
-///   against the content the receiver already holds and report the missing
-///   subset plus the high-water-mark advance for identical-content entries
-///   carrying a newer clock.</item>
+///   against the writes the receiver already holds and report the missing
+///   subset plus the high-water-mark advance for held entries above the
+///   receiver's mark.</item>
 ///   <item><see cref="ComputeElidedIndices"/> - sender: turn the receiver's
 ///   missing set back into the set of drain-buffer indices to drop.</item>
 /// </list>
@@ -83,21 +83,33 @@ internal static class ContentManifestPlanner
 
     /// <summary>
     /// Receiver side: compares <paramref name="request"/>'s manifest against
-    /// the content the receiver already holds (<paramref name="receiverHeldContent"/>,
-    /// keyed by key to the content hash and clock the receiver last applied)
-    /// and computes the pull-missing response. A manifest entry whose key is
-    /// absent from <paramref name="receiverHeldContent"/>, or present with a
-    /// different content hash, is reported as missing. A manifest entry whose
-    /// content the receiver already holds is not missing; if its
-    /// <see cref="ContentManifestEntry.Hlc"/> is strictly newer than the
-    /// clock the receiver holds for that key, the response's
-    /// <see cref="ContentManifestResponse.AdvancedHlc"/> is raised to the
-    /// maximum such clock (the metadata-only high-water-mark advance for the
-    /// idempotent re-set of an identical value).
+    /// the writes the receiver already holds (<paramref name="receiverHeldContent"/>,
+    /// keyed by key to the digest and source identity of a write the receiver
+    /// merged and whose key its leaf still holds at that version or newer) and
+    /// computes the pull-missing response.
+    /// <para>
+    /// A manifest entry is elided only when the receiver holds <em>exactly that
+    /// write</em>: the same content hash, the same origin
+    /// (<see cref="ContentManifestRequest.OriginClusterId"/>), and the same
+    /// <see cref="ContentManifestEntry.Hlc"/> (#4585). Equal bytes are not
+    /// enough. Last-writer-wins orders writes by version, not by content, so the
+    /// same value at a newer version, or from another origin, must still ship;
+    /// eliding it would let a concurrent write that loses to it everywhere else
+    /// win at this receiver for good. Every other entry is reported as missing.
+    /// </para>
+    /// <para>
+    /// The response's <see cref="ContentManifestResponse.AdvancedHlc"/> is the
+    /// highest elided clock strictly above
+    /// <paramref name="receiverHighWaterMark"/>, or
+    /// <see cref="HybridLogicalClock.Zero"/>: a metadata-only high-water-mark
+    /// advance for a write the receiver merged without advancing its mark (for
+    /// example during a bootstrap drain).
+    /// </para>
     /// </summary>
     public static ContentManifestResponse ComputeMissingSet(
         in ContentManifestRequest request,
-        IReadOnlyDictionary<string, (ulong ContentHash, HybridLogicalClock Hlc)> receiverHeldContent)
+        IReadOnlyDictionary<string, ReceiverHeldContent> receiverHeldContent,
+        HybridLogicalClock receiverHighWaterMark)
     {
         ArgumentNullException.ThrowIfNull(receiverHeldContent);
         var entries = request.Entries ?? (IReadOnlyList<ContentManifestEntry>)Array.Empty<ContentManifestEntry>();
@@ -107,13 +119,9 @@ internal static class ContentManifestPlanner
         for (var i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
-            if (receiverHeldContent.TryGetValue(entry.Key, out var held)
-                && held.ContentHash == entry.ContentHash)
+            if (IsExactlyHeld(in request, in entry, receiverHeldContent))
             {
-                // Receiver already holds byte-identical content. Elide the
-                // payload; advance the high-water-mark when the manifest
-                // clock is newer than what the receiver recorded.
-                if (entry.Hlc.CompareTo(held.Hlc) > 0 && entry.Hlc.CompareTo(advanced) > 0)
+                if (entry.Hlc.CompareTo(receiverHighWaterMark) > 0 && entry.Hlc.CompareTo(advanced) > 0)
                 {
                     advanced = entry.Hlc;
                 }
@@ -130,6 +138,20 @@ internal static class ContentManifestPlanner
             AdvancedHlc = advanced,
         };
     }
+
+    /// <summary>
+    /// Whether the receiver holds exactly the write <paramref name="entry"/>
+    /// manifests: the same digest, origin and source HLC (#4585).
+    /// </summary>
+    private static bool IsExactlyHeld(
+        in ContentManifestRequest request,
+        in ContentManifestEntry entry,
+        IReadOnlyDictionary<string, ReceiverHeldContent> receiverHeldContent) =>
+        entry.Key is not null
+        && receiverHeldContent.TryGetValue(entry.Key, out var held)
+        && held.ContentHash == entry.ContentHash
+        && held.Hlc == entry.Hlc
+        && string.Equals(held.OriginClusterId, request.OriginClusterId, StringComparison.Ordinal);
 
     /// <summary>
     /// Sender side: turns the receiver's <paramref name="missingEntryIndices"/>

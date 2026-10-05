@@ -532,6 +532,18 @@ Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
   pivots to `Failed` as the terminal outcome. Set
   `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
   entirely (fail-fast).
+- **A deferred entry is never skipped.** The applier can defer an entry
+  (`ApplyResult.Deferred`): a cross-cluster restore saga's receive fence
+  has paused inbound apply for the tree, or the entry duplicates one still
+  in flight on the receiver. Nothing else re-sends a snapshot row, so the
+  drain stops at the first deferred entry, without counting it or folding
+  its clock into the handoff seal, and fails the attempt. The deferral
+  consumes a slot of the same `BootstrapTransientRetry` budget whatever the
+  classifier says, and each retry re-opens the full export; once the budget
+  is spent the bootstrap fails with the import started, so the tree stays
+  read-fenced and is re-driven until a drain applies every entry. The
+  handoff is never pinned past a deferred entry
+  ([#4604](https://github.com/NSTA1/Orleans.Lattice/issues/4604)).
 - **Source HLC + origin preservation.** Every snapshot entry is
   applied through `IReplicationApplier.ApplyAsync`, the same canonical
   inbound apply seam used by live-incremental replication, carrying

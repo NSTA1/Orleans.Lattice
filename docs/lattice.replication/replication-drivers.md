@@ -897,7 +897,9 @@ HLC and the sender advances its durable cursor to
 `ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
 the receiver's stored timestamp behind the sender's cursor and change
 LWW/HLC convergence against concurrent foreign-origin writes. Eliding
-safely requires the receiver to report which content it already holds.
+safely requires the receiver to report which writes it already holds -
+exactly, by content hash, origin and source HLC, with its leaf still at
+that version or newer (#4585), never by bytes alone.
 That is the separate opt-in `ContentHashDedupElisionEnabled` (default
 `false`, and it requires this master switch): before each batch ships
 the shipper runs a content-manifest exchange over the digest-probe
