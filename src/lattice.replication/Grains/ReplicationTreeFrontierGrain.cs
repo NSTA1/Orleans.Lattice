@@ -155,8 +155,15 @@ internal sealed class ReplicationTreeFrontierGrain(
             }
         }
 
-        foreach (var (origin, lowWatermark) in sourceLowWatermarks)
+        // Every origin is installed, not only those the export lists: the tree
+        // now reflects the source's contents, and an origin the export carries
+        // no watermark for starts again from zero, which ends the re-seed it was
+        // awaiting.
+        var origins = new HashSet<string>(state.State.Origins.Keys, StringComparer.Ordinal);
+        origins.UnionWith(sourceLowWatermarks.Keys);
+        foreach (var origin in origins)
         {
+            var lowWatermark = sourceLowWatermarks.TryGetValue(origin, out var exported) ? exported : HybridLogicalClock.Zero;
             if (!state.State.Origins.TryGetValue(origin, out var entry))
             {
                 entry = new ReplicationTreeOriginFrontier();

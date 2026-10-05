@@ -152,6 +152,29 @@ public sealed class ReplicationTreeFrontierGrainTests
     }
 
     [Test]
+    public async Task A_pin_of_an_export_without_watermarks_ends_the_re_seed_of_every_origin_from_zero()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        await grain.ObserveAsync(OriginB, shipped: null, CancellationToken.None);
+        await grain.OnContentsReplacingAsync(CancellationToken.None);
+        var epoch = (await grain.GetAsync(CancellationToken.None)).Epoch;
+
+        await grain.PinAsync(epoch, new Dictionary<string, HybridLogicalClock>(), new Dictionary<string, HybridLogicalClock[]>(), CancellationToken.None);
+        await grain.ObserveAsync(OriginB, Shipped(epoch, 70, 60, generation: 4), CancellationToken.None);
+        var snapshot = await grain.GetAsync(CancellationToken.None);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(h.State.State.Origins.Values.Select(e => e.AwaitingPin), Has.All.False);
+            Assert.That(snapshot.LowWatermarks[OriginB], Is.EqualTo(Hlc(70)), "the origin's own watermark now rises again");
+            Assert.That(snapshot.LowWatermarks.ContainsKey(OriginA), Is.False, "an origin that shipped nothing yet starts from zero");
+            Assert.That(await h.Origin(OriginB).GetLowWatermarkAsync(CancellationToken.None), Is.EqualTo(Hlc(60)));
+        });
+    }
+
+    [Test]
     public async Task A_pin_begun_before_a_replacement_is_refused()
     {
         var h = new Harness(RegistryLineage);
