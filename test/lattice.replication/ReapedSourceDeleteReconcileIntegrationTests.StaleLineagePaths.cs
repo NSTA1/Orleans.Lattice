@@ -127,6 +127,47 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
     }
 
     [Test]
+    public async Task Concurrent_pushes_stamped_with_different_lineages_are_each_judged_on_their_own()
+    {
+        const string tree = "rsdr-stale-lineage-concurrent";
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await _siteA.Client.GetGrain<ILattice>(tree).SetAsync("kept", [1]);
+        await BootstrapSiteBAsync(tree);
+        var preRestore = (await _siteA.Client.GetLatticeRegistry().GetEntryAsync(tree))!.Lineage;
+        await RestampSourceLineageAsync(tree);
+        await BootstrapSiteBAsync(tree);
+        var restored = (await _siteA.Client.GetLatticeRegistry().GetEntryAsync(tree))!.Lineage;
+        var epoch = await _siteB.Client.GetGrain<IReplicationTreeFrontierGrain>(tree)
+            .ObserveAsync(SiteAClusterId, null, CancellationToken.None);
+
+        // Both deliveries hold a live lineage scope before either is admitted, so
+        // a carrier shared between flows would judge one by the other's stamp.
+        var staleEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var currentEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<ApplyResult> PushAsync(Guid? stamp, string key, TaskCompletionSource mine)
+        {
+            using var scope = ReplicationSourceLineageScope.Enter(SiteAClusterId, stamp, epoch);
+            mine.SetResult();
+            await Task.WhenAll(staleEntered.Task, currentEntered.Task);
+            return await Applier(_siteB).ApplyBatchAsync([StaleWrite(tree, key)], CancellationToken.None);
+        }
+
+        var stale = Task.Run(() => PushAsync(preRestore, "concurrent-stale", staleEntered));
+        var current = Task.Run(() => PushAsync(restored, "concurrent-current", currentEntered));
+        await Task.WhenAll(stale, current);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await stale).SourceLineageRefused, Is.True,
+                "the stale delivery is judged by its own pre-restore stamp, not by the concurrent current one");
+            Assert.That(await siteB.GetAsync("concurrent-stale"), Is.Null);
+            Assert.That((await current).SourceLineageRefused, Is.False,
+                "the current delivery is judged by its own stamp, not by the concurrent stale one");
+            Assert.That(await siteB.GetAsync("concurrent-current"), Is.EqualTo(new byte[] { 9 }));
+        });
+    }
+
+    [Test]
     public async Task A_dead_letter_read_under_the_pre_restore_lineage_is_not_applied_by_a_replay_after_the_realign()
     {
         const string tree = "rsdr-stale-lineage-replay";
