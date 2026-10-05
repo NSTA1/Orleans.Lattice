@@ -282,6 +282,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`SetManyEnvelopeBudget`](#setmanyenvelopebudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
+| [`ReplicationClockFloorLag`](#replicationclockfloorlag) | `TimeSpan` | 60 seconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Timeout and budget ceiling
@@ -1754,6 +1755,17 @@ Wall-clock budget **one top-level call** may spend waiting at the WAL admission 
 **The default is unbounded, so this option is opt-in on the 9.x line**, for the same reason as `SetManyFanOutBudget`: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller on a released package, which is a breaking behavioural change. The flip to a finite default is deferred to the next major ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)).
 
 This option can be changed freely at any time. The new value takes effect at the next admission gate check.
+
+### `ReplicationClockFloorLag`
+
+How far a replicated tree's per-partition WAL [clock floor](wal.md#clock-floor-replicated-trees) trails the partition's wall clock (default 60 seconds; must be between one second and one day) ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)).
+
+A partition refuses a freshly authored local write stamped below its floor. Single-key writes re-stamp transparently, so the lag decides two things:
+
+- **How long an idempotency key stays usable on a replicated tree.** A `LatticeIdempotencyKey` older than the floor fails with `LatticeIdempotencyKeyExpiredException`, because its stamp is fixed by contract. A key is usable for at least this long after it is minted.
+- **How much clock skew between silos the floor tolerates** before refusals start.
+
+A smaller lag lets a replication receiver release a dependent whose exact dependency it no longer remembers sooner. A tree that is not replicated never advances its floor, so the option has no effect on it.
 
 ### `WalThrottledAdmissionPace`
 

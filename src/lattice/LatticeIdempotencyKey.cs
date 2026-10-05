@@ -37,6 +37,18 @@ namespace Orleans.Lattice;
 /// <see cref="LatticeOptions.RetryPolicy"/>. The library never mints
 /// keys itself - the policy is strictly opt-in.
 /// </para>
+/// <para>
+/// <b>Lifetime on a replicated tree (issue #4586).</b> A replicated tree's
+/// write-ahead-log partitions refuse a freshly authored write stamped below
+/// their clock floor, which trails the wall clock by
+/// <see cref="LatticeOptions.ReplicationClockFloorLag"/>. Because
+/// <see cref="Timestamp"/> is stamped verbatim, a write under a key older than
+/// the floor cannot be re-stamped: it is not applied and fails with
+/// <see cref="LatticeIdempotencyKeyExpiredException"/>. A key is usable for at
+/// least <see cref="LatticeOptions.ReplicationClockFloorLag"/> after it is
+/// minted, so mint it when the logical operation starts and keep retries inside
+/// that window. Trees that are not replicated are unaffected.
+/// </para>
 /// </remarks>
 [GenerateSerializer]
 [Alias(TypeAliases.LatticeIdempotencyKey)]
