@@ -190,6 +190,60 @@ public sealed class WalOverrideHoldTests
     }
 
     [Test]
+    public async Task A_second_replicated_write_after_coverage_pruned_the_hold_survives_a_trim()
+    {
+        // The leaf raises a hold once per partition per activation. Coverage then
+        // prunes it in the write that lands the partition's first real offset X, and
+        // a later carried-stamp write in the SAME activation raises nothing. It is
+        // protected by X instead: the offset only ever rises, the write lands above
+        // it, and the offset-floor stop refuses every entry above X on every arm.
+        var treeName = "post-coverage-override-" + _run;
+        var (otherKey, writeKey, _) = PickKeys();
+        var secondKey = PickSecondKey(writeKey);
+        var first = await DeployAsync();
+        try
+        {
+            var services = await ReleaseWritePartitionEmptyAsync(first, treeName, otherKey);
+            var tree = first.Client.GetGrain<ILattice>(treeName);
+            using (LatticeHlcOverrideContext.With(AncientStamp()))
+            {
+                await tree.SetAsync(writeKey, [7]);
+            }
+
+            Assert.That(await ReadHoldsAsync(first, services, treeName), Is.Not.Empty, "the first write raised the hold");
+
+            // Drive the live leaf to a checkpoint and capture without deactivating it,
+            // as the blocked-leaf remedy does: the real offset lands and prunes the hold.
+            var leaf = first.Client.GetGrain<IBPlusLeafGrain>(await ReadLeafAsync(first, services, treeName));
+            await leaf.DriveStarvedCheckpointAsync();
+            Assert.That(await ReadHoldsAsync(first, services, treeName), Is.Empty, "coverage pruned the hold");
+            var covered = await ReadPinsAsync(first, services, treeName, WritePartition);
+            Assert.That(covered.All(p => p.Offset >= 0), Is.True,
+                "the partition carries a real offset (" + string.Join(", ", covered) + ")");
+
+            // Same activation, so the raise latch is still set: no new hold.
+            using (LatticeHlcOverrideContext.With(AncientStamp()))
+            {
+                await tree.SetAsync(secondKey, [8]);
+            }
+
+            Assert.That(await ReadHoldsAsync(first, services, treeName), Is.Empty,
+                "the latch suppressed a second raise in the same activation");
+            await RunGcAsync(services, treeName, retention: false);
+            await RunGcAsync(services, treeName, retention: true);
+            await first.KillSiloAsync(first.Primary);
+        }
+        finally
+        {
+            await first.DisposeAsync();
+        }
+
+        await AssertReadBackAsync(treeName, writeKey, new byte[] { 7 }, "the covered first write was lost");
+        await AssertReadBackAsync(treeName, secondKey, new byte[] { 8 },
+            "a carried-stamp write appended after coverage pruned the hold was lost to a trim");
+    }
+
+    [Test]
     public async Task A_block_report_after_the_write_does_not_release_the_hold()
     {
         // A leaf that persists a checkpoint without capturing it publishes the
@@ -327,6 +381,18 @@ public sealed class WalOverrideHoldTests
         }
 
         return (other, key, WritePartition);
+    }
+
+    private static string PickSecondKey(string first)
+    {
+        for (var i = 0; ; i++)
+        {
+            var candidate = $"m{i:D3}";
+            if (candidate != first && WalPartitionHash.Compute(candidate, 2) == WritePartition)
+            {
+                return candidate;
+            }
+        }
     }
 
     /// <summary>
