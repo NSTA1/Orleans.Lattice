@@ -2738,9 +2738,11 @@ internal sealed partial class WalShardGrain(
         await DrainInFlightAsync(Options.WalDrainBudget).ConfigureAwait(true);
 
         // The drain budget may have force-faulted slots whose provider writes are
-        // still running, and an earlier flush deadline may have abandoned a call
-        // that has not settled. Either can still land above the tail read below,
-        // so the tail is not stable: refuse to report it (issue #4525).
+        // still running, and an earlier flush deadline - of this activation or of
+        // a predecessor of the same shard in this process - may have abandoned a
+        // call that has not settled. Either can still land after the tail below is
+        // read, so the tail is not stable: refuse to report it (issues #4525,
+        // #4699).
         if (HasOutstandingProviderWork())
         {
             Trace($"move.quiesce.drain_incomplete tree={_treeId} shard={_shardIndex}");
@@ -2764,14 +2766,20 @@ internal sealed partial class WalShardGrain(
 
     /// <summary>
     /// Prunes settled entries from <see cref="_outstandingProviderWork"/> and
-    /// reports whether any provider work that may still land a write remains.
+    /// reports whether any provider work that may still land a write remains:
+    /// this activation's own, or an earlier activation's of the same shard in this
+    /// process, which only <see cref="WalAbandonedFlushRegistry"/> remembers
+    /// (issue #4699). A reactivated shard knows nothing of its predecessor's
+    /// calls, so without the registry its quiesce would report a stable tail
+    /// while one of them can still land under the move's copy.
     /// </summary>
     private bool HasOutstandingProviderWork()
     {
         lock (_stateGate)
         {
             _outstandingProviderWork.RemoveAll(static t => t.IsCompleted);
-            return _outstandingProviderWork.Count > 0;
+            return _outstandingProviderWork.Count > 0
+                || AbandonedWindows()?.LowestUnsettledStart() is not null;
         }
     }
 

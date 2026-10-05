@@ -10,9 +10,10 @@ and the transaction registry retires what it knows. It is the deliverable of
 It is one area indexed in [`spec/README.md`](../README.md), which describes the
 layout every module follows, how to run TLC and why TLC runs in CI. This README
 covers only what is particular to shard ownership. The area is specified by
-**two modules**, and the seam between them is part of what this README
-documents. A third, `ShardOwnershipCrdt`, checks the same ownership moves for a
-CRDT-mode key, whose copies must be joined rather than overwritten (see
+four modules. Its core is **two modules**, and the seam between them is part of
+what this README documents. A third, `ShardOwnershipCrdt`, checks the same
+ownership moves for a CRDT-mode key, whose copies must be joined rather than
+overwritten (see
 [`RefinementCrdt.md`](RefinementCrdt.md)). A fourth, `ShardOwnershipCutover`,
 checks a saga bound to the previous copy across a local shadow-cutover restore
 and its revert, the alias move the other modules do not make (see
@@ -74,10 +75,13 @@ the line where its concerns stop interacting, not shrunk.
 | Registry retires the saga's row | no | yes |
 | A delayed shadow-forwarded prepare | no | yes |
 | A leaf reactivation (terminal memory and shadow markers lost) | no | yes |
+| Write stamps that disagree with real time, and migrated rows (#4522, #4564) | yes | no (values are stamps in commit order) |
+| The applied-terminal witness, carried by a leaf split of the split destination (#4545) | no | yes |
+| The saga's participant row and the forgotten-saga refusal (#4632) | no | yes |
 | `UniqueOwner`, `SagaBatchOnOneCopy`, `ReshardCompletes`, `RoutingConverges` | yes | no |
 | `NoKeyLost`, `NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic` | yes | yes |
 | `SplitCompletes`, `ResizeCompletes`, `SagaCompletes` | yes | yes |
-| `NoStrandedBucket` | no | yes |
+| `NoStrandedBucket`, `ReadableOnceComplete`, `NoLiveBucketAfterForget` | no | yes |
 
 The retention module keeps the ownership machinery its concerns act through, a
 saga bound across one split and one resize with its undo, so every
@@ -89,38 +93,99 @@ a clean control, in the module it now lives in.
 
 The behaviours the split puts in neither module on its own are a retention
 event **together with** something only `ShardOwnership` has: a stale router
-writing, a saga re-binding, a reshard-driven split, a refused flip, or an undo
-before the flip. They were checked once, by composing the modules, rather than
-argued. The review (#4435, finding F7) built the compositions from
-`ShardOwnershipRetention.tla` and re-checking them here reproduced its results.
-Each composition was run under the retention cfg (`TypeOK`, `NoKeyLost`,
-`NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic`, `SplitCompletes`,
-`ResizeCompletes`, `SagaCompletes`, `NoStrandedBucket`) on two TLC workers,
-liveness checked at the end:
+writing, a saga re-binding, a reshard-driven split, a refused flip, an undo
+before the flip, a write stamp that disagrees with real time, or a migrated row.
+They are checked by composing the modules, rather than argued.
+The review (#4435, finding F7) first built the compositions from
+`ShardOwnershipRetention.tla`. Its confirmation pass re-measured them on the
+current modules, after #4574, #4609 and #4670 had changed both, with tla2tools
+v1.7.4 on two TLC workers, liveness checked at the end:
 
 | Composition | Added to the retention module | Result |
 |---|---|---|
-| (a) | stale writers: `SagaPrepare(k, p)` and `LaterWrite(p)` over every published pair | clean, 82,155 distinct states, depth 24: **identical to the module alone**, so stale writers add no reachable behaviour in this instance |
-| (b) | (a), plus `SagaRebindOnRefusal` and `SagaRebindBeforeDecision` (weakly fair) and `UndoBeforeFlip` | clean, 132,491 distinct states, depth 25, 3 min 11 s |
-| (c) | (b), plus the reshard (`ReshardStart`, `ReshardFinish` fair, the split's `rs = "migrating"` arm, the resize's reshard interlock) and `ResizeFlipRefused` | clean, 497,105 distinct states, depth 29, 9 min 54 s |
+| (a) | stale writers: `SagaPrepare(k, p)` and `LaterWrite(p)` over every published pair | clean, 142,980 distinct states, depth 24, 1 min 55 s: **identical to the module alone**, so stale writers add no reachable behaviour in this instance |
+| (b) | (a), plus `SagaRebindOnRefusal` and `SagaRebindBeforeDecision` (weakly fair) and `UndoBeforeFlip` | clean, 205,504 distinct states, depth 25, 3 min 59 s |
+| (c) | (b), plus the reshard (`rs`; `ReshardStart`, `ReshardFinish` fair, the split's `rs = "migrating"` arm, weakly fair, and the resize's reshard interlock) and `ResizeFlipRefused` (`refusals`) | clean, 680,740 distinct states, depth 29, 12 min 53 s |
+| (d) | (c), plus `ShardOwnership`'s write stamps and migrated-row flag: its versions, `Rank`, `Stamp` and `LWW` (every row merge last-writer-wins on stamps, every read judged by rank), `BVal`, and `KnowsP` and `WVal` stamping the later write, and `mig` with its updates in the sweep, the final drain, the purge, the terminal and the later write. The leaf read gate consults a shadow marker only for a migrated row and verifies it against the row's stamp, as production does | clean, 813,771 distinct states, depth 29, 19 min 08 s |
 
-Composition (c) is everything `ShardOwnership` has that the retention module
-lacks. It was also checked against the four properties only `ShardOwnership`
-states (`UniqueOwner`, `SagaBatchOnOneCopy`, `ReshardCompletes`,
-`RoutingConverges`), all thirteen in one run, and is clean: the state count and
-time above are that run's. The review measured 498,905 states and 8 min 35 s for
-(c) under the retention cfg alone, on the bucket before the purge's timing
-assumption was removed (#4503); the difference is that change.
+(a) and (b) were run under the retention cfg: `TypeOK`, `NoKeyLost`,
+`NoResurrection`, `AtomicOnOwner`, `OwnerMonotonic`, `ReadableOnceComplete`,
+`NoLiveBucketAfterForget`, `SplitCompletes`, `ResizeCompletes`, `SagaCompletes`
+and `NoStrandedBucket`. (c) was also checked against the four properties only
+`ShardOwnership` states, all fifteen in one run: `UniqueOwner`,
+`SagaBatchOnOneCopy` (read over buckets, since a retention `"mark"` is a shadow
+marker, not a bucket), `ReshardCompletes` and `RoutingConverges`. (d) was checked
+under (c)'s configuration, all fifteen properties in one run.
 
-So in this instance nothing is lost by the split. The composition is not a CI
-gate because (c) exceeds the five-minute per-run limit on two workers by a wide
-margin, and every mutation would pay it twice. It is the measured cost of
+(c) adds every **action** `ShardOwnership` has that the retention module lacks.
+(d) adds the rest of its state: the write stamps that disagree with real time
+and the migrated-row flag (#4522, #4564), which the retention module lacks
+because its values are stamps in commit order. So a stamp or import defect
+**together with** a retention event is checked too. (d) ports
+`ShardOwnership`'s definitions verbatim rather than restating them. It changes
+one retention definition to match production: `LeafGated`, the read gate on
+the split destination, requires a migrated row (production consults a shadow
+marker only for an `IsMigrated` row: `BPlusLeafGrain`'s
+`lww.IsMigrated && TryGetShadowedSagas`). It also compares the row's stamp, not
+its rank, with the saga's prepare stamp
+(`ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare`). The retention
+module alone gates every row there. That hides more reads, and a hidden read
+excuses the safety properties. (d) shows this loses nothing in this instance,
+in both directions: every safety property holds under production's narrower
+gate, and a probe that restores the wider gate in (d) still satisfies
+`ReadableOnceComplete` (814,034 distinct states).
+
+(d) is not vacuous. Fourteen mutations were applied to it, each checked
+against its own target alone, and thirteen went red:
+
+- The seven stamp and import defects: `NoKeyLostLaterWriteBelowP`,
+  `NoKeyLostMigrationImportDropped`, `NoKeyLostFreshStampDrainOverMigratedRow`,
+  `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`,
+  `NoKeyLostResizeMirrorUnmarkedPrepare` and `NoKeyLostSnapshotResolvesAtFreshStamp`.
+- The five retention mutations on the marker gate: the four
+  `ReadableOnceComplete` ones and `OwnerMonotonicSweepIndeterminateLeavesMarker`.
+  So requiring a migrated row did not disarm the gate.
+- One defect only the composition can state: a sweep that resolves an
+  Indeterminate answer by installing the backstop at a fresh dominating stamp.
+  Under the registry's mask, it overwrites a later write mirrored to the
+  destination.
+
+The fourteenth is the wider-gate probe above, which is meant to stay clean.
+
+So in this instance nothing else is lost by the split. The composition is not a
+CI gate because (d) exceeds the five-minute per-run limit on two workers by a
+wide margin, and every mutation would pay it twice. It is the measured cost of
 composing the two modules, and the reason they are separate; anyone changing
-either module's shared machinery should re-run it. The compositions are
-mechanical: replace the retention module's current-pair writers with the
-published-pair forms, then add the named actions and their fairness from
-`ShardOwnership.tla` with the retention variables added to their `UNCHANGED`
-tuples.
+either module's shared machinery should re-run (d). The compositions are
+mechanical, and each is built from the previous one:
+
+- **(a)**: in `Next`, replace `\E k \in Keys : SagaPrepare(k, CurrentPair)` with
+  `\E k \in Keys, p \in published : SagaPrepare(k, p)`, and `LaterWrite(CurrentPair)`
+  with `\E p \in published : LaterWrite(p)`.
+- **(b)**: add `SagaRebindOnRefusal`, `SagaRebindBeforeDecision` and
+  `UndoBeforeFlip` from `ShardOwnership.tla`, each with the retention variables
+  it leaves alone in its `UNCHANGED` tuple, to `Next`, and add `WF_svars` of
+  each re-bind to `Spec`.
+- **(c)**: add variables `rs` (`"idle"`) and `refusals` (`1`) to `vars`, `svars`,
+  `Init`, `TypeOK` and every existing `UNCHANGED` tuple. Add `rs = "migrating" \/`
+  to `SplitBegin`'s resize guard and `rs # "migrating"` to `ResizeBegin`, and add
+  `ReshardStart`, `ReshardFinish` and `ResizeFlipRefused` from
+  `ShardOwnership.tla` with `WF_svars(rs = "migrating" /\ SplitBegin)` and
+  `WF_svars(ReshardFinish)`. Then add the four `ShardOwnership`-only
+  properties to the module and the cfg.
+- **(d)**: from `ShardOwnership.tla`, copy the version definitions (`Vals`
+  with `LaterLowV`, `SagaUV` and `FreshV`, `Rank`, `Stamp` and `LWW`) over the
+  retention module's, and `BVal`, `KnowsP` and `WVal` ahead of the read gate.
+  Add variable `mig` (all `FALSE`) to `vars`, `svars`, `Init`, `TypeOK` and
+  every `UNCHANGED` tuple. Then give the sweep's committed arm, the final drain,
+  `ResizePurge`, `SagaTerminal` and `LaterWrite` `ShardOwnership`'s `mig'`
+  update, taking `mig` out of their `UNCHANGED` tuples. Replace `Max` with `LWW`
+  in every row merge (`ackOn` and `vis` keep `Max`: they hold ranks). Take
+  `TermRow`'s arms, the final drain's `LET` and `LaterWrite`'s `WVal` stamp from
+  `ShardOwnership.tla`, and wrap `ReadVia` and `OwnerValue` in `Rank`. In
+  `LeafGated`, replace `row[c][s][k] < SagaV` with
+  `mig[c][s][k] /\ Stamp(row[c][s][k]) < Stamp(SagaV)`.
+
 ### Budget
 
 Each module's full configuration, liveness included, runs on two TLC workers

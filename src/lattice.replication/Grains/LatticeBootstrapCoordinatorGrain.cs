@@ -936,6 +936,13 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // Capture the tree frontier's epoch before the export is requested
         // (#4586 part 2b): the handoff pins the export only if no replacement
         // of the tree's contents happened in between.
+        // The sagas already pending from the source before the export opens
+        // (issue #4692): after a plain bootstrap only these can be stale. Read
+        // on every attempt, so a resumed drain reads it afresh for its new export.
+        var pendingBeforeExport = await StalePendingClearer
+            .CapturePendingAsync(_grainFactory, treeName, sourceClusterId, cancellationToken)
+            .ConfigureAwait(true);
+
         var frontierEpoch = (await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
             .GetAsync(cancellationToken)
             .ConfigureAwait(true)).Epoch;
@@ -1195,20 +1202,36 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         // A re-seed the export postdates: the sender has withheld every saga
         // record since before the export, so every pending bucket from it is
-        // either carried by the export or stale. Still behind the read fence.
-        if (state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter) && snapshot.ExportEpoch > reseedAfter)
+        // either carried by the export or stale. Any other full bootstrap - a
+        // tree re-added to replication among them (#4692) - settles only the
+        // sagas that were pending before the export opened: the sender held
+        // nothing back, so a saga staged since is not stale. Still behind the
+        // read fence.
+        var reseed = state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter)
+            && snapshot.ExportEpoch > reseedAfter;
+        if (reseed || pendingBeforeExport.Count > 0)
         {
             var cleared = await StalePendingClearer
-                .ClearAsync(_grainFactory, treeName, sourceClusterId, carriedSagas, decidedSagas, cancellationToken)
+                .ClearAsync(
+                    _grainFactory,
+                    treeName,
+                    sourceClusterId,
+                    carriedSagas,
+                    decidedSagas,
+                    cancellationToken,
+                    onlyTransactions: reseed ? null : pendingBeforeExport)
                 .ConfigureAwait(true);
             if (cleared > 0)
             {
                 Logger.LogWarning(
-                    "Re-seed of tree '{TreeName}' from '{SourceClusterId}' settled {Count} leftover pending saga(s): each decided "
+                    "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' settled {Count} leftover pending saga(s): each decided "
                     + "one by its decision, and each the source purged discarded, its committed values carried by the export.",
                     treeName, sourceClusterId, cleared);
             }
+        }
 
+        if (reseed)
+        {
             // Consumed; persisted with the phase transition below.
             state.State.ReseedAfterEpochs.Remove(sourceClusterId);
         }

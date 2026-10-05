@@ -360,6 +360,8 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var txid = Guid.NewGuid();
         poison.FilterPoisonedAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
             .Returns(new[] { txid });
+        poison.ClassifyAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new ReceiverSagaPoisonClassification { Poisoned = new[] { txid } });
         var decorator = new DeadLetterTrackingReplicationApplier(
             inner,
             grainFactory,
@@ -405,6 +407,8 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var txid = Guid.NewGuid();
         poison.FilterPoisonedAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
             .Returns(new[] { txid });
+        poison.ClassifyAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new ReceiverSagaPoisonClassification { Poisoned = new[] { txid } });
         var decorator = new DeadLetterTrackingReplicationApplier(
             inner,
             grainFactory,

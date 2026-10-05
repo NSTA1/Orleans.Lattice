@@ -117,6 +117,25 @@ public partial class LatticeCrossTreeReceiverGrainTests
     }
 
     [Test]
+    public async Task NotifyTerminalAsync_refuses_a_tree_joining_a_decided_barrier_whose_cluster_id_disagrees()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.NotifyTerminalAsync(Terminal("orders", true, ["orders"]));
+
+        var (divergent, _) = CreateGrain(
+            existingState: state,
+            clusterIds: new Dictionary<string, string>
+            {
+                ["orders"] = "cluster-a",
+                ["ledger"] = "cluster-b",
+            });
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            divergent.NotifyTerminalAsync(Terminal("ledger", true, ["orders", "ledger"])));
+        Assert.That(state.State.Arrived.Keys, Is.EquivalentTo(new[] { "orders" }), "the late tree is not finalized with a verdict it cannot share");
+    }
+
+    [Test]
     public async Task NotifyTerminalAsync_admits_a_single_tree_wait_set_regardless_of_cluster_id()
     {
         // A one-tree wait set carries no verdict across any tree boundary, so

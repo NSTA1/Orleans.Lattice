@@ -886,13 +886,18 @@ if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
 
 When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
 
-From then on, the push path refuses a batch from that source in two cases:
+From then on, the receiver refuses an entry stamped by that source in two cases:
 - the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
 - the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
 
 A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
 - A sender whose binding is stale rebinds and never re-sends the old log.
 - A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
+
+The check runs at the applier's admission seam (`ReplicationSourceLineageGate.AdmitAsync`), which every apply entry passes through, so it covers more than the push that delivered a batch ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707)). An entry that parks in the causal-apply buffer, or is dead-lettered, keeps the stamp it arrived under. It is checked again when the buffer drains it or an operator replays it, against the lineage the tree has drained by then:
+- The drain discards a refused entry. It belongs to a lineage the tree no longer replicates, as a refused push would have.
+- A refused replay returns `ApplyResult.SourceLineageRefused` and leaves the entry parked for the operator to discard.
+- A failure to read the record keeps a drained entry parked, and defers a replay.
 
 The gate refuses more than the reconcile strictly needs, because a lineage cannot be ordered and a refusal only costs a re-seed. A batch with no stamp (a sender that predates the header), or from a source this tree never drained, applies as before. A failure to read the record refuses the batch for now without asking for a re-seed.
 
@@ -1202,7 +1207,14 @@ A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's
 [replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
 withholds it whole (#4533). A pending bucket the receiver staged for it
-before a re-seed is cleared by that re-seed's drain (below). A saga the
+before a re-seed is cleared by that re-seed's drain (below). Any other
+full bootstrap clears one too (#4692) - a tree re-added to replication,
+which must come back holding no leftover bucket from the origin, among
+them - but only for a saga that was already pending from the origin when
+the export opened and that the export neither carries in flight nor
+decides. The sender holds nothing back during such a bootstrap, so a saga
+staged after the export opened is not stale: its terminal is still to
+come, and it keeps its bucket. A saga the
 source still knows but cannot settle (an `Indeterminate` row with no
 recorded verdict) ships as a value-less row that names it with no
 `SettledDecision`, so the receiver does not take it for a purged one;

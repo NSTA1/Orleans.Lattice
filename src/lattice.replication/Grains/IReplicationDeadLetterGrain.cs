@@ -45,8 +45,20 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// <see cref="LatticeReplicationMetrics.ReasonUnknown"/>) so the
     /// <c>reason</c> dimension stays stable across publishers.
     /// </para>
+    /// <para>
+    /// <paramref name="sourceLineage"/> is the source lineage the entry's sender
+    /// stamped on the batch it arrived in (issue #4707), kept with the parked
+    /// entry so an operator replay is checked against the lineage the tree has
+    /// drained by then. <see langword="null"/> for an unstamped entry.
+    /// </para>
     /// </summary>
-    Task<long> EnqueueAsync(WalRecord entry, string failureReason, int retryCount, string reasonTag, CancellationToken cancellationToken);
+    Task<long> EnqueueAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        ReplicationSourceLineageStamp? sourceLineage = null);
 
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);

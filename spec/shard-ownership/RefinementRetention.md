@@ -172,7 +172,7 @@ copy's map).
 | `SagaComplete` | The broadcast finished; the caller is acknowledged | `AtomicWriteGrain.CompleteSagaAsync`. | Yes: `CompensationContinuousReaderTests.Successful_saga_broadcasts_TxCommit_to_every_touched_shard`. |
 | `RegistryMask` | The registry stops, or resumes, reporting the decision | `TxRegistryGrain.GetStatusAsync` answering `TxStatus.Indeterminate` for an expired tombstone or an unreachable cross-tree coordinator. **Environment action, over-approximating:** it may toggle at any point after the decision and before the row is retired, whatever the participants have seen; production's retention mask follows the fan-out and its snapshot pin is what clears it, and a dial failure has no ordering at all, so every Indeterminate answer production gives is one the model can give. Before the decision the registry reads InFlight whatever the mask, so the guard loses nothing. | Yes: `TxRegistryGrainTests.GetStatusAsync_reports_an_aged_out_decision_as_indeterminate_not_in_flight`. |
 | `RegistryForget` | The saga's row leaves the registry | `TxRegistryGrain.ForgetAsync` from the completed saga (`AtomicWriteGrain`'s retention keepalive), and the prune behind it. **Environment action, not fair:** retirement may never happen. | Yes: `AtomicWriteGrainTests.ReceiveReminder_keepalive_on_a_completed_saga_arms_retention_and_forgets_the_decision`. |
-| `DeliverLate` | A delayed shadow-forwarded prepare reaches the split destination | The split hot-path forward through `ShardRootGrain.ForwardShadowAsync`, refused at the leaf by `BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync` when the activation remembers the terminal or, for a prepare marked forwarded (`LatticeForwardedPrepareContext`), when the registry reports the saga decided, following an Indeterminate answer to the recorded verdict (#4445). It also installs a shadow marker on the leaf (`BPlusLeafGrain.MarkSagaShadowAsync`); installing none once the leaf has applied the saga's terminal, or durably witnessed that it settled the key (`wit`), is #4545's fix (#4608, #4644). It also refuses a forwarded prepare whose saga the registry reports undecided with no participant row, the saga having been forgotten (`BPlusLeafGrain`'s forgotten-saga check, `GuardRefuses`, #4632). The resize mirror skips mirroring a prepare its source leaf refused (`ShardRootGrain`'s mirror on a refused prepare); that only saves a hop, since the mirror's destination leaf runs the same check on the mirrored forward, as `RefusedAt` covers both locations: removing the skip leaves the mirroring-shard detector below green, removing the leaf's check turns it red. **Environment action:** delivery is unfair and may happen at any time, which is what a forward outliving its deadline can do; it also stands for the split sweep's non-atomic replay. | Yes: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided`, `BPlusLeafGrainTests.Forwarded_prepare_after_a_reactivation_is_refused_when_the_registry_reports_the_saga_committed`, `BPlusLeafGrainTests.Forwarded_prepare_is_refused_on_the_recorded_verdict_behind_a_masked_decision` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it` `BPlusLeafGrainTests.A_marker_installed_after_its_terminal_settled_the_key_is_not_installed_and_a_split_does_not_carry_it`, `BPlusLeafGrainTests.A_marker_for_a_key_the_saga_terminal_did_not_settle_here_is_installed_gates_and_is_carried`, `BPlusLeafGrainTests.Forwarded_prepare_of_a_forgotten_saga_whose_decision_was_pruned_is_refused` and `ForgottenSagaForwardedPrepareIntegrationTests.A_forwarded_prepare_delivered_after_its_saga_is_forgotten_and_pruned_is_never_bucketed` and `ForgottenSagaForwardedPrepareIntegrationTests.A_late_forward_of_a_forgotten_saga_onto_a_mirroring_shard_is_refused_without_faulting_the_mirror`. |
+| `DeliverLate` | A delayed shadow-forwarded prepare reaches the split destination | The split hot-path forward through `ShardRootGrain.ForwardShadowAsync`, refused at the leaf by `BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync` when the activation remembers the terminal or, for a prepare marked forwarded (`LatticeForwardedPrepareContext`), when the registry reports the saga decided, following an Indeterminate answer to the recorded verdict (#4445). It also installs a shadow marker on the leaf (`BPlusLeafGrain.MarkSagaShadowAsync`); installing none once the leaf has applied the saga's terminal, or durably witnessed that it settled the key (`wit`), is #4545's fix (#4608, #4644). It also refuses a forwarded prepare whose saga the registry reports undecided with no participant row, the saga having been forgotten (`BPlusLeafGrain`'s forgotten-saga check, `GuardRefuses`, #4632). The resize mirror skips mirroring a prepare its source leaf refused (`ShardRootGrain`'s mirror on a refused prepare); that only saves a hop, since the mirror's destination leaf runs the same check on the mirrored forward, as `RefusedAt` covers both locations: removing the skip leaves the mirroring-shard detector below green, removing the leaf's check turns it red. **Environment action:** delivery is unfair and may happen at any time, which is what a forward outliving its deadline can do; it also stands for the split sweep's non-atomic replay, and for a delayed resize-mirror prepare reaching the resized copy after its terminal: the mirror goes through the same `ShardRootGrain.ForwardWithDeadlineAsync`, which marks every shadow forward of a prepare as forwarded (`LatticeForwardedPrepareContext`), so the resized copy's leaf applies the same refusals. | Yes: `BPlusLeafGrainTests.Delayed_forwarded_prepare_that_outruns_the_terminal_is_refused_once_the_saga_has_decided`, `BPlusLeafGrainTests.Forwarded_prepare_after_a_reactivation_is_refused_when_the_registry_reports_the_saga_committed`, `BPlusLeafGrainTests.Forwarded_prepare_is_refused_on_the_recorded_verdict_behind_a_masked_decision` and `ShardRootGrainSplitShadowForwardTests.Hot_path_shadow_forward_trailing_the_terminal_installs_no_orphan_on_a_destination_leaf_that_remembers_it` `BPlusLeafGrainTests.A_marker_installed_after_its_terminal_settled_the_key_is_not_installed_and_a_split_does_not_carry_it`, `BPlusLeafGrainTests.A_marker_for_a_key_the_saga_terminal_did_not_settle_here_is_installed_gates_and_is_carried`, `BPlusLeafGrainTests.Forwarded_prepare_of_a_forgotten_saga_whose_decision_was_pruned_is_refused` and `ForgottenSagaForwardedPrepareIntegrationTests.A_forwarded_prepare_delivered_after_its_saga_is_forgotten_and_pruned_is_never_bucketed` and `ForgottenSagaForwardedPrepareIntegrationTests.A_late_forward_of_a_forgotten_saga_onto_a_mirroring_shard_is_refused_without_faulting_the_mirror`, and `ShardRootGrainShadowForwardTests.SetManyAsync_prepare_mirrored_to_the_resize_destination_is_marked_as_a_forwarded_prepare` for the resize mirror's marking. |
 | `LeafSplit` | A leaf split moves the split destination's key to a fresh sibling leaf | `BPlusLeafGrain.TransferShadowMarkersToSiblingAsync` from the leaf split (`BPlusLeafGrain.CollectShadowMarkers` gathers the donor's markers and prepared buckets for the moved keys, then `MarkSagaShadowAsync` installs them on the sibling). Transferring none for a saga whose terminal the donor applied, carrying each marker's prepare stamp (#4608), and carrying the donor's applied-terminal witness for the moved keys to the sibling's sidecar, at its birth and again once the donor narrows its span (`wit`, #4644), is #4545's fix. The leaf dimension is modelled only for the split destination's `k2`; elsewhere a shard is one leaf. **Environment action:** a leaf splits whenever it fills, any number of times; it is offered only while it can move a marker or precede the late forward, the only cases the module can observe. | Yes: `BPlusLeafGrainTests.Split_transfers_destination_side_shadow_markers_for_migrated_keys`, `BPlusLeafGrainTests.Split_unions_marker_and_pending_sources_without_duplicating_a_key`, `BPlusLeafGrainTests.A_marker_installed_after_its_terminal_settled_the_key_is_not_installed_and_a_split_does_not_carry_it`, `BPlusLeafGrainTests.A_leaf_split_carries_each_markers_marked_prepare_stamp_to_the_sibling` and `ShadowMarkerLeafSplitIntegrationTests.A_marker_installed_after_its_terminal_does_not_strand_a_key_a_leaf_split_moves`, `BPlusLeafGrainTests.A_leaf_split_carries_the_witnesses_of_the_moved_keys_to_the_sibling`, `BPlusLeafGrainTests.A_terminal_landing_on_the_donor_during_the_split_transfer_still_reaches_the_siblings_witness` and `UnstampedShadowMarkerIntegrationTests.An_unstamped_marker_reaching_a_split_sibling_after_its_saga_completed_does_not_hide_the_key`. |
 | `LaterWrite(p)` | A client write of `k2` through the current pair | A routed write through `LatticeGrain`, mirrored by `ShardRootGrain.ForwardShadowAsync` while the shard forwards; a mirror the resized copy refuses because a split of it moved the slot is re-sent to the shard the refusal names (`RTarget`, #4478). | Yes: `ShardRootGrainShadowForwardTests.SetAsync_forwards_during_draining` and `ShardRootGrainShadowForwardTests.SetAsync_mirror_refused_for_a_moved_slot_is_resent_to_the_shard_that_owns_it_now`. |
 | `Reactivate(c, s)` | A leaf activation is replaced | A new `BPlusLeafGrain` activation: `_recentlyTerminal` and `_shadowedSagas` start empty, so the leaf loses its marker and its terminal memory together; prepared buckets are rebuilt by replay. **Environment action:** unfair and at most once. `Next` offers it on the split destination only, because nothing reaches any other shard after its terminal, so a reactivation there would only spend the budget. | Yes: `BPlusLeafGrainTests.Materialiser_replays_prepared_set_into_pending_tx` pins that replay rebuilds the buckets the model keeps across a reactivation. |
@@ -208,8 +208,8 @@ under-approximations are stated so that they are not mistaken for coverage:
   through the pair the registry names now, not through any pair it ever
   published. Stale writers are `ShardOwnership`'s territory, where the same
   actions range over `published`. Composing them with this module's retention
-  events was checked once and adds no reachable state (82,155 distinct states,
-  identical to this module alone).
+  events adds no reachable state (142,980 distinct states, identical to this
+  module alone, re-measured on the current module).
 - **No hop budget.** The mirror's chase (`RTarget`) always reaches the shard a
   refusal names; production fails the forward, and so the write, once its hops
   run out, which only removes behaviours. A one-off check with a budget of zero
@@ -228,14 +228,17 @@ check inside the harness's per-run budget.
 ## Deliberate abstraction gaps
 
 - **Composition with `ShardOwnership`.** Not a CI gate. A behaviour that needs
-  a stale writer, a re-bind, a reshard, a refused flip or an undo before a flip
-  together with a retention event is checked by neither module's gate. The
-  composition of everything `ShardOwnership` has with this module was checked
-  once, before this module gained the applied-terminal witness and the
-  forgotten-saga refusal, and was clean against all thirteen properties of both
-  modules (497,105 distinct states, depth 29, 9 min 54 s on two workers); it
-  exceeds the per-run budget, which is why the modules are separate. See the
-  README.
+  a stale writer, a re-bind, a reshard, a refused flip, an undo before a flip, a
+  stamp that disagrees with real time or a migrated row together with a
+  retention event is checked by neither module's gate. The
+  composition of every action `ShardOwnership` has with this module, re-measured
+  on the current modules (the applied-terminal witness and the forgotten-saga
+  refusal included), is clean against all fifteen properties of both (680,740
+  distinct states, depth 29, 12 min 53 s on two workers). So is the composition
+  that also adds `ShardOwnership`'s stamps and migrated rows (813,771 distinct
+  states, depth 29, 19 min 08 s), and the stamp and import mutations still go
+  red in it. Both exceed the per-run budget, which is why the modules are
+  separate. See the stamps bullet below and the README.
 - **The post-sweep cleanup and the sweep's non-atomic window.** The sweep is one
   step. Its window (a decision landing between the pre-check and the replay) is
   covered by the late forward, which may arrive at any time; the cleanup that
@@ -243,7 +246,15 @@ check inside the harness's per-run budget.
 - **Cross-tree delegation.** Only its observable effect, an Indeterminate
   answer at any time before retirement, is modelled.
 - **Reactivation elsewhere than the split destination.** Argued in the
-  `Reactivate` row: no step reads the lost memory anywhere else here.
+  `Reactivate` row: no step reads the lost memory anywhere else here. In
+  production one more step could: a resize-mirror prepare abandoned at its
+  deadline (`ShardRootGrain.ForwardWithDeadlineAsync`) may still reach the
+  resized copy after the saga's terminal, on a leaf that has since lost its
+  memory of it. The module does not model that delivery separately. The
+  forward is marked as a forwarded prepare, so the leaf refuses it on the
+  registry's decision or on the saga's retired participant row, exactly as a
+  `DeliverLate` prepare is refused
+  (`ShardRootGrainShadowForwardTests.SetManyAsync_prepare_mirrored_to_the_resize_destination_is_marked_as_a_forwarded_prepare`).
 - **Leaves.** A shard is one leaf, except the split destination's `k2`, whose
   leaf can split any number of times (`LeafSplit`), so a shadow marker can
   move to a sibling that never saw the terminal (#4545). Leaf splits elsewhere,
@@ -261,6 +272,16 @@ check inside the harness's per-run budget.
   stamp and import defects (#4522, #4564) as standing mutations. What this
   module adds to them, a reactivation that loses the activation's memory
   before a fresh-stamp backstop, is `NoKeyLostRetainedFreshStampBackstop`.
+  Their composition with this module's retention events is checked: see the
+  composition bullet above. That composition also checks this module's read
+  gate against production's. `LeafGated` gates the split destination's row
+  whatever its provenance, but production consults a shadow marker only for a
+  migrated row (`BPlusLeafGrain` tests `lww.IsMigrated` before
+  `IsShadowedReadSafeAsync`). Gating more hides more reads, and a hidden read
+  excuses the safety properties, so the composition gates as production does.
+  Every safety property holds there, and the wider gate still satisfies
+  `ReadableOnceComplete` with stamps present, so the difference loses nothing
+  in this instance.
 - **Time.** Retention windows, deadlines and the purge's delay are not modelled.
 
 ## Territory owned by other open issues

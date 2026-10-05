@@ -140,6 +140,10 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // operation's verdict, which every participant's terminal shares.
             if (!state.State.Arrived.ContainsKey(terminal.TreeId))
             {
+                // The same premise as the undecided join: one verdict crosses the
+                // tree boundary only between trees that agree on cluster identity.
+                ThrowIfWaitSetClusterIdsDisagree(
+                    CanonicalStringSet.SortedDistinct(state.State.WaitSet.Append(terminal.TreeId)));
                 state.State.Arrived[terminal.TreeId] = terminal;
                 await state.WriteStateAsync();
             }

@@ -112,7 +112,8 @@ internal sealed class ReplicationDeadLetterGrain(
         string failureReason,
         int retryCount,
         string reasonTag,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReplicationSourceLineageStamp? sourceLineage = null)
     {
         ArgumentNullException.ThrowIfNull(failureReason);
         ArgumentException.ThrowIfNullOrEmpty(reasonTag);
@@ -150,6 +151,8 @@ internal sealed class ReplicationDeadLetterGrain(
                 FailureReason = failureReason,
                 RetryCount = retryCount,
                 EnqueuedAtTicks = enqueuedAtTicks,
+                SourceLineageClusterId = sourceLineage?.SourceClusterId,
+                SourceLineage = sourceLineage?.Lineage,
             }),
             capacity: null,
             cancellationToken).ConfigureAwait(true);
