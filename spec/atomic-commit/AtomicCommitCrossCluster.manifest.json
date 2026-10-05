@@ -14,10 +14,10 @@
   },
   "variants": {
     "GapFollow": {
-      "distinctStates": 38509
+      "distinctStates": 60964
     },
     "GapJoin": {
-      "distinctStates": 31989
+      "distinctStates": 53984
     },
     "DetachFollow": {
       "distinctStates": 44412
