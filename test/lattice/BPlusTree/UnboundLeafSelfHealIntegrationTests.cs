@@ -147,8 +147,7 @@ public class UnboundLeafSelfHealIntegrationTests
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
 
         await router.DeleteTreeAsync();
-        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
-        await leaf.ClearGrainStateAsync();
+        await leaf.ClearGrainStateForPurgeAsync();
         await router.RecoverTreeAsync();
 
         // Re-damage after recovery: the leaf is unbound again but keeps its row,

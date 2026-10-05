@@ -54,7 +54,7 @@ public partial class TreeDeletionGrainTests
             shardRoot.MarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.UnmarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.PurgeAsync().Returns(Task.CompletedTask);
-            shardRoot.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
+            shardRoot.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromResult(-1));
         }
     }
 
@@ -85,7 +85,7 @@ public partial class TreeDeletionGrainTests
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             await shard.Received(1).UnmarkDeletedAsync();
-            await shard.Received(1).ReseedNodeBindingsAsync();
+            await shard.Received(1).ReseedNodeBindingsAsync(0);
         }
     }
 
