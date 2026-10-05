@@ -300,4 +300,13 @@ internal sealed record TreeRegistryEntry
     /// </para>
     /// </summary>
     [Id(19)] public string? AliasCutoverTarget { get; init; }
+
+    /// <summary>
+    /// Stable content-lineage token for the logical tree. It changes when an
+    /// operation swaps in content that was not derived key-for-key from the
+    /// previous content, and is preserved across topology-only moves such as
+    /// resize, reshard, shard split, and leaf split. <see langword="null"/> on
+    /// legacy rows is unknown.
+    /// </summary>
+    [Id(20)] public Guid? Lineage { get; init; }
 }

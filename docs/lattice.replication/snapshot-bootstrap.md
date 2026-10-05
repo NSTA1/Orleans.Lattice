@@ -52,22 +52,46 @@ before calling `AddLatticeReplication`.
   after every snapshot entry has been applied, so the causal
   dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
-- **Deletes ship as committed tombstone rows.** The committed
-  projection carries live keys only, so the default provider ends the
-  export with a tombstone pass: every key a source leaf still holds as a
-  tombstone ships as a row with `IsTombstone` set and `IsPrepared`
-  clear, stamped with the tombstone's own HLC, and the bootstrap drain
-  applies it as a delete. Without it a receiver that bootstraps in place
-  over an existing copy - a peer that fell off the log and is
-  re-bootstrapped by either the receiver-side local detector or the
-  sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key the source deleted
-  while it was behind, permanently, because the delete's WAL record is
-  behind the source's trim point and the incremental stream never
-  delivers it (#4504). Last-writer-wins resolves a tombstone row against
-  a live row for the same key by HLC, so a delete older than a value the
-  receiver wrote later does not apply. A tombstone the source has already
-  reaped (tombstone compaction physically removes it after
-  `TombstoneGracePeriod`) cannot ship; that residual is tracked as #4537.
+- **Deletes ship as committed tombstone rows, then reaped source deletes
+  reconcile.** The committed projection carries live keys only, so the
+  default provider ends the export with a tombstone pass: every key a
+  source leaf still holds as a tombstone ships as a row with
+  `IsTombstone` set and `IsPrepared` clear, stamped with the tombstone's
+  own HLC, and the bootstrap drain applies it as a delete. Without it a
+  receiver that bootstraps in place over an existing copy - a peer that
+  fell off the log and is re-bootstrapped by either the receiver-side local
+  detector or the sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key
+  the source deleted while it was behind, permanently, because the
+  delete's WAL record is behind the source's trim point and the
+  incremental stream never delivers it (#4504).
+
+  A source tombstone can be physically reaped after
+  `TombstoneGracePeriod`, so an in-place drain also pre-captures the
+  receiver's live source-origin, non-expiring rows before opening the
+  export. The sender carries a source-generation tuple at export open and
+  close: physical tree id, shard-map version, lineage token, soft-delete
+  epoch, and deletion state. After the drain, for every pre-captured
+  source-origin key that the whole-tree export did not carry as a live,
+  tombstone, or prepared row, the coordinator synthesises a delete at the
+  captured HLC. The HLC is not advanced: the last-writer-wins merge makes
+  a tombstone win an equal-HLC tie, while any receiver write with a newer
+  HLC still wins.
+
+  The reconcile is deliberately fail-safe. It runs only for unscoped,
+  last-writer-wins exports whose open and close generation match, whose
+  source was not deleted or purging at either end, and whose lineage
+  matches the receiver's durable aligned-lineage record for that source.
+  The aligned lineage is recorded only by a bootstrap into an empty
+  receiver tree, where empty means the receiver leaf scan found zero raw
+  rows, including tombstones. Legacy or otherwise unknown generation
+  values skip reconciliation. A generation mismatch or a deleted/purging
+  source records a durable owed retry; maintenance re-enters the normal
+  full bootstrap path later, with a fresh pre-capture and all gates run
+  again. A lineage mismatch is permanent and is not owed. Source-origin
+  keys carrying an expiry are not captured because they expire on their
+  own, and receiver-local or third-origin stale keys remain the residual
+  tracked by #4549.
+
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).

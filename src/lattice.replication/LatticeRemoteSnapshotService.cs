@@ -48,7 +48,7 @@ namespace Orleans.Lattice.Replication;
 /// cluster-local by not enrolling it.
 /// </para>
 /// </summary>
-public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
+public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
 {
     private readonly ISnapshotProvider _provider;
     private readonly ILatticeReplicationContext? _replicationContext;
@@ -208,6 +208,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
             AsOfHlc = stream.AsOfHlc,
             CausalStableFrontier = stream.CausalStableFrontier,
             ExportEpoch = stream.ExportEpoch,
+            OpenGeneration = stream.OpenGeneration,
         };
     }
 
@@ -238,6 +239,35 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
             .ConfigureAwait(false))
         {
             yield return entry;
+        }
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureTreeEnrolledForExport(treeName);
+
+        var stream = await _provider
+            .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
+            .ConfigureAwait(false);
+
+        await foreach (var entry in stream.Entries
+            .WithCancellation(cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return new RemoteSnapshotStreamItem { Entry = entry };
+        }
+
+        if (stream.CloseGeneration is { } close)
+        {
+            yield return new RemoteSnapshotStreamItem { CloseGeneration = close };
         }
     }
 }

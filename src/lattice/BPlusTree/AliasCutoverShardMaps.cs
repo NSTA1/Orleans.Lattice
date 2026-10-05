@@ -308,6 +308,10 @@ internal static class AliasCutoverShardMaps
             targetMap,
             target?.NextShardIndex,
             expectedPhysicalTreeId: current);
+        if (await registry.GetEntryAsync(logicalTreeId) is { } moved)
+        {
+            await registry.UpdateAsync(logicalTreeId, moved with { Lineage = Guid.NewGuid() });
+        }
 
         // The swap's own read of the row is authoritative: a split that committed
         // onto the previous copy's map after this method read it is part of that

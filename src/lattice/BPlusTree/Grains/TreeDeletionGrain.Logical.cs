@@ -113,11 +113,16 @@ internal sealed partial class TreeDeletionGrain
                     state.State.LogicalDeleteComplete = false;
                     state.State.LogicalPurgeComplete = false;
                     state.State.LogicalPurgeInProgress = false;
+                    // A logical delete is a soft delete of this tree id too: bump
+                    // the epoch so a delete-and-recover inside a snapshot export
+                    // is visible to the receiver's reconcile (issue #4537).
+                    state.State.DeletionEpoch++;
                     try { await PersistAsync(); }
                     catch
                     {
                         state.State.LogicalPhysicalTreeId = null;
                         state.State.LogicalDeletedAtUtc = null;
+                        state.State.DeletionEpoch--;
                         throw;
                     }
                 }

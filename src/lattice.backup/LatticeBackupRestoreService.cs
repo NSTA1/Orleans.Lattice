@@ -362,6 +362,11 @@ internal sealed class LatticeBackupRestoreService(
             await AliasCutoverShardMaps.RevertAsync(
                 grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
                 restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+            if (await registry.GetEntryAsync(restore.TargetTreeId).ConfigureAwait(false) is { } revertedEntry)
+            {
+                await registry.UpdateAsync(restore.TargetTreeId, revertedEntry with { Lineage = Guid.NewGuid() })
+                    .ConfigureAwait(false);
+            }
 
             if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
                 && !string.Equals(restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId, StringComparison.Ordinal))
@@ -600,6 +605,11 @@ internal sealed class LatticeBackupRestoreService(
             // layout: a split on it can no longer commit once the alias has moved.
             var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
                 grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+            if (await registry.GetEntryAsync(targetTreeId).ConfigureAwait(false) is { } restoredEntry)
+            {
+                await registry.UpdateAsync(targetTreeId, restoredEntry with { Lineage = Guid.NewGuid() })
+                    .ConfigureAwait(false);
+            }
             if (armRedirect && retainedRouting is null)
             {
                 retainedRouting = new RoutingInfo(previousPhysicalTreeId!, finalReplacedMap ?? replacedMap!);

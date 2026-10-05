@@ -148,4 +148,28 @@ internal sealed class BootstrapCoordinatorState
     /// The UTC tick at or after which a failed, fenced bootstrap is re-driven.
     /// </summary>
     [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
+
+    /// <summary>
+    /// Source lineage token this receiver's copy is aligned with, keyed by
+    /// source cluster id. Recorded only after a bootstrap into an empty receiver
+    /// tree; never lazily adopted on a populated receiver.
+    /// </summary>
+    [Id(18)] public Dictionary<string, Guid> AlignedLineageBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Sources whose last delete-reconcile attempt skipped because the source
+    /// generation changed or reported deletion during the export. A later full
+    /// re-bootstrap retries from the beginning with a fresh pre-capture.
+    /// </summary>
+    [Id(19)] public Dictionary<string, bool> ReconcileOwedBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the receiver tree held no rows at all, tombstones included, when
+    /// the current import began (issue #4537). Recorded before the import's first
+    /// entry is applied and kept across a resume or re-drive of a partial import,
+    /// so a first bootstrap into an empty tree still records its aligned lineage
+    /// after a crash. Legacy state decodes to <see langword="false"/>, which skips
+    /// alignment fail-safe.
+    /// </summary>
+    [Id(20)] public bool ReceiverEmptyAtImportStart { get; set; }
 }

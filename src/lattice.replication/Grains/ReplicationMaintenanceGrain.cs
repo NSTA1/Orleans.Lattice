@@ -257,8 +257,25 @@ internal sealed class ReplicationMaintenanceGrain(
         // the local cluster is never one of its own peers.
         foreach (var peer in peers)
         {
-            if (string.IsNullOrEmpty(peer)
-                || !oldestByOrigin.TryGetValue(peer, out var oldest))
+            if (string.IsNullOrEmpty(peer))
+            {
+                continue;
+            }
+
+            try
+            {
+                await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(TreeName)
+                    .RetryOwedReconcileAsync(peer)
+                    .ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Owed bootstrap delete reconcile retry for peer {Peer} failed for {Context}; will retry on next cadence",
+                    peer, LogContext);
+            }
+
+            if (!oldestByOrigin.TryGetValue(peer, out var oldest))
             {
                 continue;
             }

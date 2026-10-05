@@ -118,11 +118,13 @@ internal sealed partial class TreeDeletionGrain(
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
         var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
+        var deletionEpochSnapshot = state.State.DeletionEpoch;
 
         // Persist the deletion state.
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
         state.State.RetainsRegistryEntry = retainsRegistryEntry;
+        state.State.DeletionEpoch++;
         try
         {
             await PersistAsync();
@@ -132,6 +134,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
+            state.State.DeletionEpoch = deletionEpochSnapshot;
             throw;
         }
 
@@ -188,6 +191,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
+            state.State.DeletionEpoch = deletionEpochSnapshot;
             try
             {
                 await PersistAsync();

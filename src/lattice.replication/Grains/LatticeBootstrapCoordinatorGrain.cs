@@ -168,6 +168,19 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task RetryOwedReconcileAsync(string sourceClusterId, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!state.State.ReconcileOwedBySource.TryGetValue(sourceClusterId, out var owed) || !owed)
+        {
+            return;
+        }
+
+        await BootstrapAsync(sourceClusterId, cancellationToken).ConfigureAwait(true);
+    }
+
     /// <summary>
     /// Persists kickoff intent and returns whether the caller should
     /// register the keepalive reminder + phase timer. Returns
@@ -767,6 +780,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // that bootstrap intra-cluster only without an explicit replication
         // declaration.
         var mergeMode = _mergeModeResolver.Resolve(treeName) ?? LatticeMergeMode.LwwRegister;
+        var preCapture = await CaptureReceiverEntriesAsync(
+                treeName,
+                sourceClusterId,
+                mergeMode,
+                cancellationToken)
+            .ConfigureAwait(true);
 
         // Pass sourceClusterId through to the snapshot provider so that
         // cross-cluster adapters (RemoteSnapshotProvider) can address
@@ -800,6 +819,15 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
         state.State.SnapshotExportEpoch = snapshot.ExportEpoch;
+        // Whether the receiver held no rows at all before this import began
+        // (issue #4537). Captured only while no entry of the import has been
+        // applied: a resumed or re-driven drain of a partial import would see its
+        // own rows, so it keeps the value its first attempt recorded.
+        if (!state.State.ImportApplied)
+        {
+            state.State.ReceiverEmptyAtImportStart = preCapture.IsEmpty;
+        }
+
         // Recorded before the first entry is applied: from here on the tree may
         // hold a partial import, so a failure keeps the read fence up (#4526).
         state.State.ImportApplied = true;
@@ -826,6 +854,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
 
         int sinceLastPersist = 0;
+        var carriedKeys = new HashSet<string>(StringComparer.Ordinal);
 
         // Open the bootstrap-drain ambient scope ONCE for the entire
         // drain rather than per entry. The scope is invariant across
@@ -866,6 +895,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
                 continue;
             }
+
+            carriedKeys.Add(entry.Key);
 
             if (ToSnapshotWalRecord(entry, treeName, sourceClusterId, mergeMode) is not { } record)
             {
@@ -922,6 +953,15 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             }
         }
 
+        await ReconcileReapedSourceDeletesAsync(
+                preCapture,
+                carriedKeys,
+                snapshot.OpenGeneration,
+                snapshot.CloseGeneration,
+                mergeMode,
+                cancellationToken)
+            .ConfigureAwait(true);
+
         // Every snapshot entry is applied: the import is whole, so lift the read
         // fence before leaving the drain (issue #4526). Lifted before the phase
         // is persisted: a crash in between resumes the drain, which re-arms the
@@ -933,6 +973,126 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         Logger.LogInformation(
             "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': ApplyingSnapshot -> IncrementalHandoff (LastAppliedHlc={LastAppliedHlc})",
             treeName, sourceClusterId, state.State.LastAppliedHlc);
+    }
+
+    private async Task<BootstrapReceiverPreCapture> CaptureReceiverEntriesAsync(
+        string treeName,
+        string sourceClusterId,
+        LatticeMergeMode mergeMode,
+        CancellationToken cancellationToken)
+    {
+        var capture = new BootstrapReceiverPreCapture();
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        var everything = new VersionVector();
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                var delta = await leaf.GetDeltaSinceAsync(everything).ConfigureAwait(true);
+                capture.RawEntryCount += delta.Entries.Count;
+
+                var liveEntries = await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true);
+                foreach (var entry in liveEntries)
+                {
+                    if (entry.ExpiresAtTicks != 0
+                        || !string.Equals(entry.OriginClusterId, sourceClusterId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    capture.SourceEntries[entry.Key] = new BootstrapCapturedEntry(
+                        entry.Timestamp,
+                        entry.MergeMode ?? mergeMode);
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+
+        return capture;
+    }
+
+    private async Task ReconcileReapedSourceDeletesAsync(
+        BootstrapReceiverPreCapture preCapture,
+        HashSet<string> carriedKeys,
+        SnapshotSourceGeneration? openGeneration,
+        SnapshotSourceGeneration? closeGeneration,
+        LatticeMergeMode mergeMode,
+        CancellationToken cancellationToken)
+    {
+        var treeName = TreeName;
+        var sourceClusterId = state.State.SourceClusterId;
+        state.State.AlignedLineageBySource.TryGetValue(sourceClusterId, out var alignedLineage);
+        var decision = BootstrapDeleteReconcile.Decide(
+            isScopedExport: false,
+            openGeneration,
+            closeGeneration,
+            alignedLineage == Guid.Empty ? null : alignedLineage,
+            state.State.ReceiverEmptyAtImportStart,
+            mergeMode);
+
+        RecordBootstrapReconcile(treeName, sourceClusterId, decision.Outcome);
+
+        if (decision.OweRetry)
+        {
+            state.State.ReconcileOwedBySource[sourceClusterId] = true;
+        }
+        else
+        {
+            state.State.ReconcileOwedBySource.Remove(sourceClusterId);
+        }
+
+        if (decision.RecordAlignedLineage && openGeneration?.Lineage is { } lineage)
+        {
+            state.State.AlignedLineageBySource[sourceClusterId] = lineage;
+        }
+
+        // The aligned-lineage and owed slots are persisted by the drain-end write
+        // that follows. A crash before it resumes the drain, which re-exports,
+        // re-captures, and decides again from the persisted import-start state.
+        if (!decision.ShouldReconcile)
+        {
+            return;
+        }
+
+        foreach (var (key, captured) in preCapture.SourceEntries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (carriedKeys.Contains(key))
+            {
+                continue;
+            }
+
+            var record = new WalRecord
+            {
+                TreeId = treeName,
+                Op = MutationKind.Delete,
+                Key = key,
+                Value = null,
+                Timestamp = captured.Timestamp,
+                IsTombstone = true,
+                OriginClusterId = sourceClusterId,
+                Mode = captured.MergeMode,
+            };
+            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            if (applied.Deferred)
+            {
+                // Same rule as a deferred snapshot row (issue #4604): nothing else
+                // re-sends this delete, so fail the attempt and re-drain.
+                throw new LatticeBootstrapEntryDeferredException(treeName, key);
+            }
+        }
     }
 
     /// <summary>
@@ -1112,6 +1272,82 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 LatticeTenantLabel.ForTree(treeName),
             });
         _drainStartTimestamp = null;
+    }
+
+    private static void RecordBootstrapReconcile(
+        string treeName,
+        string sourceClusterId,
+        BootstrapReconcileOutcome outcome)
+    {
+        switch (outcome)
+        {
+            case BootstrapReconcileOutcome.Reconciled:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedScoped:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedScoped),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedUnstable:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedUnstable),
+                    LatticeTenantLabel.ForTree(treeName));
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeOwedRetry),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedDeleted:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedDeleted),
+                    LatticeTenantLabel.ForTree(treeName));
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeOwedRetry),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedUnknown:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedUnknown),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedLineageMismatch:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedLineageMismatch),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedNeverAligned:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedNeverAligned),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+            case BootstrapReconcileOutcome.SkippedNotLww:
+                LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, treeName),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, sourceClusterId),
+                    new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedNotLww),
+                    LatticeTenantLabel.ForTree(treeName));
+                break;
+        }
     }
 
     /// <summary>

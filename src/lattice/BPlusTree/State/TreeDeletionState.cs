@@ -114,4 +114,11 @@ internal sealed class TreeDeletionState
     /// decodes the missing slot to <see langword="false"/>.
     /// </summary>
     [Id(20)] public bool RegistryUnregisterPending { get; set; }
+
+    /// <summary>
+    /// Monotonic logical soft-delete epoch. Incremented whenever this tree id
+    /// enters a soft-deleted state so snapshot-bootstrap reconciliation can
+    /// detect a delete-and-recover cycle that begins and ends live.
+    /// </summary>
+    [Id(21)] public long DeletionEpoch { get; set; }
 }

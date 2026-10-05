@@ -118,6 +118,7 @@ internal sealed class LatticeRegistryGrain(
             // the activation-time materialiser always agree on the
             // partition fan-out shape for the lifetime of the tree.
             WalPartitions = entry.WalPartitions ?? siloDefaultWalPartitions,
+            Lineage = entry.Lineage ?? Guid.NewGuid(),
         };
     }
 
@@ -503,7 +504,14 @@ internal sealed class LatticeRegistryGrain(
         var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         // Writing the alias completes any cutover that carried the target's map
         // onto this entry first, so its in-progress marker is cleared with it.
-        var updated = existing with { PhysicalTreeId = physicalTreeId, AliasCutoverTarget = null };
+        var updated = existing with
+        {
+            PhysicalTreeId = physicalTreeId,
+            AliasCutoverTarget = null,
+            Lineage = string.Equals(existing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+                ? existing.Lineage
+                : Guid.NewGuid(),
+        };
         await UpdateAsync(treeId, updated);
         await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
     }
