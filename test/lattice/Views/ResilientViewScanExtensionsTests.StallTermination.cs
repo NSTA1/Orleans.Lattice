@@ -309,7 +309,7 @@ public partial class ResilientViewScanExtensionsTests
     {
         // Three consecutive aborts drive the backoff past its immediate-first-retry
         // arm and into the 10ms-per-attempt ramp, which is the only path through
-        // ComputeReconnectDelayMs that actually awaits.
+        // ResilientScanResume.ReconnectDelayMs that actually awaits.
         var view = Substitute.For<ILatticeView>();
         var callIndex = 0;
         view.EntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())

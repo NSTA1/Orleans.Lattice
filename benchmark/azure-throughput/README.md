@@ -142,7 +142,7 @@ The resource group becomes `rg-lat-exp` and the `~/.ssh/config` host alias becom
   drain after the producer stops, before the silo is stopped (default 60; `0` skips).
 - `-CaptureCounters` -- attach `dotnet-counters` to the silo for the cohort.
 
-Every cohort writes three artefacts under `benchmark/.run/azure-throughput/`:
+Every cohort writes artefacts under `benchmark/.run/azure-throughput/`:
 - `silo-<cohort>.log` -- silo journal (between cohort start and silo stop), with the
   runner's verdict block appended
 - `producer-<cohort>.log` -- producer journal
@@ -182,7 +182,7 @@ operation the silo dispatches per producer batch; unset or unknown means `set-ma
 | `get-point` | One `GetAsync` per key, over a keyspace the silo pre-seeds at startup with one `SetManyAsync` of `BENCH_VEHICLE_COUNT` keys - on the VM (TCP ingest) path only. The silo reads the same variable as the producer, and its silo-side default of 0 skips the pre-seed: `run-cohort.ps1` sets it only for the producer, so pass it to the silo through `-ExtraSiloEnv` as well. `performance-report.ps1`'s Layer 2 rows do not pass it, so their `get-point` and `get-many` cohorts read keys that were never written (each cohort gets a fresh tree). In cluster ingest mode (Layer 3) the silo skips this step and the producer seeds the same keys after warm-up instead, logging `[producer] preseed ... entries=N`. |
 | `get-many` | `GetManyAsync` over the same keyspace, with the same pre-seed caveats. |
 
-In the four atomic modes each saga is its own flush unit: it takes its own
+In atomic modes each saga is its own flush unit: it takes its own
 `BENCH_FLUSH_CONCURRENCY` slot, is retried on its own, and is counted in `ops` or
 `failed` on its own, so up to `BENCH_FLUSH_CONCURRENCY` sagas are in flight and
 `inFlight` on the progress line counts sagas. A producer batch used to be one unit
@@ -398,14 +398,21 @@ az group delete --name rg-lat --yes --no-wait
 
 ## Layer 3 (multi-silo, Azure Container Apps)
 
-`performance-report.ps1 -Layer 3` (or `-Layer3`) measures the same engine and all nine
-workloads against N silos. It provisions a rig with `scripts/deploy-aca.ps1` (or reuses
+`performance-report.ps1 -Layer 3` (or `-Layer3`) measures the same engine and workload set
+against N silos. It provisions a rig with `scripts/deploy-aca.ps1` (or reuses
 one with `-ReuseAca <prefix>`), runs at least `-N` cohorts (default 3) of every workload
 at each count in `-SiloCounts` (default `1, 2, 4, 6, 8`) through `scripts/run-cohort-aca.ps1`,
 and deletes the resource group afterwards unless `-KeepAca` is set or the rig was
 reused. `-Resume` continues an interrupted sweep from the state saved under its prefix, so
 repeat that prefix with `-NamePrefix` (or `-ReuseAca` for a rig that was kept). Both scripts can
 also be run by hand.
+
+Between cohorts the silo-count change (`Set-AcaSiloCount` in `scripts/aca-common.ps1`) does
+not return until every superseded silo revision has drained: it polls the app's full revision
+list and the replicas of the newest retired revisions, and fails closed with the lingering
+revision names if they have not retired within the timeout. A deactivated revision keeps
+serving for 30-60 s, so this adds roughly that much per silo-count transition, but it stops an
+old revision's replicas from overlapping the next cohort's warm-up (#3588).
 
 A provisioning run names its rig from `-NamePrefix <prefix>` when given, otherwise from
 a fresh prefix. To sweep a rig you provisioned yourself, run

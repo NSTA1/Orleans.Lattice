@@ -222,7 +222,14 @@ internal sealed class SchemaOperations : IDisposable
         _ => "migrate this tree",
     };
 
-    private static SchemaOperationStage StageOf(LatticeOperationStatus status)
+    /// <summary>
+    /// Classifies an operation's polled status into the stage the Schema area shows:
+    /// running until terminal, then completed, cancelled, aborted (a failure whose
+    /// outcome is the abort marker) or failed.
+    /// </summary>
+    /// <param name="status">The polled operation status.</param>
+    /// <returns>The stage.</returns>
+    internal static SchemaOperationStage StageOf(LatticeOperationStatus status)
     {
         if (!status.IsTerminal)
         {

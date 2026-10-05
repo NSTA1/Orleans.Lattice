@@ -5,15 +5,15 @@ disk and in memory, why the layout is shaped the way it is, and what
 that means for activation cost, projection-rebuild paths, and CRDT
 producer-side mutation cost.
 
-## The three storage layers
+## Storage layers
 
-A live tree's data is split across three storage layers with
+A live tree's data is split across storage layers with
 distinct durability boundaries and growth rates:
 
 | Layer | Lives in | Grows with | Durability boundary |
 |---|---|---|---|
 | Write-ahead log (WAL) | Per-partition `IWalStorageProvider` rows (the mutation key's hash picks the partition, not the tree's physical shard) | Total mutation count since last GC | Foreground commit: a mutation is durable once its WAL append returns |
-| Leaf state row | `BPlusLeafGrain` persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
+| Leaf state row | Leaf persistent state | Fixed-shape topology + checkpoint metadata. **Does not grow** with live-key count. | Periodic checkpoint persist (see [Configuration: `MaterialiserCheckpointInterval` / `MaterialiserCheckpointEntries`](configuration.md)) |
 | Snapshot blob | The leaf's snapshot row (a separate `leaf-snapshot` grain state), plus separate segment rows when a capture exceeds `LeafSnapshotSegmentBytes` | Entry count (live keys plus uncompacted tombstones) * canonical row size | Each snapshot capture - whenever the leaf's durable coverage lags its checkpoint (the WAL GC trims only covered prefixes) and when a checkpoint nears the WAL retention horizon; see [Projection Rebuild: snapshot-on-fall-off safety net](projection-rebuild.md#snapshot-on-fall-off-safety-net) |
 
 The **WAL is canonical.** Everything else is derived. A leaf's
@@ -26,7 +26,7 @@ covers.
 
 ## Why the leaf state row stays small
 
-A pre-collapse `LeafNodeState` carried the per-key `Entries`
+The pre-collapse leaf state row carried the per-key `Entries`
 dictionary inline. That coupled the persisted row size to
 `MaxLeafKeys` * average per-entry overhead - a leaf could carry
 hundreds of KB of LWW state in its state row, which forced the
@@ -67,7 +67,7 @@ replay.
 
 ## Activation: replay, rehydrate, and the safety net
 
-On every leaf activation, the materialiser runs three steps in
+On every leaf activation, the materialiser runs these steps in
 order:
 
 1. **Rehydrate from a usable snapshot.** If the leaf's snapshot

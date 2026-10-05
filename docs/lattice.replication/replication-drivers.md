@@ -149,7 +149,7 @@ reads it.
 
 ##### Membership-sensitive consumers
 
-These are the four drivers whose behaviour depends on which peers
+These are the drivers whose behaviour depends on which peers
 are currently reachable. Every one of them reads
 `IReplicationTopology` and nothing else (other membership-sensitive
 paths - the anti-entropy digest probe, the source-identity rebind, the
@@ -461,20 +461,20 @@ restore-to-drop-keys cutover meant to discard, which plain last-writer-wins
 cross-cluster shipping never retracts). Pushing the rebind synchronously with
 the swap shrinks that window to the notification latency.
 
-Two further per-tick metadata resolutions are memoised on the same principle -
+The other per-tick metadata resolutions are memoised on the same principle -
 recompute only when an input changed, not every tick. Peer wire-version
 negotiation and shared-dictionary negotiation both key off the receiver's
 advertised capability on `ReplicationAck`, so their results are cached and
 recomputed only when a new ack changes the peer's advertised capability (or
 the shipper's options instance or effective dictionary id changes), not on
-every pump tick. Together with the source-identity rebind this removes all
-three steady-state idle registry/metadata resolutions, so an idle shipper's
+every pump tick. Together with the source-identity rebind this removes
+steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
 
 ### Doorbell
 
 The shipper grain is the log-first replication producer: it tails the
-single per-shard leaf write-ahead log (the leaf commit-log writer is the
+partitioned per-tree write-ahead log (the leaf commit-log writer is the
 sole WAL appender) from a durable per-partition cursor and is the only
 ship driver. The commit-time doorbell sink does not append to the
 WAL and does not ship; it maintains no producer-side vector clock state
@@ -548,79 +548,49 @@ exponential backoff sized by:
 `Random.Shared` is the jitter source - sufficient for distribution
 purposes, not cryptographic.
 
-### Permanent encode failure: dead-letter routing
+### Unencodable batches
 
 When building the outbound framing header throws an `ArgumentException`
-or `InvalidOperationException` - schema-shape failures the batch can
-never recover from in its current form - the shipper:
+or `InvalidOperationException` - a schema-shaped failure the batch can
+never recover from in its current form - the batch cannot reach the peer
+through the log. Parking it on this cluster's dead-letter queue would not
+help: a replay applies a parked entry here, where it is a no-op, and never
+sends it to the peer. So the shipper treats the batch like a
+[forced gap](#forced-gap-a-peer-taken-off-the-log) (#4614):
 
-1. Poisons the saga of every prepare in the batch (see
-   [Poisoned sagas](#poisoned-sagas)).
-2. Parks every entry in the offending batch on the per-tree
-   dead-letter store tagged with
-   `LatticeReplicationMetrics.ReasonSchema` so a single poison entry never
-   stalls the stream forever.
-3. Advances the cursor past the batch so the stream makes forward
-   progress, and persists the cursor with the poison list at once.
-4. Logs a warning with the entry count and the new cursor position.
+1. It takes the peer off the log: it takes the replay hold, records the
+   tree's current export epoch as the re-seed marker, withholds saga
+   records, and asks the peer to re-seed on every push and liveness probe.
+   On the first failure it also drops its terminal holds, as the forced gap
+   does.
+2. It quarantines the batch: per partition, the hull from that partition's
+   cursor through the batch's last read sequence, merged with any earlier
+   quarantine. The marker and the hull are written durably **before** the
+   cursor moves.
+3. It advances the cursor past the batch, so plain writes keep shipping.
 
-The DLQ enqueue is best-effort; a deterministically-failing DLQ does not
-pin the ship loop. The original entries remain in the WAL until the GC
-pass trims them, so an operator can still recover off the WAL even when
-the DLQ is unavailable.
+Every further failure raises the marker to the current export epoch: an
+export already opened past the old epoch predates the new batch and must
+not clear the marker. The peer re-bootstraps from an export after the
+marker, which carries the quarantined writes (committed rows, prepared rows
+of sagas still in flight, and decision rows), encoded by the snapshot path
+rather than the batch framing. After the echo, the rewind consumes every
+quarantined position without shipping it - every record in the hull was
+appended before the marker, so the export already carried it - and the
+quarantine clears once no re-seed is outstanding and every partition's
+cursor has passed it. A rebind to a new source log clears it too, because
+its sequences belong to the retired log. The quarantine is one sequence
+range per partition, so it needs no capacity bound and never stalls the
+link.
 
-Parking is a loss for the peer, not a deferral: replaying a parked entry
-through `ILatticeReplicationDeadLetters` applies it on **this** cluster,
-where it is a no-op, and never sends it to the peer.
+The shipper logs a warning naming the batch size and the epoch, and the
+link reports `Stalled` (with `ReseedRequiredSeconds` set) until the peer
+has re-seeded. Nothing is written to the dead-letter queue.
 
-#### Poisoned sagas
-
-A saga terminal that reached the peer after one of its prepares was
-parked would commit the saga there without that write - a torn batch the
-peer keeps, because the parked prepare never arrives. So a parked prepare
-poisons its saga for that peer (#4494):
-
-- Every later prepare and every terminal of the saga is parked too, with
-  reason `poisoned_saga`, instead of being shipped. A terminal already
-  held behind its prepares is parked rather than released. The peer keeps
-  the saga invisible: it serves it as never written, while this cluster
-  has it decided. No abort is sent to settle the prepares it already
-  staged: this cluster never decided one.
-- Poisoning also takes the peer off the log through the
-  [forced-gap path](#forced-gap-a-peer-taken-off-the-log) (#4620): the
-  shipper takes the replay hold, records the tree's export epoch, withholds
-  saga records and asks the peer to re-seed on every push. It does so before
-  the batch is parked, durably with the poison, so a park a full queue
-  refuses still leaves the re-seed owed. The re-seed ships the decided saga
-  whole (committed rows and its decision row) and settles the prepares the
-  peer staged; without it the peer would serve the saga as never written
-  for good. After the echo, the rewind re-reads the poisoned saga's records
-  and parks them again, so the re-seed does not repeat.
-- Each poisoning logs a warning naming the transaction and the peer, and
-  counts on `orleans.lattice.replication.shipper.saga_poisoned`
-  (`outcome=poisoned`). The link reads `Stalled` until the peer has
-  re-seeded.
-- The poison list is persisted in the shipper's state with the cursors, so
-  a reactivation keeps withholding the saga. An entry retires only once the
-  saga can append no further record: the shipper has seen the origin
-  registry hold the saga's decision (or parked one of its terminals) and
-  later hold no row for it for a 10-minute grace - every terminal, a split's
-  late sweep terminal included, needs a recorded decision, and the grace lets
-  a sweep that read the decision just before the purge append its terminal
-  first - and the durable cursor has passed every partition tail sampled
-  after that. A count of the saga's terminals
-  is not a bound, because an unstamped or late sweep terminal can follow
-  the stamped ones. The registry is probed at most every 30 seconds, for
-  up to 64 sagas at a time.
-- The list is bounded (16,384 sagas). When it is full the shipper fails
-  closed: it neither parks the failing batch nor advances past it, logs an
-  error, counts `saga_poisoned{outcome=refused}`, and retries the batch on
-  its ship backoff, so the stream to that peer stalls rather than letting
-  a saga through torn.
-- A rebind to a new source log after a coordinated restore drops the list
-  (both clusters were reset to the cut). Any other rebind keeps it, because
-  the new copy can mirror the saga's records; partition tails sampled from
-  the retired log are dropped and re-sampled from the new one.
+A shipper whose state still carries a poison list from an earlier build
+(#4494, which parked the batch and poisoned its sagas) takes the peer off
+the log on activation and forgets the list: the re-seed delivers each of
+those sagas whole.
 
 ### Buffer reuse
 
@@ -730,9 +700,10 @@ held terminal are not re-shipped on every tick. After a restart, a held
 terminal whose prepares were acknowledged earlier releases on the tail
 barrier.
 
-A held terminal is never stranded. A terminal of a saga whose prepare was
-dead-lettered is parked rather than released (see
-[Poisoned sagas](#poisoned-sagas)), so it never reaches the peer:
+A held terminal is never stranded. A batch that could not be encoded takes
+the peer off the log and drops every hold (see
+[Unencodable batches](#unencodable-batches)), so no terminal of a saga that
+lost a prepare in it is released before the peer has re-seeded:
 
 - A prepare trimmed before it shipped (a peer that fell off the log) is
   passed by the acknowledged frontier like any other sequence.
@@ -817,7 +788,7 @@ Beside every batch, and on an idle link's liveness probe, the shipper ships `Rep
 - **Per tree.** The watermark is the minimum covered floor over the tree's partitions. A partition with no covered floor means the tree has no watermark.
 - **Clamps.** The watermark never passes:
   - the earliest acknowledged prepare of a saga whose terminals the peer has not all acknowledged (`ReplicationShipperState.Frontier`), because a prepared write stays invisible on the peer until its terminal lands;
-  - a local record the cursor passed without delivering it (a dead-lettered batch), until a re-seed from a later export carries it;
+  - a local record the cursor passed without delivering it (a batch that could not be encoded, quarantined as in #4614), until a re-seed from a later export carries it;
   - a prepare it could not track, because more than 4096 shipped sagas awaited their terminals.
 - **No watermark at all** while any of these holds:
   - the peer is off the log, or a replay filter is set;
@@ -1189,9 +1160,6 @@ emits; the table shows which driver is the source of each.
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
-| `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
-| `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |
-| `shipper.saga_poisoned` | Shipper grain (poisoned saga) | A saga withheld from the peer (`outcome=poisoned`), or a full poison list refusing to advance (`outcome=refused`). |
 | `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
 | `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
 

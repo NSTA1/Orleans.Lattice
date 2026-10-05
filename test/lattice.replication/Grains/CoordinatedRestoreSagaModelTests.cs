@@ -157,9 +157,10 @@ public class CoordinatedRestoreSagaModelTests
         channel.Register("site-a", a.Grain);
         channel.Register("site-b", b.Grain);
 
-        // Drive prepare directly (no coordinator decision), then fire the fence-expiry
-        // reminder path that models a coordinator that never returned. Both prepared
-        // clusters must auto-compensate.
+        // Drive prepare directly, then deliver the abort that a lost coordinator's
+        // saga resolves to (its prepare deadline records abort, and a fence-expiry
+        // query or an operator resolution delivers it, issue #4637). Both prepared
+        // clusters must compensate.
         var request = new SagaControlRequest
         {
             SagaId = SagaId,

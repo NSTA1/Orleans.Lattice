@@ -170,7 +170,7 @@ they become in a real deployment (see
 
 | Toggle (compose) | Local value | Azure value |
 |---|---|---|
-| `Entra__Enabled` (all heads) | `false` (no sign-in) | `true` (Entra JWT on every facade) |
+| `Entra__Enabled` (all heads) | `false` (no Entra sign-in) | `true` (Entra JWT on every facade) |
 | `StateApi__RequireAuthorization` / `Mcp__RequireAuthorization` | `false` | `true` |
 | `Auth__DefaultEffect` (silo) | `Allow` | `Deny` (deny-by-default) |
 | `Mcp__DevAuthenticateAll` (mcp) | `true` (synthetic subject) | `false` (real Entra subject) |

@@ -18,7 +18,7 @@ The shard root is depth `0`; each level descended increments the depth.
 
 ## The remote range-fold (wired over gRPC)
 
-A key-range-keyed **remote** subtree digest requires two things: a public core API that folds an arbitrary key-range into a digest, and a transport that can invoke it on the peer. Both now exist.
+A key-range-keyed **remote** subtree digest requires a public core API that folds an arbitrary key-range into a digest, and a transport that can invoke it on the peer. Both now exist.
 
 The core library exposes `ILattice.GetLeafProjectionDigestForRangeAsync(int shardIndex, string? startKeyInclusive, string? endKeyExclusive, CancellationToken)`. The owning shard root descends its internal-node tree by separator-key range, touches only the leaves (and whole subtrees) that overlap the half-open `[start, end)` query range, and combines them with the same algebra the internal nodes use (XOR the raw projection hashes, sum the entry counts, max-reduce the checkpoint offsets) before wrapping the result in the identical `XxHash128(rawHash || entryCount || checkpointOffset)` shape an internal node spanning exactly that range would publish. A full-range `[null, null)` probe is byte-identical to the whole-shard `GetLeafProjectionDigestAsync`. The per-entry contribution is **content-only** - it never depends on the local WAL replay position - so two clusters holding the same logical entries in the range compute the same fold independent of how each physically split its leaves. This is the layout-independence property the walk needs.
 
@@ -30,7 +30,7 @@ The range digest deliberately folds in the max-reduced checkpoint offset so that
 
 ## Enabling it
 
-The walk ships **dark** and is gated three ways: the digest probe must be enabled, a mismatch must be found, and `MerkleWalkEnabled` must be `true`. An un-opted host sees no new behaviour.
+The walk ships **dark** and is gated by detection and configuration: the digest probe must be enabled, a mismatch must be found, and `MerkleWalkEnabled` must be `true`. An un-opted host sees no new behaviour.
 
 ```csharp verify
 siloBuilder.AddLatticeReplication(o =>

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -40,30 +41,45 @@ namespace Orleans.Lattice.Explorer.Tests.Connection;
 internal sealed class StateApiH2cServer : IAsyncDisposable
 {
     private readonly WebApplication _app;
+    private readonly List<IReadOnlyDictionary<string, string>> _requestHeaders = [];
 
-    private StateApiH2cServer(WebApplication app, string address)
+    private StateApiH2cServer(WebApplication app)
     {
         _app = app;
-        Address = address;
+        Address = string.Empty;
     }
 
     /// <summary>The <c>http://</c> address the server is listening on.</summary>
-    public string Address { get; }
+    public string Address { get; private set; }
 
     /// <summary>An address nothing listens on, for a probe that must find the endpoint down.</summary>
     public const string UnreachableAddress = "http://127.0.0.1:1";
+
+    /// <summary>The headers of every request the server received, in arrival order.</summary>
+    public IReadOnlyList<IReadOnlyDictionary<string, string>> RequestHeaders
+    {
+        get
+        {
+            lock (_requestHeaders)
+            {
+                return [.. _requestHeaders];
+            }
+        }
+    }
 
     /// <summary>Starts the server over the supplied facades.</summary>
     /// <param name="query">The read facade every unary RPC is served from.</param>
     /// <param name="observer">The change-stream facade; substituted when omitted.</param>
     /// <param name="metrics">The metrics facade; substituted when omitted.</param>
     /// <param name="requireAuthorization">Whether the binding's default-deny authorizer is enforced.</param>
+    /// <param name="advertisedAuthSchemes">The schemes the unauthenticated advertisement RPC reports; none when omitted.</param>
     /// <returns>The started server.</returns>
     public static async Task<StateApiH2cServer> StartAsync(
         ILatticeStateQuery query,
         ILatticeStateObserver? observer = null,
         ILatticeStateMetricsObserver? metrics = null,
-        bool requireAuthorization = false)
+        bool requireAuthorization = false,
+        IEnumerable<AuthSchemeDescriptor>? advertisedAuthSchemes = null)
     {
         ArgumentNullException.ThrowIfNull(query);
 
@@ -79,20 +95,47 @@ internal sealed class StateApiH2cServer : IAsyncDisposable
         builder.Services.AddSingleton(query);
         builder.Services.AddSingleton(observer ?? Substitute.For<ILatticeStateObserver>());
         builder.Services.AddSingleton(metrics ?? Substitute.For<ILatticeStateMetricsObserver>());
-        builder.Services.AddLatticeStateApiGrpc(options => options.RequireAuthorization = requireAuthorization);
+        builder.Services.AddLatticeStateApiGrpc(options =>
+        {
+            options.RequireAuthorization = requireAuthorization;
+            foreach (var scheme in advertisedAuthSchemes ?? [])
+            {
+                options.AdvertisedAuthSchemes.Add(scheme);
+            }
+        });
 
         var app = builder.Build();
+        var server = new StateApiH2cServer(app);
+
+        app.Use(async (context, next) =>
+        {
+            server.Capture(context.Request.Headers);
+            await next(context).ConfigureAwait(false);
+        });
         app.MapLatticeStateApiGrpc();
         await app.StartAsync().ConfigureAwait(false);
 
-        var address = app.Services
+        server.Address = app.Services
             .GetRequiredService<IServer>()
             .Features
             .Get<IServerAddressesFeature>()!
             .Addresses
             .First();
 
-        return new StateApiH2cServer(app, address);
+        return server;
+    }
+
+    private void Capture(IHeaderDictionary headers)
+    {
+        var snapshot = headers.ToDictionary(
+            header => header.Key,
+            header => header.Value.ToString(),
+            StringComparer.OrdinalIgnoreCase);
+
+        lock (_requestHeaders)
+        {
+            _requestHeaders.Add(snapshot);
+        }
     }
 
     /// <inheritdoc />

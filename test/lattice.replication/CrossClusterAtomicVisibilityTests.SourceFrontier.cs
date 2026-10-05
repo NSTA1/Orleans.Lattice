@@ -411,14 +411,21 @@ public partial class CrossClusterAtomicVisibilityTests
         var skipped = Hlc(ticks, 30);
         feeds[0].Append(LocalSet(tree, "lost", skipped));
         await PumpAsync(shipper, ticks: 1);
+        var shippedBefore = transport.Batches.Count;
         feeds[1].Append(LocalSet(tree, "b", Hlc(ticks, 60)));
-        await PumpAsync(shipper, ticks: 1);
+        await PumpAsync(shipper, ticks: 2);
+        var after = transport.Batches.Skip(shippedBefore).ToList();
 
+        // Since #4614 the failure also takes the peer off the log, which freezes
+        // the watermark outright until the re-seed carries the lost write; the
+        // skip clamp keeps it capped past that re-seed if the export predates it.
         Assert.Multiple(() =>
         {
-            Assert.That(transport.Shipped.Any(r => r.Key == "lost"), Is.False, "precondition: the batch failed to encode and was dead-lettered");
+            Assert.That(transport.Shipped.Any(r => r.Key == "lost"), Is.False, "precondition: the batch failed to encode and was quarantined");
+            Assert.That(shipper.ReseedRequired, Is.True, "precondition: the encode failure took the peer off the log");
             Assert.That(state.State.Frontier.SkipClamp, Is.EqualTo(skipped));
-            Assert.That(transport.Latest?.TreeLowWatermark, Is.EqualTo(skipped),
+            Assert.That(after, Is.Not.Empty, "precondition: the link kept shipping after the failure");
+            Assert.That(after.Where(b => b.SourceFrontier is { } f && f.TreeLowWatermark.CompareTo(skipped) > 0), Is.Empty,
                 "a write the cursor passed without delivering was never applied at the peer");
         });
     }

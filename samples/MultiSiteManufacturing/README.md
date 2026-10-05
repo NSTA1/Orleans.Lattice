@@ -125,7 +125,7 @@ property in process.
 
 ## Fault-injection surface
 
-The sample layers five tiers of fault injection, each modelling a
+The sample layers a tiered fault-injection surface, each tier modelling a
 distinct real-world failure class. The dashboard's chaos fly-out drives
 tiers 1 to 4b (tiers 4 and 4b through its *Cluster split* and
 *Replication disconnect* presets); tier 5 is driven from the Docker CLI:

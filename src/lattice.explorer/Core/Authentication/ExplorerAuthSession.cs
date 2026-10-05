@@ -12,8 +12,9 @@ namespace Orleans.Lattice.Explorer.Core.Authentication;
 /// </summary>
 /// <remarks>
 /// Only the Basic credential is persisted (through the injected
-/// <see cref="ICredentialStore"/>, which each head backs with an OS-encrypted
-/// store); it is never written to the plaintext config store. Token-based
+/// <see cref="ICredentialStore"/>, which the web head backs with a Data
+/// Protection-protected <c>HttpOnly</c> cookie); it is never written to the
+/// plaintext config store. Token-based
 /// sign-ins are session/in-memory only and are never persisted here - the
 /// token provider owns any opt-in persistence of its own refresh material.
 /// </remarks>

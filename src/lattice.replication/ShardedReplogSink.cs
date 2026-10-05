@@ -13,7 +13,7 @@ namespace Orleans.Lattice.Replication;
 /// the write-ahead log and no longer maintains any producer-side vector
 /// clock state.
 /// <para>
-/// The write-ahead log is the single per-shard <c>IWalShardGrain</c>
+/// The write-ahead log is the per-WAL-partition <c>IWalShardGrain</c> log
 /// keyed <c>{treeId}/{partition}</c> that the foreground commit-log
 /// writer (<see cref="Orleans.Lattice.BPlusTree.Grains.WalCommitLogWriter"/>) appends to on every commit,
 /// stamping the durable origin cluster id and vector clock. The

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -17,10 +18,13 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// <see cref="CrossClusterSagaParticipantGrain"/> activations, each hosting both a
 /// <see cref="RestoreParticipant"/> (over a fake restore engine) and an
 /// <see cref="ExampleSagaParticipant"/>, across two clusters. Verifies commit,
-/// unanimous-abort compensation, coordinator-loss fence-timer auto-compensation,
-/// and idempotent re-attach for the custom participant.
+/// unanimous-abort compensation, the fence-expiry decision query (an unreachable
+/// coordinator keeps the fence; a recorded abort, or a coordinator whose record is
+/// gone, compensates; issue #4637), and idempotent re-attach for the custom
+/// participant.
 /// </summary>
 [TestFixture]
+[NonParallelizable]
 public class CustomSagaParticipantModelTests
 {
     private const string SagaId = "custom-saga-e2e";
@@ -38,7 +42,16 @@ public class CustomSagaParticipantModelTests
         public required FakePersistentState<CrossClusterSagaParticipantState> State { get; init; }
     }
 
-    private static ClusterHarness CreateCluster(SagaVote exampleVote = SagaVote.Commit)
+    [SetUp]
+    public void SetUp() => SagaParticipantFenceCensus.ResetForTest();
+
+    [TearDown]
+    public void TearDown() => SagaParticipantFenceCensus.ResetForTest();
+
+    private static ClusterHarness CreateCluster(
+        SagaVote exampleVote = SagaVote.Commit,
+        InProcessSagaControlChannel? decisionChannel = null,
+        string? clusterId = null)
     {
         var engine = new FakeCoordinatedRestoreEngine { TargetTree = TargetTree };
 
@@ -57,6 +70,14 @@ public class CustomSagaParticipantModelTests
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("saga-participant", SagaId));
+        if (decisionChannel is not null)
+        {
+            // The participant asks its coordinator for the decision through the
+            // saga-control channel, stamped as this cluster.
+            context.ActivationServices.Returns(new ServiceCollection()
+                .AddSingleton(decisionChannel.ViewFrom(clusterId!))
+                .BuildServiceProvider());
+        }
 
         var reminders = Substitute.For<IReminderRegistry>();
         reminders.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
@@ -76,7 +97,9 @@ public class CustomSagaParticipantModelTests
         return new ClusterHarness { Grain = grain, Engine = engine, Fence = fence, Example = example, State = state };
     }
 
-    private static CrossClusterSagaCoordinatorGrain CreateCoordinator(ISagaControlChannel channel)
+    private static CrossClusterSagaCoordinatorGrain CreateCoordinator(
+        ISagaControlChannel channel,
+        FakePersistentState<CrossClusterSagaCoordinatorState>? state = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("saga-coordinator", SagaId));
@@ -91,7 +114,7 @@ public class CustomSagaParticipantModelTests
         return new CrossClusterSagaCoordinatorGrain(
             context, channel, reminders, optionsMonitor,
             NullLogger<CrossClusterSagaCoordinatorGrain>.Instance,
-            new FakePersistentState<CrossClusterSagaCoordinatorState>());
+            state ?? new FakePersistentState<CrossClusterSagaCoordinatorState>());
     }
 
     private static SagaControlRequest Request() => new()
@@ -168,32 +191,91 @@ public class CustomSagaParticipantModelTests
         await a.Fence.Received(1).LiftAsync();
     }
 
-    [Test]
-    public async Task Coordinator_loss_fence_expiry_auto_compensates_the_custom_participant()
+    private static async Task ExpireFenceAsync(ClusterHarness cluster)
     {
-        var a = CreateCluster();
-        var b = CreateCluster();
+        cluster.State.State.FenceDeadlineTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
+        await cluster.Grain.ReceiveReminder(FenceReminder, default);
+    }
 
-        // Prepare both clusters directly (no coordinator decision), so both hold a
-        // prepared custom participant under an armed fence.
+    [Test]
+    public async Task Fence_expiry_with_an_unreachable_coordinator_keeps_the_custom_participant_prepared_and_reports_the_held_fence()
+    {
+        var channel = new InProcessSagaControlChannel { CoordinatorUnreachable = true };
+        var a = CreateCluster(decisionChannel: channel, clusterId: "site-a");
+        var b = CreateCluster(decisionChannel: channel, clusterId: "site-b");
+
+        // Prepare both clusters directly, so both hold a prepared custom
+        // participant under an armed fence, and the coordinator never answers.
         await a.Grain.PrepareAsync(Request());
         await b.Grain.PrepareAsync(Request());
 
-        Assert.That(a.Example.HasPendingValue, Is.True);
-        Assert.That(b.Example.HasPendingValue, Is.True);
+        foreach (var cluster in new[] { a, b })
+        {
+            await ExpireFenceAsync(cluster);
+
+            // Issue #4637: compensating here could contradict a commit the
+            // coordinator already delivered elsewhere, so the fence holds.
+            Assert.Multiple(() =>
+            {
+                Assert.That(cluster.Example.CommitCount, Is.EqualTo(0), "a lost coordinator never commits");
+                Assert.That(cluster.Example.AbortCount, Is.EqualTo(0),
+                    "fence expiry alone must not compensate the custom participant");
+                Assert.That(cluster.Example.HasPendingValue, Is.True);
+                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(0));
+                Assert.That(cluster.State.State.Phase, Is.EqualTo(SagaPhase.Prepared));
+            });
+        }
+
+        Assert.That(SagaParticipantFenceCensus.OldestAgeSeconds(SagaParticipantFenceCensus.ReasonCoordinatorUnreachable),
+            Is.GreaterThan(0), "the held fence must be reported on the fence-held age gauge");
+    }
+
+    [TestCase(true, TestName = "Fence_expiry_after_a_recorded_abort_compensates_the_custom_participant")]
+    [TestCase(false, TestName = "Fence_expiry_against_a_coordinator_whose_record_is_gone_compensates_the_custom_participant")]
+    public async Task Fence_expiry_compensates_the_custom_participant_when_the_coordinator_answers_abort(bool recordedAbort)
+    {
+        var channel = new InProcessSagaControlChannel();
+        var a = CreateCluster(decisionChannel: channel, clusterId: "site-a");
+        var b = CreateCluster(decisionChannel: channel, clusterId: "site-b");
+
+        var coordinatorState = new FakePersistentState<CrossClusterSagaCoordinatorState>();
+        if (recordedAbort)
+        {
+            coordinatorState.State.SagaId = SagaId;
+            coordinatorState.State.Phase = CrossClusterSagaPhase.Aborted;
+            coordinatorState.State.Outcome = CrossClusterSagaOutcome.Aborted;
+            coordinatorState.State.Participants =
+            [
+                new CrossClusterSagaParticipantRef { ClusterId = "site-a" },
+                new CrossClusterSagaParticipantRef { ClusterId = "site-b" },
+            ];
+        }
+
+        // NotStarted (no record) is answered as Aborted: the coordinator persists
+        // its record before any prepare, so a missing record is an aborted saga
+        // whose record has since expired.
+        channel.RegisterCoordinator(CoordinatorCluster, CreateCoordinator(channel, coordinatorState));
+
+        await a.Grain.PrepareAsync(Request());
+        await b.Grain.PrepareAsync(Request());
 
         foreach (var cluster in new[] { a, b })
         {
-            // The coordinator never returns: move the fence deadline into the past
-            // and fire the fence reminder, exercising the auto-compensation path.
-            cluster.State.State.FenceDeadlineTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
-            await cluster.Grain.ReceiveReminder(FenceReminder, default);
+            await ExpireFenceAsync(cluster);
 
-            Assert.That(cluster.Example.CommitCount, Is.EqualTo(0), "a lost coordinator never commits");
-            Assert.That(cluster.Example.AbortCount, Is.EqualTo(1), "fence expiry must auto-compensate the custom participant");
-            Assert.That(cluster.Example.HasPendingValue, Is.False);
-            Assert.That(cluster.Engine.RevertCount, Is.EqualTo(1));
+            Assert.Multiple(() =>
+            {
+                Assert.That(cluster.Example.CommitCount, Is.EqualTo(0));
+                Assert.That(cluster.Example.AbortCount, Is.EqualTo(1),
+                    "the coordinator's abort must compensate the custom participant");
+                Assert.That(cluster.Example.HasPendingValue, Is.False);
+                Assert.That(cluster.Engine.RevertCount, Is.EqualTo(1));
+                Assert.That(cluster.State.State.Phase, Is.EqualTo(SagaPhase.Aborted));
+            });
         }
+
+        Assert.That(SagaParticipantFenceCensus.OldestAgeSeconds(SagaParticipantFenceCensus.ReasonCoordinatorUnreachable),
+            Is.Null, "a resolved participant holds no fence");
     }
 
     [Test]

@@ -141,4 +141,48 @@ public interface ILatticeReplicationAdmin
         CancellationToken cancellationToken = default) =>
         throw new NotSupportedException(
             $"This {nameof(ILatticeReplicationAdmin)} implementation does not support force-lifting a bootstrap read fence.");
+
+    /// <summary>
+    /// <b>Alarmed operator override.</b> Resolves this cluster's prepared
+    /// participant in the cross-cluster saga <paramref name="sagaId"/> - a
+    /// coordinated restore - when its coordinator cluster is lost (issue #4637).
+    /// <para>
+    /// A prepared participant whose cutover-fence timer expires asks the
+    /// coordinator for the saga's decision and applies it; while the
+    /// coordinator cannot be reached it keeps its fence up and raises the
+    /// <c>orleans.lattice.replication.saga.participant.fence_held_age</c> gauge
+    /// rather than compensate on its own, because the other clusters may
+    /// already have committed. This verb is the way out when the coordinator
+    /// will never answer.
+    /// </para>
+    /// <para>
+    /// <b>Consequence.</b> The participant still asks the coordinator first: if
+    /// it answers, its decision is applied and a contradicting request is
+    /// refused with <see cref="InvalidOperationException"/>, and a coordinator
+    /// that is still deciding refuses the call outright. Only when it cannot be
+    /// reached is <paramref name="commit"/> applied - and then nothing checks it
+    /// against the other clusters: resolve every cluster of the saga the same
+    /// way, or the restore ends with some clusters on the restored copy and
+    /// others on the pre-restore tree. It is never part of an automatic
+    /// recovery path.
+    /// </para>
+    /// <para>
+    /// Every call is audit-logged at <see cref="Microsoft.Extensions.Logging.LogLevel.Warning"/>
+    /// with the supplied <paramref name="reason"/> before it is dispatched. Like
+    /// the other verbs on this in-silo seam, it is available to host code only;
+    /// it is not exposed by any network API.
+    /// </para>
+    /// </summary>
+    /// <param name="sagaId">The saga id (the coordinated restore's operation id). Must be non-null and non-empty.</param>
+    /// <param name="commit"><see langword="true"/> to commit the restore on this cluster, <see langword="false"/> to compensate it.</param>
+    /// <param name="reason">Why the operator is resolving the participant, recorded in the audit log. Must be non-null and non-empty.</param>
+    /// <param name="cancellationToken">Cancellation token observed before dispatch.</param>
+    /// <returns><see langword="true"/> when the participant was moved to a terminal phase; <see langword="false"/> when it already held the requested one.</returns>
+    Task<bool> ResolveCrossClusterSagaParticipantAsync(
+        string sagaId,
+        bool commit,
+        string reason,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            $"This {nameof(ILatticeReplicationAdmin)} implementation does not support resolving a cross-cluster saga participant.");
 }

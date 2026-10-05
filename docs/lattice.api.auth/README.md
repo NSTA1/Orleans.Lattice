@@ -144,7 +144,7 @@ Every request / response record is Orleans-serialized with a stable, compact ali
 
 ## Facade method signatures
 
-All 18 `ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.Lattice.Api.Abstractions` package. Every method takes a trailing `CancellationToken cancellationToken = default`.
+`ILatticeAuthAdmin` methods, exactly as declared in the shared `Orleans.Lattice.Api.Abstractions` package. Every method takes a trailing `CancellationToken cancellationToken = default`.
 
 | Method | Signature |
 |---|---|

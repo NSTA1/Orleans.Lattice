@@ -123,7 +123,8 @@ public partial class ReplicationShipperGrainTests
             ILatticeMergeModeResolver? modeResolver = null,
             IReplicationDeadLetterGrain? deadLetters = null,
             ITxRegistryGrain? txRegistry = null,
-            long? exportEpoch = null)
+            long? exportEpoch = null,
+            Func<long>? exportEpochOf = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
@@ -152,10 +153,11 @@ public partial class ReplicationShipperGrainTests
             factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(deadLetters);
         }
 
-        if (exportEpoch is { } epoch)
+        if (exportEpochOf is not null || exportEpoch is not null)
         {
+            var current = exportEpochOf ?? (() => exportEpoch!.Value);
             var epochGrain = Substitute.For<IReplicationExportEpochGrain>();
-            epochGrain.GetAsync().Returns(Task.FromResult(epoch));
+            epochGrain.GetAsync().Returns(_ => Task.FromResult(current()));
             factory.GetGrain<IReplicationExportEpochGrain>(Tree).Returns(epochGrain);
         }
 

@@ -327,7 +327,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// </exception>
     private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc)
     {
-        var stamped = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        var stamped = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
         if (string.IsNullOrWhiteSpace(stamped))
         {
             // Cold reject path only.
@@ -361,24 +361,6 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     }
 
     /// <summary>
-    /// Reads a request header by name, ordinal-ignore-case as HTTP/2 header
-    /// names are lower-cased on the wire. Mirrors the sibling helper on
-    /// <c>LatticeSagaGrpcService</c>.
-    /// </summary>
-    private static string? ReadHeader(ServerCallContext context, string key)
-    {
-        foreach (var entry in context.RequestHeaders)
-        {
-            if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return entry.Value;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
     /// Records the applied low watermark the authenticated sender shipped as
     /// the <see cref="LatticeReplicationGrpcMetadataNames.SourceFrontierHeader"/>
     /// call header on its tree frontier, and returns the frontier epoch to
@@ -400,7 +382,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ReplicationSourceFrontier? shipped = null;
         if (_topology?.CurrentPeers.Contains(originClusterId) == true
             && ReplicationSourceFrontier.TryParse(
-                ReadHeader(context, LatticeReplicationGrpcMetadataNames.SourceFrontierHeader),
+                GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceFrontierHeader),
                 out var parsed))
         {
             shipped = parsed;
@@ -457,7 +439,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // authenticated sender. The answer is echoed on whichever ack follows.
         long? bootstrapEpoch = null;
         if (long.TryParse(
-                ReadHeader(context, LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader),
+                GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader),
                 System.Globalization.NumberStyles.Integer,
                 System.Globalization.CultureInfo.InvariantCulture,
                 out var reseedAfter))

@@ -295,7 +295,7 @@ runs.
 
 ## Observability
 
-The coordinator emits three instruments on the `orleans.lattice` meter, charted on
+The coordinator emits instruments on the `orleans.lattice` meter, charted on
 the Overview dashboard's "Atomic action (saga / TCC)" row and documented in
 [Metrics](metrics.md):
 

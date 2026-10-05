@@ -46,7 +46,7 @@ public sealed class LatticeVectorIndexStore(ILattice tree) : IVectorIndexStore
     // Backoff before resuming a timed-out page walk.
     //
     // The first resume is immediate, on exactly the reasoning
-    // ComputeReconnectDelayMs applies to an enumerator reclaim: there is nothing
+    // ResilientScanResume.ReconnectDelayMs applies to an enumerator reclaim: there is nothing
     // to back off from, because the fault itself already provided the separation.
     // A response timeout is the strongest case for that - the walk has just spent
     // the whole timeout waiting, so a further pause adds nothing that the fault

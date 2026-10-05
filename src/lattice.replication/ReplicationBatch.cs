@@ -26,7 +26,7 @@ public readonly record struct ReplicationBatch
     /// <summary>
     /// Name of the local tree this batch was drawn from. Receivers that
     /// dispatch per-tree apply pipelines route on this id; the per-origin
-    /// high-water-mark dedup key is <c>(TreeName, OriginClusterId)</c>.
+    /// high-water-mark is keyed by <c>(TreeName, OriginClusterId)</c>.
     /// Required: must be non-<see langword="null"/> and non-empty.
     /// </summary>
     public string TreeName { get; init; }

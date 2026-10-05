@@ -20,7 +20,7 @@ each section:
 ## Consistency levels
 
 The tables below state a guarantee for each operation they list, mostly in
-terms of the following four levels. They do not cover every `ILattice`
+terms of the following levels. They do not cover every `ILattice`
 method: a method that no table lists is not classified here.
 
 | Level | What the caller observes |
@@ -252,8 +252,8 @@ saga. See
 The same all-or-nothing visibility holds **across clusters**. Each
 participating tree's terminals replicate on their own per-tree WAL feed,
 so a receiver can apply one tree's terminal before a sibling tree's. A
-receiver-side coordinator grain (`ILatticeCrossTreeReceiverGrain`), keyed
-by `(originClusterId, operationId)`, holds every participating tree
+receiver-side coordinator, keyed by `(originClusterId, operationId)`,
+holds every participating tree
 invisible until a terminal has arrived for each tree it expects, then
 flips them together - mirroring the authoring cluster's single-write
 flip. The set of trees it waits for is scoped to the trees actually
@@ -348,7 +348,7 @@ time is unavailable to every other caller meanwhile. Each logs a warning naming
 the operation and the number of leaves visited when it exceeds a short internal
 threshold, so a burst of Orleans long-request warnings on a shard can be
 attributed to the walk causing it rather than only to the requests it blocked.
-Three of them have had their hold shortened rather than removed. Marking and
+Several of them have had their hold shortened rather than removed. Marking and
 unmarking moved-away slots discover the leaf chain sequentially but fan the
 per-leaf writes out with bounded concurrency, so the hold costs roughly the
 chain walk plus the slowest batch rather than the sum of every write. The

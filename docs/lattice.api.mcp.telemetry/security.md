@@ -48,7 +48,7 @@ Beyond the yes/no capability, the host can restrict *which* metrics a granted ca
 
 Matching is whole-name and case-sensitive. A wildcard entry is anchored at both ends, its `*` never matches a newline, and it is matched without backtracking, so a caller-supplied name - the metadata tool's `metric` argument, or a name lifted out of a query - cannot carry a trailing newline past an entry, and the check stays linear in the name's length.
 
-The allow-list is enforced consistently across all four tools:
+The allow-list is enforced consistently across the telemetry tools:
 
 - `lattice_telemetry_query` and `lattice_telemetry_query_range` extract the metric names referenced by the PromQL expression and reject the call if **any** referenced name is not admitted, if the expression names a metric through a matcher that cannot be reduced to an exact name, if it carries a label-only selector not anchored to a metric name (the right-hand side of `up or {job="api"}`, which would select series across every metric), or if no metric name can be extracted from it at all - before the backend is called.
 - `lattice_telemetry_list_metrics` filters the returned names to the admitted set.
@@ -66,6 +66,6 @@ Every fault path returns a structured result rather than throwing: a capability 
 
 ## Next
 
-- [Tools](tools.md) - the four telemetry tools and their results.
+- [Tools](tools.md) - the telemetry tools and their results.
 - [Setup](setup.md) - configuring the backend credential and the metric-access allow-list.
 - [MCP security](../lattice.api.mcp/security.md) - the fail-closed discovery model this capability plugs into.

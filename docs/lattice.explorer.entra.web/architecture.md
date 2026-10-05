@@ -53,9 +53,11 @@ anonymous user and all downstream State API calls remain anonymous.
 `EntraWebExplorerAuthMethod` resolves downstream scopes in priority order:
 
 1. `ExplorerEntraWebOptions.Scopes`, when non-empty.
-2. The audience advertised by the State API, appending `/.default` when the
-   advertised value is a bare resource id.
+2. An admitted audience advertised by the State API, appending `/.default` when
+   the advertised value is a bare resource id.
 
+An advertised audience is admitted only when it is an `api://` resource, an
+`https` resource on the endpoint host, or an exact match in `AllowedAudiences`.
 If neither source provides a scope, sign-in fails with an actionable exception.
 
 ## Renewal and revocation

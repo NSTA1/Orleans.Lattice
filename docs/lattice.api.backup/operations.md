@@ -48,7 +48,7 @@ A succeeded operation's `ResultReference` is the captured backup id, the set id,
 | Kind | Keys |
 |---|---|
 | Captures | `backupId`. |
-| Set capture | `setId` and `memberBackupIds` (comma-separated, in scope order; read with `BackupOperationResults.ReadMemberBackupIds`). |
+| Set capture | `setId` when the set spans multiple scopes, plus `memberBackupIds` (comma-separated, in scope order; read with `BackupOperationResults.ReadMemberBackupIds`). |
 | Restores | `backupId`, `targetTreeId`, `mode`, `restoreOperationId`, `manifestChain`, `entriesApplied`, `deadLetteredCrossTenant`, `deadLetteredOverQuota`, and for a shadow cutover `shadowPhysicalTreeId` and `previousPhysicalTreeId`. `BackupOperationResults.TryReadRestoreResult` rebuilds the `LatticeRestoreResult`, for example to pass to `RevertRestoreAsync`. |
 | Health check | `backupId`, `healthStatus` (a `BackupHealthStatus` name), `missingArtifactCount` and `hashMismatchArtifactCount`. The result reference is the backup id; read the full report with `GetBackupHealthAsync`. |
 | Catalog rebuild | `scannedCount`, `registeredCount` and `reconciledCount`. `BackupOperationResults.TryReadCatalogRebuildReport` rebuilds the `BackupCatalogRebuildReport`. No result reference. |
@@ -98,7 +98,7 @@ Each deprecated verb is now a thin wrapper that starts the matching operation an
 |---|---|
 | `CreateBackupAsync(request)` | `StartBackupAsync(request)`, then poll `GetOperationStatusAsync`; the backup id is `ResultReference`. |
 | `CreateIncrementalBackupAsync(request)` | `StartIncrementalBackupAsync(request)`. |
-| `CreateBackupSetAsync(request)` | `StartBackupSetAsync(request)`; the set id is `ResultReference` and the members are in `memberBackupIds`. |
+| `CreateBackupSetAsync(request)` | `StartBackupSetAsync(request)`; a multi-scope set id is `ResultReference` and the members are in `memberBackupIds`. |
 | `RestoreBackupAsync(request)` | `StartRestoreAsync(request)`; rebuild the `LatticeRestoreResult` with `BackupOperationResults.TryReadRestoreResult`. |
 | `ColdRestoreAsync(request)` | `StartColdRestoreAsync(request)`. |
 | `CheckBackupHealthAsync(backupId)` | `StartBackupHealthCheckAsync(backupId)`; the verdict is `healthStatus`, and the full report is `GetBackupHealthAsync(backupId)`. |

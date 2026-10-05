@@ -2586,7 +2586,7 @@ public class LatticeOptions
     public const long DefaultWalMaxBatchBytes = 4L * 1024 * 1024;
 
     /// <summary>
-    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// Maximum number of in-flight + pending batches the per-partition WAL
     /// grain will hold before applying back-pressure to new
     /// <c>Append</c> callers. The grain serialises offset assignment
     /// under the grain turn but lets each batch's
@@ -2632,7 +2632,7 @@ public class LatticeOptions
     public const int DefaultWalMaxPendingBatches = 16;
 
     /// <summary>
-    /// In-flight depth at or above which a per-shard WAL append stops
+    /// In-flight depth at or above which a per-partition WAL append stops
     /// opening a flush of its own and instead coalesces into the pending
     /// batch, to be drained by the follow-on kick that fires when an
     /// existing flush settles ("group commit").
@@ -3197,10 +3197,12 @@ public class LatticeOptions
     /// over-threshold storage gauges populate without any caller invoking
     /// <see cref="ILattice.GetStorageUsageAsync"/>. The poll path is
     /// activation-light: it touches only WAL partition grains, so idle trees
-    /// stay cold. The poller runs on every silo (no leader election); because
-    /// each tree's WAL-only aggregator is a single cluster-wide activation, its
-    /// publish lands on its own host silo's sink and the gauges union across
-    /// every live sink, so a tree contributes its series once cluster-wide.
+    /// stay cold. The poller runs on every silo (no leader election). Each
+    /// tree's WAL-only aggregator publishes on its own host silo's sink, but
+    /// the deep aggregator (and a resize copy's aggregators) can publish the
+    /// same logical tree from a different silo, so more than one silo can
+    /// export one tree's series: aggregate the storage gauges across silos
+    /// with <c>max by (tree)</c>, not <c>sum by (tree)</c>.
     /// The snapshot-bytes, leaf-state-bytes, and total-bytes gauges are not
     /// refreshed by this poll; they populate on demand via
     /// <see cref="ILattice.GetStorageUsageAsync"/> /

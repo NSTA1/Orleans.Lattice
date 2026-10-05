@@ -142,14 +142,17 @@ review and lifecycle flows.
 ## Access
 
 Access is the policy area for auth rules, groups and explaining an access
-decision. `/access` is cluster-wide; `/t/{tenant}/access` shows only the rules
-that govern that tenant's own trees, with one quiet line for the cluster-wide
-rules that also apply, and lists no groups, since groups belong to the whole
-cluster. It is visible only to callers who can read the group catalogue
-through `ILatticeAuthAdmin`; anonymous refusal stays visible as an Unavailable
-sign-in prompt, while signed-in refusal hides the area. Its commands are
-`access.explain`, `access.create-rule` and `access.create-group`. See
-[Managing access](managing-access.md) for rule editing, group management and
+decision. `/access` is cluster-wide: it shows cluster rules, cluster groups and
+cluster-wide explanation. `/t/{tenant}/access` is tenant-rooted when delegated
+tenant access administration is enabled: it has Groups, Members, Rules and
+Explain sections for that tenant. Tenant Rules shows the read-only platform rules
+that govern the tenant's trees first, then the tenant's own rules. It is visible
+to callers who can read the cluster group catalogue through `ILatticeAuthAdmin`,
+or to callers who administer the active tenant through the delegated tenant
+access facades; anonymous cluster refusal stays visible as an Unavailable sign-in
+prompt, while signed-in refusal by both probes hides the area. Its cluster-wide
+commands are `access.explain`, `access.create-rule` and `access.create-group`.
+See [Managing access](managing-access.md) for rule editing, group management and
 explain output.
 
 ## Schema

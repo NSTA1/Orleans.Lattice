@@ -631,15 +631,16 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
-    public async Task ExecuteAsync_shortens_the_backoff_when_another_leaf_heals()
+    public async Task ExecuteAsync_keeps_the_advertised_backoff_when_another_leaf_heals()
     {
-        // R5. A bare timer is a floor, not the goal: the sweep should re-arm on
-        // evidence that the blocking condition has lifted. A healed outcome
-        // anywhere in this silo is exactly that evidence - it says a blocked
-        // leaf activated, replayed, captured a snapshot and resolved its pin,
-        // so the memory headroom and replay capacity a stranded tree also needs
-        // demonstrably exist right now. That collapses the stranded tree's
-        // 30-minute wait to the 15-minute floor.
+        // Issue #3605 reverses R5. A heal elsewhere in this silo used to
+        // collapse the stranded tree's 30-minute wait to the 15-minute floor,
+        // on the reading that a healed leaf proves the headroom a stranded tree
+        // needs. It proves nothing about THIS consumer: a consumer that spent
+        // its whole budget failing to advance keeps failing for its own reason,
+        // and on a busy silo something heals every pass, so the advertised
+        // 30 min / 1 h / ... escalation degenerated into a flat 15-minute
+        // retry that never backed off at all. The heal must not shorten it.
         const string HealerTree = "healer";
         var healerBlocked = false;
         var gc = Substitute.For<ILatticeWalGc>();
@@ -681,18 +682,29 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         healerBlocked = true;
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
-        // Its capture completes at +55, which credits a heal and is the
-        // evidence. The stranded tree reads it on the following pass, at +60 -
-        // ten minutes before the unaccelerated backoff would have allowed it.
+        // Its capture completes at +55, which credits a heal. The stranded tree
+        // sees the following pass at +60, ten minutes before its advertised
+        // backoff elapses - and must still be waiting.
         healerBlocked = false;
         await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
 
         Assert.Multiple(() =>
         {
+            Assert.That(Outcomes(recorder, "rearmed"), Is.Zero,
+                "a heal elsewhere is not evidence about this consumer and must not collapse its backoff.");
+            Assert.That(Outcomes(recorder, "attempted"), Is.EqualTo(3),
+                "the stranded leaf must not be touched again before its backoff elapses.");
+        });
+
+        // The full 30 minutes elapse at +70, and only then does it re-arm.
+        await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(15));
+
+        Assert.Multiple(() =>
+        {
             Assert.That(Outcomes(recorder, "rearmed"), Is.EqualTo(1),
-                "a heal elsewhere must collapse the stranded tree's backoff to the floor.");
+                "the advertised 30-minute backoff must still re-arm once it elapses.");
             Assert.That(Outcomes(recorder, "attempted"), Is.EqualTo(4),
-                "the accelerated re-arm is followed by a real touch, not merely recorded.");
+                "the re-arm is followed by a real touch, not merely recorded.");
         });
 
         await scheduler.StopAsync(CancellationToken.None);

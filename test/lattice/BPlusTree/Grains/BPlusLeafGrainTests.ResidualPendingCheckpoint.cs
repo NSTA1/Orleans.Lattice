@@ -92,7 +92,13 @@ public partial class BPlusLeafGrainTests
     {
         var (leaf, _) = await ActivatePinBankLeafAsync();
         leaf.Published.Clear();
-        var writesBefore = leaf.State.WriteCount;
+
+        // The tick may make a newly kept snapshot's coverage flag durable (issue
+        // #4634); that one-time write carries the checkpoint unchanged and is
+        // not a checkpoint persist.
+        var checkpointWrites = new List<long>();
+        var observe = CheckpointAdvancingWrites(checkpointWrites, leaf.State.State);
+        leaf.State.OnWriteState = observe;
 
         await leaf.Grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
 
@@ -101,7 +107,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(leaf.State.State.ProjectionCheckpointOffset, Is.EqualTo(0L),
                 "inside the one-hour interval and below one million entries the advance must stay pending; "
                     + "a tick that commits it defeats checkpoint coalescing.");
-            Assert.That(leaf.State.WriteCount, Is.EqualTo(writesBefore),
+            Assert.That(checkpointWrites, Is.Empty,
                 "and no checkpoint persist may run.");
             Assert.That(leaf.Grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(3L),
                 "control: the advance is still held pending in memory.");

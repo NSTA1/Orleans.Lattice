@@ -17,13 +17,13 @@ subscribe by reference.
 |---|---|---|
 | `index` | the logical index name | every instrument |
 | `tenant` | always `_platform_` | every instrument |
-| `path` | `activation`, `backfill`, `outbox` | `write_failures` (all three); `grains_enrolled` (`activation` and `backfill` only) |
+| `path` | `activation`, `backfill`, `outbox` | `write_failures` (all listed paths); `grains_enrolled` (`activation` and `backfill` only) |
 
 The `path` tag names the route that did the work: `activation` is the activation
 and mutation path that physically writes a grain's entries, `backfill` is the
 background crawl, and `outbox` is a deferred or retried index write.
 
-The two `grains_enrolled` series are not additive. Every enrolment is performed -
+The `grains_enrolled` series are not additive. Every enrolment is performed -
 and counted - by the grain's own activation path, the first time the grain
 crosses into the index. The `backfill` series instead counts every grain whose
 activation the crawl drove to completion, so a crawl-driven grain normally
@@ -55,7 +55,7 @@ tenant-scoped telemetry query.
 | `orleans.lattice.grainindex.backfill.percent_complete` | `ObservableGauge<double>` | `%` | How far through its population a backfill has reached. |
 | `orleans.lattice.grainindex.backfill.state` | `ObservableGauge<int>` | `{state}` | Lifecycle state of a backfill, as the numeric `GrainIndexBackfillState`. |
 
-The four observable gauges read a frozen snapshot published by the backfill
+The observable gauges read a frozen snapshot published by the backfill
 grain, so a scrape never recomputes progress and only the silo hosting a crawl's
 activation - the one that knows where the crawl has reached - publishes its
 series.

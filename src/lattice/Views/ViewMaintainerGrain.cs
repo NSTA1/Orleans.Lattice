@@ -356,7 +356,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         _shipViewSuppressed = false;
 
-        // Heal a source physical-identity swap (restore / resize / reshard) before
+        // Heal a source physical-identity swap (restore / revert / resize / undo / remediation / set-alias) before
         // any drain work: if the alias now resolves to a different physical tree, the
         // view resets, rebuilds from the new source, and rebinds its WAL cursor. A
         // heal owns the checkpoint and cursor for this pass, so short-circuit.
@@ -1047,8 +1047,8 @@ internal sealed partial class ViewMaintainerGrain(
     /// Resolves the current physical tree id for a logical source tree through the
     /// registry alias. The write-ahead log, cursor pins, and source-state scans are
     /// all addressed by physical id, so every WAL-touching operation resolves the
-    /// live physical id rather than caching it - a shadow-cutover restore, resize,
-    /// or reshard can repoint the alias at a new physical tree at any time. System
+    /// live physical id rather than caching it - a shadow-cutover restore or revert, resize or undo, schema remediation,
+    /// or set-alias operation can repoint the alias at a new physical tree at any time. System
     /// trees never alias (and resolving one would recurse into the registry tree),
     /// so they short-circuit to themselves.
     /// </summary>
@@ -1073,7 +1073,7 @@ internal sealed partial class ViewMaintainerGrain(
     /// the first bind it records the identity with no rebuild (unless the source is
     /// already aliased, in which case it reprojects from the physical tree). When the
     /// bound identity no longer matches, the source was swapped underneath the alias
-    /// (restore / resize / reshard): the old WAL cursor pin is released, the durable
+    /// (restore / revert / resize / undo / remediation / set-alias): the old WAL cursor pin is released, the durable
     /// per-partition offsets are reset (they are absolute against the retired WAL and
     /// must never resume against a different physical log), the view is rebuilt from
     /// the new physical source, and the new identity is recorded. Returns whether a

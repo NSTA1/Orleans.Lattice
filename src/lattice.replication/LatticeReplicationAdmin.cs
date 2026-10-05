@@ -176,4 +176,38 @@ internal sealed class LatticeReplicationAdmin(
 
         return lifted;
     }
+
+    /// <inheritdoc />
+    public async Task<bool> ResolveCrossClusterSagaParticipantAsync(
+        string sagaId,
+        bool commit,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sagaId);
+        ArgumentException.ThrowIfNullOrEmpty(reason);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Fail closed: without a grain factory there is no participant to reach.
+        var grainFactory = _grainFactory
+            ?? throw new InvalidOperationException(
+                $"{nameof(LatticeReplicationAdmin)} was constructed without an {nameof(IGrainFactory)}; it cannot resolve a cross-cluster saga participant.");
+
+        // Audit before dispatch, so an attempt is on record even when it fails.
+        _logger.LogWarning(
+            "Operator RESOLVE of cross-cluster saga participant {SagaId} to {Decision} requested: {Reason}. If the coordinator cannot be reached, nothing checks this against the other clusters of the saga.",
+            sagaId, commit ? "commit" : "abort", reason);
+
+        var resolved = await grainFactory
+            .GetGrain<Grains.ICrossClusterSagaParticipantGrain>(sagaId)
+            .OperatorResolveAsync(commit)
+            .ConfigureAwait(false);
+
+        _logger.LogWarning(
+            resolved
+                ? "Cross-cluster saga participant {SagaId} RESOLVED to {Decision} by an operator."
+                : "Operator resolution of cross-cluster saga participant {SagaId} to {Decision} found it already resolved; nothing changed.",
+            sagaId, commit ? "commit" : "abort");
+        return resolved;
+    }
 }

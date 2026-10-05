@@ -6,27 +6,23 @@ namespace Orleans.Lattice.Replication;
 /// Internal ambient flag that marks the calling
 /// <see cref="IReplicationApplier"/> invocation as part of a
 /// receiver-side bootstrap drain. While the flag is set, the applier
-/// suppresses the per-origin high-water-mark dedup check and HWM
-/// advance for the entry so the drain can deliver per-key prepared and
-/// committed-projection rows whose source HLCs are not globally
+/// skips the per-origin high-water-mark advance for the entry so the drain
+/// can deliver per-key prepared and committed-projection rows whose source HLCs are not globally
 /// ordered (the snapshot exporter walks shards and leaves in arbitrary
 /// order, not in HLC order).
 /// </summary>
 /// <remarks>
 /// <para>
 /// In the steady state the producer's incremental WAL stream is
-/// HLC-monotonic per origin, so the per-origin HWM check correctly
-/// suppresses re-delivery. During bootstrap the same monotonicity
+/// HLC-monotonic per origin, and the HWM advances only after an apply
+/// commits; it is not a drop threshold for point writes, and no
+/// snapshot-pinned floor is either (#4463). During bootstrap the same monotonicity
 /// does not hold: prepared rows captured from a leaf's pending-tx
 /// bucket carry the per-saga prepare-time HLC, and per-leaf scans
 /// across shards can yield rows whose HLCs are interleaved relative
-/// to the per-origin HWM. Without the suppression below, the first
-/// shard's row for a saga can advance the HWM past a subsequent
-/// shard's row for the same saga - dropping the second row as
-/// "dedup" and leaving the saga's pending-tx bucket missing keys.
-/// The matching terminal record then flips a partial bucket into a
-/// strict-subset view, violating the per-saga all-or-nothing
-/// invariant that the bootstrap-boundary contract owes the receiver.
+/// to the per-origin HWM. The drain therefore leaves the HWM and the
+/// FIFO anchor it seeds untouched, and the post-drain handoff installs
+/// the HWM at the snapshot cut.
 /// </para>
 /// <para>
 /// The receiver-side dedup primitives that remain in force during a
@@ -53,11 +49,10 @@ namespace Orleans.Lattice.Replication;
 /// <para>
 /// The handoff at the end of the drain
 /// (<see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>)
-/// monotonically establishes the per-origin HWM at the snapshot's
-/// <c>AsOfHlc</c>, so steady-state dedup is preserved across the
-/// transition. Range deletes, terminal records, and tombstone-reap
-/// envelopes do not interact with the HWM check and are unaffected by
-/// this scope.
+/// raises the per-origin HWM to the snapshot's frontier (a pointwise
+/// maximum with the vector already held, #4464) and installs no drop
+/// floor. Range deletes, terminal records, and tombstone-reap envelopes
+/// do not advance the HWM and are unaffected by this scope.
 /// </para>
 /// </remarks>
 internal static class LatticeBootstrapApplyContext
