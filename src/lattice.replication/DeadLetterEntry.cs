@@ -50,4 +50,21 @@ public readonly record struct DeadLetterEntry
     /// </summary>
     [Id(4)]
     public long EnqueuedAtTicks { get; init; }
+
+    /// <summary>
+    /// The sender that stamped <see cref="SourceLineage"/> on the batch the entry
+    /// arrived in (issue #4707), or <see langword="null"/> for an unstamped entry.
+    /// </summary>
+    [Id(5)]
+    public string? SourceLineageClusterId { get; init; }
+
+    /// <summary>
+    /// The source lineage the entry's sender read it under (issue #4707), or
+    /// <see langword="null"/> for an unstamped entry. A replay is checked against
+    /// the lineage the tree has drained from <see cref="SourceLineageClusterId"/>
+    /// by then: an entry read under a lineage the tree no longer holds is not
+    /// applied, and stays parked for the operator to discard.
+    /// </summary>
+    [Id(6)]
+    public Guid? SourceLineage { get; init; }
 }

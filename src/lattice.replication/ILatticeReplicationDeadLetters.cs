@@ -47,7 +47,13 @@ public interface ILatticeReplicationDeadLetters
     /// retry or discard. A replay the durable receive fence of an
     /// in-flight restore saga defers (<see cref="ApplyResult.Deferred"/>
     /// is <see langword="true"/>) applied nothing, so the entry also stays
-    /// parked and can be replayed again once the fence lifts. Returns
+    /// parked and can be replayed again once the fence lifts. The replay
+    /// runs under the source lineage the entry's sender stamped
+    /// (<see cref="DeadLetterEntry.SourceLineage"/>); a replay refused
+    /// because that lineage is not the one the tree has drained since
+    /// (<see cref="ApplyResult.SourceLineageRefused"/> is
+    /// <see langword="true"/>) applied nothing either, and the entry stays
+    /// parked for the operator to discard. Returns
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);

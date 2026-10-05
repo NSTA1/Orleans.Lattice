@@ -318,6 +318,20 @@ internal sealed partial class ReplicationApplier(
                 }
             }
 
+            // SOURCE LINEAGE (issues #4673, #4707). An entry its sender read under
+            // a source lineage this tree no longer holds - before a source restore,
+            // purge and recreate, or alias move, arriving after this tree drained
+            // the new lineage - must not land, whichever path delivers it: a push,
+            // the causal-buffer drain, or a dead-letter replay. Checked after the
+            // enrollment and tenant gates, so a peer-controlled tree id activates
+            // no coordinator.
+            var lineageVerdict = await AdmitSourceLineageAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+            if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+            {
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return SourceLineageRefusal(lineageVerdict);
+            }
+
             // DURABLE RECEIVE FENCE (issue #1173). While a cross-cluster restore
             // saga has paused inbound apply for this tree, peer entries must not
             // be admitted: an early-flipping cluster that applied a laggard's
@@ -786,7 +800,8 @@ internal sealed partial class ReplicationApplier(
                     + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
                 retryCount: 0,
                 reasonTag: LatticeReplicationMetrics.ReasonDependencyLost,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             RecordDeadLetterFull(entry, full: false);
             return true;
         }
@@ -900,7 +915,11 @@ internal sealed partial class ReplicationApplier(
             admissionEpoch = fence.Epoch;
         }
 
-        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry, admissionEpoch).ConfigureAwait(false);
+        // Issue #4707: the entry keeps the source lineage its sender stamped, so
+        // its drain is checked against the lineage drained by then.
+        var remaining = await GetBufferGrain(entry.TreeId)
+            .ParkAsync(entry, admissionEpoch, ReplicationSourceLineageScope.Current)
+            .ConfigureAwait(false);
         _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
 
@@ -934,10 +953,29 @@ internal sealed partial class ReplicationApplier(
     /// apply performs. Runs under the system-origin access scope, as
     /// <see cref="ApplyAsync"/> does. Throws on failure; the grain dead-letters
     /// the entry.
+    /// <para>
+    /// The entry is first checked against the source lineage it was stamped
+    /// with when it was parked (issue #4707), through the same seam as a pushed
+    /// entry: a verdict other than
+    /// <see cref="ReplicationSourceLineageGate.Verdict.Apply"/> is returned
+    /// without applying anything, and the grain discards a lineage-refused entry
+    /// and keeps a transiently refused one parked.
+    /// </para>
     /// </summary>
-    internal async Task ApplyDrainedEntryAsync(WalRecord entry, long admissionEpoch, CancellationToken cancellationToken)
+    internal async Task<ReplicationSourceLineageGate.Verdict> ApplyDrainedEntryAsync(
+        WalRecord entry,
+        long admissionEpoch,
+        ReplicationSourceLineageStamp? sourceLineage,
+        CancellationToken cancellationToken)
     {
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+        using var lineageScope = ReplicationSourceLineageScope.Enter(sourceLineage);
+
+        var lineageVerdict = await AdmitSourceLineageAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+        {
+            return lineageVerdict;
+        }
 
         // Issue #4593: the drained entry carries the epoch it was parked under.
         ReplicationAdmissionEpoch.Stamp(entry.TreeId, admissionEpoch);
@@ -949,6 +987,7 @@ internal sealed partial class ReplicationApplier(
         await GetHwmGrain(entry.TreeId)
             .AdvanceAppliedAsync(entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken)
             .ConfigureAwait(false);
+        return lineageVerdict;
     }
 
     /// <summary>
@@ -1406,7 +1445,8 @@ internal sealed partial class ReplicationApplier(
                 + "rejected so a peer cannot override the local merge algebra via the wire mode field.",
             retryCount: 0,
             reasonTag: LatticeReplicationMetrics.ReasonModeMismatch,
-            cancellationToken);
+            cancellationToken,
+            ReplicationSourceLineageScope.Current);
     }
 
     /// <summary>
@@ -1448,7 +1488,8 @@ internal sealed partial class ReplicationApplier(
             failureReason: failureReason,
             retryCount: 0,
             reasonTag: reasonTag,
-            cancellationToken);
+            cancellationToken,
+            ReplicationSourceLineageScope.Current);
     }
 
 

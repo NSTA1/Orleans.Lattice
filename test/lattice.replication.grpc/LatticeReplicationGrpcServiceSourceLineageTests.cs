@@ -14,7 +14,12 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// the source-lineage call header, after the caller's origin is authenticated,
 /// and refuses - not accepted, flagged - a batch stamped with a lineage this tree
 /// did not drain from that sender, so its records never apply. A push without
-/// the header (a sender that predates it) applies as before.
+/// the header (a sender that predates it) applies as before. Since issue #4707
+/// the check runs at the applier's admission seam rather than in the service,
+/// so the harness fronts the substitute applier with that production check
+/// (<see cref="ReplicationSourceLineageGate.AdmitAsync"/>), exactly as the
+/// canonical applier runs it; the service's own duties - stamping the scope and
+/// answering a refused result - are what these tests drive.
 /// </summary>
 [TestFixture]
 public class LatticeReplicationGrpcServiceSourceLineageTests
@@ -31,6 +36,27 @@ public class LatticeReplicationGrpcServiceSourceLineageTests
         public int CurrentWireVersion => 1;
         public void Encode(ReplicationBatchEnvelope envelope, System.Buffers.IBufferWriter<byte> writer) => serializer.Serialize(envelope, writer);
         public ReplicationBatchEnvelope Decode(ReadOnlyMemory<byte> payload) => serializer.Deserialize(payload.Span);
+    }
+
+    /// <summary>
+    /// Runs the production source-lineage admission check before handing the
+    /// batch to <paramref name="inner"/>, as the canonical applier does.
+    /// </summary>
+    private sealed class AdmittingApplier(IGrainFactory factory, IReplicationApplier inner) : IReplicationApplier
+    {
+        public Task<ApplyResult> ApplyAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
+            ApplyBatchAsync([entry], cancellationToken);
+
+        public async Task<ApplyResult> ApplyBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
+        {
+            var verdict = await ReplicationSourceLineageGate.AdmitAsync(factory, entries[0].TreeId!, NullLogger.Instance, cancellationToken);
+            return verdict switch
+            {
+                ReplicationSourceLineageGate.Verdict.Apply => await inner.ApplyBatchAsync(entries, cancellationToken),
+                ReplicationSourceLineageGate.Verdict.RefuseLineage => new ApplyResult { SourceLineageRefused = true },
+                _ => new ApplyResult { Deferred = true },
+            };
+        }
     }
 
     private sealed class Harness
@@ -62,7 +88,7 @@ public class LatticeReplicationGrpcServiceSourceLineageTests
             topology.CurrentPeers.Returns([Origin]);
             return new LatticeReplicationGrpcService(
                 method,
-                Applier,
+                new AdmittingApplier(Factory, Applier),
                 registry,
                 NoOpReceiverFlowControlPolicy.Instance,
                 Factory,

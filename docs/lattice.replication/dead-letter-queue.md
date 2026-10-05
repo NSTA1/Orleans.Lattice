@@ -90,7 +90,7 @@ Resolve the seam from DI and call per-tree:
 | `ListAsync(treeId, ct)` | `IReadOnlyList<DeadLetterEntry>` | Ascending entry-id order. Pure read. |
 | `CountAsync(treeId, ct)` | `int` | Cached count, served from memory. |
 | `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Records a lost mark for a foreign-origin entry first (see [Lost writes and their dependents](#lost-writes-and-their-dependents)). Emits `reason=discarded`. |
-| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing, non-deferred return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A result deferred by a coordinated restore's receive fence (`Deferred = true`) or a thrown exception leaves the entry parked. |
+| `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing, non-deferred return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A result deferred by a coordinated restore's receive fence (`Deferred = true`), a result refused for its source lineage (`SourceLineageRefused = true`), or a thrown exception leaves the entry parked. |
 
 ```csharp verify
 var dlq = client.ServiceProvider.GetRequiredService<ILatticeReplicationDeadLetters>();
@@ -107,7 +107,9 @@ if (parked.Count > 0)
     // result is null when the id is unknown; otherwise the replay routed
     // through the canonical applier and the entry is removed - unless a
     // coordinated restore deferred it (result.Value.Deferred), which leaves
-    // it parked for a later replay.
+    // it parked for a later replay, or it was read under a source lineage
+    // this tree no longer holds (result.Value.SourceLineageRefused), which
+    // leaves it parked for the operator to discard.
 }
 ```
 
@@ -125,6 +127,8 @@ Parking an entry that exhausted its retry budget advances the tree's per-origin 
 2. Operators are explicitly opting into a "this entry might still apply" attempt; the failure budget is logically a transport-level concern, not an operator-replay concern.
 
 The replay is a genuine apply attempt: the canonical applier has no per-origin HLC drop threshold, so a replayed point entry runs the full apply pipeline. Every park path also releases the entry's own shadow-forward dedupe reservation (or never took one), so the replay is not suppressed as a duplicate of its original delivery. The seam treats any non-throwing, non-deferred return as terminal for cleanup and removes the parked row, whatever the resulting `Applied` flag. `Applied = true` means the write landed. `Applied = false` means the canonical applier filtered or diverted it: its identity is held in the shadow-forward dedupe cache by a re-delivered copy of the same record that has since been applied or parked; its origin is the local cluster (an entry the sender parked because it could not encode the batch), which the canonical applier never applies back onto its authoring cluster; a receiver-side gate rejected it (the enrollment gate drops it; the merge-mode and tenant-isolation gates dead-letter it again under a new id); or a dependency is still missing and it was re-parked in the causal-apply buffer. The one non-terminal outcome is a deferral: while a coordinated restore holds the tree's inbound receive fence the applier returns `Deferred = true` without applying anything, and the seam leaves the parked row in place (no `dead_letter.removed` is emitted), because nothing re-ships a parked entry once the fence lifts. Replay it again after the restore completes.
+
+A parked entry keeps the source lineage its sender stamped on the batch it arrived in (`DeadLetterEntry.SourceLineage`, with the stamping sender in `DeadLetterEntry.SourceLineageClusterId`; both are `null` for an unstamped entry). The replay runs under that stamp, so the canonical applier checks it against the lineage the tree has drained from that sender since, exactly as it checks a push ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707); see [Source lineage gate](snapshot-bootstrap.md#source-lineage-gate)). An entry read under a lineage the tree no longer holds - before a source restore, purge and recreate, or alias move the tree has since drained - is not applied: the replay returns `SourceLineageRefused = true` and leaves the row parked. It will never apply, so discard it.
 
 ## Receiver-side poisoned sagas
 

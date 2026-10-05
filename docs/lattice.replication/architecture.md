@@ -186,23 +186,24 @@ The plain replication protocol has a design-level TLA+ specification,
 exhaustively by TLC on every pull request over a bounded instance of three
 clusters. Its transport loses, duplicates, reorders, and partitions entries,
 receivers restart, and the merge is abstracted over both last-writer-wins and a
-grow-only counter. It checks six properties:
+grow-only counter. It checks eight properties:
 
 | Property | What it guarantees |
 |----------|--------------------|
+| `TypeOK` | Every model variable stays within its declared domain. |
 | `NoRelay` | A cluster ships only the writes it authored, so nothing is relayed or ping-pongs around a ring. |
 | `NoReflection` | A cluster never applies its own write received back from a peer. |
 | `CursorNeverSkipsUnshipped` | A shipper's cursor never passes a write the peer has not absorbed. |
 | `DedupNeverDropsNew` | A receiver discards an entry as a duplicate only when its replica already reflects it. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is still applied when it arrives. |
+| `CausalOrder` | No replica holds a write without the write its dependency names (#4586). |
 | `EventualConvergence` | Once writing stops, with a fair transport and dead letters eventually replayed, every replica of every key converges to the value of all its writes. |
 
 A companion module,
 [`ReplicationCausalDelivery.tla`](../../spec/replication/ReplicationCausalDelivery.tla),
 checks that a receiver cannot deadlock on causal dependencies when shipping
 order inverts a cross-origin dependency cycle and every shipper waits on each
-acknowledgement. Both modules check causal order: no replica holds a write
-without the write its dependency names. A third,
+acknowledgement. It checks `CausalOrder` too. A third,
 [`ReplicationLowWatermark.tla`](../../spec/replication/ReplicationLowWatermark.tla),
 checks the low watermark that also meets a dependency: the per-partition WAL
 clock floors, the watermark counted from the acknowledged cursor and clamped
@@ -245,7 +246,9 @@ behind a bootstrap drop floor that stops an in-flight write resurrecting it
   frontier and every attached peer's vouched watermark (#4678, the fix for
   #4615).
 - The stale-lineage refusal: a receiver aligned with a new source lineage
-  refuses a batch read under the old one (#4681, the fix for #4673).
+  refuses a batch read under the old one (#4681, the fix for #4673), on every
+  apply path - a push, the causal-buffer drain and a dead-letter replay
+  (#4707).
 - The source-restore contract: a unilateral source restore never makes a
   peer delete a row it dropped, so peers may diverge, and a coordinated
   restore converges them.

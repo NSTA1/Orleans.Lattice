@@ -45,6 +45,13 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
     /// </summary>
     private static Func<RemoteSnapshotMetadata, SnapshotSourceFrontier?>? _openFrontier;
 
+    /// <summary>
+    /// While set, replaces the source frontier an export carries in its close
+    /// trailer - the frontier a completed bootstrap installs on the receiver's
+    /// tree frontier (issue #4586 part 2b) - from the one the source shipped.
+    /// </summary>
+    private static Func<SnapshotSourceFrontier?, SnapshotSourceFrontier?>? _closeFrontier;
+
     /// <summary>While set, the receiver's transport behaves as a sender that predates source generations.</summary>
     private static volatile bool _legacySender;
 
@@ -611,6 +618,12 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
             {
                 if (_legacySender && item.CloseGeneration is not null)
                 {
+                    continue;
+                }
+
+                if (_closeFrontier is { } closeFrontierFor && item.CloseGeneration is not null)
+                {
+                    yield return item with { SourceFrontier = closeFrontierFor(item.SourceFrontier) };
                     continue;
                 }
 
