@@ -37,7 +37,7 @@ steps:
   - n: 4
     action: "Replay an entry that should now apply or terminally filter through the canonical applier."
     api: "ILatticeReplicationDeadLetters.ReplayAsync"
-    expects: "A non-null, non-deferred ApplyResult removes the parked entry; Deferred true leaves it parked."
+    expects: "A non-null, non-deferred ApplyResult removes the parked entry; Deferred true or SourceLineageRefused true leaves it parked."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
   - n: 5
     action: "Discard only after validating that the parked entry should never be applied."
@@ -72,6 +72,10 @@ failure_modes:
     signal: "ReplayAsync returns ApplyResult with Deferred true."
     effect: "The entry remains parked because a coordinated restore receive fence still blocks inbound apply."
     response: "Wait for the restore fence to lift and replay the same entry again."
+  - id: stale-source-lineage
+    signal: "ReplayAsync returns ApplyResult with SourceLineageRefused true."
+    effect: "The entry was read under a source lineage this tree no longer holds, so it is not applied and stays parked."
+    response: "Discard the entry: it belongs to a lineage the tree no longer replicates, and no replay will apply it."
   - id: queue-full
     signal: "dead_letter.refused rises and the replication link reports Stalled (DeadLetterFullSeconds is set on the peer-status row)."
     effect: "The queue is at DeadLetterQueueCapacity and refuses further parks; the affected entries stay unacknowledged and the link is held back. Nothing is evicted."

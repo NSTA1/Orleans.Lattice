@@ -253,4 +253,15 @@ internal sealed class BootstrapCoordinatorState
     /// drained again. State written before this slot decodes to an empty map.
     /// </summary>
     [Id(27)] public Dictionary<string, Guid> DrainedFrontierEpochBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The cross-tree receiver barriers the last drain recorded this tree's
+    /// arrival at, from a cross-tree sub-saga's decision row, that had not yet
+    /// decided when the drain ended (issue #4683). The tree stays read-fenced,
+    /// and the bootstrap does not complete, until every one has decided: the
+    /// import serves the sub-saga post-saga, and a sibling tree may still serve
+    /// it pre-saga until its own terminal reaches the barrier. State written
+    /// before this slot decodes to an empty list.
+    /// </summary>
+    [Id(28)] public List<string> PendingCrossTreeBarriers { get; set; } = [];
 }

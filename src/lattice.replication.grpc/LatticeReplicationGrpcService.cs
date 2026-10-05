@@ -505,30 +505,12 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // arriving after this tree drained the new lineage - must not land
         // (issue #4673). The origin was authenticated above, so the header is
         // the authenticated sender's own claim; a malformed one vouches for no
-        // lineage and is refused like a mismatch.
-        var lineageVerdict = await ReplicationSourceLineageGate.CheckAsync(
-                _grainFactory,
-                request.TreeName,
-                request.OriginClusterId,
-                ReadSourceLineage(context),
-                receiverLineage,
-                _logger)
-            .ConfigureAwait(false);
-        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
-        {
-            return new ReplicationAckBox
-            {
-                Value = new ReplicationAck
-                {
-                    Accepted = false,
-                    HighestAppliedHlc = HybridLogicalClock.Zero,
-                    BootstrapEpoch = bootstrapEpoch,
-                    ReceiverLineage = receiverLineage,
-                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
-                    SourceLineageRefused = lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseLineage,
-                },
-            };
-        }
+        // lineage and is refused like a mismatch. The check itself runs at the
+        // applier's admission seam (issue #4707), which every apply path - this
+        // push, the causal-buffer drain and a dead-letter replay - passes
+        // through: the stamp rides into it on the lineage scope, and is parked
+        // or dead-lettered with any entry that does not apply now.
+        var stampedLineage = ReadSourceLineage(context);
 
         // Time the apply call so the flow-control policy can shape
         // its hint against the real receiver-side cost of the just-
@@ -539,6 +521,9 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var applyStart = Stopwatch.GetTimestamp();
         try
         {
+            using var lineageScope = stampedLineage is null
+                ? null
+                : ReplicationSourceLineageScope.Enter(request.OriginClusterId, stampedLineage, receiverLineage);
             result = await _applier.ApplyBatchAsync(entries, context.CancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
@@ -566,6 +551,26 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         var applyDurationMs = Stopwatch.GetElapsedTime(applyStart).TotalMilliseconds;
+
+        // The applier's admission seam refused the batch: the sender read it
+        // under a source lineage this tree no longer holds (issues #4673,
+        // #4707). Tell it so, and it re-resolves its binding - re-seeding this
+        // peer when its binding is current - rather than re-ship the batch.
+        if (result.SourceLineageRefused)
+        {
+            return new ReplicationAckBox
+            {
+                Value = new ReplicationAck
+                {
+                    Accepted = false,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = bootstrapEpoch,
+                    ReceiverLineage = receiverLineage,
+                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                    SourceLineageRefused = true,
+                },
+            };
+        }
 
         // Stamp the receiver-side blocked-floor pin (the lowest
         // staged HLC across every partially-buffered atomic batch on

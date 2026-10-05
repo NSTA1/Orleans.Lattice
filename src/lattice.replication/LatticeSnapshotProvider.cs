@@ -368,11 +368,14 @@ internal sealed class LatticeSnapshotProvider(
         var recordedResolved = new HashSet<Guid>();
         var preparedSagas = new HashSet<Guid>();
         var lateDecided = new HashSet<Guid>();
+        // Every row of a cross-tree sub-saga names its operation, so a receiver
+        // can tell which cross-tree barriers the import settles (#4683).
+        var crossTreeNames = new CrossTreeNames(_grainFactory, treeName);
         await foreach (var prepared in EnumeratePreparedAsync(
                 treeName, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
-            yield return prepared;
+            yield return await crossTreeNames.NameAsync(prepared).ConfigureAwait(false);
         }
 
         if (AfterPreparedPassForTesting is { } afterPrepared)
@@ -481,6 +484,7 @@ internal sealed class LatticeSnapshotProvider(
         // but cannot settle (an unresolved Indeterminate row) ships as a
         // value-less row naming it, which keeps the receiver from treating it
         // as purged. A receiver that predates it skips a row with no value.
+        await crossTreeNames.PrefetchAsync(snap0?.Keys ?? Enumerable.Empty<Guid>()).ConfigureAwait(false);
         foreach (var (txid, decided) in snap0?.ToList() ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -500,7 +504,7 @@ internal sealed class LatticeSnapshotProvider(
 
             if (status is TxStatus.Committed or TxStatus.Aborted)
             {
-                yield return new SnapshotEntry
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
                 {
                     Key = string.Empty,
                     // No value: a receiver that predates the decision slot
@@ -508,16 +512,16 @@ internal sealed class LatticeSnapshotProvider(
                     Value = null!,
                     TransactionId = txid,
                     SettledDecision = status == TxStatus.Committed,
-                };
+                }).ConfigureAwait(false);
             }
             else
             {
-                yield return new SnapshotEntry
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
                 {
                     Key = string.Empty,
                     Value = null!,
                     TransactionId = txid,
-                };
+                }).ConfigureAwait(false);
             }
         }
 
@@ -543,13 +547,13 @@ internal sealed class LatticeSnapshotProvider(
             if (recorded is TxStatus.Committed or TxStatus.Aborted)
             {
                 lateDecided.Add(txid);
-                yield return new SnapshotEntry
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
                 {
                     Key = string.Empty,
                     Value = null!,
                     TransactionId = txid,
                     SettledDecision = recorded == TxStatus.Committed,
-                };
+                }).ConfigureAwait(false);
             }
         }
 
@@ -559,7 +563,7 @@ internal sealed class LatticeSnapshotProvider(
         }
 
         await foreach (var completion in EnumerateCompletionAsync(
-                treeName, physicalTreeId, partitions, snap0, openHeads, lateDecided, cancellationToken)
+                treeName, physicalTreeId, partitions, snap0, openHeads, lateDecided, crossTreeNames, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return completion;
@@ -621,6 +625,7 @@ internal sealed class LatticeSnapshotProvider(
         Dictionary<Guid, TxStatus>? snap0,
         long[] openHeads,
         HashSet<Guid> decisionRowsShipped,
+        CrossTreeNames crossTreeNames,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var snap1 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
@@ -657,13 +662,13 @@ internal sealed class LatticeSnapshotProvider(
 
             if (decisionRowsShipped.Add(txid))
             {
-                yield return new SnapshotEntry
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
                 {
                     Key = string.Empty,
                     Value = null!,
                     TransactionId = txid,
                     SettledDecision = status == TxStatus.Committed,
-                };
+                }).ConfigureAwait(false);
             }
         }
 
@@ -1141,6 +1146,75 @@ internal sealed class LatticeSnapshotProvider(
 
                 leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    /// <summary>
+    /// Names the cross-tree operation on the export's rows of a sub-saga the
+    /// source authored as part of one (issue #4683), from the authoring tree's
+    /// transaction registry, which keeps the membership for as long as it
+    /// stores the decision. Each saga is looked up once per export.
+    /// </summary>
+    internal sealed class CrossTreeNames(IGrainFactory grainFactory, string treeName)
+    {
+        private readonly Dictionary<Guid, CrossTreeMembership?> _known = new();
+
+        /// <summary>Looks up <paramref name="txids"/> in one call per registry shard.</summary>
+        public async Task PrefetchAsync(IEnumerable<Guid> txids)
+        {
+            var byRegistry = new Dictionary<GrainId, (ITxRegistryGrain Registry, List<Guid> Txids)>();
+            foreach (var txid in txids)
+            {
+                if (txid == Guid.Empty || _known.ContainsKey(txid))
+                {
+                    continue;
+                }
+
+                var registry = TxRegistryRouting.GetRegistry(grainFactory, treeName, txid);
+                var id = registry.GetGrainId();
+                if (!byRegistry.TryGetValue(id, out var group))
+                {
+                    group = (registry, []);
+                    byRegistry[id] = group;
+                }
+
+                group.Txids.Add(txid);
+            }
+
+            foreach (var (registry, group) in byRegistry.Values)
+            {
+                var found = await registry.GetCrossTreeMembershipsAsync(group).ConfigureAwait(false);
+                foreach (var txid in group)
+                {
+                    _known[txid] = found.TryGetValue(txid, out var membership) ? membership : null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="row"/>, naming the cross-tree operation its saga
+        /// belongs to when it belongs to one.
+        /// </summary>
+        public async ValueTask<SnapshotEntry> NameAsync(SnapshotEntry row)
+        {
+            if (row.TransactionId == Guid.Empty)
+            {
+                return row;
+            }
+
+            if (!_known.TryGetValue(row.TransactionId, out var membership))
+            {
+                await PrefetchAsync([row.TransactionId]).ConfigureAwait(false);
+                membership = _known[row.TransactionId];
+            }
+
+            return membership is null
+                ? row
+                : row with
+                {
+                    CrossTreeOperationId = membership.OperationId,
+                    CrossTreeParticipants = membership.Participants,
+                };
         }
     }
 }

@@ -210,6 +210,37 @@ internal sealed class ReceiverSagaPoisonGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> ReleaseQuarantineAsync(string originClusterId, Guid transactionId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Transaction id must not be empty.", nameof(transactionId));
+        }
+
+        var index = state.State.Quarantined.FindIndex(e => e.TransactionId == transactionId
+            && string.Equals(e.OriginClusterId, originClusterId, StringComparison.Ordinal));
+        if (index < 0)
+        {
+            return false;
+        }
+
+        var released = state.State.Quarantined[index];
+        state.State.Quarantined.RemoveAt(index);
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Quarantined.Insert(index, released);
+            throw;
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyCollection<Guid>> GetQuarantinedAsync(string originClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);

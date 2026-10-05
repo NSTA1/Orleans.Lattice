@@ -125,6 +125,7 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         var i = 0;
         while (i < entries.Count)
         {
@@ -140,6 +141,10 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (runResult.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
@@ -147,7 +152,7 @@ internal sealed partial class ReplicationApplier
             i = j;
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -233,6 +238,7 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         foreach (var runResult in results)
         {
             if (runResult.Applied)
@@ -243,13 +249,17 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (runResult.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
             }
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -272,6 +282,7 @@ internal sealed partial class ReplicationApplier
             var anyApplied = false;
             var highest = HybridLogicalClock.Zero;
             var anyDeferred = false;
+            var anyLineageRefused = false;
             foreach (var (start, end) in segments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -285,12 +296,16 @@ internal sealed partial class ReplicationApplier
                 {
                     anyDeferred = true;
                 }
+                if (runResult.SourceLineageRefused)
+                {
+                    anyLineageRefused = true;
+                }
                 if (runResult.HighWaterMark.CompareTo(highest) > 0)
                 {
                     highest = runResult.HighWaterMark;
                 }
             }
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
         }
         finally
         {
@@ -615,8 +630,10 @@ internal sealed partial class ReplicationApplier
     ///   <item><description>Range-delete entries apply
     ///   through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
-    ///   <item><description>Point entries have no HLC drop threshold:
-    ///   neither the incrementally advanced per-origin diagonal (per-origin
+    ///   <item><description>Point entries have no HLC drop threshold but
+    ///   the bootstrap drop floor (#4549), which is the source's
+    ///   downward-closed per-origin applied low watermark: neither the
+    ///   incrementally advanced per-origin diagonal (per-origin
     ///   HLC is non-monotonic in WAL-append order - #1060) nor a
     ///   snapshot-pinned floor (no single HLC is downward-closed over what a
     ///   snapshot holds - #4463). Exact duplicates are absorbed by the
@@ -694,6 +711,15 @@ internal sealed partial class ReplicationApplier
                     entries, startInclusive, endExclusive, decision, cancellationToken)
                     .ConfigureAwait(false);
             }
+        }
+
+        // SOURCE LINEAGE (issues #4673, #4707). Mirror the per-entry check in
+        // ApplyAsync: one stamp covers the whole delivery, and the verdict is
+        // cached on the scope, so every run of the batch costs one check.
+        var lineageVerdict = await AdmitSourceLineageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+        {
+            return SourceLineageRefusal(lineageVerdict);
         }
 
         var resolved = options.Get(treeId);
@@ -1060,7 +1086,8 @@ internal sealed partial class ReplicationApplier
                 // when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. There is no HLC drop threshold
-                // ahead of it (#1060, #4463).
+                // ahead of it but the bootstrap drop floor (#1060, #4463,
+                // #4549).
                 if (!dedupeCache.TryAdd(entry, out var duplicateInFlight))
                 {
                     // IN-FLIGHT DUPLICATE (#4465): see ApplyAsync. A
@@ -1438,6 +1465,7 @@ internal sealed partial class ReplicationApplier
     {
         var anyApplied = false;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         var highest = HybridLogicalClock.Zero;
         for (var k = startInclusive; k < endExclusive; k++)
         {
@@ -1451,12 +1479,16 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (r.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (r.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = r.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>

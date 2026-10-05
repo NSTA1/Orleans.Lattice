@@ -21,7 +21,9 @@ internal sealed partial class TxRegistryGrain
     // TxRegistryGrainTests.AdmissionBound pins every weight against a real
     // serialisation, so a change to the state shape that outgrows a weight fails
     // a test instead of silently weakening the bound.
-    internal const long AdmissionEstimateBaseBytes = 2 * 1024;
+    // The empty row measured 2,125 JSON bytes once the cross-tree membership
+    // map was added (#4683), so the base carries headroom above that.
+    internal const long AdmissionEstimateBaseBytes = 5 * 512;
     internal const long AdmissionEstimateDecisionBytes = 48;
     internal const long AdmissionEstimateForgottenAtBytes = 80;
     internal const long AdmissionEstimateParticipantsBytes = 256;
@@ -31,6 +33,7 @@ internal sealed partial class TxRegistryGrain
     internal const long AdmissionEstimateSnapshotPinBytes = 384;
     internal const long AdmissionEstimatePinnedTxidBytes = 48;
     internal const long AdmissionEstimateWalGenerationBytes = 64;
+    internal const long AdmissionEstimateCrossTreeMembershipBytes = 512;
 
     /// <summary>
     /// Count-weighted estimate of the registry's persisted row size. Reads
@@ -61,6 +64,7 @@ internal sealed partial class TxRegistryGrain
             + (s.ExpectedTerminals.Count * AdmissionEstimateExpectedTerminalsBytes)
             + ((s.ExternalAuthorities.Count + s.ReceiverDecisionAuthorities.Count) * AdmissionEstimateAuthorityBytes)
             + (s.SnapshotPins.Count * AdmissionEstimateSnapshotPinBytes)
+            + (s.CrossTreeMemberships.Count * AdmissionEstimateCrossTreeMembershipBytes)
             + (pinnedTxids * AdmissionEstimatePinnedTxidBytes);
     }
 

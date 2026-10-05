@@ -31,11 +31,12 @@ reader is most likely to over-read are these.
   report a decision, retiring its row), a late forwarded prepare and a leaf
   reactivation do to a saga bound across a split and a resize. A behaviour that
   needs a retention event together with a stale writer, a saga re-bind, a
-  reshard, a refused flip or an undo before a flip is checked by **neither**
-  module's CI gate. Their composition, every action of both and all their
-  properties, is clean in this instance; it costs about thirteen minutes of
-  TLC, which is why it is not a gate. It does not combine `ShardOwnership`'s
-  write stamps and migrated rows with a retention event
+  reshard, a refused flip, an undo before a flip, a write
+  stamp that disagrees with real time or a migrated row is checked by **neither**
+  module's CI gate. Their composition is clean in this instance: every action
+  of both, `ShardOwnership`'s write stamps and migrated rows, and all their
+  properties. It costs about nineteen minutes of TLC, which is why it is not
+  a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
   A third module, `ShardOwnershipCrdt`, checks that the same moves join a
   CRDT-mode key's copies rather than overwrite them.

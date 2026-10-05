@@ -63,15 +63,27 @@ internal sealed class LatticeReplicationDeadLetters(
         // Replay routes through the canonical applier, bypassing the
         // failure-tracking decorator. A successful return removes the
         // entry from the queue with reason=replayed; a thrown exception
-        // leaves the entry parked for the operator to decide.
-        var result = await inner.ApplyAsync(parked.Value.Entry, cancellationToken).ConfigureAwait(false);
+        // leaves the entry parked for the operator to decide. The entry is
+        // replayed under the source lineage its sender stamped (issue #4707),
+        // so the applier checks it against the lineage the tree has drained
+        // since, exactly as it checks a pushed entry.
+        ApplyResult result;
+        using (ReplicationSourceLineageScope.Enter(
+                   parked.Value.SourceLineageClusterId ?? string.Empty,
+                   parked.Value.SourceLineageClusterId is null ? null : parked.Value.SourceLineage))
+        {
+            result = await inner.ApplyAsync(parked.Value.Entry, cancellationToken).ConfigureAwait(false);
+        }
 
         // A deferred result is not terminal: the durable receive fence of an
         // in-flight restore saga held the entry back without applying it, and
         // unlike a streamed batch nothing will re-ship a parked entry once the
         // fence lifts. Removing it here would silently drop the write, so it
-        // stays parked for a later replay (issue #3757).
-        if (result.Deferred)
+        // stays parked for a later replay (issue #3757). A source-lineage
+        // refusal is not terminal either (issue #4707): the entry was read under
+        // a lineage this tree no longer holds, and it stays parked for the
+        // operator to discard.
+        if (result.Deferred || result.SourceLineageRefused)
         {
             return result;
         }
@@ -153,6 +165,48 @@ internal sealed class LatticeReplicationDeadLetters(
             originClusterId,
             _logger,
             CancellationToken.None);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> ReleaseQuarantinedSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Transaction id must not be empty.", nameof(transactionId));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var released = await grainFactory.GetGrain<IReceiverSagaPoisonGrain>(treeId)
+            .ReleaseQuarantineAsync(originClusterId, transactionId)
+            .ConfigureAwait(false);
+        if (!released)
+        {
+            _logger.LogWarning(
+                "Operator release of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}' found no quarantine to release.",
+                transactionId,
+                originClusterId,
+                treeId);
+            return false;
+        }
+
+        DeadLetterTrackingReplicationApplier.RecordReceiverSagaPoisoned(
+            treeId,
+            originClusterId,
+            LatticeReplicationMetrics.OutcomeReceiverSagaQuarantineReleased);
+        _logger.LogWarning(
+            "Operator released the quarantine of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}'; its records are "
+            + "applied again, and one that keeps failing is quarantined again.",
+            transactionId,
+            originClusterId,
+            treeId);
         return true;
     }
 
