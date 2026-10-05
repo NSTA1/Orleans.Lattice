@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. The floor-epoch write gate (#4549): a
+# write admitted before the floor existed, still on its way to a shard, would
+# land after the bootstrap's reconcile scan and resurrect a key the source
+# deleted and reaped. The shard root refuses a write admitted under an older
+# floor epoch, and the sender re-ships it against the floor.
+MODULE: EventualConvergenceNoFloorWriteGate
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a write admitted before the floor was installed lands after the reconcile scan and resurrects a key the source deleted
+PERTURBS: Land
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+    /\ IF adm[o] = "stale"
+--- REPLACE
+\* MUTATION: the shard root admits a write of any floor epoch.
+    /\ IF FALSE
+--- END

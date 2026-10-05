@@ -23,7 +23,7 @@ replication says nothing about it.
 | [`ReplicationCausalDelivery.tla`](ReplicationCausalDelivery.tla), [`.cfg`](ReplicationCausalDelivery.cfg), [`.manifest.json`](ReplicationCausalDelivery.manifest.json) | The focused companion module: causal-dependency delivery under head-of-line blocking (below). |
 | [`causal-delivery-mutations/`](causal-delivery-mutations/) | The companion module's mutation catalogue. |
 | [`ReplicationCausalDelivery.Refinement.md`](ReplicationCausalDelivery.Refinement.md) | The companion module's refinement note. |
-| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) | The second companion module: an in-place re-bootstrap after the source reaped a delete (below). |
+| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) and the [`Floor`](ReplicationReBootstrap.Floor.cfg) variant configuration | The second companion module: an in-place re-bootstrap after the source reaped a delete, and the bootstrap drop floor (below). |
 | [`rebootstrap-mutations/`](rebootstrap-mutations/) | The second companion module's mutation catalogue. |
 | [`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md) | The second companion module's refinement note. |
 | [`ReplicationLowWatermark.tla`](ReplicationLowWatermark.tla), [`.cfg`](ReplicationLowWatermark.cfg), [`.manifest.json`](ReplicationLowWatermark.manifest.json) and four variant configurations | The third companion module: the low watermark that makes the causal-dependency check sound (below). |
@@ -130,13 +130,24 @@ soft delete during the scan, and a restore, purge or rebind since the
 receiver's copy was aligned. `ReconcileDeletesOnlyDeleted` checks that every
 fabricated tombstone is dominated by a delete the source really authored.
 
+A full re-bootstrap also installs a drop floor at the source's per-origin
+applied low watermark (#4549, built by #4675), so a third cluster's write
+still on its way to the receiver, which the source had applied, deleted and
+reaped, cannot resurrect the key. The floor defers rather than drops until
+its import closes stable, is cleared when the import closes unstable, never
+covers the source's own origin, and arms the receiver's shard roots so a
+write admitted before it is refused rather than land after the reconcile
+scan. The Floor variant configuration adds the third cluster that needs.
+
 The module also checks the reap guard (#4615, built by #4678), the refusal of
 a batch read under a source lineage the receiver has left (#4673, built by
 #4681), the re-seed a receiver
 restore and a detach force, and the source-restore contract: a unilateral
 source restore never fabricates a delete, peers may diverge after one, and a
 coordinated restore converges them. `EventualConvergence` holds on every
-behaviour with no unilateral source restore, with no other carve-out.
+behaviour with no unilateral source restore, with no other carve-out, and
+after one the receiver keeps every write of another origin until a
+coordinated restore runs.
 
 ## The low-watermark companion
 
@@ -212,7 +223,8 @@ lands as the check that reintroducing it is caught:
   source-origin key and then of any origin's; a tombstone reaped on the wall
   clock alone; and a stale-lineage batch applied after realignment
   (`EventualConvergenceReapedDeleteNotReconciled`,
-  `EventualConvergenceForeignRowNotReconciled`,
+  `EventualConvergenceForeignRowNotReconciled` and, for a third origin's
+  write still in flight, `EventualConvergenceNoBootstrapFloor`,
   `EventualConvergenceReapInsideGrace`,
   `ReconcileDeletesOnlyDeletedStaleLineageApplied`).
 
@@ -244,7 +256,9 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 (1,592,864 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,161 distinct states (62,250
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
-held over 633,326 distinct states (1,878,200 generated) at a depth of 26.
+held over 633,326 distinct states (1,898,971 generated) at a depth of 26,
+and in its Floor variant over 449,383 (1,327,241 generated) at a depth of
+21.
 Every property in `ReplicationLowWatermark.cfg` held over 330,842 distinct
 states (1,669,854 generated) at a depth of 26, and in its Sagas, Loss,
 DeadLetters and Bootstrap variants over 181,862, 27,522, 19,449 and 43,757.
@@ -262,5 +276,5 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 5 | 3 | 14 | 22 | 20 | 306,494 |
 | `ReplicationCausalDelivery` | 2 | 1 | 5 | 6 | 6 | 19,161 |
-| `ReplicationReBootstrap` | 2 | 1 | 16 | 26 | 17 | 633,326 |
+| `ReplicationReBootstrap` | 2 | 1 | 18 | 33 | 19 | 633,326 |
 | `ReplicationLowWatermark` | 2 | 1 | 18 | 21 | 19 | 330,842 |

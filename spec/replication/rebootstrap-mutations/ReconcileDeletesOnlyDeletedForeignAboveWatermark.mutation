@@ -8,7 +8,7 @@ SUMMARY: an entry of another origin is reconciled whatever its HLC, so one the s
 PERTURBS: EndExport
 
 --- FIND
-           okFor == foreign /\ stable /\ reg[r].h < ex.lwm0
+           okFor == foreign /\ stable /\ reg[r].h < ex.lwm0[reg[r].o]
 --- REPLACE
 \* MUTATION: the watermark is not consulted.
            okFor == foreign /\ stable

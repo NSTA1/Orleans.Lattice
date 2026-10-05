@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces production before #4675 (the fix
+# for #4549): a full re-bootstrap installed no drop floor, so a third cluster's
+# write the source had applied, deleted and reaped, still on its way to the
+# receiver, lands after the export and resurrects the key there.
+MODULE: EventualConvergenceNoBootstrapFloor
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the re-bootstrap installs no drop floor, so a third origin's write still in flight resurrects a key the source deleted and reaped
+PERTURBS: BeginExport
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+       ELSE /\ fl' = [o \in Thirds |-> SrcLwm(o)]
+--- REPLACE
+\* MUTATION: no drop floor.
+       ELSE /\ fl' = [o \in Thirds |-> 0]
+--- END

@@ -240,7 +240,11 @@ checks the receiver-side reconcile and its safety gates, each built: the
 reconcile of a key the source wrote (#4647, the fix for #4537), and of a key
 another cluster wrote, below the source's low watermark for its origin,
 behind a bootstrap drop floor that stops an in-flight write resurrecting it
-(#4675, the fix for #4549). It also checks:
+(#4675, the fix for #4549). The floor is checked in the module's Floor
+variant, which adds a third cluster: it drops only below the source's applied
+watermark, defers until its import closes stable, is cleared by an unstable
+close, and arms the shard roots so a write admitted before it is refused
+rather than land after the reconcile. It also checks:
 
 - The reap gate: a tombstone is reaped only below every origin's applied
   frontier and every attached peer's vouched watermark (#4678, the fix for
