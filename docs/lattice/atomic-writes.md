@@ -668,7 +668,11 @@ outstanding no decision on the tree is purged. A shipper takes one before
 it takes its peer off the log for a re-seed, and keeps it until the
 replay that follows has passed its horizon, so a saga in flight at the
 re-seed's export keeps its decision while the replay may still read it
-([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A failed
+([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). The WAL
+GC takes one too, for a shipper, before a `WalRetention` trim passes that
+shipper's unshipped read position, and the shipper releases it once its
+durable position covers the trim or its peer is re-seeded
+([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A failed
 read of the holds holds too. On such a host
 `TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
 (masked at once) rather than dropping it.

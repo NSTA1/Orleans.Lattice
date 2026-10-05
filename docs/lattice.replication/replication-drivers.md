@@ -159,7 +159,7 @@ on each pass):
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
-| Driver activation background service (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. No silo restart required. |
+| Driver activation background service (startup pass + runtime adds and removes) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. On `Removed`, detaches each of the removed peer's shippers from the write-ahead log (see *Shipper-lifetime asymmetry*). No silo restart required. |
 | Commit-time doorbell sink (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
 | Per-tree fall-off probe (per-cadence) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
 | Per-peer shipper pump | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
@@ -207,11 +207,17 @@ empty topology rather than a surprising re-emergence of a stale list.
    ringing the removed peer on the next commit. The next fall-off
    cadence tick excludes it from the probe set. The activation service
    does *not* tear down the existing shipper - see the asymmetry rule
-   below.
+   below - but it does detach it from the write-ahead log, so the
+   removed peer no longer holds the log's trims or the tree's saga
+   decision purges.
 3. **Re-add (peer disappears and reappears).** If the original shipper
    activation is still in memory, it is reused - there is no fresh
    activation, and the durable cursor on that activation continues
-   from where the previous run left off.
+   from where the previous run left off. Activating it re-attaches it
+   to the write-ahead log. It is still off the log, so it withholds saga
+   records until the peer is re-seeded; that re-seed's drain also clears
+   any pending bucket the peer staged before the removal whose decision
+   the source purged meanwhile.
 4. **Replace (host swaps the topology implementation).** Possible only
    at silo startup, before `AddLatticeReplication` registers the
    default. After registration the `TryAddSingleton` slot is occupied
@@ -243,6 +249,27 @@ any in-flight batch and any cursor advance that had not yet been
 persisted. The cost is that a peer removed from the topology is not
 the same as a peer disconnected from the wire - reachability is the
 transport's responsibility, not the topology's.
+
+What `Removed` does change is what the shipper *holds*
+([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A
+running shipper holds the tree's write-ahead log at its durable read
+position (the WAL GC trims below it), and a trim the `WalRetention`
+ceiling forces past it records a saga decision-purge hold (*Forced
+gaps* below). A peer that is gone for good must hold neither, so on
+`Removed` the activation service calls
+`IReplicationShipperGrain.DetachFromLogAsync` for each replicated
+tree. The shipper durably marks itself detached and takes the peer off
+the log (*Forced gaps* below) in the same write, withdraws from the
+log's offset consumers, and releases its purge hold. The GC no longer
+waits for it, so a trim can pass a prepare it has not read; it
+therefore keeps shipping only plain writes and withholds every saga
+record, and it keeps the re-seed marker for as long as it is detached.
+Topology removal is the escape hatch for a peer that will never
+re-seed. A detach that loses
+a race with the peer being added back is skipped. `EnsureActiveAsync`
+(the `Added` path and the startup pass) re-attaches the shipper. A
+peer removed while no silo was running stays attached until it is
+removed again with the cluster up.
 
 ##### Mismatch scenarios at a glance
 
@@ -740,6 +767,18 @@ Every full snapshot export takes a fresh export epoch before its registry snapsh
 While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
 
 A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
+
+#### Decision-purge holds
+
+The re-seed can only settle a saga whose decision the origin's transaction registry still stores, but a trimmed saga's decision becomes purgeable once its records are gone from the log. So a trim never passes a shipper silently: each WAL GC pass reads every registered shipper's durable read position, and before it trims an offset at or past one (only the `WalRetention` ceiling admits such a trim) it durably records a hold for that shipper in the tree's `IWalPurgeHoldGrain`, keyed by the physical tree and the shipper's grain id. A failed hold write skips the trim, and so does a pass that could not read the set of registered shippers; a shipper whose own position could not be read counts as position 0, so a forced trim holds it. While any hold is outstanding the registry purges no decision on the tree.
+
+The shipper releases its own hold, conditionally in the hold grain so a hold a concurrent trim widened is never released by an older read:
+
+- when the peer acknowledges the re-seed, since every partition then re-ships from its lowest retained entry, past whatever was trimmed;
+- on its phase timer (at most every 30 s), when no re-seed is outstanding and its durable read position is past every trimmed offset, as when the trimmed records were already in flight and were acknowledged after the trim;
+- when its peer is removed from the topology (*Shipper-lifetime asymmetry* above).
+
+An old silo never records a hold, and a host that has none behaves exactly as before.
 
 ### Replay filter: a non-contiguous stream over purged sagas
 
