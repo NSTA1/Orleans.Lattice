@@ -168,6 +168,48 @@ internal sealed class LatticeReplicationDeadLetters(
         return true;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> ReleaseQuarantinedSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Transaction id must not be empty.", nameof(transactionId));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var released = await grainFactory.GetGrain<IReceiverSagaPoisonGrain>(treeId)
+            .ReleaseQuarantineAsync(originClusterId, transactionId)
+            .ConfigureAwait(false);
+        if (!released)
+        {
+            _logger.LogWarning(
+                "Operator release of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}' found no quarantine to release.",
+                transactionId,
+                originClusterId,
+                treeId);
+            return false;
+        }
+
+        DeadLetterTrackingReplicationApplier.RecordReceiverSagaPoisoned(
+            treeId,
+            originClusterId,
+            LatticeReplicationMetrics.OutcomeReceiverSagaQuarantineReleased);
+        _logger.LogWarning(
+            "Operator released the quarantine of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}'; its records are "
+            + "applied again, and one that keeps failing is quarantined again.",
+            transactionId,
+            originClusterId,
+            treeId);
+        return true;
+    }
+
     private IReplicationDeadLetterGrain Grain(string treeId) =>
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(treeId);
 

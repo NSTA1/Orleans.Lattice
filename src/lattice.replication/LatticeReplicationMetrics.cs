@@ -867,11 +867,15 @@ public static class LatticeReplicationMetrics
     /// <see cref="OutcomeReceiverSagaPoisonRefusedDecided"/> when the receiver's
     /// transaction registry already carried a terminal decision, and
     /// <see cref="OutcomeReceiverSagaPoisonRefusedFull"/> when the bounded
-    /// poison set was full and the caller kept deferring fail-closed.
+    /// poison set was full and the caller kept deferring fail-closed;
+    /// <see cref="OutcomeReceiverSagaQuarantined"/>,
+    /// <see cref="OutcomeReceiverSagaQuarantineFull"/>, and
+    /// <see cref="OutcomeReceiverSagaQuarantineReleased"/> record the
+    /// quarantine of a saga a re-seed could not settle (issue #4692).
     /// </summary>
     public static readonly Counter<long> ReceiverSagaPoisoned =
         Meter.CreateCounter<long>("orleans.lattice.replication.apply.saga_poisoned", unit: "{saga}",
-            description: "Receiver-side poisoned sagas, tagged by tree, origin and outcome (timeout/operator/refused_decided/refused_full).");
+            description: "Receiver-side poisoned sagas, tagged by tree, origin and outcome (timeout/terminal_timeout/quarantined/quarantine_full/quarantine_released/operator/refused_decided/refused_full).");
 
     /// <summary>
     /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for a
@@ -906,6 +910,26 @@ public static class LatticeReplicationMetrics
     /// parked without being applied. An input-integrity fault.
     /// </summary>
     public const string OutcomeReceiverSagaQuarantined = "quarantined";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga that had to be quarantined (issue #4692) could not be, because the
+    /// bounded quarantine set is full. The record is held unacknowledged - the
+    /// stream from that origin for that tree waits - and the saga is neither
+    /// poisoned nor re-seeded again, so the re-seed cycle cannot return. Release
+    /// resolved quarantines with
+    /// <see cref="ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync"/>
+    /// to free capacity.
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantineFull = "quarantine_full";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// host-trusted operator released a quarantined saga through
+    /// <see cref="ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync"/>
+    /// (issue #4692).
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantineReleased = "quarantine_released";
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:

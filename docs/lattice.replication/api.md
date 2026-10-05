@@ -133,7 +133,7 @@ See [Dead-Letter Queue](dead-letter-queue.md).
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync` |
+| `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures; host-trusted receiver saga poison and quarantine release. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync`, `PoisonSagaAsync`, `ReleaseQuarantinedSagaAsync` |
 | `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks`, `SourceLineageClusterId`, `SourceLineage` (the source lineage the entry's sender stamped, which a replay is checked against; `null` when unstamped) |
 
 Replay runs the parked entry through the canonical applier and removes it on any non-throwing, non-deferred return, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).

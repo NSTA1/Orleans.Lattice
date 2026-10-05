@@ -63,9 +63,19 @@ internal interface IReceiverSagaPoisonGrain : IGrainWithStringKey
     /// <paramref name="originClusterId"/> durably (issue #4692): its records are
     /// parked without being applied, and it is never re-seeded again for that
     /// cause. Returns <see langword="false"/> when the bounded quarantine set is
-    /// full.
+    /// full; the caller then holds the record unacknowledged rather than
+    /// poisoning the saga again.
     /// </summary>
     Task<bool> QuarantineAsync(string originClusterId, Guid transactionId, string reason);
+
+    /// <summary>
+    /// Releases the quarantine of <paramref name="transactionId"/> from
+    /// <paramref name="originClusterId"/> durably, once an operator has fixed its
+    /// cause (issue #4692). The saga stays retired, so a record of it that fails
+    /// again is quarantined again rather than re-seeded. Returns
+    /// <see langword="false"/> when the saga was not quarantined.
+    /// </summary>
+    Task<bool> ReleaseQuarantineAsync(string originClusterId, Guid transactionId);
 
     /// <summary>The quarantined sagas from <paramref name="originClusterId"/>.</summary>
     [AlwaysInterleave]
