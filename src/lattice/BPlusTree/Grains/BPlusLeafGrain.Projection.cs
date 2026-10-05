@@ -1211,7 +1211,10 @@ internal sealed partial class BPlusLeafGrain
         };
         MergeIntoProjection(mutation.Key, incoming);
         AdvanceProjectionClock(mutation.Timestamp);
-        // A replayed terminal backstop settled its key here (issue #4545).
+        // A replayed terminal backstop settled its key here (issue #4545). The
+        // record does not say whether it carried a prepare stamp, so it is
+        // recorded either way: a superset of the witness is still exact about
+        // what the terminal settled.
         if (mutation.IsBackstop)
             RecordTerminalWitness(mutation.TransactionId, mutation.Key);
     }

@@ -998,12 +998,19 @@ internal sealed partial class BPlusLeafGrain
         }
 
         RemovePendingTxOffsetsForTransaction(transactionId);
+        // Durable, per-key record of what this terminal settled here without a
+        // marked prepare stamp (issue #4545). A marked last-writer-wins key is
+        // stored at its stamp P, so any stamped marker for it is released by the
+        // read gate's self-check; every other key needs the witness. Recorded
+        // before the classification is forgotten. Keys re-routed to the leaf
+        // that declares them were removed from the bucket above.
+        RecordTerminalWitness(
+            transactionId,
+            bucket.Keys,
+            key => preserveTimestamps || !IsMarkedLwwPrepare(transactionId, key, deltaBucket));
         ForgetPrepareStampClassification(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
         RecordTerminalLanded(transactionId);
-        // Durable, per-key record of what this terminal settled here (issue
-        // #4545); a key re-routed to the leaf that declares it is settled there.
-        RecordTerminalWitness(transactionId, bucket.Keys, skipKeys);
 
         // Bump the same-silo revision cookie so a co-located
         // LeafCacheGrain notices both that the pending bucket has
@@ -2680,7 +2687,11 @@ internal sealed partial class BPlusLeafGrain
             foreach (var kvp in missingKeys)
             {
                 perTxBackstopped.Add(kvp.Key);
-                RecordTerminalWitness(transactionId, kvp.Key);
+                // A backstop that carried the prepare's stamp P installed the key
+                // at P, which the read gate's self-check recognises; only a
+                // backstop without one needs the witness (issue #4545).
+                if (missingStamps is null || !missingStamps.ContainsKey(kvp.Key))
+                    RecordTerminalWitness(transactionId, kvp.Key);
             }
         }
 
@@ -2772,6 +2783,7 @@ internal sealed partial class BPlusLeafGrain
         // sibling that inherited it; a key of the same saga whose committed
         // value has not reached this leaf yet is still marked.
         var carriesStamps = LatticeOriginalPrepareStampContext.HasStamps;
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var key in keys)
         {
             if (string.IsNullOrEmpty(key) || IsTerminalWitnessed(transactionId, key))
@@ -2936,6 +2948,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async ValueTask<bool> IsShadowedReadSafeAsync(string key, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var txid in sagas)
         {
             var status = await ResolvePendingStatusAsync(txid);

@@ -1050,6 +1050,8 @@ internal sealed partial class BPlusLeafGrain
                 siblingId);
         }
 
+        // The witness for the moved keys rides the sibling's birth write below.
+        await EnsureTerminalWitnessHydratedAsync();
         await newLeaf.InitializeSiblingAsync(new SiblingInitialization
         {
             TreeId = state.State.TreeId!,
@@ -1368,6 +1370,8 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        // The marker transfer reads the applied-terminal witness (issue #4545).
+        await EnsureTerminalWitnessHydratedAsync();
         var bySaga = CollectShadowMarkers(movedKeys);
         if (bySaga is null)
             return;

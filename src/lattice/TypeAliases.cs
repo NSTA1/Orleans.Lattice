@@ -767,6 +767,12 @@ internal static class TypeAliases
     /// </summary>
     internal const string AppliedTerminalWitness = "ol.atw";
 
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar grain interface (issue #4545).</summary>
+    internal const string ILeafTerminalWitnessGrain = "ol.gtw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar state (issue #4545).</summary>
+    internal const string LeafTerminalWitnessState = "ol.ltw";
+
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 

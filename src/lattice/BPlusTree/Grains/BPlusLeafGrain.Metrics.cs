@@ -125,9 +125,10 @@ internal sealed partial class BPlusLeafGrain
                 $"Leaf {context.GrainId} was cleared; refusing the write from {caller}, which would re-create its row.");
         }
 
-        // The applied-terminal witness rides every state write (issue #4545), so
-        // it is atomic with the projection checkpoint the write may carry.
-        MaterialiseTerminalWitnessForPersist();
+        // Every change to the applied-terminal witness reaches its sidecar before
+        // this state write (issue #4545), so a projection checkpoint this write
+        // carries never passes a terminal whose witness is not durable.
+        await FlushTerminalWitnessAsync();
 
         if (_tracePersist)
         {

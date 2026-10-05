@@ -5,24 +5,30 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
 /// The durable applied-terminal witness (issue #4545): which keys each saga's
-/// terminal settled on this leaf.
+/// terminal settled on this leaf without a marked prepare stamp.
 /// <para>
 /// A destination-side shadow marker gates a migrated row while its saga is
-/// committed (or its decision is masked) and the saga's terminal has not reached
-/// this leaf. The activation-scoped terminal memory cannot answer that last part
-/// across a reactivation or on a split sibling, and a marker that arrives after
-/// the terminal - a delayed shadow forward or sweep replay - then gates the key
-/// until the registry forgets the saga. The witness answers it durably and per
-/// key: a key it records already incorporates the saga, so a marker for it is
-/// not installed, not carried across a split, and does not gate a read.
+/// committed (or its decision is masked) and the saga's terminal has not
+/// settled the key here. A marker that arrives after the terminal - a delayed
+/// shadow forward or sweep replay, after a reactivation, or routed by key to a
+/// split sibling that never saw the terminal - would then gate the key until
+/// the registry forgets the saga. A marker carrying the saga's marked prepare
+/// stamp is released by the read gate's self-check, because a key the terminal
+/// settled at that stamp holds a row at or above it. The witness covers the
+/// rest: keys settled without such a stamp (a CRDT fold, an unmarked drain, a
+/// backstop that carried no stamp) and keys an abort discarded. A key it
+/// records is not marked, not carried across a split, and not gated.
 /// </para>
 /// <para>
-/// The index is loaded lazily from <see cref="LeafNodeState.AppliedTerminalWitnesses"/>
-/// and written back to it before every state write, so the persisted copy is
-/// atomic with the projection checkpoint; replay of the WAL after that
-/// checkpoint rebuilds the rest through the same recording calls the foreground
-/// path makes. Entries are pruned once the registry reads the saga as absent,
-/// at which point every marker for it passes through anyway.
+/// The witness is kept in memory, per (saga, key), and made durable in this
+/// leaf's own sidecar row (<see cref="ILeafTerminalWitnessGrain"/>), never in the
+/// leaf state: it is written only when it has changed, and always before a
+/// state write, so no persisted projection checkpoint can pass a terminal whose
+/// witness is not durable - the write-ahead log, which replay reads past that
+/// checkpoint, holds it until then. A failed sidecar write fails the state
+/// write with it. Entries are pruned once the registry reads their saga as
+/// absent, when every marker for it passes through anyway; nothing else ever
+/// removes one, so the witness has no cap and no eviction.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
@@ -31,72 +37,62 @@ internal sealed partial class BPlusLeafGrain
     internal static readonly TimeSpan TerminalWitnessPruneInterval = TimeSpan.FromMinutes(1);
 
     private Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? _terminalWitness;
+    private Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? _pendingWitnessAdds;
+    private HashSet<Guid>? _pendingWitnessRemoves;
     private bool _terminalWitnessHydrated;
-    private bool _terminalWitnessDirty;
-    private List<AppliedTerminalWitness>? _materialisedTerminalWitnesses;
     private long _lastTerminalWitnessPruneTicks;
-    private long _terminalWitnessBytes;
-    private bool _terminalWitnessPruneDue;
-
-    /// <summary>
-    /// Estimated byte budget of one leaf's witness (issue #4545). A witness lives
-    /// until the registry prunes its saga's row - on a busy tree about the
-    /// decision retention plus one prune interval - so its size is the rate of
-    /// sagas settling keys on the leaf times that lifetime, which is unbounded by
-    /// construction; this caps what every state write carries.
-    /// </summary>
-    internal const long DefaultTerminalWitnessBudgetBytes = 64 * 1024;
-
-    private const long WitnessEntryOverheadBytes = 32;
-    private const long WitnessKeyOverheadBytes = 8;
-
-    /// <summary>Test seam: replaces <see cref="DefaultTerminalWitnessBudgetBytes"/> on this activation.</summary>
-    internal long? TerminalWitnessBudgetOverride { get; set; }
-
-    private long TerminalWitnessBudget => TerminalWitnessBudgetOverride ?? DefaultTerminalWitnessBudgetBytes;
-
-    /// <summary>Sagas whose witness this activation evicted to hold the budget, for tests.</summary>
-    internal int TerminalWitnessEvictions { get; private set; }
 
     /// <summary>Test seam: replaces <see cref="TerminalWitnessPruneInterval"/> on this activation.</summary>
     internal TimeSpan? TerminalWitnessPruneIntervalOverride { get; set; }
 
-    /// <summary>The witness index, hydrated from the persisted state on first use.</summary>
-    private Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? TerminalWitnessIndex
+    /// <summary>The sidecar grain, or <see langword="null"/> for a leaf without a Guid key.</summary>
+    private ILeafTerminalWitnessGrain? TerminalWitnessSidecar =>
+        context.GrainId.TryGetGuidKey(out var leafKey, out _)
+            ? grainFactory.GetGrain<ILeafTerminalWitnessGrain>(leafKey)
+            : null;
+
+    /// <summary>Whether a change to the witness still has to reach the sidecar.</summary>
+    internal bool HasPendingTerminalWitness =>
+        _pendingWitnessAdds is { Count: > 0 } || _pendingWitnessRemoves is { Count: > 0 };
+
+    /// <summary>
+    /// Loads the sidecar into the index once per activation, before the first
+    /// lookup. Every caller is a rare path - a marker install, a shadowed read,
+    /// a split - so this costs one call per activation that ever needs it.
+    /// </summary>
+    internal async ValueTask EnsureTerminalWitnessHydratedAsync()
     {
-        get
+        if (_terminalWitnessHydrated)
+            return;
+
+        var persisted = TerminalWitnessSidecar is { } sidecar ? await sidecar.LoadAsync() : null;
+        if (_terminalWitnessHydrated)
+            return;
+        _terminalWitnessHydrated = true;
+        if (persisted is not { Length: > 0 })
+            return;
+
+        foreach (var witness in persisted)
         {
-            if (!_terminalWitnessHydrated)
+            if (witness.Keys is null || (_pendingWitnessRemoves?.Contains(witness.TransactionId) ?? false))
+                continue;
+            var set = GetOrAddWitness(ref _terminalWitness, witness.TransactionId, witness.RecordedAtTicks);
+            foreach (var key in witness.Keys)
             {
-                _terminalWitnessHydrated = true;
-                if (state.State.AppliedTerminalWitnesses is { Count: > 0 } persisted)
-                {
-                    _terminalWitness = new Dictionary<Guid, (HashSet<string>, long)>(persisted.Count);
-                    foreach (var witness in persisted)
-                    {
-                        if (witness.Keys is not null)
-                            MergeWitness(witness.TransactionId, witness.Keys, witness.RecordedAtTicks);
-                    }
-                }
-
-                _materialisedTerminalWitnesses = state.State.AppliedTerminalWitnesses;
-                _terminalWitnessDirty = false;
+                if (!string.IsNullOrEmpty(key))
+                    set.Add(key);
             }
-
-            return _terminalWitness;
         }
     }
 
-    /// <summary>Number of sagas with a recorded witness, for tests.</summary>
-    internal int TerminalWitnessCount => TerminalWitnessIndex?.Count ?? 0;
-
     /// <summary>
     /// Whether <paramref name="transactionId"/>'s terminal settled
-    /// <paramref name="key"/> on this leaf, now or on an earlier activation, or
-    /// on the donor this leaf was split from.
+    /// <paramref name="key"/> on this leaf without a marked prepare stamp - now,
+    /// on an earlier activation, or on the donor this leaf was split from. Reads
+    /// the index only: callers hydrate it first.
     /// </summary>
     internal bool IsTerminalWitnessed(Guid transactionId, string key) =>
-        TerminalWitnessIndex is { } index
+        _terminalWitness is { } index
         && index.TryGetValue(transactionId, out var witness)
         && witness.Keys.Contains(key);
 
@@ -105,164 +101,129 @@ internal sealed partial class BPlusLeafGrain
     {
         if (transactionId == Guid.Empty || string.IsNullOrEmpty(key))
             return;
-        _ = TerminalWitnessIndex;
-        MergeWitness(transactionId, [key], DateTime.UtcNow.Ticks);
+        AddWitnessKey(transactionId, key, DateTime.UtcNow.Ticks);
     }
 
-    /// <summary>Records that <paramref name="transactionId"/>'s terminal settled every key in <paramref name="keys"/> here.</summary>
-    private void RecordTerminalWitness(Guid transactionId, IEnumerable<string> keys, IReadOnlySet<string>? except = null)
+    /// <summary>
+    /// Records that <paramref name="transactionId"/>'s terminal settled every key
+    /// in <paramref name="keys"/> here that <paramref name="include"/> admits.
+    /// </summary>
+    private void RecordTerminalWitness(Guid transactionId, IEnumerable<string> keys, Func<string, bool>? include = null)
     {
         if (transactionId == Guid.Empty)
             return;
-        _ = TerminalWitnessIndex;
-        HashSet<string>? set = null;
+        var now = DateTime.UtcNow.Ticks;
         foreach (var key in keys)
         {
-            if (string.IsNullOrEmpty(key) || (except is not null && except.Contains(key)))
-                continue;
-            set ??= GetOrAddWitness(transactionId, DateTime.UtcNow.Ticks);
-            AddWitnessKey(set, key);
+            if (!string.IsNullOrEmpty(key) && (include is null || include(key)))
+                AddWitnessKey(transactionId, key, now);
         }
     }
 
-    private void MergeWitness(Guid transactionId, IEnumerable<string> keys, long recordedAtTicks)
+    private void AddWitnessKey(Guid transactionId, string key, long recordedAtTicks)
     {
-        var set = GetOrAddWitness(transactionId, recordedAtTicks);
-        foreach (var key in keys)
-        {
-            if (!string.IsNullOrEmpty(key))
-                AddWitnessKey(set, key);
-        }
+        if (!GetOrAddWitness(ref _terminalWitness, transactionId, recordedAtTicks).Add(key))
+            return;
+        GetOrAddWitness(ref _pendingWitnessAdds, transactionId, recordedAtTicks).Add(key);
+        _pendingWitnessRemoves?.Remove(transactionId);
     }
 
-    private HashSet<string> GetOrAddWitness(Guid transactionId, long recordedAtTicks)
+    private static HashSet<string> GetOrAddWitness(
+        ref Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? map,
+        Guid transactionId,
+        long recordedAtTicks)
     {
-        _terminalWitness ??= new Dictionary<Guid, (HashSet<string>, long)>();
-        if (_terminalWitness.TryGetValue(transactionId, out var existing))
-        {
+        map ??= new Dictionary<Guid, (HashSet<string>, long)>();
+        if (map.TryGetValue(transactionId, out var existing))
             return existing.Keys;
-        }
 
         var keys = new HashSet<string>(StringComparer.Ordinal);
-        _terminalWitness[transactionId] = (keys, recordedAtTicks);
-        _terminalWitnessBytes += WitnessEntryOverheadBytes;
-        _terminalWitnessDirty = true;
+        map[transactionId] = (keys, recordedAtTicks);
         return keys;
     }
 
-    private void AddWitnessKey(HashSet<string> set, string key)
-    {
-        if (!set.Add(key))
-            return;
-        _terminalWitnessDirty = true;
-        _terminalWitnessBytes += WitnessKeyBytes(key);
-        if (_terminalWitnessBytes > TerminalWitnessBudget)
-            _terminalWitnessPruneDue = true;
-    }
-
-    private static long WitnessKeyBytes(string key) => WitnessKeyOverheadBytes + 2L * key.Length;
-
-    private static long WitnessBytes(HashSet<string> keys)
-    {
-        var bytes = WitnessEntryOverheadBytes;
-        foreach (var key in keys)
-            bytes += WitnessKeyBytes(key);
-        return bytes;
-    }
-
-    private void RemoveWitness(Guid transactionId)
-    {
-        if (_terminalWitness is not null && _terminalWitness.Remove(transactionId, out var removed))
-        {
-            _terminalWitnessBytes -= WitnessBytes(removed.Keys);
-            _terminalWitnessDirty = true;
-        }
-    }
-
     /// <summary>
-    /// Holds the witness to <see cref="TerminalWitnessBudget"/> by evicting the
-    /// oldest sagas' entries, and says so (issue #4545). Eviction fails closed:
-    /// a key with no witness keeps the read gate, so a delayed marker for it is
-    /// declined - the pre-#4545 behaviour, bounded by the registry retiring the
-    /// saga - and never served torn. Reached only after a prune that ignored its
-    /// throttle could not bring the witness under budget.
+    /// Makes every change to the witness durable in the sidecar. Called before
+    /// every state write: a throw fails that write, so a projection checkpoint
+    /// never becomes durable past a terminal whose witness is not.
     /// </summary>
-    private void EnforceTerminalWitnessBudget()
+    internal async Task FlushTerminalWitnessAsync()
     {
-        if (_terminalWitness is not { Count: > 0 } index || _terminalWitnessBytes <= TerminalWitnessBudget)
+        if (!HasPendingTerminalWitness)
             return;
 
-        var oldestFirst = new List<(Guid Txid, long RecordedAtTicks)>(index.Count);
-        foreach (var (txid, witness) in index)
-            oldestFirst.Add((txid, witness.RecordedAtTicks));
-        oldestFirst.Sort(static (a, b) => a.RecordedAtTicks.CompareTo(b.RecordedAtTicks));
-
-        var evicted = 0;
-        foreach (var (txid, _) in oldestFirst)
+        var sidecar = TerminalWitnessSidecar;
+        if (sidecar is null)
         {
-            if (_terminalWitnessBytes <= TerminalWitnessBudget)
-                break;
-            RemoveWitness(txid);
-            evicted++;
+            _pendingWitnessAdds = null;
+            _pendingWitnessRemoves = null;
+            return;
         }
 
-        TerminalWitnessEvictions += evicted;
-        ResolveLogger()?.LogWarning(
-            "Leaf {Leaf} on tree {Tree} evicted the applied-terminal witness of {Evicted} saga(s) to hold it to its "
-            + "{Budget}-byte budget; the registry still reports them. A delayed shadow marker for one of their keys "
-            + "now keeps that key's read gate until the registry retires the saga (reads decline, never tear). "
-            + "Sustained eviction means more sagas settle keys on this leaf within the decision retention window "
-            + "than the budget holds.",
-            context.GrainId,
-            state.State.TreeId,
-            evicted,
-            TerminalWitnessBudget);
+        var adds = _pendingWitnessAdds;
+        var removes = _pendingWitnessRemoves;
+        _pendingWitnessAdds = null;
+        _pendingWitnessRemoves = null;
+        try
+        {
+            await sidecar.ApplyAsync(ToWitnesses(adds), removes is { Count: > 0 } ? removes.ToArray() : null);
+        }
+        catch
+        {
+            RestorePendingWitness(adds, removes);
+            throw;
+        }
     }
 
-    /// <summary>
-    /// Writes the index back to <see cref="LeafNodeState.AppliedTerminalWitnesses"/>
-    /// when it changed, or when the state object no longer holds the list this
-    /// activation last wrote (a re-read replaced it), so the state write about to
-    /// happen persists it.
-    /// </summary>
-    internal void MaterialiseTerminalWitnessForPersist()
+    private void RestorePendingWitness(
+        Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? adds,
+        HashSet<Guid>? removes)
     {
-        if (!_terminalWitnessHydrated)
-            return;
-        EnforceTerminalWitnessBudget();
-        if (!_terminalWitnessDirty
-            && ReferenceEquals(state.State.AppliedTerminalWitnesses, _materialisedTerminalWitnesses))
-            return;
-        _terminalWitnessDirty = false;
-
-        if (_terminalWitness is not { Count: > 0 } index)
+        if (adds is not null)
         {
-            state.State.AppliedTerminalWitnesses = null;
-            _materialisedTerminalWitnesses = null;
-            return;
+            foreach (var (txid, witness) in adds)
+            {
+                if (_pendingWitnessRemoves?.Contains(txid) ?? false)
+                    continue;
+                GetOrAddWitness(ref _pendingWitnessAdds, txid, witness.RecordedAtTicks).UnionWith(witness.Keys);
+            }
         }
 
-        var list = new List<AppliedTerminalWitness>(index.Count);
-        foreach (var (txid, witness) in index)
+        if (removes is not null)
         {
-            if (witness.Keys.Count == 0)
-                continue;
+            foreach (var txid in removes)
+            {
+                if (_pendingWitnessAdds is null || !_pendingWitnessAdds.ContainsKey(txid))
+                    (_pendingWitnessRemoves ??= []).Add(txid);
+            }
+        }
+    }
+
+    private static AppliedTerminalWitness[]? ToWitnesses(Dictionary<Guid, (HashSet<string> Keys, long RecordedAtTicks)>? map)
+    {
+        if (map is not { Count: > 0 })
+            return null;
+
+        var list = new AppliedTerminalWitness[map.Count];
+        var i = 0;
+        foreach (var (txid, witness) in map)
+        {
             var keys = new string[witness.Keys.Count];
             witness.Keys.CopyTo(keys);
-            list.Add(new AppliedTerminalWitness(txid, keys, witness.RecordedAtTicks));
+            list[i++] = new AppliedTerminalWitness(txid, keys, witness.RecordedAtTicks);
         }
 
-        _materialisedTerminalWitnesses = list.Count > 0 ? list : null;
-        state.State.AppliedTerminalWitnesses = _materialisedTerminalWitnesses;
+        return list;
     }
 
     /// <summary>
     /// The witnesses for the keys at or above <paramref name="splitKey"/>, which a
-    /// split moves to the new sibling, or <see langword="null"/> when there are none.
+    /// split moves to the new sibling, or <see langword="null"/> when there are
+    /// none. The caller hydrates the index first.
     /// </summary>
     private AppliedTerminalWitness[]? CollectTerminalWitnessesForSibling(string splitKey)
     {
-        if (TerminalWitnessIndex is not { Count: > 0 } index)
+        if (_terminalWitness is not { Count: > 0 } index)
             return null;
 
         List<AppliedTerminalWitness>? moved = null;
@@ -283,63 +244,80 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Adopts a split donor's witnesses for the keys this sibling receives. A
-    /// union, so a recovery-path re-call is idempotent; the entries are copied,
-    /// never retained, because the payload crosses the grain boundary without a
-    /// deep copy.
+    /// Adopts a split donor's witnesses for the keys this sibling receives, as
+    /// pending changes that the sibling's birth write makes durable. A union, so
+    /// a recovery-path re-call is idempotent; the entries are copied, never
+    /// retained, because the payload crosses the grain boundary without a deep
+    /// copy.
     /// </summary>
     private bool AdoptTerminalWitnesses(AppliedTerminalWitness[]? witnesses)
     {
         if (witnesses is not { Length: > 0 })
             return false;
 
-        _ = TerminalWitnessIndex;
-        var before = _terminalWitnessDirty;
-        _terminalWitnessDirty = false;
+        var changed = false;
         foreach (var witness in witnesses)
         {
             if (witness.TransactionId == Guid.Empty || witness.Keys is null)
                 continue;
-            MergeWitness(witness.TransactionId, witness.Keys, witness.RecordedAtTicks);
+            foreach (var key in witness.Keys)
+            {
+                if (string.IsNullOrEmpty(key) || IsTerminalWitnessed(witness.TransactionId, key))
+                    continue;
+                AddWitnessKey(witness.TransactionId, key, witness.RecordedAtTicks);
+                changed = true;
+            }
         }
 
-        var changed = _terminalWitnessDirty;
-        _terminalWitnessDirty |= before;
         return changed;
     }
 
     /// <summary>
     /// Best-effort prune: asks the registry about every witness recorded at
     /// least <see cref="TerminalWitnessPruneInterval"/> ago, at most once per
-    /// interval - or, once the witness is over its budget, about every witness at
-    /// once - and drops those it reads as absent. An absent saga reads
+    /// interval, and drops those it reads as absent. An absent saga reads
     /// <see cref="TxStatus.InFlight"/>, and a shadow marker for an in-flight saga
     /// passes through the read gate, so a pruned witness can never be needed
-    /// again. Any other answer, or a registry fault, keeps the witness.
+    /// again. Any other answer, or a registry fault, keeps the witness. The drop
+    /// reaches the sidecar with the next state write.
     /// </summary>
     internal async Task PruneTerminalWitnessAsync()
     {
-        if (TerminalWitnessIndex is not { Count: > 0 } index)
-            return;
-
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
             return;
 
-        // Over budget, the throttle and the age filter are skipped: every
-        // witness is asked about before the budget evicts anything.
+        // A leaf that has recorded nothing and never needed its witness this
+        // activation is not made to load it just to prune: nothing it could hold
+        // grows while the leaf records nothing.
+        if (!_terminalWitnessHydrated && _terminalWitness is not { Count: > 0 })
+            return;
+
         var now = DateTime.UtcNow.Ticks;
         var interval = (TerminalWitnessPruneIntervalOverride ?? TerminalWitnessPruneInterval).Ticks;
-        var overBudget = _terminalWitnessPruneDue;
-        if (!overBudget && now - _lastTerminalWitnessPruneTicks < interval)
+        if (now - _lastTerminalWitnessPruneTicks < interval)
             return;
         _lastTerminalWitnessPruneTicks = now;
-        _terminalWitnessPruneDue = false;
+
+        // Only a hydrated index knows what the sidecar holds. Hydrating costs one
+        // load per activation, and only once something has been recorded or the
+        // sidecar may hold entries from an earlier activation.
+        try
+        {
+            await EnsureTerminalWitnessHydratedAsync();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return;
+        }
+
+        if (_terminalWitness is not { Count: > 0 } index)
+            return;
 
         List<Guid>? aged = null;
         foreach (var (txid, witness) in index)
         {
-            if (overBudget || now - witness.RecordedAtTicks >= interval)
+            if (now - witness.RecordedAtTicks >= interval)
                 (aged ??= []).Add(txid);
         }
 
@@ -364,8 +342,16 @@ internal sealed partial class BPlusLeafGrain
 
         foreach (var txid in aged)
         {
-            if (statuses.TryGetValue(txid, out var status) && status == TxStatus.InFlight)
-                RemoveWitness(txid);
+            if (statuses.TryGetValue(txid, out var status) && status == TxStatus.InFlight
+                && _terminalWitness!.Remove(txid))
+            {
+                _pendingWitnessAdds?.Remove(txid);
+                (_pendingWitnessRemoves ??= []).Add(txid);
+            }
         }
     }
+
+    /// <summary>Deletes the sidecar row, for a leaf being removed.</summary>
+    private Task ClearTerminalWitnessSidecarAsync() =>
+        TerminalWitnessSidecar is { } sidecar ? sidecar.ClearAsync() : Task.CompletedTask;
 }
