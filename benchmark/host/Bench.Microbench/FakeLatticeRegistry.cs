@@ -108,6 +108,8 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes) => Task.CompletedTask;
 
+    public Task RaiseReplicationFloorEpochAsync(string treeId, long epoch) => Task.CompletedTask;
+
     public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) => Task.CompletedTask;
 
     // ----- Not exercised: null WAL catalog + pinned ShardCount = 1 in the bench. -----

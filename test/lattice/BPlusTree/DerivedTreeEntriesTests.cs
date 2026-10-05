@@ -50,6 +50,10 @@ public sealed class DerivedTreeEntriesTests
         // lineage, and carrying one tree's onto another would claim the copy holds
         // that tree's contents.
         nameof(TreeRegistryEntry.Lineage),
+        // Replication admission state of one physical tree (#4549), not
+        // configuration: a copy's shards are armed by its own bootstraps, and a
+        // re-stamp that adopts a copy re-seeds it, which raises it afresh.
+        nameof(TreeRegistryEntry.ReplicationFloorEpoch),
     ];
 
     private static TreeRegistryEntry WithEveryOverride() => new()

@@ -453,7 +453,36 @@ internal sealed partial class ReplicationApplier(
             }
 
             var hwmGrain = GetHwmGrain(entry.TreeId);
-            var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+            var admission = await hwmGrain.GetAdmissionAsync(entry.OriginClusterId!, cancellationToken);
+            var hwm = admission.HighWaterMark;
+
+            // Bootstrap drop floor (#4549): the tree's last full bootstrap
+            // already reflects every write of this origin stamped below the
+            // source's low watermark at export open and not held there, so a
+            // late delivery of one is acknowledged without being merged; merged,
+            // a write the source has since deleted and reaped would come back.
+            // While the import has not closed stable the floor is provisional and
+            // the delivery is deferred instead: an unstable import clears the
+            // floor, and a dropped delivery is never re-sent. The drain's own
+            // rows are exempt. Every other write is stamped with the floor epoch
+            // it was admitted under, so a shard armed by a later install refuses
+            // it rather than let it land after that bootstrap's reconcile scan.
+            if (!LatticeBootstrapApplyContext.IsActive)
+            {
+                if (admission.Drops(entry.Timestamp))
+                {
+                    if (admission.FloorProvisional)
+                    {
+                        outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                    }
+
+                    outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                }
+
+                ReplicationFloorAdmission.Stamp(admission.FloorEpoch);
+            }
 
             // There is NO per-origin HLC drop threshold for point writes -
             // neither the incrementally-advanced diagonal nor a
@@ -682,6 +711,16 @@ internal sealed partial class ReplicationApplier(
                 // restore's fence lifts and opens the copy.
                 cache.Remove(entry);
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
+            catch (ReplicationFloorAdmissionStaleException)
+            {
+                // Issue #4549: a bootstrap drop floor was installed after this
+                // entry was admitted, and its shard is armed against it. Defer it,
+                // so the sender re-ships it and the re-delivery is admitted
+                // against the floor.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
             }
             catch

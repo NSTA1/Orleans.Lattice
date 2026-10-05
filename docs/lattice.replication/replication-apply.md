@@ -115,6 +115,12 @@ The buffer is bounded by `CausalBufferMaxEntries` (default `1024`) and `CausalBu
 - **The entry's own origin diagonal.** The per-origin high-water-mark tracks that origin's own FIFO progression, so requiring the local clock to dominate the diagonal would deadlock the very entry being applied.
 - **The receiver's own cluster id.** The receiver-side local vector clock tracks only *foreign*-applied frontiers - it never advances its own diagonal - but the receiver durably holds every write it authored itself, so any dependency on one of the receiver's own writes is trivially satisfied. Without this exemption a peer entry whose frontier references a write the receiver originated (for example, site C's post-partition write that causally follows site A's pre-partition write, once an A-C partition heals) would park forever against a perpetually-zero self-component and stall convergence.
 
+### 7. Bootstrap drop floor
+
+After a full bootstrap the high-water-mark grain may hold a durable drop floor: per origin, the source's applied low watermark when the export opened and the writes below it the source held without applying ([snapshot bootstrap](snapshot-bootstrap.md), issue #4549). A point write or prepare of that origin stamped below the watermark and not held is not merged. While the bootstrap's import is still open the floor is provisional and the delivery is deferred (`Deferred = true`, `outcome=bootstrap-floor-deferred`); once the import closes stable it is acknowledged without being merged (`Applied = false`, `outcome=bootstrap-floor-dropped`), because the export already reflected it. The check runs after the terminal branch, so saga terminals are never held back, and it is skipped inside a bootstrap drain, so the drain's own rows apply. The batch path applies the same per-entry check and defers its run when any entry is below a provisional floor.
+
+Every other replicated write is stamped with the tree's floor epoch from the same admission read. A shard root armed by a later floor install refuses a write stamped with an older epoch with `ReplicationFloorAdmissionStaleException`, and the applier maps it to a deferral (`outcome=bootstrap-floor-deferred`), so the re-shipped delivery is admitted against the floor. The floor is cleared whenever the tree's applied identities are reset, and a later bootstrap replaces it.
+
 ## Validation
 
 `ApplyAsync` throws `ArgumentException` when:

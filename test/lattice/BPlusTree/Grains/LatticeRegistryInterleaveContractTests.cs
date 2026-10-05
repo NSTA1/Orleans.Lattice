@@ -97,6 +97,9 @@ public sealed class LatticeRegistryInterleaveContractTests
         nameof(ILatticeRegistry.SetMaxCacheValueBytesAsync),
         nameof(ILatticeRegistry.SetWalMaxRetainedBytesAsync),
         nameof(ILatticeRegistry.LatchProjectionDigestPermanentlyDisabledAsync),
+        // A read-modify-write that only ever raises the epoch (#4549): interleaved,
+        // two raises could read the same entry and the lower write could land last.
+        nameof(ILatticeRegistry.RaiseReplicationFloorEpochAsync),
         nameof(ILatticeRegistry.UpdateWalPlacementAsync),
         nameof(ILatticeRegistry.RaiseWalMoveFencesAsync),
         nameof(ILatticeRegistry.ReleaseWalMoveFenceAsync),

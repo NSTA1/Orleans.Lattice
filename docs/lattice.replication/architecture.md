@@ -228,10 +228,11 @@ covers what happens once the source has garbage-collected a tombstone. A
 receiver that fell off the source's log past a delete whose tombstone was
 then reaped receives it by no path, and keeps the deleted value. The module
 checks the receiver-side reconcile and its safety gates. The reconcile of a
-key the source wrote is built (#4647, the fix for #4537); the reconcile of a
-key another cluster wrote, below the source's low watermark for its origin,
-is open (#4549). The module also states two guards production lacks and one
-contract:
+key the source wrote is built (#4647, the fix for #4537), and so is the
+reconcile of a key another cluster wrote, below the source's low watermark
+for its origin, behind a bootstrap drop floor that stops an in-flight write
+resurrecting it (#4549). The module also states two guards production lacks
+and one contract:
 
 - A tombstone is reaped on the wall clock alone, so a write it beats that
   arrives after the grace period resurrects the key (#4615).
