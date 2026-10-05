@@ -24,7 +24,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 9 | 4 | 14 | 22 | 26 | 91,389 |
-| `WalMove` | 5 | 2 | 13 | 17 | 18 | 1,617 |
+| `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
@@ -38,6 +38,11 @@ invariant and both action properties with a budget of two faults instead of one:
 445,516 distinct states to depth 32. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
+`WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
+with its own coordinator, so one can take over the other's lapsed fence while the
+other is still copying. It checks every property, safety and liveness: 16,225
+distinct states to depth 21, about fifteen seconds on two workers.
+
 ## Files
 
 | File | What it is |
@@ -47,7 +52,7 @@ because at two the full configuration takes about ten minutes, past the TLC budg
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
 | `WalMove.tla` / `.cfg` / `.manifest.json` | The move module, its TLC model and its manifest. |
-| [`move-mutations/`](move-mutations/) | `WalMove`'s mutation catalogue. |
+| `WalMove.TwoMoves.cfg` | The move module with two moves contending for the stream, checked with every property. |
 | [`MoveRefinement.md`](MoveRefinement.md) | `WalMove` mapped to production. |
 
 ## Properties checked
@@ -99,14 +104,13 @@ fixed, and those mutations are ordinary regression checks:
 | #4467 | A cold rebuild that faults part-way re-arms warm from the persisted checkpoint over a partial projection. **Fixed by #4489**: the retry stays cold. | `ReadPositionHonestFaultedColdReplayResumesWarm` |
 
 The independent review (#4433) found two more, both hidden by a bound or an
-abstraction the first version had. #4523 is fixed and its mutations are ordinary
-regression checks; #4525 is open, with a standing mutation that reproduces
-production's behaviour and gap rows in its refinement note:
+abstraction the first version had. Both are fixed, and their mutations are ordinary
+regression checks:
 
-| Issue | Defect | Standing mutation |
+| Issue | Defect | Mutation |
 |-------|--------|-------------------|
 | #4523 | A never-written leaf that holds no snapshot released at its persisted checkpoint; a later cold rebuild captures below that release, the GC trims past it, and the next activation latches stale. Needs two faults, which the one-fault configuration hid. **Fixed by #4535**: the release fires only under durable coverage. | `ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint` (no fault needed) and `RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults` (the two-fault composition) |
-| #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing about the source, so a source re-activated after the copy acknowledges writes the flip discards. The first model reset the move on a shard crash and could not see it. | `MovedStreamKeepsAckedWritesFenceInMemoryOnly` |
+| #4525 | A move's fence lives only in the source activation's memory and the flip re-checks nothing about the source, so a source re-activated after the copy acknowledges writes the flip discards. The first model reset the move on a shard crash and could not see it. **Fixed by #4557**: a durable fence every new activation re-derives, a flip that requires it still held, and a drain that waits out abandoned provider work. | `MovedStreamKeepsAckedWritesFenceInMemoryOnly` |
 
 The model also showed that one proposed fix for #4450 - cold-starting whenever the
 WAL prefix probes intact - is unsafe. The leaf's pin was resolved against the
@@ -121,7 +125,9 @@ the reproducing mutation.
 
 It covers the leaf lifecycle's durability logic on one partition shared by two
 leaves - with two faults per behaviour for safety and one for liveness - and the
-move protocol with one move, one shard crash and one coordinator crash. It does NOT
+move protocol with one shard crash and one coordinator crash, for one move and, in the
+`TwoMoves` variant, for two moves contending for the stream (a move may take over
+another's lapsed fence). It does NOT
 cover:
 
 - multi-partition checkpoint arrays;
@@ -145,7 +151,8 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalMove.cfg WalMove.tla
 Pass `-metadir` with a directory outside the repository, or delete the `states/`
 directory TLC leaves beside the module. On two workers `WalDurability` takes about
 two minutes, because it checks two liveness properties over the full state graph;
-its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds.
+its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds, and its
+`TwoMoves` variant about fifteen.
 
 ## The Coyote companion
 

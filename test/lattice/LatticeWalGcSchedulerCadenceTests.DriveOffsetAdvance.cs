@@ -170,8 +170,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     + "whose floor-holding pin did not move at all.");
             Assert.That(Outcomes(recorder, "healed"), Is.Zero,
                 "crediting a heal here is the defect: it marks the consumer repaired, so the remedy walks "
-                    + "away from a pin that is still holding the whole tree's WAL, and it advances the heal "
-                    + "epoch that collapses every other abandoned consumer's backoff estate-wide.");
+                    + "away from a pin that is still holding the whole tree's WAL.");
         });
     }
 

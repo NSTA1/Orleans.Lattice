@@ -152,6 +152,12 @@ internal sealed partial class BPlusLeafGrain
         // deactivates. A fresh activation holds no markers, so dropping them
         // is what actually makes the rebuild indistinguishable from one, which
         // is the property the comment above claims.
+        //
+        // The applied-terminal witness (issue #4545) is NOT dropped: it is a
+        // durable record of terminals this leaf settled, not activation memory,
+        // and the replay from the reset checkpoint only re-adds what it already
+        // holds. Keeping it is what lets a marker for a settled key be told
+        // apart from a live one after the rebuild, as after any reactivation.
         _shadowedSagas = null;
         _shadowMarkerStamps = null;
 
@@ -222,7 +228,14 @@ internal sealed partial class BPlusLeafGrain
         {
             var blob = await snapshotGrain.LoadAsync(CancellationToken.None);
             if (blob is null)
+            {
+                // The snapshot is already gone. The rebuild accepts what it held,
+                // so the record that it existed goes too (issue #4634); otherwise
+                // the rebuilt leaf would fail every cold start closed. Step 2's
+                // persist makes it durable.
+                ForgetKeptSnapshotCoverage();
                 return;
+            }
 
             unreadable = await DescribeUnreadableSnapshotAsync(snapshotGrain, blob);
         }
@@ -248,6 +261,10 @@ internal sealed partial class BPlusLeafGrain
             unreadable);
 
         await snapshotGrain.ClearAsync(CancellationToken.None);
+
+        // The loss is accepted, so the record of the discarded snapshot goes with
+        // it (issue #4634); step 2's persist makes that durable.
+        ForgetKeptSnapshotCoverage();
     }
 
     /// <summary>

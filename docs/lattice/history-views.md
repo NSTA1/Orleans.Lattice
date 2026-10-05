@@ -149,7 +149,7 @@ data came from and whether it is complete:
 | Field | Meaning |
 |-------|---------|
 | `Source` | `View` when read from the durable history view, `WalWindow` for the best-effort write-ahead-log fallback, or `None` when neither is available - and also when the access gate denies a point read of the key, which returns an empty page rather than throwing. |
-| `Truncated` | Always `false` on the `View` path - the timeline is never cut off below by WAL garbage collection; it is bounded by the configured retention age and by any rebuild that collapsed it (see [the accumulative guard](#the-accumulative-guard)). `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
+| `Truncated` | Always `false` on the `View` path - the timeline is never cut off below by WAL garbage collection; it is bounded by the configured retention age and by any rebuild that collapsed it, including a rebuild after the view fell behind a WAL retention trim (see [the accumulative guard](#the-accumulative-guard) and [WAL retention bounds the timeline](#limitations)). `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
 | `EarliestAvailable` | On a truncated `WalWindow` read, the oldest hybrid-logical-clock still readable; `HybridLogicalClock.Zero` otherwise. |
 
 ### Fallback without a history view
@@ -184,7 +184,7 @@ An ordinary materialised view is rebuilt from *current* source state when its
 projection version changes or when an unconstrained range delete is observed on a
 re-keyed projection (which the history projection is) - both of which would
 collapse a history timeline. A history view's registration
-carries an **accumulative** flag that changes exactly those two behaviours:
+carries an **accumulative** flag that changes these behaviours:
 
 - **Projection-version change:** the view adopts the new version forward and keeps
   its existing rows, resuming the drain from the durable checkpoint. The worst
@@ -217,6 +217,17 @@ live-tunable policy, not code identity, so changing them never trips a rebuild.
   one-revision-per-key seed from current state once garbage collection has
   trimmed that log or when the source is already aliased to another physical
   tree; revisions trimmed before the view existed cannot be recovered.
+- **WAL retention bounds the timeline.** This is the contract, not a defect: a
+  history view's timeline is only as long as the source write-ahead log retains
+  the revisions the view has not yet read. The WAL garbage collector never trims
+  an entry the view has not durably consumed except under a configured
+  `WalRetention` window, and a retention trim that overtakes the view is a
+  legitimate retention event. The maintainer detects it as a fall-off, logs the
+  warning `View '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.`,
+  and rebuilds from current source state, which collapses the timeline to one
+  revision per key; it never tails on across the gap with a revision silently
+  missing. Size `WalRetention` above the view's worst-case lag, or leave it unset,
+  where the full timeline matters.
 - **Count-based retention ("keep last N per key") is not expressible** in a pure
   per-mutation projection and is out of scope for this substrate.
 - **The read path is built in.** `ILattice.ScanEntryHistoryAsync` queries a key's

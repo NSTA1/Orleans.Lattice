@@ -49,6 +49,13 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Re-enters the normal full bootstrap path when a prior delete reconcile
+    /// skipped on an unstable source generation and recorded durable owed work.
+    /// No-op when no owed retry exists for <paramref name="sourceClusterId"/>.
+    /// </summary>
+    Task RetryOwedReconcileAsync(string sourceClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Drives the bootstrap state machine through
     /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> →
     /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> →
@@ -72,6 +79,38 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// error rather than a hung second call.
     /// </exception>
     Task BootstrapAsync(string sourceClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records that <paramref name="sourceClusterId"/> withholds saga records
+    /// until this receiver re-seeds from an export after
+    /// <paramref name="reseedAfterEpoch"/> (issues #4533 / #4534), then, when
+    /// <paramref name="start"/> is set, starts a bootstrap from it unless one
+    /// from the same source is already running. With automatic bootstrap off
+    /// the request is still recorded, so the operator's bootstrap consumes it.
+    /// A drain whose export is after the recorded epoch also clears the
+    /// receiver's stale pending buckets from that source: each one whose saga
+    /// the export carries neither as a prepared row nor as a decision row,
+    /// which the source therefore decided and purged, is decided aborted
+    /// locally. Its committed values, if any, arrived as committed rows.
+    /// </summary>
+    /// <param name="sourceClusterId">The re-seeding sender's cluster id. Must be non-null and non-empty.</param>
+    /// <param name="reseedAfterEpoch">The sender's recorded re-seed epoch.</param>
+    /// <param name="start">Whether to start the bootstrap, or only record the request.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="InvalidOperationException">A bootstrap from a different source is running.</exception>
+    Task BootstrapForReseedAsync(string sourceClusterId, long reseedAfterEpoch, bool start, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <see langword="true"/> while a re-seed request from
+    /// <paramref name="sourceClusterId"/> is recorded and no drain has
+    /// consumed it - from the request until the drain's stale-bucket clear has
+    /// finished (issue #4533). The sender withholds every saga record for that
+    /// whole window, so a saga record from it that arrives meanwhile is a
+    /// straggler pushed before its re-seed marker, and the receiver refuses it.
+    /// </summary>
+    /// <param name="sourceClusterId">The sender's cluster id.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> IsReseedPendingAsync(string sourceClusterId);
 
     /// <summary>
     /// Returns the export epoch of the last full bootstrap from

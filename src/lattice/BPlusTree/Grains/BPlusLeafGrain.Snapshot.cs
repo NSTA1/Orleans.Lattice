@@ -1355,6 +1355,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var current = _durableSnapshotOffsetsByPartition;
+        RaiseKeptSnapshotCoverageMarker(perPartition);
         if (current is null || current.Length < perPartition.Length)
         {
             var grown = new long[perPartition.Length];
@@ -2820,36 +2821,46 @@ internal sealed partial class BPlusLeafGrain
     /// rather than re-deriving a deficit check of its own, and that choice is
     /// the substance of the fix rather than a convenience. That method holds
     /// THREE drivers - the #2220 coverage-deficit escape, the #2692
-    /// zero-coverage repair, and the ordinary per-partition capture - and
-    /// before this timer existed it had exactly ONE invocation in the whole of
-    /// <c>src/</c>: the one in <c>BPlusLeafGrain.Projection.cs</c>, inside the
-    /// checkpoint-persist tail. Both escapes were deliberately placed ABOVE the
-    /// cadence gate so that no tuning knob could disable them, and both sat
-    /// BELOW that single call site, so on a leaf with no write traffic neither
-    /// was reachable at all. Re-deriving only the deficit check here would have
-    /// repaired the stale-coverage case and left the zero-coverage case - the
-    /// one #2692 exists for, and the one the stuck partitions were actually in -
-    /// as unreachable as it was then.
-    /// <para>
-    /// <b>That count is historical and must not be read as current.</b> This
-    /// method is itself the second invocation, and
-    /// <c>DriveStarvedCheckpointCoreAsync</c> is the third (issue #3185) - the
-    /// GC-driven dormant leaf being a population this timer cannot reach,
-    /// because a timer only ticks on a live activation and the collector
-    /// recycles such a leaf long before its first jittered tick is due. The
-    /// sentence is kept in the past tense rather than deleted because it is the
-    /// argument for routing every new driver through that one method instead of
-    /// re-deriving a check, and that argument is what both later drivers
-    /// followed. Left in the present tense it read as a live invariant, and it
-    /// cost real diagnostic time on #3185: the method it describes falsified it
-    /// the moment this one was added.
+    /// zero-coverage repair, and the ordinary per-partition capture. Both
+    /// escapes were deliberately placed ABOVE the cadence gate so that no
+    /// tuning knob could disable them, but before this timer existed the
+    /// method was reached only from the checkpoint-persist tails, so on a leaf
+    /// with no write traffic neither escape was reachable at all. Re-deriving
+    /// only the deficit check here would have repaired the stale-coverage case
+    /// and left the zero-coverage case - the one #2692 exists for, and the one
+    /// the stuck partitions were actually in - as unreachable as it was then.
+    /// That is the argument for routing every new driver through that one
+    /// method instead of re-deriving a check.
     /// </para>
+    /// <para>
+    /// The call sites are named here by symbol and never counted, because a
+    /// count goes stale the moment a driver is added and a stale count was read
+    /// as a live invariant on #3185. <see cref="MaybeRunPeriodicSnapshotRecheckAsync"/>
+    /// is invoked directly from
+    /// <see cref="CompleteCheckpointFlushTailAsync"/> and
+    /// <see cref="CompleteDeactivationCheckpointFlushTailAsync"/> (the
+    /// checkpoint-persist tails, as a checkpoint persist), and from
+    /// <see cref="DriveStarvedCheckpointCoreAsync"/> (the starvation drive,
+    /// issue #3185) and <see cref="BankDurablePinCoreAsync"/> (the bank step,
+    /// issue #3599), neither as a checkpoint persist. This timer does not call
+    /// it directly: it reaches it through <see cref="BankDurablePinCoreAsync"/>
+    /// below, or through the starvation drive on the two starvation branches.
+    /// The drive covers the GC-driven dormant leaf, a population this timer
+    /// cannot reach, because a timer only ticks on a live activation and the
+    /// collector recycles such a leaf long before its first jittered tick is
+    /// due. <c>BPlusLeafGrainRecheckCallSiteTests</c> pins this list against
+    /// the source.
     /// </para>
     /// <para>
     /// The cadence counter is NOT advanced from here: the recheck is told this
-    /// call is not a checkpoint persist, so
-    /// <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
-    /// keeps meaning exactly what it is documented to mean.
+    /// call is not a checkpoint persist (<c>fromCheckpointPersist: false</c>),
+    /// so <see cref="LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints"/>
+    /// keeps meaning exactly what it is documented to mean. The same flag also
+    /// skips the cadence gate itself, so a tick reaches not only both escapes
+    /// but the ordinary per-partition capture as well: any partition whose
+    /// checkpoint is ahead of its durable coverage is captured on this tick,
+    /// with no wait for N checkpoint persists that a write-idle leaf would never
+    /// make.
     /// </para>
     /// <para>
     /// Every no-loss precondition is therefore the existing one, evaluated by
@@ -3799,6 +3810,18 @@ internal sealed partial class BPlusLeafGrain
 
         if (blob is null)
         {
+            // An absent snapshot is not proof that this leaf never had one (issue
+            // #4634). If its store once kept a snapshot whose coverage licensed the
+            // WAL GC to trim, a cold rebuild from the surviving suffix would come
+            // up without that prefix and report its keys absent. That is a lost
+            // snapshot, and it fails the replay closed exactly as a failed load
+            // does (issue #4450), whatever the WAL tail reads.
+            if (DetectLostKeptSnapshot() is { } lost)
+            {
+                _snapshotLoadFailedThisAttempt = true;
+                _snapshotLoadFaultThisAttempt = lost;
+            }
+
             return false;
         }
 

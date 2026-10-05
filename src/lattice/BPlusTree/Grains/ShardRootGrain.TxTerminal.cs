@@ -380,6 +380,11 @@ internal sealed partial class ShardRootGrain
                 committedValues,
                 cancellationToken);
 
+            // The saga's original prepare stamps travel with the mirrored
+            // terminal (issue #4522): the resize mirror ships every write to the
+            // destination copy at this copy's own stamps and every prepare
+            // carrying its own, so the destination is on this copy's clock
+            // lineage and its backstop applies each key at its prepare stamp.
             var shadowForward = ForwardShadowAsync(
                 (transactionId, committed, committedValues, cancellationToken),
                 static (target, state) => (Task)target.AppendTxTerminalAsync(

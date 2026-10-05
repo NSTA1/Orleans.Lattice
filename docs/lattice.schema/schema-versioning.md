@@ -9,7 +9,7 @@ and keeps storing verbatim `byte[]`.
 
 Versioning is provided by the `Orleans.Lattice.Schema` companion package and is
 independent of enforcement: a tree can version without enforcing, or enforce a
-fixed schema without versioning. The two compose (see
+fixed schema without versioning. They compose (see
 [composition](#composition-with-enforcement)).
 
 ## How the version travels with the value

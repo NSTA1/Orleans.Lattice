@@ -104,6 +104,7 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<BPlusTree.Grains.TxRegistryReadCoalescer>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<TreeAliasObserverDispatcher>();
+        builder.Services.AddSingleton<TreeLineageObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
 
         // Storage-usage observable-gauge sink. Constructing the singleton
@@ -234,6 +235,9 @@ public static class LatticeServiceCollectionExtensions
         // IWalStorageProvider via AppendEncodedBatchAsync. Singleton-
         // scoped so the underlying codec stays hot.
         builder.Services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
+        // Issue #4586: a replicated tree's WAL partitions advance their clock
+        // floor only while every active silo advertises the floor capability.
+        builder.Services.TryAddSingleton<IWalClockFloorGate, ClusterManifestWalClockFloorGate>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
         // Membership seam: default to the anonymous-resolving no-op so a
         // consumer of ILatticeMembershipContext (for example the later
@@ -652,6 +656,12 @@ public static class LatticeServiceCollectionExtensions
                 sp.GetService<ILogger<LeafCursorReporter>>(),
                 sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName),
                 optionsResolver: sp.GetService<LatticeOptionsResolver>()));
+
+        // Flush durable materialiser-pin advances the reporter's debounce
+        // coalesced but never wrote, at silo stop, after grain deactivation and
+        // before storage teardown (issue #3509).
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, BPlusTree.Grains.LeafCursorReporterShutdownFlushParticipant>());
 
         // Reusable per-shard WAL tailing loop shared by every log consumer
         // (materialised views, the replication producer, future change-feed /

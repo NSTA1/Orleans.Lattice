@@ -49,4 +49,20 @@ public sealed record LatticeSubjectSelector
     /// <exception cref="ArgumentException"><paramref name="groupId"/> is <c>null</c> or empty.</exception>
     public static LatticeSubjectSelector Group(string groupId) =>
         new(LatticeSubjectSelectorKind.Group, groupId);
+
+    /// <summary>
+    /// Returns whether this selector names <paramref name="subjectId"/> directly
+    /// (a user selector, ordinal) or through one of <paramref name="groupIds"/>
+    /// (a group selector). Any other kind matches nothing.
+    /// </summary>
+    /// <param name="subjectId">The subject's user id.</param>
+    /// <param name="groupIds">The subject's resolved group closure.</param>
+    /// <returns><see langword="true"/> when the selector applies to the subject.</returns>
+    internal bool Matches(string subjectId, HashSet<string> groupIds) =>
+        Kind switch
+        {
+            LatticeSubjectSelectorKind.User => string.Equals(Id, subjectId, StringComparison.Ordinal),
+            LatticeSubjectSelectorKind.Group => groupIds.Contains(Id),
+            _ => false,
+        };
 }

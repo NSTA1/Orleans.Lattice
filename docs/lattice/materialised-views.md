@@ -1,8 +1,7 @@
 # Materialised views
 
 A materialised view is an asynchronous, eventually-consistent projection of a
-source tree, maintained by tailing that tree's write-ahead log (WAL). Two view
-kinds are supported:
+source tree, maintained by tailing that tree's write-ahead log (WAL). The supported view kinds are:
 
 - **Filter / re-project** - a predicate selects the subset of source keys to
   keep, an optional value transform reshapes the stored bytes, and an optional
@@ -18,7 +17,7 @@ writes.
 ## What you need to register
 
 Materialised views run on top of a WAL-backed lattice; they do **not** require
-a replicated cluster. A single-silo deployment registers two things:
+a replicated cluster. A single-silo deployment registers these pieces:
 
 - `AddLattice(...)` - the lattice itself, which also registers the commit-log
   reader and an in-memory WAL baseline.
@@ -66,7 +65,7 @@ needs selectors over the source value, build it with the typed `Create<T>`
 factory so the selectors run against the deserialized value type instead of raw
 `byte[]`.
 
-There are two ways to create a view.
+Create a view either at startup or at runtime.
 
 **At startup** - declare it on the silo builder so the maintainer comes online
 with the host. `AddView` registers a filter / re-project view;
@@ -352,8 +351,8 @@ declaration and carry no runtime-provider constraint.
 
 A view tails its source by the source's logical id, but the maintainer binds to
 the source's current *physical* tree id - the effective id its registry alias
-resolves to. A resize, a shadow-cutover restore, a schema remediation or an
-administrative alias change can repoint that alias at a new physical tree
+resolves to. A resize or its undo, a shadow-cutover restore or its revert, a schema
+remediation or an administrative alias change can repoint that alias at a new physical tree
 underneath a live view. When it does, the maintainer rebuilds the view from the
 new physical source and rebinds its tail: a WAL tail alone can never retract a key
 the new source never had, so a rebuild is required for correctness. A view
@@ -433,7 +432,7 @@ built-in reduces are exposed through `AggregationKind`:
 | `SetUnion` | Distinct-member cardinality (`long`) | member selector |
 | `Fold` | A user-defined fold's accumulator (opaque bytes) | group key + `Initial` / `Apply` fold |
 
-The first five are built-in commutative reducers declared with
+`Count`, `Sum`, `Min`, `Max`, and `SetUnion` are built-in commutative reducers declared with
 `AggregationLatticeViewProjection.Create<T>`; `Fold` is a custom, non-commutative
 reduce declared with `LatticeFoldProjection` (see
 [Folded (custom-reducer) views](#folded-custom-reducer-views) below).
@@ -870,10 +869,14 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 
 ### Lag budget and dead-view eviction
 
-A view pins the source WAL only up to a per-view `MaxLagBudget` (default `0`
+A view holds the source WAL from the first offset it has not durably consumed:
+the maintainer registers with the source log's durable consumer set before it
+reads it, and the WAL GC on every silo asks it for that position on each pass, so
+a view never loses an entry to a pass on a silo it does not run on (issue #4584).
+It holds the WAL only up to a per-view `MaxLagBudget` (default `0`
 disables it). A view that exceeds the budget - chronically slow, or a crashed
-maintainer - is force-evicted: the WAL pin is released and the view is rebuilt
-from current source state. Eviction is emitted on
+maintainer - is force-evicted: the view is rebuilt from current source state,
+and its hold moves to the source heads the rebuild captures. Eviction is emitted on
 `orleans.lattice.view.lag_budget_eviction`, and a `LagEvictionCooldown`
 (default 30 s) prevents repeated evictions from thrashing a view that is kept
 chronically over budget. Size `LatticeOptions.WalRetention` at or above the
@@ -900,8 +903,8 @@ full rate. The throttle engages only while the source is actually saturated, so
 leaving it on costs nothing on a healthy source. The maintainer reads the signal
 under the source's logical id, while the signal is sampled under the id of the
 write-ahead log the source's writes land in, so while the source resolves to a
-different physical copy - after a resize, a shadow-cutover restore or a schema
-remediation (see [Source-identity rebind](#source-identity-rebind)) - the
+different physical copy - after a resize or undo, a shadow-cutover restore or revert,
+a schema remediation or an administrative alias change (see [Source-identity rebind](#source-identity-rebind)) - the
 maintainer does not see that copy's saturation and drains at full rate.
 
 Separately from this client-side self-throttle, the maintainer's catch-up reads

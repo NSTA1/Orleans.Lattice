@@ -123,7 +123,7 @@ about what will be evaluated:
 
 ## Facade surface
 
-`ILatticeTelemetry` (implemented by the public `LatticeTelemetry`, which `AddLatticeTelemetryApi()` registers) has two methods:
+`ILatticeTelemetry` (implemented by the public `LatticeTelemetry`, which `AddLatticeTelemetryApi()` registers) exposes:
 
 | Method | Signature |
 |---|---|
@@ -156,7 +156,7 @@ authorized caller may read and is no substitute for the capability: its `ReadAll
 
 ## The curated catalogue
 
-`LatticeTelemetryQueries.Definitions` is the complete built-in catalogue: fifteen
+`LatticeTelemetryQueries.Definitions` is the complete built-in catalogue:
 server-authored entries at catalogue revision `LatticeTelemetryQueries.Version`
 (`1`), in ascending query-id order. Each entry's `TelemetryQueryDescriptor` names
 the OpenTelemetry instruments it reads (for example `orleans.lattice.shard.reads`);
@@ -183,7 +183,7 @@ with the `_total` suffix on counters and the unit word on histogram buckets
 | `tree.write.operation_rate` | Range | `{op}/s` | `orleans_lattice_shard_writes_total` |
 | `tree.write.record_rate` | Range | `{record}/s` | `orleans_lattice_shard_records_written_total` |
 
-The two `tenant.*` entries read the tenancy add-on's `orleans.lattice.tenancy`
+The `tenant.*` entries read the tenancy add-on's `orleans.lattice.tenancy`
 meter; on a cluster without it they evaluate cleanly and return no series. Every
 `Range` entry accepts a time range, a step, and a tree filter;
 `tree.storage.bytes`, `tree.admission.utilization`, and
@@ -221,7 +221,7 @@ first.
 
 ## `GetCatalogAsync` degrades; it does not fail
 
-Discovery **never surfaces a backend fault**. An unconfigured backend, and a caller entitled to no query, both receive `TelemetryQueryCatalog.Empty` rather than an exception, so a client renders no panels instead of erroring - and the two cases stay indistinguishable, so a refusal leaks nothing about the deployment.
+Discovery **never surfaces a backend fault**. An unconfigured backend, and a caller entitled to no query, both receive `TelemetryQueryCatalog.Empty` rather than an exception, so a client renders no panels instead of erroring - and the cases stay indistinguishable, so a refusal leaks nothing about the deployment.
 
 **This is load-bearing for callers, and changing it would break them silently.** A client may therefore treat a transport-level `Unavailable` from `GetCatalog` as *the surface is unreachable*, because a mere metrics-store outage cannot produce one. The Explorer relies on exactly that: its Telemetry area hides itself whenever the catalogue read fails - a refused caller, a cluster that does not serve telemetry, or one it cannot reach - while a metrics-backend outage reaches it only through a query, as a retryable error on the chart that asked.
 
@@ -252,12 +252,12 @@ one, so the request degrades.
 
 ## Failure surface
 
-Three exceptions, all declared in `Orleans.Lattice.Api.Abstractions` so every
+The facade exceptions are declared in `Orleans.Lattice.Api.Abstractions` so every
 transport binding can name them without referencing this package:
 
 | Exception | Means |
 |---|---|
-| `TelemetryQueryNotFoundException` | The query id is unknown **or** not offered by this deployment. The two are deliberately indistinguishable, so a caller learns nothing about the deployment from a refusal. |
+| `TelemetryQueryNotFoundException` | The query id is unknown **or** not offered by this deployment. The cases are deliberately indistinguishable, so a caller learns nothing about the deployment from a refusal. |
 | `TelemetryQueryBoundsException` | A well-formed request whose window the entry's declared bounds or the deployment-wide `MaxRange` / `MaxStep` guardrails refuse - descending, too long, starting too far back, yielding too many points, or with a step above `MaxStep` (on an entry that declares no step ceiling, a step too large for the window arithmetic saturates and is refused by the `MaxStep` guardrail rather than overflowing). Its `Violation` carries the typed `TelemetryBoundsViolation` reason. |
 | `TelemetryBackendException` | The backend was unreachable, timed out, or answered unusably. Not the caller's fault. |
 
@@ -267,7 +267,7 @@ the caller lacks the cluster-wide `Telemetry` capability, checked by the public
 `TelemetryAccessAuthorizer` (discovery instead degrades to the empty catalogue);
 once the query id and the entry's bounds pass, it throws `LatticeTenantAccessDeniedException`
 when the caller cannot be attributed to any tenant, and `ArgumentException` when
-the tree filter of an entry that accepts one contains a control character. The two Lattice refusals
+the tree filter of an entry that accepts one contains a control character. The Lattice refusals
 (`LatticeAuthorizationDeniedException` and `LatticeTenantAccessDeniedException`) are core `Orleans.Lattice`
 types, so a binding can name them too.
 

@@ -320,16 +320,25 @@ internal sealed partial class ReplicationApplier
         // ack that makes the sender re-ship the run after the fence lifts. A run
         // is a single (treeId, originClusterId) segment, so one gate check covers
         // it.
-        if (_receiveGate is not null
-            && await _receiveGate.IsReceivePausedAsync(entries[startInclusive].TreeId, cancellationToken)
-                .ConfigureAwait(false))
+        //
+        // The answer carries the fence's epoch and the run is stamped with it
+        // (issue #4593), so a restored copy refuses a run admitted under an
+        // epoch older than its restore's pause.
+        if (_receiveGate is not null)
         {
-            return new ApplyResult
+            var observed = await _receiveGate.ObserveAsync(entries[startInclusive].TreeId, cancellationToken)
+                .ConfigureAwait(false);
+            if (observed.Paused)
             {
-                Applied = false,
-                HighWaterMark = HybridLogicalClock.Zero,
-                Deferred = true,
-            };
+                return new ApplyResult
+                {
+                    Applied = false,
+                    HighWaterMark = HybridLogicalClock.Zero,
+                    Deferred = true,
+                };
+            }
+
+            ReplicationAdmissionEpoch.Stamp(entries[startInclusive].TreeId, observed.Epoch);
         }
 
         try
@@ -348,6 +357,19 @@ internal sealed partial class ReplicationApplier
             // the receive fence does; the sender re-ships it, entries this run
             // already applied are acknowledged as re-deliveries, and the refused
             // terminal is re-applied once the capture releases the registry.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
+        catch (CopyReceiveFencedException)
+        {
+            // Issue #4593: the run routed to a restored copy whose receive fence a
+            // coordinated restore still holds closed. Defer the run exactly as the
+            // receive fence does; the sender re-ships it once the copy opens.
             RecordInboundContact(entries[startInclusive], success: true);
             return new ApplyResult
             {
@@ -577,8 +599,8 @@ internal sealed partial class ReplicationApplier
     /// <remarks>
     /// <para>The per-entry classification is preserved exactly:</para>
     /// <list type="bullet">
-    ///   <item><description>Range-delete entries bypass HWM dedup and
-    ///   apply through the range path because one issue HLC covers a whole
+    ///   <item><description>Range-delete entries apply
+    ///   through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
     ///   <item><description>Point entries have no HLC drop threshold:
     ///   neither the incrementally advanced per-origin diagonal (per-origin
@@ -684,8 +706,8 @@ internal sealed partial class ReplicationApplier
         // gate must be suppressed and the end-of-run HWM advance must
         // be skipped, mirroring the per-entry path's bypass at
         // <see cref="ApplyAsync"/>. The snapshot exporter visits
-        // shards / leaves in arbitrary order, so applying steady-state
-        // HWM dedup during bootstrap replay can drop a still-pending
+        // shards / leaves in arbitrary order, so a mid-drain HWM
+        // advance during bootstrap replay can later suppress a still-pending
         // saga key with a strictly-earlier source HLC and break
         // per-saga all-or-nothing visibility on the bootstrapped peer.
         // The post-drain
@@ -711,6 +733,11 @@ internal sealed partial class ReplicationApplier
         var advancedAtAll = false;
         var highestApplied = hwm;
 
+        // Issue #4586: the identities this run applied, recorded on the tree's
+        // high-water-mark grain in the end-of-run call so a dependent of one is
+        // released at once. Saga prepares are not visible until their terminal.
+        List<HybridLogicalClock>? appliedIdentities = null;
+
         // Set when an entry in this run duplicates an identity whose
         // reservation another, still-running delivery holds (#4465). The
         // run then reports Deferred so the transport returns a
@@ -723,20 +750,16 @@ internal sealed partial class ReplicationApplier
         // applies a terminal ahead of a prepare that was delivered before it.
         HashSet<Guid>? deferredSagaPrepares = null;
 
-        // Lazy local vector clock: only the first causal-dep entry
-        // pays the GetVectorAsync round trip; later entries reuse it
-        // until an apply mutates it (which may have moved the local
-        // VC), at which point we mark it dirty and re-fetch on the
-        // next causal-dep check.
-        VersionVector? cachedLocalVc = null;
-        var localVcDirty = false;
+        // Set when an entry in this run could not be dead-lettered because the
+        // dead-letter queue is full (#4603). The run then reports Deferred, so
+        // the sender keeps its cursor and re-ships rather than lose the entry.
+        var deferDeadLetterFull = false;
 
         // Pending batched LWW Set/Delete items. Items pass classification
         // (not range delete, not dedup'd, not causally parked) and are
         // deferred into a single ApplyMergeManyAsync at end of run rather
         // than issuing one shard RPC per item. State changes
-        // (highestApplied, anyApplied, advancedAtAll,
-        // localVcDirty) and per-entry instrumentation
+        // (highestApplied, anyApplied, advancedAtAll) and per-entry instrumentation
         // (ApplyDuration, ApplyLag, FifoState) are deferred until the
         // flush succeeds, mirroring the per-entry path's semantics under
         // partial-batch failure.
@@ -759,7 +782,7 @@ internal sealed partial class ReplicationApplier
 
         // Pending batched typed-CRDT delta items. Mirror of pendingItems
         // for non-prepared CRDT-mode Set entries: each passes the same
-        // classification gauntlet (HWM dedup, shadow-forward dedup, causal
+        // classification gauntlet (shadow-forward dedup, causal
         // park) and is deferred into a single ApplyCrdtDeltaManyAsync at
         // end of run, which folds every delta inside one grain turn (no
         // per-entry read-merge-write round trip). A tree resolves to a
@@ -818,11 +841,15 @@ internal sealed partial class ReplicationApplier
                 {
                     highestApplied = deferredEntry.Timestamp;
                 }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
+                }
             }
 
             anyApplied = true;
             advancedAtAll = true;
-            localVcDirty = true;
         }
 
         async Task FlushPendingAsync()
@@ -890,11 +917,15 @@ internal sealed partial class ReplicationApplier
                 {
                     highestApplied = deferredEntry.Timestamp;
                 }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
+                }
             }
 
             anyApplied = true;
             advancedAtAll = true;
-            localVcDirty = true;
         }
 
         for (var k = startInclusive; k < endExclusive; k++)
@@ -1035,24 +1066,37 @@ internal sealed partial class ReplicationApplier
                 // re-delivery is upheld by LwwValue.Merge inside
                 // AddPreparedMutation and the per-tx
                 // _recentlyTerminal dedup on the terminal mark.
-                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
+                if (!isPreparedAtomicBatch
+                    && CausalApplyBuffer.RequiredDependencies(entry, resolved.ClusterId) is { } required)
                 {
-                    if (cachedLocalVc is null || localVcDirty)
+                    var verdicts = await hwmGrain.CheckDependenciesAsync([required], cancellationToken).ConfigureAwait(false);
+                    var verdict = verdicts.Length == 0 ? CausalDependencyVerdict.Unmet : verdicts[0];
+                    if (verdict == CausalDependencyVerdict.Lost)
                     {
-                        cachedLocalVc = await hwmGrain.GetVectorAsync(cancellationToken).ConfigureAwait(false);
-                        localVcDirty = false;
+                        // Mirror ApplyAsync: a dependency on a write this tree
+                        // lost for good is a terminal dead-letter (#4603); a full
+                        // queue defers the run instead.
+                        dedupeCache.Remove(entry);
+                        cacheReservedForCurrent = false;
+                        if (!await TryDeadLetterDependencyLostAsync(entry, cancellationToken).ConfigureAwait(false))
+                        {
+                            deferDeadLetterFull = true;
+                            outcome = LatticeReplicationMetrics.OutcomeDedup;
+                            continue;
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeRejectedDependencyLost;
+                        continue;
                     }
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, cachedLocalVc, resolved.ClusterId))
+
+                    if (verdict == CausalDependencyVerdict.Unmet)
                     {
                         await ParkAsync(entry, cancellationToken).ConfigureAwait(false);
                         // Mirror ApplyAsync's park branch: the durable buffer
                         // now holds the entry and dedups its re-deliveries,
                         // so release the shadow-forward reservation (#4464).
-                        // The park may also have drained entries and advanced
-                        // the local vector clock, so re-fetch it next time.
                         dedupeCache.Remove(entry);
                         cacheReservedForCurrent = false;
-                        localVcDirty = true;
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         continue;
                     }
@@ -1133,9 +1177,13 @@ internal sealed partial class ReplicationApplier
                     {
                         highestApplied = entry.Timestamp;
                     }
+
+                    if (!entry.IsPrepared)
+                    {
+                        (appliedIdentities ??= new List<HybridLogicalClock>()).Add(entry.Timestamp);
+                    }
                     anyApplied = true;
                     advancedAtAll = true;
-                    localVcDirty = true;
                     outcome = LatticeReplicationMetrics.OutcomeSuccess;
                     continue;
                 }
@@ -1269,18 +1317,25 @@ internal sealed partial class ReplicationApplier
 
         if (advancedAtAll && !bootstrapMode)
         {
-            var advanced = await hwmGrain.TryAdvanceAsync(origin!, highestApplied, cancellationToken)
+            var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    origin!,
+                    highestApplied,
+                    (IReadOnlyList<HybridLogicalClock>?)appliedIdentities ?? Array.Empty<HybridLogicalClock>(),
+                    advanceHighWaterMark: true,
+                    cancellationToken)
                 .ConfigureAwait(false);
             var newHwm = advanced
                 ? highestApplied
                 : await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
 
-            if (advanced)
+            // A recorded identity may meet a parked dependency whether or not the
+            // high-water mark moved (issue #4586).
+            if (advanced || appliedIdentities is { Count: > 0 })
             {
                 await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
 
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
         }
 
         // Bootstrap mode: the per-origin HWM is pinned atomically at
@@ -1290,7 +1345,7 @@ internal sealed partial class ReplicationApplier
         // suppress still-pending saga keys with strictly-earlier source
         // HLCs. Surface the pre-drain HWM so callers observe the
         // canonical pre-pin frontier.
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
     }
 
     /// <summary>
@@ -1394,15 +1449,24 @@ internal sealed partial class ReplicationApplier
                 + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
                 endExclusive - startInclusive, treeId, origin, first.Mode, expectedMode);
 
+            var full = false;
             for (var k = startInclusive; k < endExclusive; k++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var startTs = Stopwatch.GetTimestamp();
-                await DeadLetterModeMismatchAsync(entries[k], expectedMode, cancellationToken).ConfigureAwait(false);
-                RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedModeMismatch);
+                if (!full && await TryDeadLetterAsync(entries[k], DeadLetterModeMismatchAsync(entries[k], expectedMode, cancellationToken)).ConfigureAwait(false))
+                {
+                    RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeRejectedModeMismatch);
+                    continue;
+                }
+
+                // The dead-letter queue is full (#4603): defer the run so the
+                // sender re-ships it; entries already parked are idempotent.
+                full = true;
+                RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeDedup);
             }
 
-            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = full };
         }
 
         if (admission == InboundTreeAdmission.RejectNoEnrollmentSource)
@@ -1438,6 +1502,14 @@ internal sealed partial class ReplicationApplier
             + "the tree is not enrolled for replication on this receiver.",
             endExclusive - startInclusive, treeId, origin);
 
+        var dropped = new HybridLogicalClock[endExclusive - startInclusive];
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            dropped[k - startInclusive] = entries[k].Timestamp;
+        }
+
+        await RecordNotEnrolledLostAsync(origin, dropped, cancellationToken).ConfigureAwait(false);
+
         for (var k = startInclusive; k < endExclusive; k++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -1459,7 +1531,9 @@ internal sealed partial class ReplicationApplier
     /// so per-entry receiver observability is preserved. A single warning is logged
     /// per run rather than per entry to avoid a log-flood amplification from a hostile
     /// peer. Returns a non-applied result so the run neither merges nor advances the
-    /// per-origin high-water-mark; the transport still acknowledges the refusal.
+    /// per-origin high-water-mark; the transport still acknowledges the refusal,
+    /// unless the dead-letter queue is full, in which case the run is deferred so
+    /// no entry is acknowledged without being parked (issue #4603).
     /// </summary>
     private async Task<ApplyResult> RejectTenantIsolationRunAsync(
         IReadOnlyList<WalRecord> entries,
@@ -1484,14 +1558,23 @@ internal sealed partial class ReplicationApplier
             + "the tenant-isolation gate refused the write ({Decision}); the run was not applied.",
             endExclusive - startInclusive, treeId, origin, decision);
 
+        var full = false;
         for (var k = startInclusive; k < endExclusive; k++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var startTs = Stopwatch.GetTimestamp();
-            await DeadLetterTenantIsolationAsync(entries[k], decision, cancellationToken).ConfigureAwait(false);
-            RecordApplyDuration(treeId, origin, startTs, outcome);
+            if (!full && await TryDeadLetterAsync(entries[k], DeadLetterTenantIsolationAsync(entries[k], decision, cancellationToken)).ConfigureAwait(false))
+            {
+                RecordApplyDuration(treeId, origin, startTs, outcome);
+                continue;
+            }
+
+            // The dead-letter queue is full (#4603): defer the run so the
+            // sender re-ships it; entries already parked are idempotent.
+            full = true;
+            RecordApplyDuration(treeId, origin, startTs, LatticeReplicationMetrics.OutcomeDedup);
         }
 
-        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = full };
     }
 }

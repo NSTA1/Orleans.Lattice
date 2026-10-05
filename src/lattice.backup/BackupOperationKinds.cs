@@ -16,7 +16,7 @@ public static class BackupOperationKinds
     /// <summary>An incremental capture layered on a base backup. Result reference: the backup id.</summary>
     public const string IncrementalCapture = "backup.incremental-capture";
 
-    /// <summary>A backup-set capture. Result reference: the set id; see <see cref="BackupOperationResultKeys.MemberBackupIds"/>.</summary>
+    /// <summary>A backup-set capture. Result reference: the set id when the set records its membership (two or more members), otherwise none; see <see cref="BackupOperationResultKeys.MemberBackupIds"/>.</summary>
     public const string SetCapture = "backup.set-capture";
 
     /// <summary>A restore of a catalogued backup. Result: see <see cref="BackupOperationResults.TryReadRestoreResult"/>.</summary>

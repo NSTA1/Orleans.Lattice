@@ -8,9 +8,10 @@ using BenchmarkDotNet.Attributes;
 namespace Orleans.Lattice.Benchmark.Microbench;
 
 /// <summary>
-/// Isolates the three tag-index round-trip reductions this suite was added for:
-/// the batched membership-row add, the overlapped membership-row removal, and
-/// the windowed intersection-query probe.
+/// Isolates the tag-index round-trip reductions this suite was added for: the
+/// batched membership-row add, the overlapped membership-row removal, the
+/// windowed intersection-query probe, and - added later - the three reductions
+/// on the orphan-reconcile and flag-mode add paths, lanes (4) to (6).
 /// <para>
 /// (1) <c>AddTagsForKeyAsync</c> - tagging a key wrote a tag-major row and its
 /// key-major mirror per tag, each as its own awaited <c>SetAsync</c>, so a
@@ -30,6 +31,24 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// its own read, costing one round trip per candidate however few tags are
 /// involved. Buffering a window of candidates carries the same number of rows in
 /// a fraction of the calls.
+/// </para>
+/// <para>
+/// (4) <c>ReconcileSubjectAsync</c> - the orphan pass re-verified every orphan
+/// candidate against the subject tree with its own <c>ExistsAsync</c>. A key
+/// carrying T tags produces T candidate rows, so it paid T identical probes for
+/// one key. The windowed lane folds the candidates to their distinct keys and
+/// confirms them a window at a time.
+/// </para>
+/// <para>
+/// (5) the orphan delete that follows (4) - each confirmed orphan deleted its
+/// tag-major row and its key-major mirror on two sequential awaits, the same
+/// serial shape (2) removed from the ordinary removal path.
+/// </para>
+/// <para>
+/// (6) <c>AddTagsForKeyAsync</c> under a flag membership mode - a flag row is
+/// authored as an enable delta minted against that row's own state, so the rows
+/// cannot collapse into one value batch the way (1) does. They can still stop
+/// being serial, exactly as (2) does for deletes.
 /// </para>
 /// <para>
 /// <b>Read the yielding-store lanes, not the completed-task ones.</b> All three
@@ -73,14 +92,31 @@ public class TagIndexBatchedRoundTripBenchmarks
     /// <summary>Mirrors the production AND-query candidate window.</summary>
     private const int AndQueryCandidateWindow = 32;
 
+    /// <summary>
+    /// Mirrors the production window the orphan pass confirms candidate keys in.
+    /// It is the same constant as the removal cap for the same reason: it is the
+    /// router's original stateless-worker count.
+    /// </summary>
+    private const int OrphanVerifyWindow = 32;
+
+    /// <summary>
+    /// Distinct keys the orphan-reconcile lanes find stranded membership rows
+    /// for. Each one contributes <see cref="TagCount"/> candidate rows, so the
+    /// de-duplication factor the lanes contrast is the tag width itself.
+    /// </summary>
+    private const int OrphanKeyCount = 16;
+
     /// <summary>The constant presence value every membership row carries.</summary>
     private static readonly byte[] Flag = [1];
 
     private string[] _tags = null!;
     private string _subjectKey = null!;
     private string[] _candidates = null!;
+    private OrphanCandidate[] _orphanCandidates = null!;
     private InMemoryTagStore _store = null!;
     private AsyncTagStore _asyncStore = null!;
+    private InMemoryTagStore _subject = null!;
+    private AsyncTagStore _asyncSubject = null!;
 
     /// <summary>
     /// Number of tags on the key the add / remove lanes write. Five is the
@@ -126,7 +162,78 @@ public class TagIndexBatchedRoundTripBenchmarks
         // Seed the rows the removal lanes delete. Re-seeded per invocation by the
         // lanes themselves so a removal cannot exhaust the fixture.
         _asyncStore = new AsyncTagStore(_store);
+
+        // The orphan-reconcile fixture. Every distinct key contributes TagCount
+        // candidate rows, which is exactly the duplication the de-duplicating
+        // lanes collapse. One key in four is still live on the subject tree -
+        // the concurrent-write race the re-verification exists to catch - so
+        // both arms do the same confirm-then-skip work rather than the
+        // optimised one being flattered by an all-orphan corpus.
+        _subject = new InMemoryTagStore();
+        var orphanRows = new List<OrphanCandidate>(OrphanKeyCount * TagCount);
+        for (var k = 0; k < OrphanKeyCount; k++)
+        {
+            var key = "orphan-" + k.ToString("D4", CultureInfo.InvariantCulture);
+            if (k % 4 == 0)
+            {
+                _subject.Seed(key, Flag);
+            }
+
+            for (var t = 0; t < TagCount; t++)
+            {
+                var tag = _tags[t];
+                orphanRows.Add(new OrphanCandidate(RowKey(tag, TreeId, key), key, tag));
+                _store.Seed(RowKey(tag, TreeId, key), Flag);
+                _store.Seed(KeyRowKey(TreeId, key, tag), Flag);
+            }
+        }
+
+        _orphanCandidates = [.. orphanRows];
+        _asyncSubject = new AsyncTagStore(_subject);
+
+        AssertLanesAgree();
     }
+
+    /// <summary>
+    /// Every optimised lane added for (4) to (6) must return exactly what its
+    /// baseline returns, including over the corpus that violates the thing the
+    /// optimisation leans on: a quarter of the orphan keys are still live, so a
+    /// lane that confused "absent from the batched result" with "no row" would
+    /// disagree here rather than in production.
+    /// </summary>
+    private void AssertLanesAgree()
+    {
+        var perRow = ReconcileVerify_PerRow_Async().GetAwaiter().GetResult();
+        var dedup = ReconcileVerify_DedupOnly_Async().GetAwaiter().GetResult();
+        var windowed = ReconcileVerify_Windowed_Async().GetAwaiter().GetResult();
+        if (perRow != dedup || perRow != windowed)
+        {
+            throw new InvalidOperationException(
+                $"Orphan re-verification lanes disagree: per-row={perRow}, dedup={dedup}, windowed={windowed}.");
+        }
+
+        var serialDeletes = ReconcileDelete_Serial_Async().GetAwaiter().GetResult();
+        var waveDeletes = ReconcileDelete_Wave_Async().GetAwaiter().GetResult();
+        if (serialDeletes != waveDeletes)
+        {
+            throw new InvalidOperationException(
+                $"Orphan delete lanes disagree: serial={serialDeletes}, wave={waveDeletes}.");
+        }
+
+        var serialAdds = AddFlagRows_Sequential_Async().GetAwaiter().GetResult();
+        var waveAdds = AddFlagRows_Wave_Async().GetAwaiter().GetResult();
+        if (serialAdds != waveAdds)
+        {
+            throw new InvalidOperationException(
+                $"Flag-mode add lanes disagree: serial={serialAdds}, wave={waveAdds}.");
+        }
+    }
+
+    /// <summary>
+    /// A stranded membership row, carrying the subject key it was authored for.
+    /// Mirrors the production candidate buffered by the reconcile scan.
+    /// </summary>
+    private readonly record struct OrphanCandidate(string RowKey, string Key, string Tag);
 
     private static string RowKey(string tag, string treeId, string key) =>
         string.Concat(tag, Sep.ToString(), treeId, Sep.ToString(), key);
@@ -351,9 +458,212 @@ public class TagIndexBatchedRoundTripBenchmarks
         return matched;
     }
 
+    // ── (4) Orphan re-verification: per-row probe vs de-duplicated window ──
+
+    [Benchmark(Description = "reconcile: one ExistsAsync per orphan row (yielding store)")]
+    public async Task<int> ReconcileVerify_PerRow_Async()
+    {
+        var orphans = 0;
+        for (var i = 0; i < _orphanCandidates.Length; i++)
+        {
+            if (await _asyncSubject.ExistsAsync(_orphanCandidates[i].Key, CancellationToken.None))
+            {
+                continue;
+            }
+
+            orphans++;
+        }
+
+        return orphans;
+    }
+
     /// <summary>
-    /// The narrowest stand-in for the tag index's backing tree: the four call
-    /// shapes the lanes contrast, over a plain dictionary. Every method returns a
+    /// Isolating arm. The shipped change does two things at once - it stops
+    /// probing the same key once per tag, and it probes a window of keys in one
+    /// call - and the first alone accounts for a factor of <c>TagCount</c>. This
+    /// lane applies only the de-duplication, so the windowed lane's remaining
+    /// margin over it is attributable to the batching and nothing else.
+    /// </summary>
+    [Benchmark(Description = "reconcile: contrast, de-duplicated but one probe per key (yielding store)")]
+    public async Task<int> ReconcileVerify_DedupOnly_Async()
+    {
+        var distinct = DistinctOrphanKeys();
+        var absent = new HashSet<string>(StringComparer.Ordinal);
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            if (!await _asyncSubject.ExistsAsync(distinct[i], CancellationToken.None))
+            {
+                absent.Add(distinct[i]);
+            }
+        }
+
+        return CountRowsFor(absent);
+    }
+
+    [Benchmark(Description = "reconcile: de-duplicated, windowed probe of 32 keys (yielding store)")]
+    public async Task<int> ReconcileVerify_Windowed_Async()
+    {
+        var distinct = DistinctOrphanKeys();
+        var absent = new HashSet<string>(StringComparer.Ordinal);
+        var window = new List<string>(Math.Min(distinct.Count, OrphanVerifyWindow));
+
+        for (var i = 0; i < distinct.Count; i++)
+        {
+            window.Add(distinct[i]);
+            if (window.Count < OrphanVerifyWindow)
+            {
+                continue;
+            }
+
+            await ConfirmAbsentAsync(window, absent);
+            window.Clear();
+        }
+
+        if (window.Count > 0)
+        {
+            await ConfirmAbsentAsync(window, absent);
+        }
+
+        return CountRowsFor(absent);
+    }
+
+    private async Task ConfirmAbsentAsync(List<string> window, HashSet<string> absent)
+    {
+        var present = await _asyncSubject.GetManyAsync(window, CancellationToken.None);
+        for (var i = 0; i < window.Count; i++)
+        {
+            if (!present.ContainsKey(window[i]))
+            {
+                absent.Add(window[i]);
+            }
+        }
+    }
+
+    private List<string> DistinctOrphanKeys()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var distinct = new List<string>();
+        for (var i = 0; i < _orphanCandidates.Length; i++)
+        {
+            var key = _orphanCandidates[i].Key;
+            if (seen.Add(key))
+            {
+                distinct.Add(key);
+            }
+        }
+
+        return distinct;
+    }
+
+    private int CountRowsFor(HashSet<string> keys)
+    {
+        var rows = 0;
+        for (var i = 0; i < _orphanCandidates.Length; i++)
+        {
+            if (keys.Contains(_orphanCandidates[i].Key))
+            {
+                rows++;
+            }
+        }
+
+        return rows;
+    }
+
+    // ── (5) Orphan delete: 2 serial awaits per orphan vs an overlapped wave ──
+
+    [Benchmark(Description = "reconcile: 2 serial deletes per orphan (yielding store)")]
+    public async Task<int> ReconcileDelete_Serial_Async()
+    {
+        var removed = 0;
+        for (var i = 0; i < _orphanCandidates.Length; i++)
+        {
+            var candidate = _orphanCandidates[i];
+            await _asyncStore.DeleteAsync(candidate.RowKey, CancellationToken.None);
+            await _asyncStore.DeleteAsync(
+                KeyRowKey(TreeId, candidate.Key, candidate.Tag), CancellationToken.None);
+            removed += 2;
+        }
+
+        return removed;
+    }
+
+    [Benchmark(Description = "reconcile: orphan deletes in a wave, capped at 32 (yielding store)")]
+    public async Task<int> ReconcileDelete_Wave_Async()
+    {
+        var removed = 0;
+        var wave = new List<Task>(
+            Math.Min(_orphanCandidates.Length * 2, RemoveRowConcurrencyLimit));
+
+        for (var i = 0; i < _orphanCandidates.Length; i++)
+        {
+            var candidate = _orphanCandidates[i];
+            wave.Add(_asyncStore.DeleteAsync(candidate.RowKey, CancellationToken.None));
+            wave.Add(_asyncStore.DeleteAsync(
+                KeyRowKey(TreeId, candidate.Key, candidate.Tag), CancellationToken.None));
+            removed += 2;
+
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave);
+        }
+
+        return removed;
+    }
+
+    // ── (6) Flag-mode add: 2N serial enables vs an overlapped wave ──
+
+    [Benchmark(Description = "flag add: 2N serial EnableAsync (yielding store)")]
+    public async Task<int> AddFlagRows_Sequential_Async()
+    {
+        var written = 0;
+        for (var i = 0; i < _tags.Length; i++)
+        {
+            var tag = _tags[i];
+            await _asyncStore.EnableAsync(RowKey(tag, TreeId, _subjectKey), CancellationToken.None);
+            await _asyncStore.EnableAsync(KeyRowKey(TreeId, _subjectKey, tag), CancellationToken.None);
+            written += 2;
+        }
+
+        return written;
+    }
+
+    [Benchmark(Description = "flag add: enable wave, capped at 32 (yielding store)")]
+    public async Task<int> AddFlagRows_Wave_Async()
+    {
+        var written = 0;
+        var wave = new List<Task>(Math.Min(_tags.Length * 2, RemoveRowConcurrencyLimit));
+        for (var i = 0; i < _tags.Length; i++)
+        {
+            var tag = _tags[i];
+            wave.Add(_asyncStore.EnableAsync(RowKey(tag, TreeId, _subjectKey), CancellationToken.None));
+            wave.Add(_asyncStore.EnableAsync(KeyRowKey(TreeId, _subjectKey, tag), CancellationToken.None));
+            written += 2;
+
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave);
+        }
+
+        return written;
+    }
+
+    /// <summary>
+    /// The narrowest stand-in for the tag index's backing tree: the call shapes
+    /// the lanes contrast, over a plain dictionary. Every method returns a
     /// completed task, so lanes running against it charge the async machinery and
     /// the batch container and nothing else - which is why a batching lane can
     /// read as flat or worse here. A real store's round trip is what the change
@@ -383,6 +693,21 @@ public class TagIndexBatchedRoundTripBenchmarks
 
         public Task<bool> DeleteAsync(string key, CancellationToken cancellationToken) =>
             Task.FromResult(_map.Remove(key));
+
+        public Task<bool> ExistsAsync(string key, CancellationToken cancellationToken) =>
+            Task.FromResult(_map.ContainsKey(key));
+
+        /// <summary>
+        /// The flag-membership write shape: a row's enable delta is minted
+        /// against that row's own current state, so the write is a
+        /// read-modify-write of one row rather than a blind value set. Modelled
+        /// as a single call because the grain performs the mint behind one hop.
+        /// </summary>
+        public Task EnableAsync(string key, CancellationToken cancellationToken)
+        {
+            _map[key] = _map.TryGetValue(key, out var current) ? current : Flag;
+            return Task.CompletedTask;
+        }
 
         public Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken)
         {
@@ -426,6 +751,18 @@ public class TagIndexBatchedRoundTripBenchmarks
         {
             await Task.Yield();
             return await inner.DeleteAsync(key, cancellationToken);
+        }
+
+        public async Task<bool> ExistsAsync(string key, CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            return await inner.ExistsAsync(key, cancellationToken);
+        }
+
+        public async Task EnableAsync(string key, CancellationToken cancellationToken)
+        {
+            await Task.Yield();
+            await inner.EnableAsync(key, cancellationToken);
         }
 
         public async Task<Dictionary<string, byte[]>> GetManyAsync(List<string> keys, CancellationToken cancellationToken)

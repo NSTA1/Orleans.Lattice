@@ -58,6 +58,10 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.DeadLetterEntry"/>.</summary>
     internal const string DeadLetterEntry = "olr.dl";
+    /// <summary>Alias for <see cref="Replication.ReplicationDeadLetterQueueFullException"/>.</summary>
+    internal const string ReplicationDeadLetterQueueFullException = "olr.qf";
+    /// <summary>Alias for <see cref="Replication.CausalDependencyVerdict"/>.</summary>
+    internal const string CausalDependencyVerdict = "olr.dv";
 
     /// <summary>Alias for the per-tree dead-letter queue grain interface.</summary>
     internal const string IReplicationDeadLetterGrain = "olr.gd";
@@ -94,6 +98,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.BootstrapCoordinatorStatus"/>.</summary>
     internal const string BootstrapCoordinatorStatus = "olr.bx";
 
+    /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
+    internal const string SnapshotSourceGeneration = "olr.sg";
+
     // Production replication drivers
 
     /// <summary>Alias for the per-(tree, peer) outbound shipper grain interface.</summary>
@@ -119,6 +126,15 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Grains.ParkedCausalEntry"/>.</summary>
     internal const string ParkedCausalEntry = "olr.cr";
+
+    /// <summary>Alias for <see cref="Grains.IReceiverSagaPoisonGrain"/>.</summary>
+    internal const string IReceiverSagaPoisonGrain = "olr.yg";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonState"/>.</summary>
+    internal const string ReceiverSagaPoisonState = "olr.ys";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
+    internal const string ReceiverSagaPoisonRecord = "olr.yr";
 
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
@@ -251,6 +267,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
     internal const string TreeReceiveFenceState = "olr.ft";
 
+    /// <summary>Alias for <see cref="ReceiveFenceObservation"/> (issue #4593).</summary>
+    internal const string ReceiveFenceObservation = "olr.fo";
+
     // Runtime per-tree replication configuration (the sys-replication-config
     // CRDT tree). The composite OR-Map value record carrying a tree's
     // enablement flag and declared wire merge mode.
@@ -285,4 +304,23 @@ public static class ReplicationTypeAliases
     internal const string IReplicationExportEpochGrain = "olr.xg";
     internal const string ReplicationExportEpochState = "olr.xs";
 
+    // Receiver per-origin causal frontier (#4586): the origin's shipped low
+    // watermark, and the writes held here without being applied.
+    internal const string IReplicationOriginFrontierGrain = "olr.og";
+    internal const string ReplicationOriginFrontierState = "olr.os";
+
+    // The sender's applied low watermark for a receiver's tree (#4586 part 2b).
+    internal const string ReplicationSourceFrontier = "olr.sf";
+
+    // Receiver per-tree causal frontier (#4586 part 2b).
+    internal const string IReplicationTreeFrontierGrain = "olr.tf";
+    internal const string ReplicationTreeFrontierState = "olr.ts";
+    internal const string ReplicationTreeOriginFrontier = "olr.to";
+    internal const string ReplicationTreeFrontierSnapshot = "olr.tn";
+
+    // The sender's per-peer aggregate of its trees' applied low watermarks (#4586 part 2b).
+    internal const string IReplicationSourceFrontierAggregateGrain = "olr.fa";
+    internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
+    internal const string SourceFrontierShipperState = "olr.fw";
+    internal const string SourceFrontierPrepare = "olr.fx";
 }

@@ -9,12 +9,12 @@ SUMMARY: a recovered coordinator resumes the flip without the copy it had taken
 PERTURBS: CoordinatorCrash
 
 --- FIND
-    /\ move' = "idle"
-    /\ moveCopy' = {}
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
     /\ coordCrashes' = coordCrashes + 1
 --- REPLACE
 \* MUTATION: the phase survives the crash; the copy does not.
     /\ move' = move
-    /\ moveCopy' = {}
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
     /\ coordCrashes' = coordCrashes + 1
 --- END

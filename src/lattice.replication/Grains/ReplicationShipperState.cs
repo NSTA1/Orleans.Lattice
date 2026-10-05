@@ -128,15 +128,16 @@ internal sealed class ReplicationShipperState
     public string? AdminPauseSagaId { get; set; }
 
     /// <summary>
-    /// Sagas poisoned for this peer because a prepare of theirs was parked on
-    /// the dead-letter queue instead of shipped (#4494), keyed by transaction id.
-    /// Every later prepare and every terminal of a poisoned saga is parked as
-    /// well, so the peer never commits the saga without the lost write. Persisted
-    /// with the cursors so a reactivation keeps withholding the saga.
+    /// Legacy: sagas an earlier build poisoned for this peer after parking a
+    /// prepare it could not encode (#4494). Nothing adds to it any more: an
+    /// encode failure takes the peer off the log instead (#4614). A shipper that
+    /// activates with entries here takes the peer off the log, so a re-seed
+    /// delivers each such saga whole, and then empties it. Kept so persisted
+    /// state, and the <see cref="PoisonedSaga"/> wire alias, still decode.
     /// </summary>
     /// <remarks>
     /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
-    /// <c>[Id(5)]</c> slot decodes to an empty map.
+    /// <c>[Id(5)]</c> slot decodes to an empty map. Never reuse the slot.
     /// </remarks>
     [Id(5)]
     public Dictionary<Guid, PoisonedSaga> PoisonedSagas { get; set; } = new();
@@ -165,4 +166,86 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(7)]
     public long ReseedRequiredSinceUtcTicks { get; set; }
+
+    /// <summary>
+    /// Set while this shipper replays its log non-contiguously (issue #4533):
+    /// after a re-seed rewinds it to the lowest retained entry, or after a
+    /// source-identity rebind restarts it on a new log. Per partition, the next
+    /// sequence when the replay began, raised whenever the shipper withholds a
+    /// saga the origin proves forgotten and purged. While set, every saga
+    /// record is checked; cleared once every partition's cursor has passed it.
+    /// A contiguous stream never sets it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(8)]
+    public long[]? ReplayFilterHorizon { get; set; }
+
+    /// <summary>
+    /// The physical log whose <c>IWalPurgeHoldGrain</c> carries this shipper's
+    /// replay hold (issue #4533), or <see langword="null"/> when it holds none.
+    /// Taken before the peer is taken off the log (or a rebind replay begins)
+    /// and released once the replay filter clears with no re-seed outstanding,
+    /// so no saga in flight at the re-seed's export loses its decision while
+    /// the replay may still need it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(9)]
+    public string? ReplayHoldLog { get; set; }
+
+    /// <summary>
+    /// While a re-seed is outstanding, per partition the lowest sequence this
+    /// shipper keeps retained for the rewind (issue #4533): its durable cursor
+    /// when it took the peer off the log, or the partition's lowest retained
+    /// entry when a trim had passed the cursor. Saga records it withholds
+    /// meanwhile sit at or above it, and its published read positions never
+    /// pass it, so the WAL GC keeps them for the rewind to re-ship. A trim the
+    /// retention ceiling forces past it is detected at the rewind, which then
+    /// takes the peer off the log again instead. <see langword="null"/> when no
+    /// re-seed is outstanding; legacy state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(10)]
+    public long[]? ReseedRetainFrom { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> once the peer was removed from the replication
+    /// topology (issue #4534): the shipper no longer holds the write-ahead log
+    /// for it - it has withdrawn from the log's offset consumers and released
+    /// its decision-purge holds - and, being off the log, ships only plain
+    /// writes until the peer returns and is re-seeded. Cleared when the peer
+    /// is added back. A state written before this slot decodes to
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(11)]
+    public bool DetachedFromLog { get; set; }
+
+    /// <summary>
+    /// Per partition, the first sequence of the encode-failure quarantine (issue
+    /// #4614): the merged hull of every batch this shipper could not encode since
+    /// the quarantine was last empty. Every record in it was appended before the
+    /// re-seed marker the failure set, so the snapshot export that clears the
+    /// marker carries its effects, and the rewind consumes it without shipping.
+    /// Empty when nothing is quarantined; legacy state decodes to an empty map.
+    /// </summary>
+    [Id(12)]
+    public Dictionary<int, long> EncodeQuarantineFrom { get; set; } = new();
+
+    /// <summary>
+    /// Per partition, the last sequence of the encode-failure quarantine (issue
+    /// #4614); see <see cref="EncodeQuarantineFrom"/>. Cleared once no re-seed is
+    /// outstanding and every partition's cursor has passed it, and on a rebind
+    /// to a new source log. Legacy state decodes to an empty map.
+    /// </summary>
+    [Id(13)]
+    public Dictionary<int, long> EncodeQuarantineThrough { get; set; } = new();
+
+    /// <summary>
+    /// What the shipper needs to vouch for the peer's applied low watermark
+    /// (issue #4586 part 2b): the receiver lineage it last saw, the shipped
+    /// prepares whose terminals the peer has not acknowledged yet, and the
+    /// records it passed without delivering. Legacy state decodes to an empty
+    /// value, under which the shipper vouches for nothing until it has seen
+    /// the receiver's lineage. Slots 14 to 19 are reserved for other work.
+    /// </summary>
+    [Id(20)]
+    public SourceFrontierShipperState Frontier { get; set; } = new();
 }

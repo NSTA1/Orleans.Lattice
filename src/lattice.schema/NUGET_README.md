@@ -7,7 +7,7 @@ the sibling of the core boolean predicate IR (`LatticePredicateNode`). Where the
 predicate IR answers "does this value's JSON document match?", the transform IR
 answers "what new JSON document does this value become?".
 
-The package ships two independent, strictly opt-in capabilities:
+The package ships independent, strictly opt-in capabilities:
 
 - **Schema enforcement** (`AddLatticeSchemaEnforcement(...)`) - per-tree,
   server-side validation of writes against a `LatticeSchemaPolicy` (JSON,

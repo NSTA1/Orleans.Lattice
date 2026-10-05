@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership.Entra.Graph configuration
 
-The package has one public options type, `LatticeEntraGraphOptions`, which configures the Microsoft Graph-backed group resolver: the Entra application credentials it authenticates with, the Graph scopes it requests, and how it shapes the transitive-group query. It is bound by the `AddEntraGraphGroupResolver` registration extension. The app-only access token is acquired and refreshed transparently, so operators never manage a Graph token directly.
+The package documents `LatticeEntraGraphOptions`, which configures the Microsoft Graph-backed group resolver: the Entra application credentials it authenticates with, the Graph scopes it requests, and how it shapes the transitive-group query. It is bound by the `AddEntraGraphGroupResolver` registration extension. The app-only access token is acquired and refreshed transparently, so operators never manage a Graph token directly.
 
 Two mutually exclusive authentication modes are supported. By default the resolver uses the confidential-client path, authenticating app-only with the `TenantId`, `ClientId`, and `ClientSecret` triple. Alternatively, supplying a `Credential` selects a secret-less path where the resolver authenticates app-only with that token credential (for example a federated managed identity) and no client secret is used. Supplying both a `Credential` and a `ClientSecret` is rejected as ambiguous.
 

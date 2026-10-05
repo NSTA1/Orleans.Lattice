@@ -281,26 +281,23 @@ internal sealed partial class TxRegistryGrain
     }
 
     /// <summary>
-    /// A copy of this registry's LOCAL decisions, expired tombstones reported as
-    /// <see cref="TxStatus.Indeterminate"/>, with no coordinator dialled. A
-    /// delegated txid with no local decision is absent, so it resolves as
-    /// <see cref="TxStatus.InFlight"/>: under invariant I1 no terminal for it can
-    /// exist anywhere while the gate holds.
+    /// A copy of this registry's LOCAL decisions as recorded, with no
+    /// coordinator dialled. A delegated txid with no local decision is absent,
+    /// so it resolves as <see cref="TxStatus.InFlight"/>: under invariant I1 no
+    /// terminal for it can exist anywhere while the gate holds.
+    /// <para>
+    /// A decision whose tombstone has outlived its retention is captured with its
+    /// recorded verdict, not as <see cref="TxStatus.Indeterminate"/> (issue
+    /// #4619). The live read reports it Indeterminate so a reader hides the key
+    /// until the leaf settles it, and the sweeps settle it from the same recorded
+    /// verdict (<see cref="GetRecordedStatusAsync"/>). A capture is permanent:
+    /// hiding a still-pending key of a committed batch whose other keys were
+    /// already applied would leave the key absent from every restore of the
+    /// capture. The verdict is still durably recorded here, so I1 holds.
+    /// </para>
     /// </summary>
-    private Dictionary<Guid, TxStatus> CaptureLocalDecisions()
-    {
-        var now = TimeProvider.GetUtcNow();
-        var retention = Retention;
-        var result = new Dictionary<Guid, TxStatus>(state.State.Decisions.Count);
-        foreach (var (txid, status) in state.State.Decisions)
-        {
-            result[txid] = IsTombstoneExpiredAt(txid, now, retention)
-                ? TxStatus.Indeterminate
-                : status;
-        }
-
-        return result;
-    }
+    private Dictionary<Guid, TxStatus> CaptureLocalDecisions() =>
+        new(state.State.Decisions);
 
     private TxDecisionGateRefusedException GateLapsed() =>
         new(GrainKey, TxDecisionGateRefusal.GateLapsed, TimeSpan.Zero);

@@ -282,6 +282,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`SetManyEnvelopeBudget`](#setmanyenvelopebudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
+| [`ReplicationClockFloorLag`](#replicationclockfloorlag) | `TimeSpan` | 60 seconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
 ### Timeout and budget ceiling
@@ -1435,7 +1436,7 @@ This option can be changed freely at any time. The new grace period takes effect
 
 Retention window for a completed saga's commit/abort decision in the per-tree transaction registry after the saga asks the registry to forget it (default: 60 seconds). The registry stamps a forgotten-at tombstone instead of evicting the decision; for the duration of the window the registry's status and snapshot reads continue to surface the decision so that a process which installs a *new* pending bucket on that txid *after* the saga's terminal fan-out can still resolve the verdict and apply the terminal directly.
 
-The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's pending-saga buckets, and its post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast by reading the retained verdict. Without retention, a saga that completed microseconds before the sweep installed its pending bucket would leave a destination-shard orphan with no recoverable outcome.
+The primary race the window guards is the retroactive shadow-forward sweep at the start of an adaptive shard split: the split coordinator replays every in-flight prepared mutation from the source leaves into the destination shard's pending-saga buckets. A destination leaf refuses a replayed or shadow-forwarded prepare whose saga has already decided by reading the retained verdict from the logical tree's registry, and the post-sweep cleanup pass resolves any orphan bucket whose terminal has already broadcast the same way. Without retention, a saga that completed microseconds before the sweep could not be recognised as decided, and would leave a destination-shard orphan with no recoverable outcome.
 
 Once the window elapses the decision is *masked* rather than deleted: the registry's status and snapshot reads report the saga as indeterminate ("a decision exists, and this tree is no longer entitled to report it") rather than as in flight. A txid the tree never recorded at all still reports in flight. Read paths hide a prepared key whose saga is indeterminate instead of falling through to its pre-saga value, because absence asserts nothing while in flight would be an affirmative and possibly wrong claim that the saga did not commit.
 
@@ -1755,6 +1756,17 @@ Wall-clock budget **one top-level call** may spend waiting at the WAL admission 
 
 This option can be changed freely at any time. The new value takes effect at the next admission gate check.
 
+### `ReplicationClockFloorLag`
+
+How far a replicated tree's per-partition WAL [clock floor](wal.md#clock-floor-replicated-trees) trails the partition's wall clock (default 60 seconds; must be between one second and one day) ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)).
+
+A partition refuses a freshly authored local write stamped below its floor. Single-key writes re-stamp transparently, so the lag decides two things:
+
+- **How long an idempotency key stays usable on a replicated tree.** A `LatticeIdempotencyKey` older than the floor fails with `LatticeIdempotencyKeyExpiredException`, because its stamp is fixed by contract. A key is usable for at least this long after it is minted.
+- **How much clock skew between silos the floor tolerates** before refusals start.
+
+A smaller lag lets a replication receiver release a dependent whose exact dependency it no longer remembers sooner. A tree that is not replicated never advances its floor, so the option has no effect on it.
+
 ### `WalThrottledAdmissionPace`
 
 Per-append pacing delay the WAL writer applies on the local admission path while the saturation verdict for the append's WAL partition is `WalSaturationState.Throttled` (default: 25 milliseconds; set to `TimeSpan.Zero` to disable local pacing). This is what gives the drain-lag (and any other `Throttled`-mapped) back-pressure teeth on the **single-silo local-write path**, where there is no remote replication sender to drip-feed and the Saturated-only `WalAdmissionSaturationWaitBudget` gate never engages. Before each dispatch admits into the per-partition admission semaphore the writer reads that partition's verdict once; on `Throttled` it awaits a single bounded `Task.Delay` of this duration, pacing the local producer so the materialiser drain can catch up. A partition's verdict carries the tree-wide `Throttled` causes (drain lag, pin latency, and the recovery-window hold) but only its own admission depth, so one busy partition does not pace appends routed to its idle siblings.
@@ -1985,7 +1997,7 @@ This is a **global** knob read from the default (unnamed) options when the sched
 
 ### `WalRetention`
 
-Optional wall-clock hard ceiling on WAL retention (default: `null`, disabled). When set, the WAL garbage collector trims entries whose HLC wall-clock is older than `now - WalRetention` regardless of consumer cursor position, bounding worst-case disk usage even when a registered consumer is hopelessly behind. The lagging consumer then "falls off the log" on its next read, surfacing the gap to the auto-bootstrap trigger (replication-side concern). When `null`, the GC predicate is purely `min(consumer cursors)`, and a lagging consumer pins the WAL until it catches up. Must be strictly greater than `TimeSpan.Zero` when set. The core options validator does not enforce that (the replication package's `LatticeReplicationOptions.WalRetention`, which is copied into this option when this one is unset, is validated): a zero or negative value puts the TTL ceiling at or after the current time, so the TTL clause then admits effectively every entry for trimming.
+Optional wall-clock hard ceiling on WAL retention (default: `null`, disabled). When set, the WAL garbage collector trims entries whose HLC wall-clock is older than `now - WalRetention` regardless of consumer cursor position, bounding worst-case disk usage even when a registered consumer is hopelessly behind. The lagging consumer then "falls off the log" on its next read, surfacing the gap to the auto-bootstrap trigger (replication-side concern). The ceiling never overtakes a leaf materialiser, however (issue #4622): it stops at the partition's durable materialiser offset floor, a partition a leaf's block pin names admits nothing, and an uncovered leaf pin caps the ceiling at its frontier, so a leaf that never checkpoints or captures holds its partitions past the window. Watch `orleans.lattice.wal.gc.leaf_pin_hold_age` for that (see [Write-ahead log](wal.md)). When `null`, the GC predicate is purely `min(consumer cursors)`, and a lagging consumer pins the WAL until it catches up. Must be strictly greater than `TimeSpan.Zero` when set. The core options validator does not enforce that (the replication package's `LatticeReplicationOptions.WalRetention`, which is copied into this option when this one is unset, is validated): a zero or negative value puts the TTL ceiling at or after the current time, so the TTL clause then admits effectively every entry for trimming.
 
 This option can be changed freely at any time. The new value takes effect on the next GC tick.
 

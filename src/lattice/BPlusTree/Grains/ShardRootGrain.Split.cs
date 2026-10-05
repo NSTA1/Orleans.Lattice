@@ -269,6 +269,50 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// The write-path reject gate for a merge batch: applies
+    /// <see cref="ThrowIfRejectedForKey"/> to each key, after the same cheap
+    /// no-split, no-moved-slots short-circuit as the batch gate.
+    /// </summary>
+    private void ThrowIfRejectedForAnyMergeKey(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        ThrowIfWriteFenced();
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var key in entries.Keys)
+            ThrowIfRejectedForKey(key);
+    }
+
+    /// <summary>
+    /// Forwards the rows a merge just stored for keys in a split's moved
+    /// slots to the split destination, at their own stamps, as the write paths
+    /// do (<see cref="ForwardLocalWriteToShadowIfNeededAsync"/>). Awaited
+    /// before the merge returns, so a row this shard accepted reaches the
+    /// destination before the shard starts refusing the slot and the final
+    /// drain can no longer be the only copy (issue #4522).
+    /// </summary>
+    private async Task ForwardMergedRowsToSplitShadowIfNeededAsync(IEnumerable<string> keys)
+    {
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var key in keys)
+        {
+            var target = TryResolveSplitShadowTarget(key);
+            if (target is null) continue;
+
+            var leafId = RootIsLeafTyped
+                ? state.State.RootNodeId!.Value
+                : await TraverseToLeafAsync(key);
+            var raw = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetRawEntryAsync(key);
+            if (raw is null) continue;
+
+            await ForwardWithDeadlineAsync(() =>
+                target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true));
+        }
+    }
+
+    /// <summary>
     /// Read-path gate. Throws <see cref="StaleShardRoutingException"/> as
     /// soon as a split has advanced to <see cref="ShardSplitPhase.Swap"/>
     /// (the registry's <see cref="ShardMap"/> has been swapped to the new
@@ -536,12 +580,38 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        // Non-prepared path: read the raw LwwValue (not the filtered VersionedValue)
-        // so the entry's ExpiresAtTicks is forwarded verbatim. Using the filtered path
-        // would drop TTL metadata, leaving the target shard with a non-expiring
-        // copy after the split commits. Decided by node TYPE so a corrupt
-        // RootIsLeaf flag over an internal root (issue 899) descends instead of
-        // blind-casting the internal root to IBPlusLeafGrain.
+        await ForwardCommittedEntryToSplitTargetAsync(target, key);
+    }
+
+    /// <summary>
+    /// After a successful non-atomic CRDT delta apply, forwards the key's
+    /// post-fold row to the split target when a split is moving the key's slot
+    /// (issue #4613), as <see cref="ForwardLocalWriteToShadowIfNeededAsync"/>
+    /// does for a plain write. Without it a CRDT write the source takes in the
+    /// split window reaches the destination only through the final drain, after
+    /// the destination may have folded a saga's contribution of its own. The
+    /// destination joins the forwarded state into its row, so the forward and
+    /// the drain both converge on every contribution either copy took.
+    /// </summary>
+    private async Task ForwardLocalCrdtWriteToShadowIfNeededAsync(string key)
+    {
+        var target = TryResolveSplitShadowTarget(key);
+        if (target is null) return;
+        await ForwardCommittedEntryToSplitTargetAsync(target, key);
+    }
+
+    /// <summary>
+    /// Forwards the key's committed row to the split target as a cross-shard
+    /// migration import. Reads the raw <see cref="LwwValue{T}"/> (not the
+    /// filtered VersionedValue) so the entry's ExpiresAtTicks is forwarded
+    /// verbatim; the filtered path would drop TTL metadata, leaving the target
+    /// shard with a non-expiring copy after the split commits. Decided by node
+    /// TYPE so a corrupt RootIsLeaf flag over an internal root (issue 899)
+    /// descends instead of blind-casting the internal root to IBPlusLeafGrain.
+    /// A deleted or missing key is left to the cleanup phase.
+    /// </summary>
+    private async Task ForwardCommittedEntryToSplitTargetAsync(IShardRootGrain target, string key)
+    {
         var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
             : await TraverseToLeafAsync(key);
@@ -661,15 +731,20 @@ internal sealed partial class ShardRootGrain
         var slot = ShardMap.GetVirtualSlot(key, vsc.Value);
         var pending = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
             .GetPendingMutationsForSlotsAsync(new[] { slot }, vsc.Value);
-        if (pending is not { Count: > 0 })
-            return (null, null);
 
-        foreach (var snapshot in pending)
+        if (pending is { Count: > 0 })
         {
-            if (snapshot.TransactionId == transactionId
-                && snapshot.StampIsOriginal
-                && string.Equals(snapshot.Key, key, StringComparison.Ordinal))
+            foreach (var snapshot in pending)
             {
+                if (snapshot.TransactionId != transactionId
+                    || !string.Equals(snapshot.Key, key, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!snapshot.StampIsOriginal)
+                    return (null, null);
+
                 var stamps = new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal)
                 {
                     [key] = snapshot.Timestamp,
@@ -678,7 +753,15 @@ internal sealed partial class ShardRootGrain
             }
         }
 
-        return (null, null);
+        // The local prepare this forward follows is not on the leaf the key now
+        // routes to: a leaf split moved the key after the prepare landed, and the
+        // bucket stays on the donor. Its marking is unknown here, and forwarding
+        // the prepare and its shadow marker unstamped could pair an unstamped
+        // marker with a marked bucket the split sweep delivers for the same key -
+        // a marker the destination could then never release once the terminal
+        // has come and gone (issue #4545). Fail the forward instead; the caller
+        // re-routes and prepares again on the leaf that holds the key.
+        throw new StaleShardRoutingException(-1, -1, -1);
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

@@ -10,7 +10,7 @@ revisions that produced the current state. It works for both tree shapes:
   decode to element-level member changes (which element was added or removed, by
   which replica, at which causal ordinal).
 
-The capability is exposed at three layers, all reading the same underlying
+The capability is exposed at these layers, all reading the same underlying
 revision timeline:
 
 | Layer | Surface | Use it for |
@@ -21,7 +21,7 @@ revision timeline:
 
 ## Where a timeline comes from
 
-A key's timeline can be served from one of two stored sources, and a separate
+A key's timeline can be served from one of these stored sources, and a separate
 live stream lets a reader follow new revisions as they happen:
 
 1. **Durable per-key history view (opt-in, preferred).** When a tree has a
@@ -203,7 +203,7 @@ tab follows every new change under the prefix instead.
 ## Try it in the sample
 
 The [MultiSiteManufacturing sample](../../samples/MultiSiteManufacturing) enables a
-durable history view (with `FullValue` retention) over two CRDT trees on startup and
+durable history view (with `FullValue` retention) over the LWW operator tree and the OR-Set labels tree on startup and
 then seeds change history into them, so the Explorer's History timeline has a
 non-trivial, durable history to show out of the box:
 

@@ -22,9 +22,10 @@ namespace Orleans.Lattice.Replication;
 /// The index is a <b>best-effort cache</b>, never a correctness oracle. A
 /// key that is absent (cold start, never applied, or evicted) is simply
 /// reported as not held, so the manifest handler treats it as missing and
-/// the sender ships the payload verbatim - always safe. The authoritative
-/// idempotency key on the receiver remains the per-origin
-/// high-water-mark; this index only decides whether a payload can be
+/// the sender ships the payload verbatim - always safe. Receiver-side
+/// apply still relies on the shadow-forward identity cache and
+/// idempotent leaf merge; this index only decides
+/// whether a payload can be
 /// elided, never whether a mutation is applied. It is process-local change
 /// state and is never serialized.
 /// </para>

@@ -173,6 +173,27 @@ public sealed class TreeAdminOperationWatchTests
     }
 
     [Test]
+    public async Task Resume_follows_nothing_when_its_search_was_cancelled_before_the_listing_answered()
+    {
+        _script.Running(
+            TreeAdminOperationIds.New(TreeAdminOperationKinds.WalMove, "orders\n0"),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying));
+        using var watch = new TreeAdminOperationWatch(_time);
+
+        // The listing answers despite the cancellation, as a reply already on the wire does:
+        // the page that asked has moved on, so another target's operation must not be followed (#4512).
+        Assert.That(
+            async () => await watch.ResumeAsync(_script.Operations, [(TreeAdminOperationKinds.WalMove, "orders\n0")], new CancellationToken(canceled: true)),
+            Throws.InstanceOf<OperationCanceledException>());
+        Assert.Multiple(() =>
+        {
+            Assert.That(watch.OperationId, Is.Null);
+            Assert.That(watch.Status, Is.Null);
+            Assert.That(_time.ArmedTimers, Is.Zero);
+        });
+    }
+
+    [Test]
     public void The_arguments_are_checked()
     {
         using var watch = new TreeAdminOperationWatch(_time);

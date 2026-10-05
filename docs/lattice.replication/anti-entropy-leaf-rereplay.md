@@ -6,7 +6,7 @@ The repair travels the **same** TX-aware, causal-stable apply path as ordinary r
 
 ## What it re-ships, and how it bounds it
 
-Producer-side selection uses two inputs to bound what gets re-sent:
+Producer-side selection uses these inputs to bound what gets re-sent:
 
 - the localised leaf `[StartKey, EndKey)` covering ranges (from the walk), and
 - the diverged peer's high-water-mark cursor for this origin.

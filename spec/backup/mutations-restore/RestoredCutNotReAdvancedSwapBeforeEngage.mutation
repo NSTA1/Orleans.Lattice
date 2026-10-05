@@ -1,0 +1,19 @@
+# Pairs with RestoredCutNotReAdvanced (issue #4441 F9). The swap runs before
+# the fence engaged - a commit re-driven after a crash that skips the engage,
+# or a swap ordered before it - so receiving is open and the restored copy is
+# not closed when it becomes routable, and a pre-restore write lands on it.
+MODULE: RestoredCutNotReAdvancedSwapBeforeEngage
+TARGET: RestoredCutNotReAdvanced
+CLASS: Invariant
+SUMMARY: the alias swaps before the fence engaged
+PERTURBS: CutoverSwap
+
+--- FIND
+    /\ alias[c] = "old"
+    /\ "new" \in closed[c]
+    /\ alias' = [alias EXCEPT ![c] = "new"]
+--- REPLACE
+    /\ alias[c] = "old"
+    \* MUTATION: no engaged fence required.
+    /\ alias' = [alias EXCEPT ![c] = "new"]
+--- END

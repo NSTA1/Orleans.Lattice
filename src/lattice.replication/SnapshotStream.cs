@@ -54,6 +54,19 @@ public sealed class SnapshotStream
     public VersionVector CausalStableFrontier { get; }
 
     /// <summary>
+    /// Source tree generation captured immediately before the export started,
+    /// or <see langword="null"/> when the sender predates generation trailers.
+    /// </summary>
+    public SnapshotSourceGeneration? OpenGeneration { get; init; }
+
+    /// <summary>
+    /// Source tree generation captured after <see cref="Entries"/> has been
+    /// fully enumerated. A <see langword="null"/> value means the stream has not
+    /// completed yet or the sender predates generation trailers.
+    /// </summary>
+    public SnapshotSourceGeneration? CloseGeneration { get; internal set; }
+
+    /// <summary>
     /// Async stream of every key the source tree carries at
     /// <see cref="AsOfHlc"/>: every live committed entry whose
     /// <see cref="SnapshotEntry.Timestamp"/> is less than or equal to

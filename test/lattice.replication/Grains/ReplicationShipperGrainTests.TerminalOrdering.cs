@@ -59,6 +59,12 @@ public partial class ReplicationShipperGrainTests
         public int Sends { get; set; }
 
         public Func<int, bool> Fail { get; set; } = _ => false;
+
+        /// <summary>The re-seed request each send carried (<see cref="ReplicationBatch.ReseedAfterEpoch"/>).</summary>
+        public List<long?> ReseedRequests { get; } = new();
+
+        /// <summary>The completed bootstrap epoch the peer echoes on each ack, if any.</summary>
+        public Func<long?> EchoedBootstrapEpoch { get; set; } = () => null;
     }
 
     private static AppliedStream RecordAppliedStream(IReplicationTransport transport, StubWalRecordEncoder encoder)
@@ -74,6 +80,17 @@ public partial class ReplicationShipperGrainTests
                 }
 
                 var batch = call.Arg<ReplicationBatch>();
+                stream.ReseedRequests.Add(batch.ReseedAfterEpoch);
+                if (batch.EncodedEnvelope is null)
+                {
+                    return Task.FromResult(new ReplicationAck
+                    {
+                        Accepted = true,
+                        HighestAppliedHlc = HybridLogicalClock.Zero,
+                        BootstrapEpoch = stream.EchoedBootstrapEpoch(),
+                    });
+                }
+
                 var segments = batch.EncodedEnvelope!.Value.EncodedEntries.Span;
                 var records = new List<WalRecord>(segments.Length);
                 for (var i = 0; i < segments.Length; i++)
@@ -82,7 +99,12 @@ public partial class ReplicationShipperGrainTests
                 }
 
                 stream.Applied.Add(records);
-                return Task.FromResult(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+                return Task.FromResult(new ReplicationAck
+                {
+                    Accepted = true,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = stream.EchoedBootstrapEpoch(),
+                });
             });
         return stream;
     }
@@ -100,7 +122,9 @@ public partial class ReplicationShipperGrainTests
             ILatticeRegistry? registry = null,
             ILatticeMergeModeResolver? modeResolver = null,
             IReplicationDeadLetterGrain? deadLetters = null,
-            ITxRegistryGrain? txRegistry = null)
+            ITxRegistryGrain? txRegistry = null,
+            long? exportEpoch = null,
+            Func<long>? exportEpochOf = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{Tree}/{Peer}"));
@@ -129,10 +153,24 @@ public partial class ReplicationShipperGrainTests
             factory.GetGrain<IReplicationDeadLetterGrain>(Tree).Returns(deadLetters);
         }
 
-        if (txRegistry is not null)
+        if (exportEpochOf is not null || exportEpoch is not null)
         {
-            factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(txRegistry);
+            var current = exportEpochOf ?? (() => exportEpoch!.Value);
+            var epochGrain = Substitute.For<IReplicationExportEpochGrain>();
+            epochGrain.GetAsync().Returns(_ => Task.FromResult(current()));
+            factory.GetGrain<IReplicationExportEpochGrain>(Tree).Returns(epochGrain);
         }
+
+        // A rebind starts a replay whose filter asks the registry about every
+        // saga (#4533); these sagas are decided and their decisions stored.
+        if (txRegistry is null)
+        {
+            txRegistry = Substitute.For<ITxRegistryGrain>();
+            txRegistry.GetRecordedStatusAsync(Arg.Any<Guid>()).Returns(Task.FromResult(TxStatus.Committed));
+            txRegistry.GetParticipantsAsync(Arg.Any<Guid>()).Returns(Task.FromResult<IReadOnlyList<int>>(Array.Empty<int>()));
+        }
+
+        factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(txRegistry);
 
         var transport = Substitute.For<IReplicationTransport>();
         var stream = RecordAppliedStream(transport, walEncoder);

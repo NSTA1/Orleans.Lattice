@@ -236,6 +236,7 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "the tree is not enrolled for replication on this receiver.",
                         entry.TreeId, entry.OriginClusterId);
+                    await RecordNotEnrolledLostAsync(entry.OriginClusterId, [entry.Timestamp], cancellationToken);
                     outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
 
@@ -266,7 +267,14 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
                         entry.TreeId, entry.OriginClusterId, entry.Mode, expectedMode);
-                    await DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken).ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
             }
@@ -291,8 +299,14 @@ internal sealed partial class ReplicationApplier(
                     .EvaluateAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
                 if (decision != ReplicationTenantIsolationDecision.Admit)
                 {
-                    await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
-                        .ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = decision switch
                     {
                         ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
@@ -313,16 +327,26 @@ internal sealed partial class ReplicationApplier(
             // same entry once the fence lifts on global completion. The gate is
             // fronted by a short in-memory cache so this is not a per-entry grain
             // call.
-            if (_receiveGate is not null
-                && await _receiveGate.IsReceivePausedAsync(entry.TreeId, cancellationToken).ConfigureAwait(false))
+            //
+            // The answer carries the fence's epoch, and the admitted entry is
+            // stamped with it (issue #4593): a restored copy refuses an entry
+            // admitted under an epoch older than its restore's pause, so a
+            // stale cached answer can never carry a pre-cutover write onto it.
+            if (_receiveGate is not null)
             {
-                outcome = LatticeReplicationMetrics.OutcomeDedup;
-                return new ApplyResult
+                var observed = await _receiveGate.ObserveAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+                if (observed.Paused)
                 {
-                    Applied = false,
-                    HighWaterMark = HybridLogicalClock.Zero,
-                    Deferred = true,
-                };
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult
+                    {
+                        Applied = false,
+                        HighWaterMark = HybridLogicalClock.Zero,
+                        Deferred = true,
+                    };
+                }
+
+                ReplicationAdmissionEpoch.Stamp(entry.TreeId, observed.Epoch);
             }
 
             // Defence-in-depth: tombstone-reap envelopes
@@ -410,7 +434,7 @@ internal sealed partial class ReplicationApplier(
             // saga-id-keyed and idempotent on the receiver
             // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
             // _recentlyTerminal HashSet dedup). They bypass the
-            // per-origin HWM check, the shadow-forward dedup cache, and
+            // shadow-forward dedup cache and
             // the causal-buffer parking path: those primitives are
             // per-key data-flow dedup primitives and have no defined
             // semantics on saga linearization records. The receiver-side
@@ -531,8 +555,7 @@ internal sealed partial class ReplicationApplier(
                 //
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass the
-                // causal-park gate for the same reason they bypass
-                // the HWM gate (see the HWM dedup comment above):
+                // causal-park gate:
                 // parallel cross-leaf saga writes carry VectorClock
                 // frontiers whose entries point at sibling per-leaf
                 // clocks, and parking them would produce a
@@ -542,10 +565,29 @@ internal sealed partial class ReplicationApplier(
                 // ordering across the saga's keys is irrelevant -
                 // the terminal flip is the single atomic-visibility
                 // transition.
-                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
+                if (!isPreparedAtomicBatch
+                    && CausalApplyBuffer.RequiredDependencies(entry, resolved.ClusterId) is { } required)
                 {
-                    var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
+                    var verdicts = await hwmGrain.CheckDependenciesAsync([required], cancellationToken);
+                    var verdict = verdicts.Length == 0 ? CausalDependencyVerdict.Unmet : verdicts[0];
+                    if (verdict == CausalDependencyVerdict.Lost)
+                    {
+                        // A dependency names a write this tree acknowledged and then
+                        // lost for good (#4603): the entry can never apply in causal
+                        // order, so dead-letter it as a terminal state. A full queue
+                        // defers it instead, so nothing is acknowledged and lost.
+                        cache.Remove(entry);
+                        if (!await TryDeadLetterDependencyLostAsync(entry, cancellationToken))
+                        {
+                            outcome = LatticeReplicationMetrics.OutcomeDedup;
+                            return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeRejectedDependencyLost;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    }
+
+                    if (verdict == CausalDependencyVerdict.Unmet)
                     {
                         await ParkAsync(entry, cancellationToken);
                         // The durable buffer now holds the entry and dedups its
@@ -597,18 +639,19 @@ internal sealed partial class ReplicationApplier(
 
                 RecordFifoState(entry);
 
-                // Advance the HWM only after the apply commits.
-                var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
+                // Advance the HWM only after the apply commits, and record the
+                // write's identity in the same call (issue #4586).
+                var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken);
                 var newHwm = advanced
                     ? entry.Timestamp
                     : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-                // The advance may have unblocked entries parked by an earlier
-                // delivery whose deps included this origin's diagonal. Drain
-                // FIFO until the buffer reaches a fixed point - each drained
-                // apply may itself advance the local vector clock, so re-fetch
-                // before each pass.
-                if (advanced)
+                // A recorded identity may meet a parked entry's dependency whether
+                // or not the high-water mark moved: a write below the mark is still
+                // a new identity (issue #4586). Drain FIFO to a fixed point; the
+                // call is skipped unless this silo last saw the buffer non-empty.
+                if (advanced || !entry.IsPrepared)
                 {
                     await DrainBufferAsync(entry.TreeId, cancellationToken);
                 }
@@ -626,6 +669,17 @@ internal sealed partial class ReplicationApplier(
                 // re-ships the entry once the capture has released the registry.
                 // The terminal tally the call recorded first is idempotent per
                 // source shard, so the re-delivery re-evaluates it unchanged.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
+            catch (CopyReceiveFencedException)
+            {
+                // Issue #4593: the apply routed to a restored copy whose receive
+                // fence a coordinated restore still holds closed (its alias swap
+                // ran after this entry passed the cached receive gate). Defer it
+                // like the receive fence, so the sender re-ships it once the
+                // restore's fence lifts and opens the copy.
                 cache.Remove(entry);
                 outcome = LatticeReplicationMetrics.OutcomeDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
@@ -676,8 +730,32 @@ internal sealed partial class ReplicationApplier(
             });
     }
 
-    private static bool HasCausalDependencies(WalRecord entry) =>
-        entry.VectorClock is { Entries.Count: > 0 };
+    /// <summary>
+    /// Dead-letters <paramref name="entry"/> with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> (#4603), or
+    /// returns <see langword="false"/> when the dead-letter queue is full so the
+    /// caller defers the entry rather than acknowledge and lose it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterDependencyLostAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId).EnqueueAsync(
+                entry,
+                failureReason: "A causal dependency of this entry names a write this cluster acknowledged and then lost "
+                    + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
+                retryCount: 0,
+                reasonTag: LatticeReplicationMetrics.ReasonDependencyLost,
+                cancellationToken).ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Records a successfully-applied point mutation into the
@@ -760,7 +838,29 @@ internal sealed partial class ReplicationApplier(
     private async Task ParkAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry).ConfigureAwait(false);
+
+        // Issue #4593: a parked entry is acknowledged and drained later, so the
+        // fence is re-read UNCACHED now. An entry a stale cached answer admitted
+        // while the fence is in fact paused, or admitted under an epoch a pause
+        // has since superseded, is deferred instead of parked - the sender
+        // re-ships it and a fresh admission stamps it again - so a parked entry
+        // always carries the epoch current when it was parked. The drain stamps
+        // that epoch, so a restored copy refuses an entry parked before its
+        // restore's pause.
+        long admissionEpoch = 0;
+        if (_receiveGate is not null)
+        {
+            var fence = await grainFactory.GetGrain<ITreeReceiveFenceGrain>(entry.TreeId).ObserveAsync().ConfigureAwait(false);
+            var superseded = ReplicationAdmissionEpoch.TryGet(out _, out var admittedUnder) && admittedUnder < fence.Epoch;
+            if (fence.Paused || superseded)
+            {
+                throw new CopyReceiveFencedException(entry.TreeId, entry.TreeId, admittedBeforeRestore: superseded);
+            }
+
+            admissionEpoch = fence.Epoch;
+        }
+
+        var remaining = await GetBufferGrain(entry.TreeId).ParkAsync(entry, admissionEpoch).ConfigureAwait(false);
         _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
 
@@ -795,18 +895,57 @@ internal sealed partial class ReplicationApplier(
     /// <see cref="ApplyAsync"/> does. Throws on failure; the grain dead-letters
     /// the entry.
     /// </summary>
-    internal async Task ApplyDrainedEntryAsync(WalRecord entry, CancellationToken cancellationToken)
+    internal async Task ApplyDrainedEntryAsync(WalRecord entry, long admissionEpoch, CancellationToken cancellationToken)
     {
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+
+        // Issue #4593: the drained entry carries the epoch it was parked under.
+        ReplicationAdmissionEpoch.Stamp(entry.TreeId, admissionEpoch);
         var resolved = options.Get(entry.TreeId);
         await ApplyPointAsync(entry).ConfigureAwait(false);
         RecordApplyLag(entry);
         RecordFifoState(entry);
         RecordAppliedContentForIndex(in entry, resolved);
         await GetHwmGrain(entry.TreeId)
-            .TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken)
+            .AdvanceAppliedAsync(entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Marks the writes a not-enrolled tree's drop acknowledged as lost on their
+    /// origin's frontier (issue #4586). The sender's low watermark passes a
+    /// dropped write, so without the mark a dependent of it would be released
+    /// although the write is never visible here; with it, the dependent is
+    /// dead-lettered. The origin is wire-supplied, so a mark is recorded only for
+    /// a configured <see cref="LatticeReplicationOptions.ReplicationPeers"/>
+    /// member when that list is set, which bounds the frontiers a peer can make
+    /// this receiver keep.
+    /// </summary>
+    private Task RecordNotEnrolledLostAsync(string? originClusterId, IReadOnlyCollection<HybridLogicalClock> dropped, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(originClusterId) || dropped.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var peers = options.CurrentValue.ReplicationPeers;
+        if (peers is not null && !peers.Contains(originClusterId))
+        {
+            return Task.CompletedTask;
+        }
+
+        return grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+            .RecordLostAsync(dropped, cancellationToken);
+    }
+
+    /// <summary>
+    /// The identity an applied <paramref name="entry"/> records on the tree's
+    /// high-water-mark grain (issue #4586): its source HLC, or nothing for a saga
+    /// prepare, which is not visible until its terminal - a dependent of it is
+    /// decided by the origin's frontier instead.
+    /// </summary>
+    private static HybridLogicalClock[] AppliedIdentity(in WalRecord entry) =>
+        entry.IsPrepared ? Array.Empty<HybridLogicalClock>() : [entry.Timestamp];
 
     private ICausalApplyBufferGrain GetBufferGrain(string treeId) =>
         grainFactory.GetGrain<ICausalApplyBufferGrain>(treeId);
@@ -1164,6 +1303,46 @@ internal sealed partial class ReplicationApplier(
     /// </summary>
     private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource) =>
         ReplicationInboundAdmission.ResolveLocalMergeMode(_replicationContext, options, treeId, out hasEnrollmentSource);
+
+    /// <summary>
+    /// Awaits a dead-letter enqueue and reports whether it parked the entry:
+    /// <see langword="false"/> when the queue is full (#4603), in which case the
+    /// caller must keep the entry unacknowledged (defer it) rather than drop it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterAsync(WalRecord entry, Task enqueue)
+    {
+        try
+        {
+            await enqueue.ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Marks (or clears) the inbound link of <paramref name="entry"/> as stalled
+    /// on a full dead-letter queue (#4603), so the peer-status read path reports
+    /// it as stalled rather than quiet while its entries are deferred. Only an
+    /// existing inbound row is updated.
+    /// </summary>
+    private void RecordDeadLetterFull(WalRecord entry, bool full)
+    {
+        if (_peerStats is null || string.IsNullOrEmpty(entry.TreeId) || string.IsNullOrEmpty(entry.OriginClusterId))
+        {
+            return;
+        }
+
+        _peerStats.RecordDeadLetterFull(
+            entry.TreeId,
+            entry.OriginClusterId,
+            ReplicationContactDirection.Inbound,
+            full ? DateTimeOffset.UtcNow : null);
+    }
 
     /// <summary>
     /// Dead-letters an inbound entry the receiver-side merge-mode gate rejected

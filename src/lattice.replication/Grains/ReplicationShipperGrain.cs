@@ -110,10 +110,10 @@ internal sealed partial class ReplicationShipperGrain(
     private string _peerClusterId = "";
     private bool _keyParsed;
 
-    // The physical tree id the WAL shards are addressed by. A logical tree can
+    // The physical tree id the WAL partitions are addressed by. A logical tree can
     // be repointed to a new physical tree by a registry alias swap (shadow-
     // cutover restore, resize, schema remediation, or operator alias change);
-    // WAL shards are keyed by the physical id. Re-resolved from _treeName by
+    // WAL partitions are keyed by the physical id. Re-resolved from _treeName by
     // event notification plus a backstop so a mid-stream swap does not
     // silently orphan the ship cursor. Defaults to _treeName (logical ==
     // physical for a tree that has never been swapped) until the first resolve.
@@ -714,6 +714,9 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        // The driver ensures a shipper only for a peer in the topology, so a
+        // shipper detached when its peer was removed holds the log again.
+        await ReattachToLogAsync();
         // RegisterOrUpdateReminder is idempotent; StartPhaseTimer's
         // _phaseTimer ??= guard makes the second call a no-op. Safe
         // for repeated invocation.
@@ -868,6 +871,10 @@ internal sealed partial class ReplicationShipperGrain(
     {
         ParseGrainKey();
 
+        // Ahead of the pause and backoff gates: releasing a covered purge hold
+        // depends on neither, and a held registry blocks every decision purge.
+        await MaybeReleasePurgeHoldAsync(force: false);
+
         // Durable administrative pause (saga cutover): no post-cut entry may
         // leave the cluster while a saga is in flight. The cursor is never
         // advanced, so shipping resumes from the same point when the pause is
@@ -945,13 +952,24 @@ internal sealed partial class ReplicationShipperGrain(
         // boundaries. Elision is opt-in and gated on the content-hash dedup
         // master switch, so the default path is unaffected.
 
-        if (window == 1)
+        try
         {
-            await PumpSerialOnceAsync(options, cancellationToken);
-            return;
-        }
+            if (window == 1)
+            {
+                await PumpSerialOnceAsync(options, cancellationToken);
+                return;
+            }
 
-        await PumpPipelinedOnceAsync(options, window, cancellationToken);
+            await PumpPipelinedOnceAsync(options, window, cancellationToken);
+        }
+        finally
+        {
+            // After every batch of the tick has folded its cursors: a rewind
+            // applied before a later fold would be raised past the retained
+            // saga records it exists to re-ship (#4534).
+            await MaybeClearReseedAsync();
+            await RefreshSourceFrontierAsync(options);
+        }
     }
 
     /// <summary>
@@ -1100,7 +1118,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
-            await ProbePoisonedSagaRetirementAsync(cancellationToken);
+            await DrainLegacyPoisonedSagasAsync();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -1228,6 +1246,7 @@ internal sealed partial class ReplicationShipperGrain(
         CancellationToken cancellationToken)
     {
         var sourceHlc = _drainBuffer[^1].Timestamp;
+        var sagaDelta = CaptureSagaFrontierDelta();
 
         // Content-hash payload elision (opt-in, default off). When enabled
         // and the peer can perform the exchange, advertise a per-entry
@@ -1247,6 +1266,7 @@ internal sealed partial class ReplicationShipperGrain(
             // of them and advanced its HWM via the exchange). Advance the
             // sender cursor past the drained range and finish the tick
             // without shipping an empty batch.
+            ApplySagaFrontierDelta(sagaDelta);
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
             state.State.ConsecutiveFailures = 0;
@@ -1321,29 +1341,14 @@ internal sealed partial class ReplicationShipperGrain(
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
         {
-            // Schema-shaped failure during framing-header construction:
-            // the entries can never be shipped in their current form.
-            // Park every entry in the offending batch on the per-tree
-            // DLQ tagged ReasonSchema and advance the cursor past the
-            // batch so the stream makes progress. Operators inspect /
-            // replay / discard via ILatticeReplicationDeadLetters.
-            Logger.LogWarning(ex,
-                "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
-                _drainBuffer.Count, LogContext, sourceHlc);
-            if (!await RouteBatchToDeadLetterAsync(ex, cancellationToken))
-            {
-                // Fail closed (#4494): the batch stays unparked and the cursor
-                // stays put; stop the tick so nothing after it is carved, and
-                // the next tick re-reads it.
-                ApplyBackoff(options, ex, "dead-letter-refused");
-                return true;
-            }
-
+            // Schema-shaped failure during framing-header construction: the
+            // entries can never be shipped in their current form. Quarantine the
+            // batch and take the peer off the log, durably, before the cursor
+            // moves past it, so a re-seed delivers its writes (#4614).
+            await NoteSkippedBatchAsync();
+            await QuarantineUnencodableBatchAsync(_partitionMaxReadSeq, _partitionAdvanced, _drainBuffer.Count, ex);
             RetireTerminalHolds(_mergeBatchId);
             await AdvanceCursorAsync(sourceHlc, options, cancellationToken);
-
-            // Persist the poison list with the cursor move now, not at the next
-            // write interval.
             await FlushCursorAsync(cancellationToken);
             return false;
         }
@@ -1358,6 +1363,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                SourceFrontier = _currentFrontier,
                 // Payload is empty on the framing path - the
                 // transport consumes EncodedEnvelope. Bytes-only
                 // transports that need a serialised form are not
@@ -1401,8 +1407,8 @@ internal sealed partial class ReplicationShipperGrain(
         // still stamps its pin, and that is precisely the window in
         // which the producer must not trim.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
-
-        await MaybeClearReseedAsync(ack);
+        NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
@@ -1429,6 +1435,8 @@ internal sealed partial class ReplicationShipperGrain(
             advancedTo = sourceHlc;
         }
 
+        ApplySagaFrontierDelta(sagaDelta);
+        NoteSourceFrontierDelivered(_currentFrontier);
         RetireTerminalHolds(_mergeBatchId);
         await AdvanceCursorAsync(advancedTo, options, cancellationToken);
         // Successful round-trip resets the backoff counter.
@@ -1507,9 +1515,9 @@ internal sealed partial class ReplicationShipperGrain(
     /// cluster are eligible to ship. Also drops entries whose
     /// <see cref="WalRecord.OriginClusterId"/> is null or empty - these
     /// are durability-only WAL appends authored by the core
-    /// <c>ICommitLogWriter</c> path on the same per-tree shard the
+    /// <c>ICommitLogWriter</c> path on the same per-tree WAL partition the
     /// replication observer ships from, and have no defined origin for
-    /// the receiver's per-origin high-water-mark dedup path. The
+    /// the receiver's per-origin high-water-mark state. The
     /// replication observer fires alongside the durability writer on
     /// every commit and stamps a non-empty origin onto its own append,
     /// so the corresponding stamped entry is what propagates to peers.
@@ -1517,7 +1525,7 @@ internal sealed partial class ReplicationShipperGrain(
     private bool ShouldShip(WalRecord entry, LatticeReplicationOptions options)
     {
         // Skip durability-only entries with no replication origin. The
-        // receiver's per-origin HWM dedup path requires a non-empty
+        // receiver's per-origin HWM state requires a non-empty
         // OriginClusterId; shipping them would surface as ArgumentException
         // and dead-letter every such entry on every pump tick.
         //
@@ -1550,7 +1558,7 @@ internal sealed partial class ReplicationShipperGrain(
         //
         // Cycle-break: only ship entries authored by the *local*
         // cluster. Under the WAL-as-sole-durability-boundary contract,
-        // the per-shard WAL also captures entries installed by
+        // the partitioned WAL also captures entries installed by
         // `IReplicationApplier` on this cluster - those entries stamp
         // `OriginClusterId` with the *source* cluster id (set by
         // `LatticeOriginContext.With(originClusterId)` inside
@@ -1890,7 +1898,8 @@ internal sealed partial class ReplicationShipperGrain(
         bool HitBatchCap,
         long LaunchTimestamp,
         bool Elided = false,
-        long BatchId = 0);
+        long BatchId = 0,
+        SagaFrontierDelta? Sagas = null);
 
     /// <summary>
     /// Bounded sender-side pipelining path. Maintains a window of up to
@@ -1928,7 +1937,7 @@ internal sealed partial class ReplicationShipperGrain(
         try
         {
             await InitializeDrainTickAsync(options, cancellationToken);
-            await ProbePoisonedSagaRetirementAsync(cancellationToken);
+            await DrainLegacyPoisonedSagasAsync();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -2018,6 +2027,7 @@ internal sealed partial class ReplicationShipperGrain(
                 var entryCount = _drainBuffer.Count;
                 var hitBatchCap = entryCount >= maxPerBatch;
                 var sourceHlc = _drainBuffer[^1].Timestamp;
+                var sagaDelta = CaptureSagaFrontierDelta();
                 var maxReadSnapshot = SnapshotPartitionMaxReadSeq();
                 var advancedSnapshot = SnapshotPartitionAdvanced();
 
@@ -2049,7 +2059,7 @@ internal sealed partial class ReplicationShipperGrain(
                     });
                     inFlight.Enqueue(new InFlightShipBatch(
                         elidedAck, sourceHlc, maxReadSnapshot, advancedSnapshot,
-                        entryCount, 0L, hitBatchCap, Stopwatch.GetTimestamp(), Elided: true, BatchId: batchId));
+                        entryCount, 0L, hitBatchCap, Stopwatch.GetTimestamp(), Elided: true, BatchId: batchId, Sagas: sagaDelta));
                     shippedAny = true;
                     _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
@@ -2090,7 +2100,7 @@ internal sealed partial class ReplicationShipperGrain(
                     // already-in-flight (lower-HLC) batches have acked
                     // in order, so the cursor never skips a hole. The
                     // failed batch's drain buffers are left intact for
-                    // RouteBatchToDeadLetterAsync below (no further
+                    // QuarantineUnencodableBatchAsync below (no further
                     // MergeOneBatchAsync runs after this break).
                     encodeFailure = ex;
                     failedMaxReadSeq = maxReadSnapshot;
@@ -2110,6 +2120,7 @@ internal sealed partial class ReplicationShipperGrain(
                         TreeName = _treeName,
                         OriginClusterId = options.ClusterId,
                         ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                        SourceFrontier = _currentFrontier,
                         Payload = ReadOnlyMemory<byte>.Empty,
                         Envelope = null,
                         EncodedEnvelope = encodedEnvelope,
@@ -2130,7 +2141,7 @@ internal sealed partial class ReplicationShipperGrain(
 
                 inFlight.Enqueue(new InFlightShipBatch(
                     sendTask, sourceHlc, maxReadSnapshot, advancedSnapshot, entryCount, byteCount, hitBatchCap, launchTimestamp,
-                    BatchId: batchId));
+                    BatchId: batchId, Sagas: sagaDelta));
                 shippedAny = true;
                 _peerStats.RecordInFlight(_treeName, _peerClusterId, inFlight.Count);
 
@@ -2167,31 +2178,18 @@ internal sealed partial class ReplicationShipperGrain(
                 }
             }
 
-            // Handle a deferred schema-shaped encode failure now that
-            // every lower-HLC batch has acked: DLQ the offending batch
-            // and advance the cursor strictly past it so a poison batch
-            // never stalls the stream.
+            // Handle a deferred schema-shaped encode failure now that every
+            // lower-HLC batch has acked: quarantine the batch and take the peer
+            // off the log, durably, then advance the cursor strictly past it, so
+            // a re-seed delivers its writes and the stream never stalls (#4614).
             if (!failed && encodeFailure is not null)
             {
-                Logger.LogWarning(encodeFailure,
-                    "Encode failed for {EntryCount}-entry batch on {Context}; routing to DLQ and advancing cursor to {Hlc}",
-                    _drainBuffer.Count, LogContext, failedSourceHlc);
-                if (await RouteBatchToDeadLetterAsync(encodeFailure, cancellationToken))
-                {
-                    RetireTerminalHolds(failedBatchId);
-                    await AdvanceCursorPipelinedAsync(
-                        failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
-
-                    // Persist the poison list with the cursor move now, not at
-                    // the next write interval.
-                    await FlushCursorAsync(cancellationToken);
-                }
-                else
-                {
-                    // Fail closed (#4494): the batch stays unparked and the
-                    // cursor stays put; the next tick re-reads it.
-                    ApplyBackoff(options, encodeFailure, "dead-letter-refused");
-                }
+                await NoteSkippedBatchAsync();
+                await QuarantineUnencodableBatchAsync(failedMaxReadSeq, failedAdvanced, _drainBuffer.Count, encodeFailure);
+                RetireTerminalHolds(failedBatchId);
+                await AdvanceCursorPipelinedAsync(
+                    failedSourceHlc, failedMaxReadSeq, failedAdvanced, options, cancellationToken);
+                await FlushCursorAsync(cancellationToken);
             }
         }
         finally
@@ -2272,6 +2270,7 @@ internal sealed partial class ReplicationShipperGrain(
             // The real ManifestExchanges / ShipElidedPayloads counters were
             // already emitted inside TryElideViaManifestExchangeAsync, so the
             // elision is still observable.
+            ApplySagaFrontierDelta(batch.Sagas);
             RetireTerminalHolds(batch.BatchId);
             await AdvanceCursorPipelinedAsync(
                 batch.SourceHlc, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
@@ -2299,6 +2298,8 @@ internal sealed partial class ReplicationShipperGrain(
         // Same cross-cluster blocked-floor propagation as the serial
         // leg, ahead of the pipelined cursor advance below.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+        NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
@@ -2313,6 +2314,8 @@ internal sealed partial class ReplicationShipperGrain(
             advancedTo = batch.SourceHlc;
         }
 
+        ApplySagaFrontierDelta(batch.Sagas);
+        NoteSourceFrontierDelivered(_currentFrontier);
         RetireTerminalHolds(batch.BatchId);
         await AdvanceCursorPipelinedAsync(
             advancedTo, batch.MaxReadSeqSnapshot, batch.AdvancedSnapshot, options, cancellationToken);
@@ -2482,9 +2485,8 @@ internal sealed partial class ReplicationShipperGrain(
         // every partition - including genuinely cold ones - because a cold
         // partition's unshipped entries may legitimately carry a per-leaf
         // HLC below the scalar cursor.
-        _legacyCursorMigrationPending =
-            state.State.Cursor != HybridLogicalClock.Zero
-            && state.State.PartitionCursors.Count == 0;
+        _legacyCursorMigrationPending = ReplicationShipEligibility.IsLegacyMigrationTick(
+            state.State.Cursor, state.State.PartitionCursors.Count);
 
         // The durable cursor of a partition with a held saga terminal is capped
         // at that terminal (#4480); resume from the uncapped acknowledged
@@ -2492,6 +2494,7 @@ internal sealed partial class ReplicationShipperGrain(
         // Without holds the two are equal.
         PrepareTerminalHoldsForTick(partitions);
         ReportReseedState();
+        await PrepareReplayFilterForTickAsync(partitions);
 
         for (var p = 0; p < partitions; p++)
         {
@@ -2515,11 +2518,11 @@ internal sealed partial class ReplicationShipperGrain(
         //
         // Fan the per-partition shipping reads out concurrently rather
         // than awaiting them one-by-one. Each read is an independent
-        // WAL-shard grain call that writes only its own partition's
+        // WAL-partition grain call that writes only its own partition's
         // scratch slot (TryRefillPartitionAsync touches index [p]
         // alone), so N partitions prime in a single read latency
         // instead of N serialized latencies. On a multi-partition tree
-        // whose WAL shards are activated on a different silo this is the
+        // whose WAL partitions are activated on a different silo this is the
         // dominant per-pump cost under a write burst: a serial prime of
         // 8 partitions pays 8 cross-silo/durable round-trips every tick
         // - even for partitions that turn out to be idle - which stalls
@@ -2585,9 +2588,6 @@ internal sealed partial class ReplicationShipperGrain(
         _holdsEnabled = TerminalHoldsRequired(options);
         if (_terminalHolds.Count > 0)
         {
-            // A held terminal whose saga was poisoned since it was held is parked,
-            // not released (#4494).
-            await ParkPoisonedTerminalHoldsAsync(cancellationToken);
             await EnsureTailBarriersAsync(cancellationToken);
             EmitReleasableTerminalHolds(maxPerBatch);
         }
@@ -2718,6 +2718,13 @@ internal sealed partial class ReplicationShipperGrain(
                 TallyPrepare(in winningRecord, minPartition, winningShipping.Sequence, options);
             }
 
+            // A record of a batch that could not be encoded is consumed without
+            // shipping: the re-seed export the failure asked for carries it (#4614).
+            if (IsEncodeQuarantined(minPartition, winningShipping.Sequence))
+            {
+                continue;
+            }
+
             if (ReplicationShipEligibility.IsBelowLegacyScalarCursor(
                     _legacyCursorMigrationPending,
                     isPreparedAtomicBatch,
@@ -2732,18 +2739,17 @@ internal sealed partial class ReplicationShipperGrain(
                 continue;
             }
 
-            // A later prepare or a terminal of a saga poisoned by a dead-lettered
-            // prepare is parked, never shipped: the peer must not commit the saga
-            // without the lost write (#4494).
-            if (IsPoisonedSagaRecord(in winningRecord))
-            {
-                await ParkPoisonedRecordAsync(winningRecord, minPartition, winningShipping.Sequence, cancellationToken);
-                continue;
-            }
-
             // The peer lost records in a trimmed gap and awaits a re-seed:
             // any saga could be missing a member, so none is delivered (#4534).
             if (ReseedRequired && IsSagaRecord(in winningRecord))
+            {
+                continue;
+            }
+
+            // A replayed (non-contiguous) stream withholds, saga by saga, any
+            // saga the origin proves forgotten and purged (#4533).
+            if (state.State.ReplayFilterHorizon is not null
+                && await TryWithholdReplayedSagaAsync(winningRecord, minPartition, winningShipping.Sequence, partitions))
             {
                 continue;
             }
@@ -3437,12 +3443,14 @@ internal sealed partial class ReplicationShipperGrain(
         var page = await grain
             .ReadShippingAsync(_partitionNextSeq[partition], pageSize, cancellationToken)
             ;
+        NoteClockFloor(partition, page.ClockFloor, page.ClockFloorOffset);
         if (page.Entries.Count == 0)
         {
             _partitionPages[partition] = null;
             return;
         }
-        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition]
+            && await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken))
         {
             // A trim removed records this shipper never delivered (#4534).
             await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
@@ -3452,6 +3460,20 @@ internal sealed partial class ReplicationShipperGrain(
         _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
     }
+
+    /// <summary>
+    /// Whether a shipping read that jumped past <paramref name="requested"/> did
+    /// so because a trim removed it, rather than because the offset is a hole that
+    /// was never written (issue #4621). Offsets are not dense: a flush abandoned at
+    /// its deadline that never lands leaves a permanent hole the allocator has
+    /// already moved past. The shard's trusted trim watermark separates the two;
+    /// without one (a provider that keeps none, or a silo in the cluster that
+    /// predates it) every jump is treated as a trim, which re-seeds the peer
+    /// needlessly at worst and never skips a trim silently.
+    /// </summary>
+    private static async Task<bool> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
+        => await grain.GetTrimWatermarkAsync(cancellationToken) is not { } trimmedThrough
+            || trimmedThrough >= requested;
 
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the
@@ -3512,7 +3534,7 @@ internal sealed partial class ReplicationShipperGrain(
             _lastSuccessfulContactUtc = now;
             return;
         }
-        if (now - _lastSuccessfulContactUtc < options.LivenessProbeInterval)
+        if (now - _lastSuccessfulContactUtc < options.LivenessProbeInterval && !SourceFrontierHeartbeatDue())
         {
             return;
         }
@@ -3567,6 +3589,7 @@ internal sealed partial class ReplicationShipperGrain(
                 TreeName = _treeName,
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
+                SourceFrontier = _currentFrontier,
                 Payload = ReadOnlyMemory<byte>.Empty,
                 Envelope = null,
                 EncodedEnvelope = encodedEnvelope,
@@ -3586,12 +3609,16 @@ internal sealed partial class ReplicationShipperGrain(
         // buffer drains. Without this the pin would freeze at its last
         // shipped value for as long as the link stays quiet.
         await PublishPeerBlockedFloorAsync(ack.BlockedAtHlc, cancellationToken);
+        NoteReseedEcho(ack);
+        NoteReceiverLineage(ack);
 
         if (!ack.Accepted)
         {
             ApplyBackoff(options, exception: null, reason: "ack-rejected");
             return;
         }
+
+        NoteSourceFrontierDelivered(_currentFrontier);
 
         // Successful probe: stamp last-contact and refresh the
         // outbound peer-stats success/backlog gauges. Receiver-side
@@ -4128,54 +4155,6 @@ internal sealed partial class ReplicationShipperGrain(
         }
     }
 
-    /// <summary>
-    /// Routes every entry in the current drain buffer to the per-tree
-    /// dead-letter queue, tagged with
-    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>. A
-    /// best-effort enqueue failure is logged and swallowed - the
-    /// cursor still advances past the batch so a deterministically-
-    /// failing DLQ does not pin the ship loop forever; the WAL
-    /// retains the originals until the GC pass trims them, so an
-    /// operator can still recover off the WAL even when the DLQ is
-    /// unavailable.
-    /// <para>
-    /// The saga of every prepare in the batch is poisoned first (#4494), so its
-    /// terminals are parked rather than shipped. Returns <see langword="false"/>,
-    /// parking nothing, when the poison list cannot take the batch's sagas: the
-    /// caller must then not advance past the batch (fail closed).
-    /// </para>
-    /// </summary>
-    private async Task<bool> RouteBatchToDeadLetterAsync(Exception encodeFailure, CancellationToken cancellationToken)
-    {
-        var failureReason = encodeFailure.Message ?? "<no message>";
-        if (!TryPoisonDrainBufferSagas())
-        {
-            return false;
-        }
-
-        _pendingCursorWrites++;
-        var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
-        foreach (var entry in _drainBuffer)
-        {
-            try
-            {
-                await dlq.EnqueueAsync(
-                    entry,
-                    failureReason,
-                    retryCount: 0,
-                    LatticeReplicationMetrics.ReasonSchema,
-                    cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
-            {
-                Logger.LogWarning(ex,
-                    "Failed to park entry on DLQ for {Context} (key={Key}, hlc={Hlc}); proceeding with cursor advance",
-                    LogContext, entry.Key, entry.Timestamp);
-            }
-        }
-
-        return true;
-    }
 
     private void ParseGrainKey()
     {
@@ -4231,7 +4210,7 @@ internal sealed partial class ReplicationShipperGrain(
 
     /// <summary>
     /// Resolves the shipper's logical source tree id to its current physical
-    /// tree id via the registry alias. WAL shards are keyed by the physical id,
+    /// tree id via the registry alias. WAL partitions are keyed by the physical id,
     /// so the ship path must address them by the resolved value rather than the
     /// logical grain key. Returns the logical id unchanged when resolution
     /// yields nothing (the direct-construction unit-test path, where no registry
@@ -4355,7 +4334,11 @@ internal sealed partial class ReplicationShipperGrain(
         state.State.Cursor = HybridLogicalClock.Zero;
         state.State.BoundPhysicalTreeId = physical;
         ResetTerminalHoldsForNewSource(followsSagaPause);
-        ResetPoisonedSagasForNewSource(followsSagaPause);
+        DiscardClockFloors();
+        // Quarantined sequences belong to the retired log (#4614).
+        ClearEncodeQuarantine();
+        // The new log is shipped from its start: a replay with no snapshot (#4533).
+        await BeginReplayFilterAsync(partitions, carried: false);
         await state.WriteStateAsync();
 
         if (_partitionGrainCache.Length >= partitions)

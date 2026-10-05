@@ -103,7 +103,7 @@ public partial class ReplicationShipperGrainTests
         // eligible to apply, fronted by the toggleable receive fence.
         var gate = new ToggleReceiveGate { Paused = true };
         var applyGrain = Substitute.For<IReplicationApplyGrain>();
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkTestGrains.Substitute();
         hwmGrain.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwmGrain.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);

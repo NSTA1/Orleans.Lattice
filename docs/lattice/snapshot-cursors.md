@@ -44,8 +44,8 @@ returning the cursor ID:
    retriable `LatticeTransactionOutcomeUnavailableException`. A gate whose
    capture crashed lapses with its lease, so it never wedges sagas.
 3. **Per-shard frozen-baseline capture.** Every shard root walks its
-   leaf chain through `IShardRootGrain.CaptureGatedSnapshotBaselineAsync`,
-   freezing each `BPlusLeafGrain`'s committed projection and folding its
+   leaf chain through the shard-root baseline-capture path,
+   freezing each leaf's committed projection and folding its
    own `(leaf_frontier, capturedHead]` WAL tail exactly once (CRDT folds
    are not idempotent, so each record is applied to a single leaf a
    single time). The per-leaf results are unioned into one fully
@@ -78,10 +78,12 @@ returning the cursor ID:
 
    Every saga prepare still pending at a shard's captured head is
    resolved, during that shard's fold, against the gate's decision
-   snapshot exactly as a live multi-key read resolves it: a batch
-   Committed in the snapshot reads post-saga, one the registry can no
-   longer determine (Indeterminate) reads as absent, and any other reads
-   pre-saga. Every shard resolves against the same decisions, so an
+   snapshot: a batch Committed in the snapshot reads post-saga, and any
+   other reads pre-saga. The snapshot holds each decision the registry
+   records, including one whose retention window has elapsed - which a
+   live read reports as Indeterminate and hides - because a capture is
+   permanent and the sweeps settle such a bucket from the same recorded
+   decision ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)). Every shard resolves against the same decisions, so an
    atomic batch is on one side of the snapshot on every shard it touched,
    even though each shard captures at its own moment and a batch's commit
    terminal reaches each shard separately. That holds because, under the
@@ -103,7 +105,7 @@ returning the cursor ID:
 
 The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and
-persisted on `LatticeCursorState.SnapshotCoordinate`. The coordinate
+persisted on the cursor state's snapshot-coordinate slot. The coordinate
 carries a fresh per-open `SnapshotBaselineToken` that identifies the
 durable baseline rows. The coordinate is deterministic - replaying with
 the same coordinate yields the same page sequence, even after silo
@@ -152,7 +154,7 @@ the in-memory seed is sufficient.
 
 The frozen baseline is therefore seeded **in memory** at capture and
 persisted **lazily**: the cursor flushes every shard's baseline durably
-(`ISnapshotLeafGrain.EnsurePersistedAsync`) the first time a page reports
+(the snapshot leaf durable-baseline flush) the first time a page reports
 `HasMore == true`, *before* it returns that page or writes its
 continuation bookmark. The client only ever observes a continuation
 token after every shard baseline is durable, so any cursor that survives
@@ -205,7 +207,7 @@ A durable baseline is normally deleted at close, but an interrupted close
 token no other cursor reuses. To bound that leak, every persisted
 baseline carries a sliding time-to-live governed by
 `LatticeOptions.SnapshotBaselineTtl` (default 6 hours; set to
-`Timeout.InfiniteTimeSpan` to disable). `SnapshotBaselineStorageGrain`
+`Timeout.InfiniteTimeSpan` to disable). The snapshot-baseline storage row
 arms a self-clearing Orleans reminder when a baseline is written and
 slides it forward while the snapshot is actively served, so a long-running
 scan keeps its baseline alive while an abandoned one is reclaimed once the
@@ -333,7 +335,7 @@ while (true)
 // scope.DisposeAsync() runs here and closes the cursor.
 ```
 
-The `*Scope` family covers the five unfiltered cursor flavours - `OpenKeyCursorScopeAsync`,
+The `*Scope` family covers the unfiltered cursor flavours - `OpenKeyCursorScopeAsync`,
 `OpenEntryCursorScopeAsync`, `OpenSnapshotKeyCursorScopeAsync`,
 `OpenSnapshotEntryCursorScopeAsync`, and `OpenDeleteRangeCursorScopeAsync` -
 so the choice between scoped and manual is independent of the

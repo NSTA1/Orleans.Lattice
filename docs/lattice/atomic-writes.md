@@ -410,10 +410,44 @@ write and the drain.
 - A split's live shadow-forward and its retroactive sweep carry `P` to the
   destination, which buckets the prepare at `P`.
 - A committed-values backstop the sweep applies carries `P` too.
+- The saga coordinator's own committed-values backstop carries `P`. Before
+  its execute phase ends, the coordinator reads every key's `P` back from
+  the bucket that holds it and persists the stamps with the execute-phase
+  checkpoint, so a coordinator that reactivates after the decision still
+  has them. Each terminal it sends to a shard carries the stamps of that
+  shard's backstop keys, so a leaf that holds no bucket for a key - the
+  sibling a leaf split moved the key's range to, say - applies the saga's
+  value at `P` and never over a write acknowledged after the prepare.
+- An online resize's mirror forwards each prepare to the resized copy
+  carrying `P`, and every other write as the row it stored, at that row's
+  own stamp, so the resized copy never re-stamps a write on its own clock.
+  Its prepared-bucket sweep and the terminals it mirrors carry `P` too, so
+  the resized copy orders every write exactly as the source does.
 - A leaf split hands its new sibling the donor's clock, so the sibling
   stamps later writes above every prepare the donor minted.
 - The write-ahead log records whether a prepare's stamp is original, so
   replay rebuilds the same decision.
+
+The coordinator's read-back has no fallback. It reads every shard a prepare
+can have reached: the touched shards and every shard a split of them leads
+to. Each shard first reads the leaves it recorded the prepares reaching. If
+that misses a key - the shard root reactivated since the prepares, or a
+split moved the bucket - the coordinator asks again exhaustively, and each
+shard reads its whole leaf chain. The buckets and their marks are replayed
+from the write-ahead log, so a bucket is never lost to a reactivation. Every
+entry must be accounted for, marked with its stamp or unmarked, before the
+checkpoint is written. A read that faults or still misses a key fails the
+batch, which the execute loop retries and, once its retries are spent,
+aborts, so a saga never commits without its stamps. The
+`orleans.lattice.atomic_write.prepare_stamp_read_back.slow_path` counter
+records each read-back that leaves the fast path (see
+[Metrics](metrics.md)).
+
+`P` is carried only to a shard of the copy whose clocks minted it, or to a
+resized copy its mirror keeps on the same clock lineage. A terminal the
+coordinator re-resolves to another copy, or redelivers to a resized copy
+after the old one was purged, carries none, and carries no committed-values
+backstop either.
 
 A prepare without that evidence is applied as before, at a fresh dominating
 stamp, with the migrated-row exception that lets a saga beat a pre-saga
@@ -421,11 +455,12 @@ value a split migrates in above the destination's clock. That covers:
 
 - a prepare written by a silo that predates this change, which keeps a
   rolling upgrade safe;
-- a prepare an online resize copies;
-- a committed-values backstop sent directly by the saga coordinator.
+- a CRDT-delta prepare, which folds into the key's current value at the
+  terminal stamp rather than replacing it.
 
-A resize copy stamps its mirrored writes with its own clock, which does not
-order them against `P`.
+Before [#4522](https://github.com/NSTA1/Orleans.Lattice/issues/4522) the
+resize mirror forwarded each write as the operation itself, so the resized
+copy stamped it on its own clock, which does not order it against `P`.
 
 ### A later write the split imports is not dropped over the saga's value
 
@@ -615,6 +650,24 @@ or by a later commit or abort decision carrying a *conflicting* outcome
 (a repeat of the same outcome is recognised as idempotent and leaves the
 tombstone in place, so it can never resurrect a decision the tree already
 retired).
+A prepare forwarded shard to shard (a split's hot-path shadow-forward, an
+online resize's mirror, or a split sweep's replay) can still be delivered
+after its saga has completed, been forgotten and had its decision pruned: a
+forward abandoned at `ShardForwardTimeout` keeps running. The registry then
+holds no row for the saga and can only answer in flight, and a destination
+leaf that no longer remembers the terminal would bucket a prepare that
+nothing ever settles, which every later split or resize carries and which
+pins the leaf's write-ahead log prefix. The saga's participant row tells the
+two cases apart
+([#4632](https://github.com/NSTA1/Orleans.Lattice/issues/4632)). The saga
+holds the row in its tree's registry from before its first prepare dispatch
+(the execute phase re-asserts it, and a registry fault fails the step) until
+`ForgetAsync`, and a forwarded prepare's participant registration only joins
+an existing row, never recreating it. So a destination leaf refuses a
+forwarded prepare whose saga the registry reports undecided and holds no row
+for, before it writes anything. A prepare applied by replication carries its
+author cluster's origin and belongs to a saga this cluster never forgets, so
+it is bucketed as before.
 On a host with replication enabled, every tree's expired tombstone is
 also held until the write-ahead log can no longer retain a prepare of its
 saga ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) -
@@ -627,7 +680,18 @@ the snapshot export. After a forget, the registry samples every
 partition's next sequence (at most once per half retention, up to 30 s)
 and purges the tombstone once every partition's oldest retained entry is
 at or past that sample. It fails closed: a failed read or a changed
-partition layout keeps the tombstone. On such a host
+partition layout keeps the tombstone. A replication shipper can also hold
+every purge on the tree through a per-tree purge hold: while any hold is
+outstanding no decision on the tree is purged. A shipper takes one before
+it takes its peer off the log for a re-seed, and keeps it until the
+replay that follows has passed its horizon, so a saga in flight at the
+re-seed's export keeps its decision while the replay may still read it
+([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). The WAL
+GC takes one too, for a shipper, before a `WalRetention` trim passes that
+shipper's unshipped read position, and the shipper releases it once its
+durable position covers the trim or its peer is re-seeded
+([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A failed
+read of the holds holds too. On such a host
 `TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
 (masked at once) rather than dropping it.
 
@@ -649,7 +713,10 @@ risk - reserved for unit tests or environments that disable adaptive
 splitting.
 
 A prepared write that reaches a leaf after that leaf has already applied
-the saga's terminal is refused rather than bucketed. A split's hot-path
+the saga's terminal is refused rather than bucketed, and so is a forwarded
+prepare (a split's shadow-forward or sweep replay) that arrives after its
+saga has decided, even when the leaf has not applied the terminal or no
+longer remembers it. A split's hot-path
 shadow-forward sends each prepared key as its own call, so one can trail
 the terminal by milliseconds. The terminal has already settled every key it
 carried to that leaf (a commit's committed-values backstop wrote the value,
@@ -658,8 +725,12 @@ ever drain the bucket. Left in place, it surfaced once the leaf no longer
 remembered the terminal - after a reactivation, or after a split stranded
 the key outside the leaf's span - as a stale value or as a key counted twice
 by `CountAsync`. The refusal happens before the write-ahead-log append, so
-the orphan cannot reappear on replay. The retention window above still
-covers a leaf whose current activation does not know the terminal. The sweep
+the orphan cannot reappear on replay. A leaf whose current activation does
+not know the terminal asks the registry instead: a forwarded prepare it does
+not recognise is checked against the saga's decision and refused once the
+saga has decided (a decision the retention window above has masked still
+counts), while a registry fault buckets it as before, because refusing a
+prepare the saga may still need would lose a write. The sweep
 reads each saga's verdict under the logical tree, where the saga records it,
 so the check also holds for a resized tree whose shards live under a
 physical copy.
@@ -708,11 +779,16 @@ matters most for the cross-cluster bootstrap export built from that
 snapshot - see
 [Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md).
 
-The masked row remains readable to the one caller that legitimately
-needs it: the leaf's activation-time self-terminalisation sweep, which
-is finishing a prepare it already owns rather than disclosing an
-outcome to a caller, reads past the mask through a deliberately narrow
-registry bypass. Read paths never do.
+The masked row remains readable to the callers that finish a prepare
+rather than disclose an outcome to a reader, through a deliberately
+narrow registry bypass: the leaf's activation-time self-terminalisation
+sweep, a split's or a resize copy's prepared-bucket sweep, and a
+snapshot capture. A capture resolves a still-pending bucket against the
+decision the registry records, masked or not, because a capture is
+permanent: hiding the key would leave it absent from every restore while
+another key of the same committed batch, whose terminal already landed,
+is held post-saga ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)).
+Read paths never read past the mask.
 
 `TxStatus.Indeterminate` is additive by value, so a mixed-version
 cluster stays wire-compatible: a node that predates the case takes the
@@ -1273,10 +1349,10 @@ the cache fast path.
 
 ## Cross-tree (multi-tree) atomic writes
 
-`SetManyAtomicAsync` is bound to a single tree. To commit a batch that
-spans **two or more distinct `ILattice` trees** all-or-nothing, use the
-`IGrainFactory.SetManyAtomicAsync` extension (or the
-`BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
+`SetManyAtomicAsync` is bound to a single tree. To commit a batch through
+the cross-tree coordinator - typically because it spans distinct `ILattice`
+trees all-or-nothing - use the `IGrainFactory.SetManyAtomicAsync` extension
+(or the `BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
 same atomic-visibility guarantee the single-tree saga gives *within* a
 tree to a set of trees: either every targeted key across every
 participating tree becomes visible, or none of them do - observed
@@ -1449,6 +1525,18 @@ another converges to `8` on **both** clusters, exactly as the live
 tag-index flag-membership rows, which use the same per-entry carry: an
 active-active membership add on each cluster converges to the union
 through the atomic (prepared) path, not only the eventual accessor path.
+
+A key whose committed value reaches a leaf as a cross-migration backstop
+(a leaf split moved the key away between the prepare and the terminal, or
+the saga's coordinator re-delivers committed values to a leaf that holds no
+prepared bucket for it) has no delta to fold there. On a tree whose merge
+mode resolves to a CRDT, that leaf **joins** the staged merged state into
+the key's current state through the primitive's state merge and stores the
+result at a stamp above the row, durably, so a mutation acknowledged on the
+key after the stage-time snapshot survives the terminal. The join keeps
+exactly what the delta fold keeps: both are pointwise per replica (or per
+dot), so concurrent writes from different replicas accumulate (issue
+[#4611](https://github.com/NSTA1/Orleans.Lattice/issues/4611)).
 
 Value-only sagas - a plain `Set(key, bytes)` slice with no staged CRDT
 delta - stay on the last-writer-wins prepared path unchanged: the highest

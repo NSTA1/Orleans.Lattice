@@ -11,20 +11,22 @@ implementation, no registration, no background work.
 The API facades (`Orleans.Lattice.Api.State`, `.Api.Data`, `.Api.Auth`,
 `.Api.Backup`, `.Api.Schema`, `.Api.Replication`, `.Api.Telemetry`,
 `.Api.TreeAdmin`, `.Api.TenantAdmin`, and `.Api.Apps`) each expose a transport-agnostic
-service surface that a transport binding projects onto a wire protocol. Two
-families of package consume those surfaces: the code-first gRPC bindings and
-the `Orleans.Lattice.Api.Mcp` server.
+service surface that a transport binding projects onto a wire protocol. The
+code-first gRPC bindings and the `Orleans.Lattice.Api.Mcp` server consume those
+surfaces.
 
 This package is the seam between them. It carries:
 
 - **The service interfaces** - `ILatticeStateQuery`, `ILatticeStateObserver`,
   `ILatticeStateMetricsObserver`, `ILatticeDataApi`, `ILatticeAuthAdmin`,
   `ILatticeBackupControl`, `ILatticeBackupOperations`, `ILatticeSchemaControl`,
+  `ILatticeSchemaOperations`, `ILatticeSchemaComplianceOperations`,
   `ILatticeReplicationControl`, `ILatticeReplicationStatus`,
   `ILatticeTelemetry`, `ILatticeTreeAdmin`,
   `ILatticeTenantAdmin`, `ILatticeTenantAccessAdmin`,
   `ILatticeTenantGrantAdmin`, `ILatticeTenantQuotaUsage`,
-  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`, the installable-app
+  `ILatticeTenantRegionAdmin`, `ILatticeTenantSelfService`,
+  `ILatticeTenantDirectoryAdmin`, `ILatticeTenantPolicyAdmin`, the installable-app
   `ILatticeAppsControl`, `ILatticeAppRoleBindings`, `ILatticeAppCatalog`,
   `ILatticeAppWorkspace` and `ILatticeAppBridge`, and the region-discovery
   `ILatticeRegionCatalog`.

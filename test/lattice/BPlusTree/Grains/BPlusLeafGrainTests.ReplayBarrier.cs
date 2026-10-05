@@ -118,13 +118,16 @@ public partial class BPlusLeafGrainTests
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync",
         // Replication and delta seams.
         "GetDeltaSinceAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
-        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync",
+        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
         // Saga and transaction terminals.
         "ApplyTxTerminalAsync", "MarkSagaShadowAsync",
+        // Drops replayed pending buckets and records the discard marker that
+        // replay consults, so it must run against the fully replayed buckets.
+        "DiscardPendingTransactionAsync",
         // Maintenance that reads the projection.
         "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",

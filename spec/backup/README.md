@@ -20,7 +20,7 @@ CI timeout:
 | [`BackupCapture`](BackupCapture.tla) | A capture racing in-flight sagas: the per-tree capture under the #4485 decision gate, and a cross-tree set's fence, drain gate, gated re-check and validation, with a lease lapse or a fault at any step. | Two trees, three shards, a single-tree and a cross-tree saga, a standalone or a set capture, two attempts. |
 | [`BackupIncremental`](BackupIncremental.tla) | An incremental backup racing a saga: the forward WAL drain from the base's frontier, the saga's prepares and terminals in the window resolved against the decision gate, the frontier held back for an unsettled saga, the undecided sagas a link hands on, and the fall back to a full backup (#4589). | One saga over two keys on two WAL partitions, its prepares and terminals on different partitions, a full capture and up to two increments. |
 | [`BackupProvenance`](BackupProvenance.tla) | What a chain records: per-origin provenance, the #2621 empty-origin rule, and the chain's HLC frontier (#3758). | A local and a replicated origin, three writes, a chain of three links. |
-| [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it. | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes. |
+| [`BackupRestore`](BackupRestore.tla) | A coordinated restore across two regions, its per-record admission, and the replication that resumes after it, with delivery split into a cached-gate admission and a later landing, a causal-apply buffer, and the restored copy's receive fence (#4593). | Two clusters, two copies each, a backup with one admitted and one foreign record, two application writes, one saga (receive-fence epochs 0 and 1). |
 | [`BackupCutover`](BackupCutover.tla) | A local shadow-cutover restore and its revert: the alias and shard map that move together, the redirects that heal stale routing, the alias reservation, and a crash with a retry. | One tree, two copies, one stale routing cache, one crash. |
 
 An increment needs the WAL's partitions and offsets, which no other capture
@@ -83,6 +83,15 @@ refinement note's rows:
   `RestoredCutNotReAdvancedResumeShipsRetiredLog` reproduces production before
   it, and its code analogue turns the fix's regression test red.
 
+- **#4593** (`BackupRestore`, fixed): a write a stale cached receive gate
+  admitted before a coordinated restore paused receiving reached the tree after
+  the alias swap, or after the lift, and landed on the restored copy; so did an
+  entry parked in the causal-apply buffer before the pause. The module checks
+  the fix: the restored copy is born closed with the pause's epoch as its
+  floor, the seam refuses a closed copy or a stale admission, a park re-reads
+  the fence, and the drain discards an entry parked before the pause.
+  `RestoredCutNotReAdvancedCopyFenceDropped` reproduces production before it,
+  and its code analogue turns the fix's regression tests red.
 - **#4589** (`BackupIncremental`, fixed): an incremental backup copied a saga's
   prepared writes as data and dropped its terminals, so a restore could hold an
   aborted or undecided batch's writes, or a batch partially. Confirmed by
@@ -92,10 +101,9 @@ refinement note's rows:
   its terminals reaches the WAL - which the fix closes by recording each capture's
   undecided sagas in its cut.
 
-All three fixes have landed, so the reproducing mutations now stand as
+All four fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
-
 ## Saga abstraction
 
 `BackupCapture` restates the saga steps of
@@ -111,7 +119,7 @@ table in [`RefinementCapture.md`](RefinementCapture.md).
 
 | Core | Routes | Coverage |
 |------|--------|----------|
-| `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, with a fixed-design arm, a no-regression arm, an anti-vacuity witness, and a guard per rule. |
+| `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, which models the fence, its lapse window, the gate, the gated re-check and the post-capture re-observation over a two-tree saga, with a fixed-design arm, a quiet-set arm, an anti-vacuity witness that an accepted set holds the committed saga, four single-defence arms (each of the drain, the re-check, the re-observed epoch and the re-observed in-flight count alone keeps the set whole against the race it covers), and two guards that find a torn set once the defences for a race are removed. |
 | `IncrementalSagaStaging` (backup) | How an increment resolves the sagas in its window against the decision gate, in `IncrementalDeltaCollector` | `IncrementalSagaStagingTests` (core unit suite; the staging is a fold over the drained entries against a fixed decision snapshot, so it is not schedule-sensitive). |
 | `BackupChainFrontier` (backup) | Origin normalisation, per-origin high-water, and both consistency cuts, in both collectors and the capture service | `BackupChainFrontierTests` (core unit suite; the rules are not schedule-sensitive). |
 | `CrossClusterSagaDecisionCore` (replication) | The coordinated restore's single global decision in `CrossClusterSagaCoordinatorGrain` | `CrossClusterSagaDecisionCoreTests`; Coyote `CoordinatedRestoreDecisionCoyoteTests`, with a fixed-design arm and a guard. |
@@ -134,8 +142,8 @@ notes and TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `BackupCapture` | 5 | 1 | 17 | 17 | 21 | 41,423 |
+| `BackupCapture` | 5 | 1 | 19 | 21 | 23 | 256,606 |
 | `BackupIncremental` | 5 | 0 | 8 | 13 | 11 | 1,709 |
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
-| `BackupRestore` | 5 | 1 | 10 | 10 | 14 | 707 |
-| `BackupCutover` | 5 | 1 | 9 | 10 | 14 | 31 |
+| `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
+| `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |

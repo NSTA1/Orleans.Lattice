@@ -12,18 +12,18 @@ activation the cache is rebuilt: the leaf reloads its latest snapshot where
 it has a usable one and replays each WAL partition from just past the offset
 that snapshot covers, or from the start of the partition's readable window
 when no snapshot covers it (see
-[Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net)). Two
+[Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net)). These
 operational concerns naturally arise:
 
 1. **Drift detection.** If a silo's leaf projection diverges from the
    WAL prefix it claims to have applied - a cosmic-ray bit flip, a
-   storage-provider read-after-write anomaly, a bug in `ILeafProjection.Apply` -
+   storage-provider read-after-write anomaly, a bug in the projection-apply path -
    how does an operator notice before downstream readers do?
 2. **Recovery from WAL trim.** If a leaf has been cold long enough that the
    WAL has been trimmed past its last persisted checkpoint, the leaf cannot
    resume by tail-replay alone. What does activation do?
 
-This document covers the two surfaces that answer those questions:
+This document covers the surfaces that answer those questions:
 `ILattice.GetLeafProjectionDigestAsync` (drift detection) and
 `ProjectionRebuildPolicy` (recovery from genuine loss), together with
 the `MaxLeafReplayEntries` / `LeafProjectionRetention` cost thresholds
@@ -105,7 +105,7 @@ fields, in this order:
 
 The per-entry contributions are XOR-folded into a 16-byte running hash
 that is **maintained incrementally on every mutation** and persisted on
-the leaf state row as `LeafNodeState.ProjectionHash`. Insert XORs the new contribution in; replace XORs the
+the leaf state row as the projection-hash field. Insert XORs the new contribution in; replace XORs the
 old contribution out and the new one in (the old contribution cancels
 under self-inverse XOR); delete XORs the contribution out. Because XOR
 is commutative, associative, and self-inverse, the running hash is
@@ -144,7 +144,7 @@ The digest is byte-stable across silos because every input is canonicalised:
 ### Topology changes and the aggregate
 
 The internal-node aggregate is maintained incrementally as children
-publish `ChildDigestSnapshot` updates upward, so the aggregate's
+publish child digest snapshots upward, so the aggregate's
 correctness depends on a single invariant: **each child contributes to
 exactly one parent at any instant**. A B+ tree split moves a contiguous
 half of a node's children to a new sibling, which transiently violates
@@ -153,7 +153,7 @@ behind on the donor or if a moved child keeps publishing to its former
 parent. Both would double-count the moved subtree's entries in the
 shard total.
 
-The split path preserves the one-parent invariant in two steps:
+The split path preserves the one-parent invariant as follows:
 
 1. **Prune on the donor.** When an internal node splits, it removes the
    moved children's rows from its persisted per-child digest table and
@@ -303,7 +303,7 @@ siloBuilder.ConfigureLattice(opts =>
 {
     // Turn off digest maintenance globally - leaf mutations stop
     // updating the running XOR fold and stop publishing
-    // ChildDigestSnapshot upward to internal-node ancestors.
+    // publishing child digest snapshots upward to internal-node ancestors.
     opts.MaintainProjectionDigest = false;
 });
 
@@ -316,10 +316,10 @@ siloBuilder.ConfigureLattice("audited-tree", opts =>
 
 When the opt-out is in effect:
 
-- Leaf-mutation funnels (`StoreEntry` / `RemoveEntry`) take a trimmed
+- Leaf-mutation funnels take a trimmed
   path that LWW-merges the value, bumps the delivery sequence, and
   returns without touching the persisted `ProjectionHash`.
-- The leaf does not publish `ChildDigestSnapshot` upward, so no
+- The leaf does not publish child digest snapshots upward, so no
   internal-node ancestor updates its `SubtreeProjectionHash` for that
   mutation. The whole upward chain is quiescent.
 - `ILattice.GetLeafProjectionDigestAsync` throws
@@ -435,7 +435,7 @@ back-compat slot) and decides how to recover. The classifier runs
 **once per partition** in `[0, WalPartitions)`; the leaf is refused
 as fall-off-log if **any** partition's classifier reports genuine loss,
 while a cost signal or the snapshot advisory below still tail-replays.
-Three triggers classify an individual
+The triggers classify an individual
 partition - but only the **first** indicates missing data, and only
 the first is fatal:
 
@@ -493,7 +493,7 @@ the first is fatal:
    supplies `TimeSpan.Zero` as the age, so this trigger does not fire
    from activation today (tracked in #1738).
 
-> **Why triggers 2 and 3 are not fatal (issue #1738).** They were,
+> **Why the cost triggers are not fatal (issue #1738).** They were,
 > until a tree holding fully intact data was permanently bricked by a
 > replay gap of 10,648 against the 10,000 default - 648 entries, 6.5%
 > over budget - while every offset it needed was still readable in the
@@ -602,7 +602,7 @@ and maintenance activations whenever more than one permit circulates. While
 only one does - a ceiling of one, or a larger ceiling at the withholding
 floor - drives and activations share that single permit.
 
-Two callers request drives, and they do not compete for that share on
+Drive requests come from these callers, and they do not compete for that share on
 equal terms (issue #3575):
 
 - the WAL GC's blocked-leaf sweep, the only caller that lifts a pin holding
@@ -723,7 +723,7 @@ deployed has no recorded proof and declines with `UnprovenBaseline`.
 Restarting to deploy the change discards that cache; this path cannot
 recover it.
 
-Two drivers still reach such a leaf: the coverage-lag timer, which
+These drivers still reach such a leaf: the coverage-lag timer, which
 drives a leaf whose checkpoint has stopped advancing, and the WAL GC's
 blocked-leaf sweep. If the rescue declines, the first starvation drive
 logs one `Error` naming the leaf and tree, and latches
@@ -786,7 +786,7 @@ siloBuilder.ConfigureLattice(o =>
 
 ## Snapshot-on-fall-off safety net
 
-The three activation-time triggers above react to a fall-off-log
+The activation-time triggers above react to a fall-off-log
 condition *after* it has already happened. The snapshot-on-fall-off
 path is the preventative safety net: while a leaf is still healthy,
 it captures a canonical-row image of its in-memory cache to a
@@ -892,7 +892,7 @@ retention stays bounded.
 
 The incremental advance can never license a checkpoint (or the
 materialiser pin) past work that is not yet durable. The replay defers
-two kinds of record:
+these record kinds:
 
 - a **deferred** saga terminal (`TxCommit` / `TxAbort`) or
   `DeleteRange`, which is applied only in the replay's second pass (a
@@ -932,6 +932,10 @@ siloBuilder.ConfigureLattice(o =>
     // N successful checkpoint persists and re-capture on advisory.
     // Set to 0 to disable the periodic recheck entirely.
     o.LeafSnapshotReClassifyEveryNCheckpoints = 64;
+
+    // Bound how long a read-held leaf may leave snapshot coverage
+    // behind its persisted checkpoint. Set to 0 to disable.
+    o.LeafSnapshotMaxCoverageLagSeconds = 300;
 });
 ```
 
@@ -950,7 +954,8 @@ siloBuilder.ConfigureLattice(o =>
   `LatticeOptions.MaterialiserCheckpointInterval`,
   `LatticeOptions.MaterialiserCheckpointEntries`,
   `LatticeOptions.LeafSnapshotMargin`,
-  `LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints` - see [Configuration](configuration.md).
+  `LatticeOptions.LeafSnapshotReClassifyEveryNCheckpoints`,
+  `LatticeOptions.LeafSnapshotMaxCoverageLagSeconds` - see [Configuration](configuration.md).
 - `LeafProjectionStaleException` - surfaced on genuine loss under every
   `ProjectionRebuildPolicy`, including the default `SnapshotThenWal`,
   whose post-rehydrate recovery is not yet integrated; also rethrown by
@@ -997,6 +1002,10 @@ projection-state slots** that the materialiser owns:
 - In-memory pending-saga, pending-tx-offset, recently-terminal, and
   backstopped-terminal dedup buffers are dropped, together with the
   destination-side shadow markers.
+- The leaf's sidecar record of the keys each saga's terminal settled on
+  it without a prepare stamp is kept: it is a durable fact about the
+  leaf, not activation memory, and it lets the leaf recognise a shadow
+  marker that arrives after its terminal (see [Shard Splitting](shard-splitting.md#convergence-guarantees)).
 - The leaf grain is deactivated. The next activation re-materialises
   the projection through the standard activation-time path, which
   under every `ProjectionRebuildPolicy` value first attempts to
@@ -1075,6 +1084,38 @@ answers. A snapshot row the storage provider cannot read at all - so
 its storage grain cannot activate - is beyond the rebuild's reach;
 restore the tree from a backup.
 
+### A vanished leaf snapshot
+
+A snapshot that is **absent** is not, on its own, proof that the leaf
+never had one (issue #4634). When a leaf's snapshot store keeps a
+snapshot, the leaf records that fact - one flag per WAL partition the
+snapshot covers - in its own durable state row, and that record is
+written before the leaf publishes any WAL pin resolved against the
+snapshot's coverage. So the WAL GC can never trim behind a snapshot
+whose existence is not durably on record, and because the record sits
+in the same row as the leaf's projection checkpoint, no storage loss
+can keep one and drop the other. The record only ever turns on, so it
+costs at most one extra state write per partition per leaf.
+
+If the snapshot later vanishes - lost storage, or a row deleted
+outside the lattice - the leaf's next cold start finds no snapshot,
+and finds the record set. The snapshot may have been the only durable
+copy of the prefix it covered, so the replay **fails closed** exactly
+as for an unreadable snapshot: data operations fail with
+`LeafSnapshotUnavailableException` and nothing is replayed. Whether the
+WAL tail still starts at offset `0` is not consulted, for the same
+reason as above: the leaf's durable WAL pin was resolved against the
+vanished snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a cold rebuild would be running. A
+leaf that never kept a snapshot is not affected.
+
+The remedy is the same: restore the snapshot or the tree from a
+backup, or call `ILattice.RebuildLeafProjectionAsync` for the leaf's
+shard to accept the loss. The rebuild drops the record along with the
+snapshot it describes, so the next activation rebuilds from the WAL
+that survives. Clearing a leaf (tree deletion, a merge) drops the
+record with the rest of its row.
+
 ### Observe materialiser lag
 
 ```csharp verify
@@ -1129,7 +1170,7 @@ if (lag > 10_000)
 
 A growing lag indicates the materialiser is not keeping up with WAL
 ingestion. Common causes are slow leaf activation under
-storage-provider backpressure, a stuck `ILeafReplayCoordinatorGrain`,
+storage-provider backpressure, a stuck replay coordinator,
 or a deactivation storm cycling leaves faster than they can replay.
 A persistent lag at a small positive value (a few entries) is
 expected: each non-empty partition contributes at least `1` even when
@@ -1154,7 +1195,7 @@ Error surface:
 | Operator detects a digest mismatch across silos, or an integrity check flagged a corrupted projection, or a fix to how WAL entries are applied to the projection requires re-materialisation | `RebuildLeafProjectionAsync` (manual, while live). It re-applies only the WAL no snapshot covers: a prefix the leaf's snapshot covers is restored from the snapshot, so a row the snapshot captured wrongly survives unless a later WAL entry for that key replaces it |
 | Operator wants a steady-state gauge to know whether the materialiser is keeping up | `GetMaterialiserLagAsync` |
 
-The two paths share the same replay seam: `RebuildLeafProjectionAsync`
+Both paths share the same replay seam: `RebuildLeafProjectionAsync`
 clears state and lets the standard activation-time path do the
 re-materialisation. There is no second, parallel rebuild code path
 to maintain - the operator surface is a controlled trigger for the

@@ -695,6 +695,26 @@ internal sealed class FileWalShard : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the durable trim watermark, <c>-1</c> when nothing was trimmed. The
+    /// trim marker is flushed before any entry is dropped and recovery drops every
+    /// entry at or below it, so no live entry ever sits at or below the value
+    /// returned (issue #4621).
+    /// </summary>
+    internal async Task<long> GetTrimWatermarkAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            return _trimWatermark;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Returns the retained payload byte total across live entries.</summary>
     internal async Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken)
     {
@@ -879,7 +899,7 @@ internal sealed class FileWalShard : IDisposable
             EnsureLoaded();
             if (_deadBytes > 0)
             {
-                Compact(LatticeMetrics.WalCompactionTriggerReconcile);
+                Compact(CompactionTrigger.Reconcile);
             }
         }
         finally
@@ -969,6 +989,12 @@ internal sealed class FileWalShard : IDisposable
     /// sibling compacted, which is the ambiguity issue #3206 measured on a
     /// live estate and exists to remove.
     /// </para>
+    /// <para>
+    /// The reclaimed-bytes counter is primed once per trigger arm, exactly as
+    /// the compaction count is (issue #3226): both carry
+    /// <see cref="LatticeMetrics.TagTrigger"/>, so an arm that has never
+    /// reclaimed anything reads as a zero series rather than an absent one.
+    /// </para>
     /// </summary>
     private void PrimeCompactionCounters()
     {
@@ -982,7 +1008,9 @@ internal sealed class FileWalShard : IDisposable
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
         LatticeMetrics.WalCompactions.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
-        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerRatio, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerCeiling, _tenantTag);
+        LatticeMetrics.WalCompactionReclaimedBytes.Add(0, _treeTag, _shardTag, LatticeMetrics.WalCompactionTriggerReconcile, _tenantTag);
 
         // The gate-input samples are armed from the shard's true post-recovery
         // state rather than a synthetic zero, so the very first scrape after a
@@ -1290,7 +1318,7 @@ internal sealed class FileWalShard : IDisposable
         var ceiling = _options.CompactionMaximumDeadBytes;
         if (ceiling > 0L && _deadBytes >= ceiling)
         {
-            Compact(LatticeMetrics.WalCompactionTriggerCeiling);
+            Compact(CompactionTrigger.Ceiling);
             return;
         }
 
@@ -1299,10 +1327,10 @@ internal sealed class FileWalShard : IDisposable
             return;
         }
 
-        Compact(LatticeMetrics.WalCompactionTriggerRatio);
+        Compact(CompactionTrigger.Ratio);
     }
 
-    private void Compact(KeyValuePair<string, object?> trigger)
+    private void Compact(CompactionTrigger trigger)
     {
         var reclaimed = _deadBytes;
         var stream = _stream!;
@@ -1386,19 +1414,45 @@ internal sealed class FileWalShard : IDisposable
     /// which averages one threshold test per shard and hides a stranded
     /// majority behind an active minority.
     /// </para>
+    /// <para>
+    /// Both also carry the <see cref="LatticeMetrics.TagTrigger"/> of the arm
+    /// that ran, so the bytes each arm released can be read per arm alongside
+    /// how often it fired (issue #3226). The arm travels as a
+    /// <see cref="CompactionTrigger"/> and is mapped to its tag here, rather
+    /// than passed in as a tag, so the instrument-priming enrolment analyser
+    /// can resolve every tag value an emission can carry.
+    /// </para>
     /// </summary>
-    private void RecordCompaction(KeyValuePair<string, object?> trigger, long reclaimedBytes)
+    private void RecordCompaction(CompactionTrigger trigger, long reclaimedBytes)
     {
         if (_treeId.Length == 0)
         {
             return;
         }
 
-        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, trigger, _tenantTag);
+        var compactionTriggerTag = trigger switch
+        {
+            CompactionTrigger.Ceiling => LatticeMetrics.WalCompactionTriggerCeiling,
+            CompactionTrigger.Reconcile => LatticeMetrics.WalCompactionTriggerReconcile,
+            _ => LatticeMetrics.WalCompactionTriggerRatio,
+        };
+
+        LatticeMetrics.WalCompactions.Add(1, _treeTag, _shardTag, compactionTriggerTag, _tenantTag);
         if (reclaimedBytes > 0)
         {
-            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, _tenantTag);
+            LatticeMetrics.WalCompactionReclaimedBytes.Add(reclaimedBytes, _treeTag, _shardTag, compactionTriggerTag, _tenantTag);
         }
+    }
+
+    /// <summary>
+    /// The compaction arm that ran, mapped to its
+    /// <see cref="LatticeMetrics.TagTrigger"/> value by <see cref="RecordCompaction"/>.
+    /// </summary>
+    private enum CompactionTrigger
+    {
+        Ratio,
+        Ceiling,
+        Reconcile,
     }
 
     /// <summary>

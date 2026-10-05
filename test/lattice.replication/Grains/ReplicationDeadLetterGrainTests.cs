@@ -20,11 +20,14 @@ public class ReplicationDeadLetterGrainTests
 
     private static async Task<(ReplicationDeadLetterGrain grain, SortedDictionary<string, byte[]> data, LatticeReplicationOptions options)> CreateGrainAsync(
         (Orleans.Lattice.BPlusTree.Grains.ISystemLattice store, SortedDictionary<string, byte[]> data)? backing = null,
-        int capacity = 1000)
+        int capacity = 1000,
+        IReplicationOriginFrontierGrain? frontier = null)
     {
         var (store, data) = backing ?? FakeSystemLattice.Create();
         var context = Substitute.For<IGrainContext>();
         var grainFactory = Substitute.For<IGrainFactory>();
+        frontier ??= Substitute.For<IReplicationOriginFrontierGrain>();
+        grainFactory.GetGrain<IReplicationOriginFrontierGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(frontier);
         var options = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
@@ -133,20 +136,41 @@ public class ReplicationDeadLetterGrainTests
     }
 
     [Test]
-    public async Task EnqueueAsync_evicts_oldest_entry_when_capacity_reached()
+    public async Task EnqueueAsync_refuses_rather_than_evicts_when_capacity_reached()
     {
+        // #4603: every parked entry is the only copy of an acknowledged write,
+        // so a full queue refuses the next one instead of evicting the oldest.
         var (grain, data, _) = await CreateGrainAsync(capacity: 2);
 
         var id1 = await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
         var id2 = await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
-        var id3 = await grain.EnqueueAsync(MakeEntry("c"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+
+        Assert.That(
+            async () => await grain.EnqueueAsync(MakeEntry("c"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None),
+            Throws.InstanceOf<ReplicationDeadLetterQueueFullException>());
 
         var entries = await grain.ListAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
-            Assert.That(entries, Has.Count.EqualTo(2));
-            Assert.That(entries.Select(e => e.EntryId), Is.EqualTo(new[] { id2, id3 }));
+            Assert.That(entries.Select(e => e.EntryId), Is.EqualTo(new[] { id1, id2 }), "nothing was evicted");
             Assert.That(data.Keys, Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task EnqueueAsync_is_idempotent_by_entry_identity()
+    {
+        var (grain, _, _) = await CreateGrainAsync(capacity: 1);
+        var entry = MakeEntry("a");
+
+        var first = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var again = await grain.EnqueueAsync(entry, "y", 2, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+
+        var count = await grain.CountAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(again, Is.EqualTo(first), "a re-shipped copy keeps its one slot");
+            Assert.That(count, Is.EqualTo(1));
         });
     }
 
@@ -173,20 +197,106 @@ public class ReplicationDeadLetterGrainTests
     }
 
     [Test]
-    public async Task EnqueueAsync_emits_removed_counter_with_evicted_reason_on_capacity_overflow()
+    public async Task EnqueueAsync_emits_refused_counter_and_no_removal_on_capacity_overflow()
     {
-        using var collector = new MeterCollector<long>(
+        using var removed = new MeterCollector<long>(
             LatticeReplicationMetrics.MeterName,
             "orleans.lattice.replication.dead_letter.removed");
+        using var refused = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.dead_letter.refused");
         var (grain, _, _) = await CreateGrainAsync(capacity: 1);
 
         await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
-        await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        Assert.ThrowsAsync<ReplicationDeadLetterQueueFullException>(
+            async () => await grain.EnqueueAsync(MakeEntry("b"), "x", 1, LatticeReplicationMetrics.ReasonSchema, CancellationToken.None));
 
-        var evictions = collector.Measurements
-            .Where(m => m.Tags.Any(t => t.Key == "reason" && (string?)t.Value == LatticeReplicationMetrics.ReasonEvicted))
-            .ToList();
-        Assert.That(evictions, Has.Count.EqualTo(1));
+        Assert.Multiple(() =>
+        {
+            Assert.That(removed.Measurements, Is.Empty, "nothing is evicted");
+            Assert.That(refused.Measurements, Has.Count.EqualTo(1));
+            Assert.That(refused.Measurements.Single().Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "reason" && (string?)t.Value == LatticeReplicationMetrics.ReasonSchema));
+        });
+    }
+
+    [Test]
+    public async Task DiscardAsync_records_a_foreign_origin_entry_as_lost_before_removing_it()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+        var entry = MakeEntry("a");
+        var id = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+
+        Assert.That(await grain.DiscardAsync(id, CancellationToken.None), Is.True);
+
+        await frontier.Received(1).RecordLostAsync(
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(l => l.Count == 1 && l.Contains(entry.Timestamp)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DiscardAsync_keeps_the_entry_when_the_lost_mark_cannot_be_recorded()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        frontier.RecordLostAsync(default!, default).ReturnsForAnyArgs(Task.FromException(new TimeoutException("frontier down")));
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+        var id = await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+
+        Assert.ThrowsAsync<TimeoutException>(async () => await grain.DiscardAsync(id, CancellationToken.None));
+
+        Assert.That(await grain.CountAsync(CancellationToken.None), Is.EqualTo(1), "never deleted without its lost mark");
+    }
+
+    [Test]
+    public async Task DiscardAsync_does_not_record_a_local_origin_entry_as_lost()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+        var id = await grain.EnqueueAsync(MakeEntry("a") with { OriginClusterId = "site-a" }, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+
+        await grain.DiscardAsync(id, CancellationToken.None);
+
+        await frontier.DidNotReceiveWithAnyArgs().RecordLostAsync(default!, default);
+        await frontier.DidNotReceiveWithAnyArgs().SetHeldAsync(default!, default!, default);
+    }
+
+    [Test]
+    public async Task A_parked_foreign_write_is_published_as_held_before_the_enqueue_returns_and_released_on_removal()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+        var entry = MakeEntry("a");
+
+        var id = await grain.EnqueueAsync(entry, "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None);
+        var heldWhileParked = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+        await grain.RemoveReplayedAsync(id, CancellationToken.None);
+        var heldAfterRemoval = await grain.IsHoldingAsync("site-b", entry.Timestamp, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(heldWhileParked, Is.True);
+            Assert.That(heldAfterRemoval, Is.False);
+        });
+        await frontier.Received(1).SetHeldAsync(
+            ReplicationOriginFrontierGrain.DeadLetterSource(TreeId),
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(h => h.Count == 1 && h.Contains(entry.Timestamp)),
+            Arg.Any<CancellationToken>());
+        await frontier.Received(1).SetHeldAsync(
+            ReplicationOriginFrontierGrain.DeadLetterSource(TreeId),
+            Arg.Is<IReadOnlyCollection<HybridLogicalClock>>(h => h.Count == 0),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task An_enqueue_whose_held_publication_fails_throws_so_the_write_is_not_acknowledged()
+    {
+        var frontier = Substitute.For<IReplicationOriginFrontierGrain>();
+        frontier.SetHeldAsync(default!, default!, default).ReturnsForAnyArgs(Task.FromException(new TimeoutException("frontier down")));
+        var (grain, _, _) = await CreateGrainAsync(frontier: frontier);
+
+        Assert.ThrowsAsync<TimeoutException>(
+            async () => await grain.EnqueueAsync(MakeEntry("a"), "x", 1, LatticeReplicationMetrics.ReasonUnknown, CancellationToken.None));
     }
 
     [Test]

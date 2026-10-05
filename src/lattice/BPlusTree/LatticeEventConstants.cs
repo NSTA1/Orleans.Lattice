@@ -153,6 +153,14 @@ public static class LatticeEventConstants
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
 
     /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key marking an HLC override
+    /// as a freshly minted stamp rather than a carried one (issue #4586), so the
+    /// WAL clock floor still governs the write. Internal - set through
+    /// <c>LatticeFreshStampContext</c>.
+    /// </summary>
+    internal const string FreshStampRequestContextKey = "ol.fsh";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
     /// atomic-transaction <c>(Size, Index)</c> pair from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator down

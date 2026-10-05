@@ -25,7 +25,12 @@ public interface ILatticeReplicationDeadLetters
     /// Removes the parked entry with id <paramref name="entryId"/> from
     /// <paramref name="treeId"/>'s queue without attempting to apply
     /// it. Returns <c>true</c> when an entry was removed; <c>false</c>
-    /// when no entry with that id existed.
+    /// when no entry with that id existed. Discarding an entry authored by
+    /// another cluster first records that write as lost, so any later entry
+    /// that depends on it is dead-lettered with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> rather than
+    /// applied out of causal order; if that record cannot be written the entry
+    /// stays parked and the call throws.
     /// </summary>
     Task<bool> DiscardAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
 
@@ -46,4 +51,20 @@ public interface ILatticeReplicationDeadLetters
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator escape hatch for a permanently wedged receiver-side
+    /// saga. Records receiver poison for <paramref name="transactionId"/> on
+    /// <paramref name="treeId"/> from <paramref name="originClusterId"/>, then
+    /// starts (or records as owed) a full re-seed from that origin. The request
+    /// is refused and returns <see langword="false"/> when the receiver's own
+    /// transaction registry has already recorded a terminal decision for the
+    /// transaction, or when the bounded poison set is full. No receiver
+    /// registry decision is written.
+    /// </summary>
+    Task<bool> PoisonSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
 }

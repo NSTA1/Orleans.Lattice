@@ -39,7 +39,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="Timeout.InfiniteTimeSpan"/> to disable retention cleanup.
 /// </para>
 /// </summary>
-internal sealed class AtomicWriteGrain(
+internal sealed partial class AtomicWriteGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
@@ -1119,6 +1119,7 @@ internal sealed class AtomicWriteGrain(
             {
                 var registry = RegistryFor(treeId, state.State.TransactionId);
                 await registry.RegisterParticipantsAsync(state.State.TransactionId, touchedSorted);
+                _participantRowShards = touchedSorted;
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG saga-prepare-bulk-register-exit] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count}");
 #endif
@@ -1191,6 +1192,49 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private ITxRegistryGrain RegistryFor(string treeId, Guid txid) =>
         TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
+
+    /// <summary>
+    /// The shard set this activation last durably registered as the saga's
+    /// participant row, so <see cref="EnsureParticipantRowAsync"/> skips the
+    /// registry round trip in the common case where the prepare phase's bulk
+    /// registration already landed it.
+    /// </summary>
+    private IReadOnlyList<int>? _participantRowShards;
+
+    /// <summary>
+    /// Makes the saga's participant row in its own tree's registry a precondition
+    /// of every prepare dispatch (issue #4632). The row is what tells a
+    /// forwarded prepare of a live saga from one delivered after the saga was
+    /// forgotten and its decision pruned: only <see cref="ITxRegistryGrain.ForgetAsync"/>
+    /// removes it, and a forwarded registration never recreates it, so the
+    /// destination leaf refuses a forwarded prepare whose saga the registry
+    /// reports undecided and holds no row for. A live saga must therefore never
+    /// be without one, or its own forwarded prepares would be refused. The prepare
+    /// phase's bulk registration is best-effort, and a reminder-driven re-entry
+    /// resumes in the execute phase without it, so the execute phase re-asserts
+    /// the row before dispatching - a no-op write when every shard is already
+    /// recorded - and a registry fault fails the step.
+    /// </summary>
+    private async Task EnsureParticipantRowAsync()
+    {
+        var txid = state.State.TransactionId;
+        var shards = state.State.TouchedShards;
+        if (txid == Guid.Empty
+            || state.State.NextIndex >= state.State.Entries.Count
+            || ReferenceEquals(_participantRowShards, shards))
+        {
+            return;
+        }
+
+        // An empty touched set (a saga persisted before the set was recorded)
+        // still needs a row; shard 0 stands in, and a terminal routed to a
+        // shard that holds none of the batch's keys is a no-op there.
+        IReadOnlyList<int> row = shards.Count > 0 ? shards : [0];
+        await TxRegistryWriteRetry.RunAsync(
+            (registry: RegistryFor(state.State.TreeId, txid), txid, row),
+            static s => s.registry.RegisterParticipantsAsync(s.txid, s.row));
+        _participantRowShards = shards;
+    }
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
@@ -1420,6 +1464,12 @@ internal sealed class AtomicWriteGrain(
                 OperationKey);
             return;
         }
+
+        // Issue #4522: a saga whose execute phase ran on a silo that predates
+        // the read-back reaches its commit broadcast with no stamps recorded.
+        // Its buckets are still pending until this broadcast, so read them now.
+        if (committed && state.State.Entries.Count > 0 && state.State.OriginalPrepareStampsPhysicalTreeId is null)
+            await ReadBackBeforeBroadcastAsync().ConfigureAwait(true);
 
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-entry] op={OperationKey} tx={transactionId} committed={committed} initialTouched=[{string.Join(",", state.State.TouchedShards)}] entriesCount={state.State.Entries.Count}");
@@ -2405,6 +2455,13 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+                // Issue #4522: carry each backstop key's original prepare stamp,
+                // only to a shard of the copy the stamps were minted on (see
+                // CarriedOriginalStamps). Set here, per delivery, so a re-resolve
+                // to another copy and #4475's purged-copy redelivery (which
+                // re-enters this method with that copy's id) carry none.
+                using var stampScope = LatticeOriginalPrepareStampContext.With(
+                    CarriedOriginalStamps(physicalTreeId, committed, committedValues));
                 return await shard.AppendTxTerminalAsync(
                     transactionId, committed, committedValues,
                     cancellationToken: CancellationToken.None,
@@ -3169,6 +3226,8 @@ internal sealed class AtomicWriteGrain(
         var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
         LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag);
 
+        await EnsureParticipantRowAsync();
+
         // Phase D1b (c2-ix memo): collapse the D1 per-key
         // Task.WhenAll-of-N-SetAsync fan-out into a single
         // ILattice.SetManyAsync call per batch. The leaf's
@@ -3392,6 +3451,29 @@ internal sealed class AtomicWriteGrain(
                     }
                 }
 
+                // Issue #4522: read back each key's original prepare stamp
+                // while the buckets are still pending, and persist it with the
+                // checkpoint below, so the committed-values backstop can carry
+                // it. The read must account for every entry: one that faults or
+                // misses a key fails the batch, which is retried (re-preparing
+                // is idempotent) and, once the retries are spent, aborts, so the
+                // saga never commits without each key's stamp.
+                var prevOriginalStamps = state.State.OriginalPrepareStamps;
+                var prevOriginalStampsTree = state.State.OriginalPrepareStampsPhysicalTreeId;
+                if (batchFailure is null)
+                {
+                    try
+                    {
+                        await ReadBackOriginalPrepareStampsAsync().ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
+                        batchFailure = ex;
+                    }
+                }
+
                 if (batchFailure is null)
                 {
                     // Whole batch committed - single post-batch
@@ -3410,6 +3492,8 @@ internal sealed class AtomicWriteGrain(
                     {
                         state.State.NextIndex = prevNextIndex;
                         state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
                         throw;
                     }
 #if LATTICE_DIAG

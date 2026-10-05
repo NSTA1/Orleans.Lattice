@@ -4189,7 +4189,7 @@ internal sealed partial class BPlusLeafGrain
             // shared-WAL replay-budget heuristic (a sibling-populated partition
             // would otherwise trip the budget against this leaf's full range),
             // but it ALSO blinds the detector's WAL-trim trigger
-            // (checkpoint > 0 && tail > checkpoint), because -1 is read as
+            // (checkpoint >= 0 && tail > checkpoint + 1), because -1 is read as
             // "nothing to lose". For a leaf that genuinely has a durable
             // projection checkpoint, that blindness is unsafe: if the WAL has
             // been trimmed past the durable checkpoint and no snapshot covers
@@ -4227,7 +4227,7 @@ internal sealed partial class BPlusLeafGrain
             // the detector was aligned to tail > checkpoint + 1 to match this guard.
             if (checkpointOverride is { } coldReplayStart
                 && coldReplayStart < persistedCheckpoint
-                && persistedCheckpoint > 0)
+                && persistedCheckpoint >= 0)
             {
                 var trimCoordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
                     $"{treeId}/{partition}");
@@ -4246,7 +4246,7 @@ internal sealed partial class BPlusLeafGrain
 
                 // Residual liveness signal (#1542). Reaching here means this
                 // partition is a genuine cold rebuild over a pre-existing durable
-                // checkpoint (persistedCheckpoint > 0) whose full prefix still
+                // checkpoint (persistedCheckpoint >= 0) whose full prefix still
                 // survives in the readable WAL - the guard above ruled out a
                 // fallen-off prefix, and no snapshot rehydrated (step 0.5 chose
                 // the -1 override only when the cache started empty and
@@ -4258,8 +4258,10 @@ internal sealed partial class BPlusLeafGrain
                 // head, so no forward advance sets _checkpointAdvancedThisActivation)
                 // that would otherwise hold its Zero block pin - and its shared
                 // WAL - forever. A brand-new leaf has no pre-existing checkpoint
-                // (persistedCheckpoint == 0), never enters this block, and so its
-                // foreground writes are never auto-covered on deactivation.
+                // (GetPersistedCheckpointForPartition reports an unassigned 0 as
+                // -1, issue #2703), never enters this block, and so its
+                // foreground writes are never auto-covered on deactivation. A
+                // durably recorded checkpoint of 0 is a real one (issue #4433).
                 _cacheRebuiltFromWalStartThisActivation = true;
             }
 
@@ -6985,8 +6987,13 @@ internal sealed partial class BPlusLeafGrain
         // with the checkpoint frozen for the entire census. Width is now
         // something the replay can spend to keep going, at every site that
         // replays rather than only at this one.
+        //
+        // The bound is newestOffset, not head (issue #3489): head is the
+        // exclusive next sequence while the reader's upper bound is inclusive,
+        // so bounding by head asked for an offset that does not exist and the
+        // loop paid one extra, empty read after the last real entry.
 
-        while (fromExclusive < head)
+        while (fromExclusive < newestOffset)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -6995,7 +7002,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
-                    head,
+                    newestOffset,
                     (ex, narrowedTo) => ReplayLogger(context)?.LogWarning(
                         ex,
                         "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "

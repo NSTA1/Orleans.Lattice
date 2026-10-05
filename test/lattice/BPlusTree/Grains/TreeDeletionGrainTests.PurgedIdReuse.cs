@@ -10,8 +10,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Regression coverage for issue #3940. A completed purge leaves the tree's
-/// deletion record behind, and the next read or write under the same id
-/// registers a new, live tree. The record used to go on describing that tree:
+/// deletion record behind, and a later write, explicit create, or alias
+/// assignment under the same id registers a new, live tree (a read never does -
+/// issue #4219). The record used to go on describing that tree:
 /// it read as deleted and purged, so a delete was a silent no-op, recovery and
 /// purge were refused, and every alias change - a resize among them - was
 /// refused, wedging the id for good. A purge is terminal, so once the id is

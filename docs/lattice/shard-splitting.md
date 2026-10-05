@@ -4,21 +4,21 @@ Adaptive shard splitting allows a hot physical shard to split into two **at
 runtime, fully online** - no shard is ever taken offline. Splits happen
 automatically when an autonomic monitor detects a hot shard, and an
 [online reshard](online-reshard.md) drives the same split to grow a tree's
-shard count. Shard splitting is internal-only: `ITreeShardSplitGrain` is declared `internal`
-and is not reachable from consumer assemblies.
+shard count. Shard splitting is internal-only: individual split coordinators are not
+reachable from consumer assemblies.
 
 ## Why
 
 Lattice trees are sharded by hashing keys into a virtual slot space and
-mapping virtual slots onto physical `ShardRootGrain` activations. With a
+mapping virtual slots onto physical shard-root activations. With a
 fixed shard count, a workload skewed toward a small set of keys will
 saturate one shard while others sit idle. Adaptive splitting redistributes
 hot virtual slots to a new physical shard so the load follows the data.
 
 ## How it works
 
-A split is driven by the internal `TreeShardSplitGrain` coordinator through
-five persisted phases, in this order. The source shard *S* keeps serving reads and
+A split is driven by an internal per-shard coordinator through
+persisted phases, in this order. The source shard *S* keeps serving reads and
 writes throughout; the target shard *T* receives mirrored data and eventually
 owns the moved slots.
 
@@ -37,7 +37,10 @@ stateDiagram-v2
    the registry, persists its intent, and opens *S*'s shadow-write window for
    the moved slots. From that moment every successful write *S* applies to a
    key in a moved virtual slot is also mirrored to *T* through *T*'s batched
-   merge, preserving the original HLC. Before the drain begins, the
+   merge, preserving the original HLC; a typed CRDT delta apply
+   (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`) is mirrored as the
+   key's post-fold state
+   ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)). Before the drain begins, the
    coordinator then runs a **retroactive prepared-mutation sweep**: it walks
    *S*'s leaf chain, snapshots every in-flight prepared saga mutation whose
    key hashes into a moved virtual slot, and replays each one into *T*'s
@@ -337,20 +340,20 @@ sampling pass until it succeeds. On each tick (default every 30 s) it:
    (fold). If that count is already `MaxConcurrentAutoSplits` or more, the
    pass triggers nothing, so a fold in flight takes up one of the tree's
    autonomic split slots.
-   Because `HotShardMonitorGrain` is keyed per-tree, the cap is enforced
+   Because the hot-shard monitor is keyed per-tree, the cap is enforced
    independently per tree - in a multi-tree cluster each tree may have up
    to `MaxConcurrentAutoSplits` concurrent splits running simultaneously.
 4. Selects the top-`(MaxConcurrentAutoSplits - inFlight)` hottest shards
    whose rate reaches `HotShardOpsPerSecondThreshold` (default 200 ops/s),
    skipping any shard already splitting, on cooldown, or owning a single
-   virtual slot. Three shape clauses can refuse a hot shard as well: no
+   virtual slot. Additional shape clauses can refuse a hot shard as well: no
    shard is admitted once the tree has `MaxPhysicalShardsPerTree`
    physical shards (default 256), or while its load is uniform - the
    hottest shard's rate below `HotShardMinSkewRatio` (default 1.5) times
    the median shard rate, the signature of a bulk ingest that a split
    cannot relieve - and a candidate holding fewer than
    `HotShardMinShardEntries` live entries (default 1024) is skipped.
-5. Triggers `ITreeShardSplitGrain.SplitAsync` on each selected shard in
+5. Triggers one split coordinator on each selected shard in
    parallel via `Task.WhenAll` and starts a per-shard cooldown.
 
 Each split runs in its own coordinator activation, keyed
@@ -371,7 +374,7 @@ individually** when:
 | `AutoSplitEnabled = false` | Whole pass | Returns early. |
 | Tree younger than `AutoSplitMinTreeAge` (since monitor activation, default 60 s) | Whole pass | Returns early. |
 | Resize / reshard / merge / snapshot in progress | Whole pass | `ILattice.IsResize/Reshard/Merge/SnapshotCompleteAsync()` returns `false`. |
-| Any shard has a pending bulk graft | Whole pass | `IShardRootGrain.HasPendingBulkOperationAsync()` returns `true`. |
+| Any shard has a pending bulk graft | Whole pass | A shard root reports a pending bulk operation. |
 | Shard migrations in flight (adaptive splits and fold donors) already at `MaxConcurrentAutoSplits` | Whole pass | Count of shards that report they are splitting. |
 | Cluster-wide split ceiling reached (`MaxClusterConcurrentAutoSplits` set) | Per candidate | No cluster headroom left in the admission gate; the candidate is deferred to a later tick. |
 | Tree already has `MaxPhysicalShardsPerTree` physical shards (default 256) | Per candidate (every hot shard) | Counted on `orleans.lattice.split.admission.deferred` with `reason=shard_ceiling`. |
@@ -415,7 +418,7 @@ Per-tree options resolve through named `IOptionsMonitor<LatticeOptions>.Get(tree
 
 | Option | Default | Description |
 |---|---|---|
-| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, `HotShardMonitorGrain` will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
+| `AutoSplitEnabled` | `true` | Master switch for autonomic splits. When `false`, the hot-shard monitor will not trigger any splits. It does not gate an explicit `ReshardAsync`, which dispatches splits through the same coordinator to grow the shard count (see [Online Reshard](online-reshard.md)). |
 | `HotShardOpsPerSecondThreshold` | `200` | Operations/second at or above which a shard is considered hot. Intentionally low so splits occur before throughput degrades. |
 | `HotShardSampleInterval` | `30 s` | How often the monitor polls hotness counters. |
 | `HotShardSplitCooldown` | `2 min` | Minimum interval between consecutive splits of the same physical shard. |
@@ -437,15 +440,23 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
 * **No data loss** - every write committed to *S* is either drained,
   shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
+  A CRDT key can take contributions on both shards during the split - a
+  saga's delta folded on *T* by its terminal while *S* takes a non-atomic
+  CRDT write - so a migrated CRDT row is joined into the row *T* holds, through
+  the key's registered `CrdtShape`, rather than replacing it or being refused
+  by it: *T* ends with the union of both copies' contributions whatever order
+  the fold, the mirror and the drain arrive in
+  ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)).
 * **No prepared-mutation loss** - the retroactive sweep at
   `BeginShadowWrite` re-stamps every in-flight prepared mutation from
   *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`
   saga whose Prepare landed on *S* before the split commits and
-  completes against *T* with no perceived interruption. Combined with
-  `LatticeOptions.TxDecisionRetention` (default 60 s), a sweep that
-  installs a pending bucket after the saga's terminal fan-out has
-  already broadcast can still resolve the verdict via the registry
-  tombstone window. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
+  completes against *T* with no perceived interruption. A swept or
+  shadow-forwarded prepare that reaches *T* after its saga has decided is
+  refused rather than bucketed: *T*'s leaf reads the decision from the
+  logical tree's registry, where `LatticeOptions.TxDecisionRetention`
+  (default 60 s) keeps it readable, and the sweep's post-sweep cleanup
+  applies a committed saga's terminal with the value as its backstop. See [Atomic Writes - Phase 4 Complete](atomic-writes.md#phase-4---complete).
 * **No mixed-round batch across the swap** - the coordinator's drain
   copies a shadowing saga's *pre-saga* value into *T* with a migration
   marker, so between the shard-map swap and the arrival of the saga's
@@ -454,22 +465,39 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   coordinator therefore installs a per-key marker naming the shadowing
   saga, and *T*'s read gate resolves it against the registry: a saga the
   registry reports as in-flight or aborted is safe (the pre-saga value is
-  the correct answer), and so is any saga whose backstop terminal has
-  already landed on *T*. Otherwise the read raises
+  the correct answer), and so is a saga whose terminal has already settled
+  that key on the leaf - drained its prepared bucket there or installed
+  its committed value as a backstop. Otherwise the read raises
   `StaleShardRoutingException` and the deadline-bounded retry loop
-  re-fans once the backstop lands. A marker can also sit on a leaf the
-  terminal will never reach again: an install delayed past a terminal the
-  leaf then forgot on reactivation, or a marker a later leaf split carries
-  onto a new sibling with its key. The marker therefore carries the saga's
-  original prepare stamp whenever the prepare is a marked last-writer-wins
-  write, and the gate also serves a migrated row stamped at or above it:
-  such a row is the saga's own value or a later write, so serving it never
-  tears the batch. A row below that stamp is the pre-saga value and stays
-  gated, and a marker without a marked stamp (a CRDT delta, a resize copy,
-  or an install from an older silo) keeps the gate described above. A leaf
-  also never installs, or carries across its own split, a marker for a
-  saga whose terminal it has already applied (issue
-  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)). A saga
+  re-fans once the backstop lands. The check is per key, not per saga: a
+  saga's terminal can reach a leaf for one of its keys while its value
+  for another key is still on its way, and that other key must stay
+  gated.
+
+  A marker can also arrive after the terminal that would clear it: a
+  delayed shadow forward or sweep replay, possibly after the leaf has
+  reactivated or after a leaf split has moved the key to a new sibling
+  that never sees the terminal. Two rules keep such a marker from hiding
+  the key (issue
+  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)):
+
+  - The marker carries the saga's original prepare stamp whenever the
+    prepare is a marked last-writer-wins write, and the gate serves a
+    migrated row stamped at or above it: such a row is the saga's own
+    value or a later write, so serving it never tears the batch. A row
+    below that stamp is the pre-saga value and stays gated.
+  - For every key a terminal settled without such a stamp - a CRDT fold,
+    an unmarked prepare, a backstop that carried no stamp - and every key
+    an abort discarded, the leaf keeps a durable record per saga and key,
+    in a sidecar row of its own rather than in its state row. The record
+    is written before any state write that could move the leaf's
+    projection checkpoint past the terminal (the write-ahead log holds it
+    until then), carried to a split sibling for the keys that move, and
+    dropped only once the registry no longer reports the saga. A leaf
+    does not install, carry across its own split, or gate on a marker for
+    a key that record names.
+
+  A saga
   whose decision has aged out of
   `TxDecisionRetention` reads as `Indeterminate` and takes the same
   conservative arm as a committed one - serving the migrated pre-saga
@@ -490,8 +518,8 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
 ## Scope
 
-Shard splitting is an autonomic concern. `ITreeShardSplitGrain` is internal
-infrastructure: once `AddLatticeAuth` has installed its trust-boundary call
+Shard splitting is an autonomic concern. The individual split coordinator is
+internal infrastructure: once `AddLatticeAuth` has installed its trust-boundary call
 filter, starting a split asserts that the call originated inside the
 cluster, so an external client call to start one is rejected with
 `LatticeAuthorizationDeniedException` (a cluster without that filter does

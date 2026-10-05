@@ -259,6 +259,12 @@ function Set-AcaSiloCount {
 		Coming back up is free of extra ceremony because every cohort sets its
 		own env vars first, and `--set-env-vars` mints a fresh active revision
 		- so the deactivated one is never reactivated, just superseded.
+
+		Neither path returns until every superseded revision has retired
+		(Wait-AcaRevisionsRetired). Deactivation and supersession both take
+		30-60 s to drain the old revision's replicas, and the replica check
+		only sees the latest revision, so without that gate the next cohort's
+		warm-up overlapped its predecessor's tail (#3588).
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
@@ -320,6 +326,12 @@ function Set-AcaSiloCount {
 			Write-Host "[aca]   no active revisions to deactivate" -ForegroundColor DarkGray
 		}
 		Wait-AcaSiloReplicas -Context $Context -Expected 0 -TimeoutSec $TimeoutSec | Out-Null
+		# Wait-AcaSiloReplicas lists replicas WITHOUT --revision, so it only
+		# sees the latest revision. A deactivated revision keeps its replicas
+		# draining for 30-60 s after that check passes, and those replicas
+		# would overlap the next cohort's warm-up (#3588). Block until every
+		# revision has actually retired before declaring the app parked.
+		Wait-AcaRevisionsRetired -Context $Context -KeepRevision $null -TimeoutSec $TimeoutSec
 		return
 	}
 
@@ -406,43 +418,67 @@ function Set-AcaSiloCount {
 	# so the live revision was retired and the stale one kept, the app was
 	# left with zero active revisions, and the wait below polled for a
 	# replica count that could never arrive.
-	$activeTsv = Invoke-Az @(
-		'containerapp', 'revision', 'list',
-		'--name', $Context.siloApp,
-		'--resource-group', $Context.resourceGroup,
-		'--all',
-		'--query', "[?properties.active].[name,properties.createdTime]",
-		'-o', 'tsv'
-	) -AllowFailure
-	if ($LASTEXITCODE -eq 0 -and $activeTsv) {
-		$active = @(($activeTsv -split "`r?`n") |
-			ForEach-Object { $_.Trim() } |
-			Where-Object { $_ } |
-			ForEach-Object {
-				$parts = $_ -split "`t"
-				$created = [datetime]::MinValue
-				if ($parts.Count -gt 1) { [void][datetime]::TryParse($parts[1], [ref]$created) }
-				[pscustomobject]@{ Name = $parts[0].Trim(); Created = $created }
-			} |
-			Sort-Object Created)
-		if ($active.Count -gt 1) {
-			$keep = $active[-1].Name
-			foreach ($rev in $active) {
-				if ($rev.Name -eq $keep) { continue }
-				Write-Host "[aca]   retiring superseded revision $($rev.Name)" -ForegroundColor DarkGray
-				Invoke-Az @(
-					'containerapp', 'revision', 'deactivate',
-					'--name', $Context.siloApp,
-					'--resource-group', $Context.resourceGroup,
-					'--revision', $rev.Name,
-					'-o', 'none'
-				) -AllowFailure | Out-Null
-			}
-			$replicas = Wait-AcaSiloReplicas -Context $Context -Expected $Count -TimeoutSec $TimeoutSec
+	#
+	# The listing is fail-closed (#3588). It used to warn and carry on when
+	# the list call failed, which is exactly the case where a superseded
+	# revision could still be draining into the measured window unobserved.
+	$activeTsv = $null
+	$listOk = $false
+	for ($attempt = 1; $attempt -le 3 -and -not $listOk; $attempt++) {
+		$activeTsv = Invoke-Az @(
+			'containerapp', 'revision', 'list',
+			'--name', $Context.siloApp,
+			'--resource-group', $Context.resourceGroup,
+			'--all',
+			'--query', "[?properties.active].[name,properties.createdTime]",
+			'-o', 'tsv'
+		) -AllowFailure
+		if ($LASTEXITCODE -eq 0 -and $activeTsv) {
+			$listOk = $true
+		} else {
+			Write-Warning "[aca] active revision list failed or was empty (attempt $attempt/3) after scaling $($Context.siloApp); retrying"
+			Start-Sleep -Seconds 5
 		}
-	} else {
-		Write-Warning "[aca] could not enumerate revisions after scaling $($Context.siloApp); a superseded revision may still be draining into this cohort."
 	}
+	if (-not $listOk) {
+		throw "Could not enumerate the active revisions of $($Context.siloApp) after scaling it to $Count. A superseded revision may still be draining into this cohort, so the cohort cannot be measured; check: az containerapp revision list -n $($Context.siloApp) -g $($Context.resourceGroup) --all"
+	}
+	$active = @(($activeTsv -split "`r?`n") |
+		ForEach-Object { $_.Trim() } |
+		Where-Object { $_ } |
+		ForEach-Object {
+			$parts = $_ -split "`t"
+			$created = [datetime]::MinValue
+			if ($parts.Count -gt 1) { [void][datetime]::TryParse($parts[1], [ref]$created) }
+			[pscustomobject]@{ Name = $parts[0].Trim(); Created = $created }
+		} |
+		Sort-Object Created)
+	$keep = $active[-1].Name
+	if ($active.Count -gt 1) {
+		foreach ($rev in $active) {
+			if ($rev.Name -eq $keep) { continue }
+			Write-Host "[aca]   retiring superseded revision $($rev.Name)" -ForegroundColor DarkGray
+			Invoke-Az @(
+				'containerapp', 'revision', 'deactivate',
+				'--name', $Context.siloApp,
+				'--resource-group', $Context.resourceGroup,
+				'--revision', $rev.Name,
+				'-o', 'none'
+			) -AllowFailure | Out-Null
+		}
+		$replicas = Wait-AcaSiloReplicas -Context $Context -Expected $Count -TimeoutSec $TimeoutSec
+	}
+
+	# Deactivation is not retirement (#3588). A revision that Single revision
+	# mode, or the loop above, has deactivated reports active=false at once,
+	# but its replicas keep running while they drain, and the replica-count
+	# wait above cannot see them: `replica list` without --revision only
+	# lists the latest revision. Every adjacent pair of cohort revisions was
+	# observed overlapping in ContainerAppSystemLogs_CL, so the incoming
+	# cohort warmed up sharing the storage account and the WAL replay permit
+	# queue with a still-draining predecessor. Hand over only once every
+	# revision except the one this cohort runs on has genuinely retired.
+	Wait-AcaRevisionsRetired -Context $Context -KeepRevision $keep -TimeoutSec $TimeoutSec
 
 	return $replicas
 }
@@ -570,6 +606,156 @@ function Wait-AcaSiloReplicas {
 		Start-Sleep -Seconds 5
 	}
 	throw "Timed out after ${TimeoutSec}s waiting for $($Context.siloApp) to report $Expected running replica(s) (last saw $lastSeen)."
+}
+
+function Get-AcaLingeringRevisions {
+	<#
+	.SYNOPSIS
+		Return the names of revisions, other than -KeepRevision, that have
+		not yet retired.
+	.DESCRIPTION
+		A pure function over the objects `az containerapp revision list --all
+		-o json` returns, so the retirement verdict can be exercised without
+		Azure. A revision counts as lingering when any of these hold:
+
+		- it is still active;
+		- it reports a replica count above zero;
+		- its runningState is anything other than a terminal state (Stopped,
+		  Failed, Deprovisioned) or absent;
+		- -ReplicaCounts maps its name to a non-zero value. The caller fills
+		  that map from `replica list --revision <name>`, which is the
+		  authoritative per-revision view; a negative value records a probe
+		  that failed, and an unproven revision is not a retired one.
+
+		Deactivation alone is not retirement: a deactivated revision reports
+		active=false immediately while its replicas are still draining
+		(#3588), which is why the first rule is not sufficient on its own.
+	#>
+	[CmdletBinding()] param(
+		[AllowEmptyCollection()][object[]] $Revisions = @(),
+		[AllowNull()][string] $KeepRevision,
+		[System.Collections.IDictionary] $ReplicaCounts = @{}
+	)
+	$terminal = @('Stopped', 'Failed', 'Deprovisioned')
+	$lingering = [System.Collections.Generic.List[string]]::new()
+	foreach ($rev in @($Revisions)) {
+		if ($null -eq $rev -or -not $rev.PSObject.Properties['name']) { continue }
+		$name = [string]$rev.name
+		if (-not $name -or $name -eq $KeepRevision) { continue }
+		$props = if ($rev.PSObject.Properties['properties']) { $rev.properties } else { $null }
+		$active = $false
+		$replicaCount = 0
+		$state = ''
+		if ($null -ne $props) {
+			if ($props.PSObject.Properties['active']) { $active = [bool]$props.active }
+			if ($props.PSObject.Properties['replicas'] -and $null -ne $props.replicas) { $replicaCount = [int]$props.replicas }
+			if ($props.PSObject.Properties['runningState'] -and $null -ne $props.runningState) { $state = [string]$props.runningState }
+		}
+		$probed = 0
+		if ($ReplicaCounts.Contains($name)) { $probed = [int]$ReplicaCounts[$name] }
+		$stateLive = $state -and ($terminal -notcontains $state)
+		if ($active -or $replicaCount -gt 0 -or $stateLive -or $probed -ne 0) {
+			$lingering.Add($name)
+		}
+	}
+	return , $lingering.ToArray()
+}
+
+function Wait-AcaRevisionsRetired {
+	<#
+	.SYNOPSIS
+		Block until every silo revision except -KeepRevision has retired.
+	.DESCRIPTION
+		Wait-AcaSiloReplicas lists replicas without --revision, so it only
+		sees the latest revision. When a cohort transition supersedes or
+		deactivates a revision, that revision's replicas keep running for
+		30-60 s while they drain, invisible to that check. Every adjacent pair
+		of cohort revisions was observed overlapping in
+		ContainerAppSystemLogs_CL (#3588): the incoming cohort warmed up
+		sharing the storage account and the WAL replay permit queue with its
+		predecessor, so its warm-up was not independent of the previous
+		cohort's tail.
+
+		This is the gate that closes that window. Each poll lists every
+		revision, classifies it with Get-AcaLingeringRevisions, and also asks
+		`replica list --revision` about the -ProbeRecent most recently created
+		superseded revisions - the only ones that can still be draining -
+		rather than trusting revision-level fields alone. It is fail-closed: a
+		listing or probe that fails counts as not yet retired, and the wait
+		throws on timeout naming the revisions still holding replicas, rather
+		than letting a cohort be measured on top of them.
+
+		Pass -KeepRevision $null when parking, where every revision must go.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[AllowNull()][string] $KeepRevision,
+		[int] $TimeoutSec = 600,
+		[int] $ProbeRecent = 2
+	)
+	$deadline = (Get-Date).AddSeconds($TimeoutSec)
+	$lastReport = $null
+	$lingering = @('<revision list not yet read>')
+	while ((Get-Date) -lt $deadline) {
+		$json = Invoke-Az @(
+			'containerapp', 'revision', 'list',
+			'--name', $Context.siloApp,
+			'--resource-group', $Context.resourceGroup,
+			'--all',
+			'-o', 'json'
+		) -AllowFailure
+		$revisions = $null
+		if ($LASTEXITCODE -eq 0 -and $json -and $json.Trim()) {
+			try { $revisions = @($json | ConvertFrom-Json) } catch { $revisions = $null }
+		}
+		if ($null -eq $revisions) {
+			$lingering = @('<revision list failed>')
+		} else {
+			$counts = @{}
+			$recent = @($revisions |
+				Where-Object { $_ -and $_.PSObject.Properties['name'] -and $_.name -ne $KeepRevision } |
+				Sort-Object -Descending -Property {
+					$created = [datetime]::MinValue
+					if ($_.PSObject.Properties['properties'] -and $_.properties.PSObject.Properties['createdTime']) {
+						[void][datetime]::TryParse([string]$_.properties.createdTime, [ref]$created)
+					}
+					$created
+				} |
+				Select-Object -First $ProbeRecent)
+			foreach ($rev in $recent) {
+				$replicaJson = Invoke-Az @(
+					'containerapp', 'replica', 'list',
+					'--name', $Context.siloApp,
+					'--resource-group', $Context.resourceGroup,
+					'--revision', $rev.name,
+					'-o', 'json'
+				) -AllowFailure
+				$n = -1
+				if ($LASTEXITCODE -eq 0) {
+					if (-not $replicaJson -or -not $replicaJson.Trim()) {
+						$n = 0
+					} else {
+						try { $n = @($replicaJson | ConvertFrom-Json | Where-Object { $_ }).Count } catch { $n = -1 }
+					}
+				}
+				$counts[[string]$rev.name] = $n
+			}
+			$lingering = Get-AcaLingeringRevisions -Revisions $revisions -KeepRevision $KeepRevision -ReplicaCounts $counts
+		}
+		$report = ($lingering | Sort-Object) -join ', '
+		if ($report -ne $lastReport) {
+			if ($lingering.Count -gt 0) {
+				Write-Host "[aca]   waiting for superseded revision(s) to retire: $report" -ForegroundColor DarkGray
+			}
+			$lastReport = $report
+		}
+		if ($lingering.Count -eq 0) {
+			Write-Host "[aca]   no superseded revision holds replicas" -ForegroundColor DarkGray
+			return
+		}
+		Start-Sleep -Seconds 5
+	}
+	throw "Timed out after ${TimeoutSec}s waiting for superseded revision(s) of $($Context.siloApp) to retire: $(($lingering | Sort-Object) -join ', '). Their replicas would overlap the next cohort's warm-up; check: az containerapp revision list -n $($Context.siloApp) -g $($Context.resourceGroup) --all"
 }
 
 function Wait-AcaJobExecution {

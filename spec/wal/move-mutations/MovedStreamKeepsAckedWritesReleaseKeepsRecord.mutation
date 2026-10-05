@@ -10,12 +10,12 @@ SUMMARY: the release unfences the source but leaves the durable fence held, so a
 PERTURBS: Release
 
 --- FIND
-    /\ dfence
+    /\ dfence # NoMove
     /\ lapsed
-    /\ dfence' = FALSE
+    /\ dfence' = NoMove
 --- REPLACE
 \* MUTATION: the record is not cleared.
-    /\ dfence
+    /\ dfence # NoMove
     /\ lapsed
     /\ dfence' = dfence
 --- END

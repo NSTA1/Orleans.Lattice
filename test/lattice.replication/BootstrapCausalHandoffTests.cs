@@ -140,7 +140,7 @@ public partial class BootstrapCausalHandoffTests
 
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
 
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
@@ -215,6 +215,8 @@ public partial class BootstrapCausalHandoffTests
                 parked.Add(((WalRecord)call[0], (string)call[3]));
                 return Task.FromResult((long)parked.Count);
             });
+
+        CausalDependencyTestDouble.Wire(hwm, localVc);
 
         var resolved = options ?? new LatticeReplicationOptions { ClusterId = LocalCluster };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();

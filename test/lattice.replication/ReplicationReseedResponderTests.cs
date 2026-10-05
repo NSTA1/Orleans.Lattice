@@ -36,6 +36,7 @@ public class ReplicationReseedResponderTests
 
         Assert.That(echoed, Is.EqualTo(5));
         await coordinator.DidNotReceiveWithAnyArgs().BootstrapAsync(default!, default);
+        await coordinator.DidNotReceiveWithAnyArgs().BootstrapForReseedAsync(default!, default, default, default);
     }
 
     [Test]
@@ -46,21 +47,24 @@ public class ReplicationReseedResponderTests
         var echoed = await ReplicationReseedResponder.RespondAsync(factory, Tree, Source, 3, true, NullLogger.Instance);
 
         Assert.That(echoed, Is.EqualTo(3));
-        await coordinator.Received(1).BootstrapAsync(Source, Arg.Any<CancellationToken>());
+        await coordinator.Received(1).BootstrapForReseedAsync(Source, 3, true, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task Does_not_start_a_second_bootstrap_while_one_is_running()
+    public async Task Records_the_request_on_a_running_bootstrap_without_starting_another()
     {
+        // The coordinator's same-source kickoff is idempotent; recording the
+        // request lets the running drain clear the stale buckets (#4533).
         var (factory, coordinator) = Create(completed: null, runningSource: Source);
 
         await ReplicationReseedResponder.RespondAsync(factory, Tree, Source, 0, true, NullLogger.Instance);
 
         await coordinator.DidNotReceiveWithAnyArgs().BootstrapAsync(default!, default);
+        await coordinator.Received(1).BootstrapForReseedAsync(Source, 0, true, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task Leaves_the_bootstrap_to_the_operator_when_auto_bootstrap_is_disabled()
+    public async Task Records_the_request_but_leaves_the_bootstrap_to_the_operator_when_auto_bootstrap_is_disabled()
     {
         var (factory, coordinator) = Create(completed: null);
 
@@ -68,6 +72,7 @@ public class ReplicationReseedResponderTests
 
         Assert.That(echoed, Is.Null);
         await coordinator.DidNotReceiveWithAnyArgs().BootstrapAsync(default!, default);
+        await coordinator.Received(1).BootstrapForReseedAsync(Source, 0, false, Arg.Any<CancellationToken>());
     }
 
     [Test]

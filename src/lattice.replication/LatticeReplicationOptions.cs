@@ -130,7 +130,7 @@ public class LatticeReplicationOptions
     public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
 
     /// <summary>
-    /// Maximum number of <see cref="WalEntry"/> records the per-shard WAL
+    /// Maximum number of <see cref="WalEntry"/> records the per-partition WAL
     /// grain will batch into a single <see cref="IWalStorageProvider.AppendBatchAsync"/>
     /// call. When the in-memory pending batch reaches this count, the
     /// next <c>Append</c> triggers a flush of the current batch before
@@ -153,7 +153,7 @@ public class LatticeReplicationOptions
     public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
 
     /// <summary>
-    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// Maximum number of in-flight + pending batches the per-partition WAL
     /// grain will hold before applying back-pressure to new
     /// <c>Append</c> callers. The single-in-flight-flush model in v1
     /// treats this as <c>(in-flight=1) + (pending=N-1)</c>; new
@@ -177,9 +177,34 @@ public class LatticeReplicationOptions
     public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
 
     /// <summary>
+    /// Wall-clock bound on how long the receiver defers a saga prepare that
+    /// exhausted <see cref="MaxApplyRetries"/> before it poisons the whole saga
+    /// on that receiver and parks the prepare with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/>. Defaults to
+    /// <see cref="DefaultSagaDeferralTimeout"/>. A silo restart restarts the
+    /// in-memory deferral clock, which can only defer longer; it never poisons a
+    /// record earlier than a continuously-running silo would have done. Must be
+    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// <para>
+    /// The bound applies only to prepares. A deferred
+    /// <see cref="MutationKind.TxCommit"/> or <see cref="MutationKind.TxAbort"/>
+    /// terminal is never poisoned by timeout, because a terminal may be the
+    /// record that completes the receiver-side tally after the registry decision
+    /// was already recorded; poisoning it would strand the saga's buckets under
+    /// a recorded commit. Fix the terminal's apply failure or re-bootstrap the
+    /// tree from the origin.
+    /// </para>
+    /// </summary>
+    public TimeSpan SagaDeferralTimeout { get; set; } = DefaultSagaDeferralTimeout;
+
+    /// <summary>
     /// Maximum number of <see cref="DeadLetterEntry"/> records the
     /// per-tree dead-letter queue retains. When the queue is full a new
-    /// enqueue evicts the oldest entry (FIFO). Defaults to
+    /// enqueue is refused rather than evicting a parked entry (issue #4603):
+    /// every parked entry was acknowledged without being applied, so the
+    /// caller keeps the refused entry unacknowledged and the affected
+    /// replication link is held back until an operator replays or discards
+    /// parked entries. Defaults to
     /// <see cref="DefaultDeadLetterQueueCapacity"/>. Must be at least
     /// <c>1</c>.
     /// </summary>
@@ -204,6 +229,24 @@ public class LatticeReplicationOptions
     /// </para>
     /// </summary>
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
+
+    /// <summary>
+    /// How many applied write identities <c>(origin, HLC)</c> the receiver
+    /// remembers per tree and origin, so an entry whose causal dependency names
+    /// one of them is released at once (issue #4586). Each identity costs a few
+    /// dozen bytes of memory on the tree's high-water-mark activation; the
+    /// record is not persisted. When an identity has been forgotten - evicted
+    /// past this capacity, or lost to a reactivation - a dependent waits for the
+    /// origin's shipped low watermark to pass it instead, which trails the
+    /// origin's wall clock by its <c>LatticeOptions.ReplicationClockFloorLag</c>.
+    /// So the capacity trades memory for latency only, never correctness.
+    /// Defaults to <see cref="DefaultCausalAppliedIdentityCapacity"/>; must be
+    /// between <c>1</c> and <c>1_048_576</c>.
+    /// </summary>
+    public int CausalAppliedIdentityCapacity { get; set; } = DefaultCausalAppliedIdentityCapacity;
+
+    /// <summary>Default value for <see cref="CausalAppliedIdentityCapacity"/> (16,384 per tree and origin).</summary>
+    public const int DefaultCausalAppliedIdentityCapacity = 16_384;
 
     /// <summary>
     /// Maximum estimated cumulative byte size of every entry parked
@@ -360,11 +403,11 @@ public class LatticeReplicationOptions
     /// (highest-HLC) entry, and elides the earlier same-key ones. Because
     /// each combine and the receiver-side apply are both commutative,
     /// associative, and idempotent, the merged entry converges to the
-    /// identical state as shipping the run individually. The generic
-    /// OR-Map mode is not combined (its value CRDT is type-erased on the
-    /// shipper); its entries ship individually, which is loss-free but
-    /// forgoes the bandwidth saving. A CRDT entry carrying no typed delta
-    /// (an opaque or legacy payload) also ships verbatim.
+    /// identical state as shipping the run individually. Registered
+    /// OR-Map shapes carry a combiner and coalesce like the closed
+    /// primitives; an unregistered OR-Map tree, another mode without a
+    /// combiner, or a CRDT entry carrying no typed delta (an opaque or
+    /// legacy payload) ships verbatim.
     /// </para>
     /// <para>
     /// Coalescing never elides a range delete, a saga terminal mark
@@ -1599,6 +1642,14 @@ public class LatticeReplicationOptions
     /// transient faults without dragging an origin cursor for hours.
     /// </summary>
     public const int DefaultMaxApplyRetries = 5;
+
+    /// <summary>
+    /// Default value for <see cref="SagaDeferralTimeout"/>: fifteen minutes.
+    /// Long enough for ordinary transient receiver failures to clear and short
+    /// enough that a permanently-unappliable prepare raises an alarm and unblocks
+    /// the origin link within an operator-visible window.
+    /// </summary>
+    public static readonly TimeSpan DefaultSagaDeferralTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Default value for <see cref="DeadLetterQueueCapacity"/>: 1000

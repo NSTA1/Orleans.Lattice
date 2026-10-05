@@ -324,7 +324,7 @@ This is commutative, associative, and idempotent.
 
 `MvRegister.Set(replicaId, value)` drops every entry the writer has observed locally and mints a fresh dot `(replicaId, NextCounter(replicaId))`. Concurrent writes from other replicas that have not been observed survive the next merge, producing a multi-value result that `MvRegisterAccessor<T>.ValuesAsync()` deserialises to `IReadOnlyList<T>`.
 
-Use the multi-value register when **losing a concurrent write is unacceptable** (shopping carts, collaborative-edit content, tag sets where order does not matter but presence does). Use `LwwValue` when last-writer-wins is the desired semantics and the application is happy to drop the loser silently.
+Use the multi-value register when **losing a concurrent write is unacceptable** for a single-valued field such as a title, status, note, or document body. Use `LwwValue` when last-writer-wins is the desired semantics and the application is happy to drop the loser silently.
 
 **Example use case:** a shopping-cart `notes` field that two devices edit while one of them is offline. With LWW, the offline device's note silently overwrites the online one when it reconnects. With MV-register, both notes survive the merge and the UI can show the user "you have two pending versions of this note - keep which one?" instead of losing data.
 

@@ -254,6 +254,29 @@ internal sealed partial class BPlusLeafGrain
         return stamps;
     }
 
+    /// <inheritdoc />
+    public async Task<Dictionary<string, HybridLogicalClock?>?> GetOriginalPrepareStampsAsync(Guid transactionId)
+    {
+        await AwaitReplayBarrierAsync();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+
+        if (_pendingTx is null || !_pendingTx.TryGetValue(transactionId, out var bucket) || bucket.Count == 0)
+            return null;
+
+        Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
+        _pendingTxDeltas?.TryGetValue(transactionId, out deltaBucket);
+
+        var stamps = new Dictionary<string, HybridLogicalClock?>(bucket.Count, StringComparer.Ordinal);
+        foreach (var (key, prepared) in bucket)
+        {
+            stamps[key] = IsMarkedLwwPrepare(transactionId, key, deltaBucket)
+                ? prepared.Timestamp
+                : null;
+        }
+
+        return stamps;
+    }
+
     /// <summary>
     /// The subset of <paramref name="stamps"/> for <paramref name="keys"/>, or
     /// <see langword="null"/> when none of them has an original stamp, so a

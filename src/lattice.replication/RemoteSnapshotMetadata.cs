@@ -85,4 +85,11 @@ public readonly record struct RemoteSnapshotMetadata
     /// the wire: an older source omits it and it decodes to <c>0</c>.
     /// </summary>
     [Id(4)] public long ExportEpoch { get; init; }
+
+    /// <summary>
+    /// Source tree generation captured before the sender opened the export.
+    /// Receivers treat <see langword="null"/> as unknown and skip delete
+    /// reconciliation fail-safe.
+    /// </summary>
+    [Id(5)] public SnapshotSourceGeneration? OpenGeneration { get; init; }
 }

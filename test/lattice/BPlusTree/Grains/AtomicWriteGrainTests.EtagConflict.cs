@@ -85,6 +85,7 @@ public partial class AtomicWriteGrainTests
             var context = Substitute.For<IGrainContext>();
             context.GrainId.Returns(GrainId.Create("atomic-write", $"{TreeId}/{OperationId}"));
             var state = new LandedConflictPersistentState<AtomicWriteState>(Row);
+            PreparedKeysReadBack.Stub(Shard, () => state.State.Entries.Select(e => e.Key));
             var grain = new AtomicWriteGrain(
                 context,
                 Factory,

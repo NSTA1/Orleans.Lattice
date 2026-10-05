@@ -2586,7 +2586,7 @@ public class LatticeOptions
     public const long DefaultWalMaxBatchBytes = 4L * 1024 * 1024;
 
     /// <summary>
-    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// Maximum number of in-flight + pending batches the per-partition WAL
     /// grain will hold before applying back-pressure to new
     /// <c>Append</c> callers. The grain serialises offset assignment
     /// under the grain turn but lets each batch's
@@ -2632,7 +2632,7 @@ public class LatticeOptions
     public const int DefaultWalMaxPendingBatches = 16;
 
     /// <summary>
-    /// In-flight depth at or above which a per-shard WAL append stops
+    /// In-flight depth at or above which a per-partition WAL append stops
     /// opening a flush of its own and instead coalesces into the pending
     /// batch, to be drained by the follow-on kick that fires when an
     /// existing flush settles ("group commit").
@@ -3197,10 +3197,12 @@ public class LatticeOptions
     /// over-threshold storage gauges populate without any caller invoking
     /// <see cref="ILattice.GetStorageUsageAsync"/>. The poll path is
     /// activation-light: it touches only WAL partition grains, so idle trees
-    /// stay cold. The poller runs on every silo (no leader election); because
-    /// each tree's WAL-only aggregator is a single cluster-wide activation, its
-    /// publish lands on its own host silo's sink and the gauges union across
-    /// every live sink, so a tree contributes its series once cluster-wide.
+    /// stay cold. The poller runs on every silo (no leader election). Each
+    /// tree's WAL-only aggregator publishes on its own host silo's sink, but
+    /// the deep aggregator (and a resize copy's aggregators) can publish the
+    /// same logical tree from a different silo, so more than one silo can
+    /// export one tree's series: aggregate the storage gauges across silos
+    /// with <c>max by (tree)</c>, not <c>sum by (tree)</c>.
     /// The snapshot-bytes, leaf-state-bytes, and total-bytes gauges are not
     /// refreshed by this poll; they populate on demand via
     /// <see cref="ILattice.GetStorageUsageAsync"/> /
@@ -4572,6 +4574,40 @@ public class LatticeOptions
 
     /// <summary>Default value for <see cref="WalThrottledAdmissionPace"/> (25 milliseconds).</summary>
     public static readonly TimeSpan DefaultWalThrottledAdmissionPace = TimeSpan.FromMilliseconds(25);
+
+    /// <summary>
+    /// How far a replicated tree's per-partition WAL clock floor trails the
+    /// partition's wall clock (issue #4586). A replication shipper reading a
+    /// partition raises the partition's durable floor to at most
+    /// <c>now - ReplicationClockFloorLag</c>, and from then on the partition
+    /// refuses a freshly authored local write whose HLC stamp is below the
+    /// floor. That is what lets the shipper publish a low watermark that is
+    /// downward-closed: every write of this cluster below it has already been
+    /// acknowledged by the peer, so a receiver can decide a causal dependency
+    /// without waiting for the exact write it names.
+    /// <para>
+    /// A refused single-key write is re-stamped and retried in the same grain
+    /// turn, so a caller only observes a refusal when a stamp could not be
+    /// renewed: a write carrying a caller-supplied
+    /// <see cref="LatticeIdempotencyKey"/> fails with
+    /// <see cref="LatticeIdempotencyKeyExpiredException"/> once the key is older
+    /// than this lag, and a multi-key batch fails with a transient error its
+    /// caller retries. A larger value widens the window an idempotency key stays
+    /// usable for and tolerates more clock skew between silos; a smaller one
+    /// lets a receiver release a dependent whose exact dependency it no longer
+    /// remembers sooner. Trees that are not replicated never advance their
+    /// floor, so the lag has no effect on them.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultReplicationClockFloorLag"/> (60 seconds).
+    /// The registered options validator rejects a value below one second or
+    /// above one day.
+    /// </para>
+    /// </summary>
+    public TimeSpan ReplicationClockFloorLag { get; set; } = DefaultReplicationClockFloorLag;
+
+    /// <summary>Default value for <see cref="ReplicationClockFloorLag"/> (60 seconds).</summary>
+    public static readonly TimeSpan DefaultReplicationClockFloorLag = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary

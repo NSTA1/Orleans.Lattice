@@ -57,7 +57,9 @@ internal sealed partial class WalShardGrain(
     LatticeOptionsResolver optionsResolver,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
-    IWalRecordEncoder encoder) : IWalShardGrain, IGrainBase
+    IWalRecordEncoder encoder,
+    [PersistentState("wal-floor", LatticeOptions.StorageProviderName)] IPersistentState<WalShardFloorState> floorState,
+    IWalClockFloorGate floorGate) : IWalShardGrain, IWalClockFloorCapable, IGrainBase
 {
     /// <summary>
     /// Upper bound on the number of <see cref="WalRecord"/> entries accepted by a
@@ -75,6 +77,22 @@ internal sealed partial class WalShardGrain(
     private int _shardIndex;
     private IWalStorageProvider _provider = null!;
     private long _nextOffset;
+
+    /// <summary>
+    /// The highest offset this activation knows the provider stores: the provider's
+    /// highest offset at activation and at every post-failure resync, raised by every
+    /// acknowledged flush. Mutated under <see cref="_stateGate"/>.
+    /// <para>
+    /// The read watermark never passes it + 1 (issue #4621). A recovering allocator
+    /// - a reactivation, or the post-failure resync - resumes at the provider's
+    /// highest offset + 1, so an offset above every stored entry can be issued again.
+    /// A trailing hole left by an abandoned flush that settled without landing is
+    /// exactly such an offset: were a reader shown past it, a reissued write could
+    /// land below that reader's cursor. A hole is exposed only once something has
+    /// landed above it, after which no recovery can reissue it.
+    /// </para>
+    /// </summary>
+    private long _highestStored = -1;
     private bool _initialized;
 
     /// <summary>
@@ -128,6 +146,15 @@ internal sealed partial class WalShardGrain(
     /// under <see cref="_stateGate"/>; completed entries are pruned lazily.
     /// </summary>
     private readonly List<Task> _outstandingProviderWork = new();
+
+    /// <summary>The provider <see cref="_abandonedWindows"/> was resolved for.</summary>
+    private IWalStorageProvider? _abandonedWindowsProvider;
+
+    /// <summary>
+    /// This shard's abandoned flush windows (issue #4621); see
+    /// <see cref="WalAbandonedFlushRegistry"/>.
+    /// </summary>
+    private WalAbandonedFlushRegistry.ShardWindows? _abandonedWindows;
 
     /// <summary>
     /// Cached <see cref="LatticeMetrics.TagTree"/> tag bound to this
@@ -412,6 +439,8 @@ internal sealed partial class WalShardGrain(
         await _provider.ReconcileAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        _highestStored = highest;
+        InitializeClockFloor();
         // Construct the per-activation drain cancellation source up-front
         // so every FlushAsync (including the very first one) can link
         // its per-flush deadline to a stable token. A deactivation that
@@ -644,10 +673,12 @@ internal sealed partial class WalShardGrain(
                 abandoned.Add(slot);
                 // The slot's FlushAsync - and so its provider call - is still
                 // running, and its write may yet land. Record it so a move
-                // quiesce cannot report a stable tail until it settles (#4525).
+                // quiesce cannot report a stable tail until it settles (#4525),
+                // and so no read passes its window until then (#4621).
                 if (slot.Task is { IsCompleted: false } flushTask)
                 {
                     _outstandingProviderWork.Add(flushTask);
+                    AbandonedWindows()?.Add(slot.StartOffset, flushTask);
                 }
             }
             _inFlight.Clear();
@@ -803,6 +834,7 @@ internal sealed partial class WalShardGrain(
         bool kickFlush = false;
         int queueDepth = 0;
         bool fenced = false;
+        HybridLogicalClock refusedBelow = default;
         lock (_stateGate)
         {
             // Re-check the move fence under the gate: a quiesce may have raised
@@ -814,6 +846,13 @@ internal sealed partial class WalShardGrain(
             if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
             {
                 fenced = true;
+            }
+            else if (!WalClockFloorCore.IsAdmitted(in entry, _floor, _localClusterId))
+            {
+                // Issue #4586: the floor check and the offset assignment are one
+                // atomic step under the gate, exactly as a floor publication
+                // pairs the floor with the next offset under it.
+                refusedBelow = _floor;
             }
             else
             {
@@ -859,6 +898,11 @@ internal sealed partial class WalShardGrain(
             ReturnSegment(segment);
             throw new LatticeWalQuiescingException(
                 $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+        }
+        if (refusedBelow != HybridLogicalClock.Zero)
+        {
+            ReturnSegment(segment);
+            throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
         }
         LatticeMetrics.WalAppendQueueDepth.Record(
             queueDepth,
@@ -981,6 +1025,7 @@ internal sealed partial class WalShardGrain(
         // offsets remain dense and ascending across the whole batch.
         var offsets = new long[count];
         var acks = new TaskCompletionSource<long>[count];
+        var admittedAgainst = new HybridLogicalClock { WallClockTicks = -1 };
         for (var i = 0; i < count; i++)
         {
             var size = sizes[i];
@@ -1039,6 +1084,7 @@ internal sealed partial class WalShardGrain(
 
             bool kickFlush = false;
             bool fenced = false;
+            HybridLogicalClock refusedBelow = default;
             lock (_stateGate)
             {
                 // Re-check the move fence under the gate (a quiesce may have
@@ -1047,8 +1093,19 @@ internal sealed partial class WalShardGrain(
                 {
                     fenced = true;
                 }
+                else if (_floor != admittedAgainst && !IsBatchRemainderAdmitted(entries, i))
+                {
+                    // Issue #4586: the remainder of the batch is checked against
+                    // the floor in force when its next offset is assigned, and
+                    // again whenever a floor published during a cutover await
+                    // has moved it, so a mid-batch publication still binds every
+                    // later offset. Checking the whole remainder at once means a
+                    // refusal before the first entry splits nothing.
+                    refusedBelow = _floor;
+                }
                 else
                 {
+                    admittedAgainst = _floor;
                     var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
                     offsets[i] = offset;
                     _pendingSegments.Add(segments[i]);
@@ -1104,6 +1161,18 @@ internal sealed partial class WalShardGrain(
                 }
                 throw new LatticeWalQuiescingException(
                     $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+            }
+            if (refusedBelow != HybridLogicalClock.Zero)
+            {
+                // Refused below the clock floor: as for the fence, entries
+                // already enqueued at indexes < i settle on their own TCSs. That
+                // only happens when a floor was published during this batch's
+                // cutover await and a later entry is older than the floor lag.
+                for (var j = i; j < count; j++)
+                {
+                    ReturnSegment(segments[j]);
+                }
+                throw RefuseBelowFloor(FirstRefusedStamp(entries, i), refusedBelow, count - i);
             }
             if (kickFlush)
             {
@@ -1162,10 +1231,65 @@ internal sealed partial class WalShardGrain(
     {
         lock (_stateGate)
         {
-            return WalShippingWatermark.DurableContiguousTail(
+            var tail = WalShippingWatermark.DurableContiguousTail(
                 _inFlight.Count != 0,
                 _inFlight.First?.Value.StartOffset ?? 0L,
                 _nextOffset);
+
+            // Never past the highest stored offset + 1: a recovering allocator can
+            // issue anything above it again, so a trailing hole stays unexposed
+            // until something lands above it (issue #4621).
+            if (_highestStored + 1 < tail)
+            {
+                tail = _highestStored + 1;
+            }
+
+            // An abandoned flush whose provider call has not settled may still land
+            // below every offset allocated after it, so nothing at or above its
+            // window is exposed until it settles (issue #4621).
+            return AbandonedWindows()?.LowestUnsettledStart() is { } abandoned && abandoned < tail
+                ? abandoned
+                : tail;
+        }
+    }
+
+    /// <summary>
+    /// This shard's record in <see cref="WalAbandonedFlushRegistry"/>, resolved for
+    /// the current provider; <see langword="null"/> before initialisation. Read and
+    /// cached under <see cref="_stateGate"/>.
+    /// </summary>
+    private WalAbandonedFlushRegistry.ShardWindows? AbandonedWindows()
+    {
+        if (_provider is null || string.IsNullOrEmpty(_treeId))
+        {
+            return null;
+        }
+
+        if (!ReferenceEquals(_abandonedWindowsProvider, _provider))
+        {
+            _abandonedWindows = WalAbandonedFlushRegistry.For(_provider, _treeId, _shardIndex);
+            _abandonedWindowsProvider = _provider;
+        }
+
+        return _abandonedWindows;
+    }
+
+    /// <summary>
+    /// Records a flush window whose provider call the activation stopped waiting
+    /// for while it may still land: for the move quiesce (issue #4525) and for the
+    /// read watermark (issue #4621).
+    /// </summary>
+    private void TrackAbandonedWindow(long startOffset, Task? work)
+    {
+        if (work is null || work.IsCompleted)
+        {
+            return;
+        }
+
+        lock (_stateGate)
+        {
+            _outstandingProviderWork.Add(work);
+            AbandonedWindows()?.Add(startOffset, work);
         }
     }
 
@@ -1461,6 +1585,12 @@ internal sealed partial class WalShardGrain(
 
         EnsureInitialized();
 
+        // Issue #4586: pair the partition's clock floor with the next offset
+        // before reading, advancing the floor first when the capability gate is
+        // open and it has fallen half a lag behind. Synchronous unless the floor
+        // is being advanced, so the idle fast path below stays allocation-free.
+        var publication = await PublishClockFloorAsync(cancellationToken).ConfigureAwait(true);
+
         // Idle fast-path: a shipper read at or beyond the durable, gap-free
         // prefix returns nothing without a storage round-trip. The bound is
         // DurableContiguousTailOffset() rather than the raw _nextOffset
@@ -1479,6 +1609,8 @@ internal sealed partial class WalShardGrain(
             {
                 Entries = Array.Empty<WalShardShippingEntry>(),
                 NextSequence = fromSequence,
+                ClockFloor = publication.Floor,
+                ClockFloorOffset = publication.Offset,
             };
         }
 
@@ -1525,6 +1657,8 @@ internal sealed partial class WalShardGrain(
         {
             Entries = collected,
             NextSequence = nextShippingSequence,
+            ClockFloor = publication.Floor,
+            ClockFloorOffset = publication.Offset,
         };
     }
 
@@ -1535,6 +1669,15 @@ internal sealed partial class WalShardGrain(
         EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
         return ValueTask.FromResult(_nextOffset);
+    }
+
+    /// <inheritdoc />
+    public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+        return ValueTask.FromResult(DurableContiguousTailOffset());
     }
 
     /// <inheritdoc />
@@ -1580,6 +1723,25 @@ internal sealed partial class WalShardGrain(
         var lowest = await _provider.GetLowestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         return lowest < 0 ? -1L : lowest;
     }
+
+    /// <inheritdoc />
+    public async Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+
+        if (!(TrimWatermarkSupportForTesting?.Invoke()
+            ?? WalTrimWatermarkSupport.AllSilosMaintain(context.ActivationServices)))
+        {
+            return null;
+        }
+
+        return await _provider.GetTrimWatermarkAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>Test seam: overrides the cluster-manifest check of <see cref="GetTrimWatermarkAsync"/>.</summary>
+    internal Func<bool>? TrimWatermarkSupportForTesting { get; set; }
 
     /// <inheritdoc />
     [Obsolete("Use GetLiveEntryCountAsync instead. GetEntryCountAsync is not trim-aware and will be removed in a future minor version.", DiagnosticId = "LATTICE0001")]
@@ -1896,8 +2058,9 @@ internal sealed partial class WalShardGrain(
                 {
                     // The bounded wait gave up on the provider call, but the
                     // call itself may still land. Record it so a move quiesce
-                    // does not report a stable tail while it is outstanding.
-                    TrackOutstandingProviderWork(providerCall);
+                    // does not report a stable tail while it is outstanding,
+                    // and so no read passes its window until it settles (#4621).
+                    TrackAbandonedWindow(slot.StartOffset, providerCall);
                     // Distinguish the two cancellation sources so the
                     // surfaced TimeoutException attributes the trip to
                     // the actually-firing deadline rather than blaming
@@ -1980,6 +2143,8 @@ internal sealed partial class WalShardGrain(
                     {
                         slot.Acks[i].TrySetResult(offsets[i]);
                     }
+
+                    _highestStored = Math.Max(_highestStored, slot.EndOffsetExclusive - 1);
                 }
             }
             if (!faultedByFailure)
@@ -2202,6 +2367,7 @@ internal sealed partial class WalShardGrain(
             lock (_stateGate)
             {
                 _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+                _highestStored = highest;
                 _stickyFailure = null;
             }
         }
@@ -2597,22 +2763,6 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <summary>
-    /// Records provider work the activation has stopped waiting for while it may
-    /// still land a write. See <see cref="_outstandingProviderWork"/>.
-    /// </summary>
-    private void TrackOutstandingProviderWork(Task? work)
-    {
-        if (work is null || work.IsCompleted)
-        {
-            return;
-        }
-        lock (_stateGate)
-        {
-            _outstandingProviderWork.Add(work);
-        }
-    }
-
-    /// <summary>
     /// Prunes settled entries from <see cref="_outstandingProviderWork"/> and
     /// reports whether any provider work that may still land a write remains.
     /// </summary>
@@ -2679,6 +2829,8 @@ internal sealed partial class WalShardGrain(
         await provider.ReconcileAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
+        _highestStored = highest;
+        InitializeClockFloor();
         // Mirror OnActivateAsync's drain-CTS construction so unit tests
         // see the same activation contract production grains use; the
         // drain-budget tests rely on the CTS being available so every

@@ -63,9 +63,9 @@ of two faults: 445,516 distinct states to depth 32.
 | `Capture(l)` | Capture a snapshot | `BPlusLeafGrain.CaptureSnapshotCoreAsync`: proceeds once any partition is proven checkpointed, declines a claim covering nothing (#2725), writes through `ILeafSnapshotStorageGrain.SaveAsync`, and records coverage only from a kept capture. The store's `LeafSnapshotStorageGrain.MergeMonotone` never lowers stored coverage; where production MERGES a regressing claim that carries every stored key, the model keeps the old snapshot outright - the same coverage over a subset of the rows - so every property that holds over the model's snapshot holds over production's. The claim refines the model's read position: while the cache is unanchored (a cold rebuild, or a rehydrate in flight) `BPlusLeafGrain.BuildUnanchoredCoverage` claims per partition only what the rebuild has provably re-read, and `BPlusLeafGrain.UnanchoredCoverageIsCapturable` declines a claim that covers nothing or regresses durable coverage (issue #4451, fixed); an anchored cache claims `BPlusLeafGrain.BuildCheckpointCoverage`. | Yes: `BPlusLeafGrainTests.Inline_capture_the_store_merges_still_advances_durable_coverage` (coverage recorded from a kept capture). For the #4451 claim, `BPlusLeafGrainTests.Capture_part_way_through_a_cold_rebuild_banks_only_the_re_read_frontier` pins the claim itself (`BuildUnanchoredCoverage`): it is the one detector red when only the claim reverts to the checkpoint. `BPlusLeafGrainTests.Capture_during_a_cold_rebuild_never_claims_coverage_its_rows_lack`, `BPlusLeafGrainTests.Deactivation_capture_during_a_cold_rebuild_never_claims_coverage_its_rows_lack` and `BPlusLeafGrainTests.Capture_while_the_snapshot_rehydrate_is_in_flight_never_claims_coverage_its_rows_lack` go red only when the claim AND the decline gate (`UnanchoredCoverageIsCapturable`) revert together. Removing only the gate is undetected by design: with the claim correct, the gate only skips a claim that covers nothing or regresses stored coverage, which the store's monotone merge would never record as a coverage regression anyway. With the claim reverted, the gate still declines the captures those three tests make, which is why only the frontier test reports a claim-only revert. |
 | `CaptureFail(l)` | A capture that fails or is declined | The store declines or the write fails; the leaf records no coverage (#3440). | Yes: `BPlusLeafGrainTests.Inline_capture_declined_by_the_store_does_not_advance_durable_coverage` and `BPlusLeafGrainTests.Staged_capture_whose_commit_is_declined_does_not_advance_durable_coverage`. |
 | `PublishPin(l)` | Publish the durable materialiser pin | `BPlusLeafGrain.ResolveDurablePinForPartition` resolves the pin through `LeafDurablePinCore.Resolve` and the pin store merges it (`WalMaterialiserPinGrain.Merge`). **Over-approximation:** the model may publish between any two steps; production publishes from the flush tail, the deactivation barrier, the starvation drive and the Zero-clock seed. Because the store merges by monotone max, a publication at any step yields an entitlement at least as high as any production schedule's. The never-written release is bounded by the snapshot coverage the leaf holds (issue #4456), and fires only when the leaf holds durable coverage at all: with no snapshot the block stands until a capture records coverage (issue #4523). | Yes: `LeafDurablePinCoreTests.A_pending_checkpoint_never_reaches_the_pin_issue_3476` and `BPlusLeafGrainTests.Batched_pin_flush_over_an_unpersisted_advance_publishes_no_pin_past_the_persisted_checkpoint` (the covered arm), and `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456`, `LeafDurablePinCoreTests.The_never_written_release_needs_durable_snapshot_coverage_issue_4523`, `BPlusLeafGrainTests.Never_written_leaf_holding_a_snapshot_releases_no_further_than_its_coverage`, `BPlusLeafGrainTests.Never_written_leaf_without_a_snapshot_keeps_its_block_pin` and `BPlusLeafGrainTests.Never_written_leaf_releases_once_a_kept_capture_covers_its_persisted_checkpoint` (the never-written arm). |
-| `GcTrim` | Trim the stream's prefix | `LatticeWalGc.ApplyDurableMaterialiserFloorAsync` computes the offset floor and marks the partition of a standing block pin blocked, which withholds both the cursor predicate and the offset admission there; `LatticeWalGc.TrimShardAsync` trims the prefix whose every entry `WalGcTrimCore.IsEntryEligible` admits under `WalGcOffsetAdmission.Admits`, and its scan stops at the durable offset floor itself. A block pin whose leaf reports no durable offset at all is held more widely still: it leaves the offset census incomplete, which holds the whole tree before any scan. **Over-approximation:** the model trims to the durable offset floor alone; production additionally bounds the trim by uncovered consumers' cursors, causal frontiers and buffer pins, and a configured retention TTL is outside the model (see gaps). | Yes: `LatticeWalGcOffsetEntitlementTests.RunOnceAsync_offset_admission_still_stops_at_the_floor_and_attributes_it` (the scan stops at the durable offset floor), `LatticeWalGcOffsetEntitlementTests.RunOnceAsync_a_block_pin_holds_its_own_partition_while_the_pass_trims_the_others` (a block pin that abstains from the offset floor holds its own partition on a pass that does reach the scan) and `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer` (the trim core never passes the slowest consumer). |
+| `GcTrim` | Trim the stream's prefix | `LatticeWalGc.ApplyDurableMaterialiserFloorAsync` computes the offset floor and marks the partition of a standing block pin blocked, which withholds both the cursor predicate and the offset admission there; `LatticeWalGc.TrimShardAsync` trims the prefix whose every entry `WalGcTrimCore.IsEntryEligible` admits under `WalGcOffsetAdmission.Admits`, and its scan stops at the durable offset floor itself. A block pin whose leaf reports no durable offset at all is held more widely still: it leaves the offset census incomplete, which holds the whole tree before any scan. **Over-approximation:** the model trims to the durable offset floor alone; production additionally bounds the trim by uncovered consumers' cursors, causal frontiers and buffer pins, and a configured retention TTL is a retention event the model does not take, whose overtaken consumers detect and recover (see "Retention TTL"). | Yes: `LatticeWalGcOffsetEntitlementTests.RunOnceAsync_offset_admission_still_stops_at_the_floor_and_attributes_it` (the scan stops at the durable offset floor), `LatticeWalGcOffsetEntitlementTests.RunOnceAsync_a_block_pin_holds_its_own_partition_while_the_pass_trims_the_others` (a block pin that abstains from the offset floor holds its own partition on a pass that does reach the scan) and `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer` (the trim core never passes the slowest consumer). |
 | `LeafStop(l)` | Leaf activation ends | A crash, a silo restart or a deactivation: the entry cache, the pending checkpoint map and the recorded coverage are per activation and lost; grain state and the snapshot survive. The next activation sees an empty cache and takes the `-1` cold override unless a snapshot rehydrates. | Yes: `LeafReplayStartPolicyTests.An_absent_snapshot_over_an_empty_cache_replays_cold` and `BPlusLeafGrainTests.Cold_rebuild_over_a_lost_prefix_throws_and_never_captures`. |
-| `Activate(l)` | Activation and its replay start | `BPlusLeafGrain.ExecuteActivationReplayAsync`: `BPlusLeafGrain.TryRehydrateFromSnapshotAsync` loads the snapshot, records its coverage and lowers the checkpoint to it; otherwise `LeafReplayStartPolicy.Decide` takes the cold override and replays the whole readable WAL, or fails closed when a snapshot that exists failed to load. Both fall-off checks - `LatticeFallOffLogDetector.ClassifyAsync` on the warm path and the cold-replay guard - route through `WalFallOffCore.IsPrefixLost`. | Yes: `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`, `BPlusLeafGrainTests.Activation_hydrates_empty_cache_from_snapshot_older_than_persisted_checkpoint` and `WalFallOffCoreTests.The_first_needed_offset_is_the_one_after_the_checkpoint`. |
+| `Activate(l)` | Activation and its replay start | `BPlusLeafGrain.ExecuteActivationReplayAsync`: `BPlusLeafGrain.TryRehydrateFromSnapshotAsync` loads the snapshot, records its coverage and lowers the checkpoint to it; otherwise `LeafReplayStartPolicy.Decide` takes the cold override and replays the whole readable WAL, or fails closed when a snapshot that exists failed to load. Both fall-off checks - `LatticeFallOffLogDetector.ClassifyAsync` on the warm path and the cold-replay guard - route through `WalFallOffCore.IsPrefixLost`. | Yes: `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`, `BPlusLeafGrainTests.Activation_hydrates_empty_cache_from_snapshot_older_than_persisted_checkpoint`, `WalFallOffCoreTests.The_first_needed_offset_is_the_one_after_the_checkpoint`, and for a checkpoint of 0 (`FallsOff`'s `cp >= 0`, issue #4433) `WalFallOffCoreTests.A_zero_checkpoint_still_needs_offset_one_issue_4433`, `LatticeFallOffLogDetectorTests.ClassifyAsync_with_zero_checkpoint_and_offset_one_trimmed_triggers_WAL_trim` and `BPlusLeafGrainTests.Cold_rebuild_over_a_durable_zero_checkpoint_whose_next_offset_was_trimmed_throws`. |
 | `ActivateLoadFail(l)` | A snapshot that exists fails to load | **A stutter:** the activation fails closed and is retried. Production has matched this since issue #4450 was fixed: `LeafReplayStartPolicy.Decide` answers `FailClosed` for a failed load over an empty cache, the activation throws `LeafSnapshotUnavailableException` rather than cold-replaying a WAL trimmed under that snapshot, and `ILattice.RebuildLeafProjectionAsync` is the operator's recovery path. A storage fault on a leaf with no snapshot also fails closed; nothing changes, which the spec admits as a stutter. | Yes: `LeafReplayStartPolicyTests.A_failed_load_over_an_empty_cache_fails_closed`, `BPlusLeafGrainTests.Failed_snapshot_load_over_a_trimmed_wal_prefix_fails_the_replay_instead_of_coming_up_from_the_suffix` and `BPlusLeafGrainTests.Failed_snapshot_load_over_an_intact_wal_fails_the_replay_closed_too`. |
 | `ReplayFaultRearm(l)` | A cold rebuild faults and re-arms in one activation | **A stutter:** the re-armed replay stays cold from its re-read frontier. Production has matched this since issue #4467 was fixed: `LeafReplayStartPolicy.Decide` treats a cache whose cold rebuild is still pending as unanchored, so `BPlusLeafGrain.ExecuteActivationReplayAsync` retries a faulted cold rebuild cold rather than resuming warm from the persisted checkpoint. | Yes: `BPlusLeafGrainTests.A_cold_rebuild_that_faults_part_way_is_retried_cold_not_resumed_warm` (within one activation) and `BPlusLeafGrainTests.Cancelled_cold_replay_lets_the_next_activation_resume_above_the_banked_frontier` (across activations). |
 
@@ -180,6 +180,23 @@ to the old behaviour, and green on the fix:
 | `ReleaseBackedBySnapshotNoSnapshotReleasesCheckpoint` | A never-written leaf with no snapshot releases its block at its persisted checkpoint, with no durable coverage behind it. | #4523 | the `ReleaseBackedBySnapshot` row's |
 | `RecoveryNeverFallsOffLogNoSnapshotReleaseTwoFaults` | The same release, composed over two faults into a stale latch; the mutation raises the fault budget to two. | #4523 | the `RecoveryNeverFallsOffLog` row's |
 
+## Retention TTL
+
+An operator-configured `WalRetention` is a retention event, not a defect: the GC's
+TTL arm admits an entry older than the window however the consumer clauses read
+(`WalGcTrimCore.ClassifyEntry` keeps it independent of the cursor and
+`consumerOffsetFloor` arms). The model takes no such step. What is verified instead
+is what the trim can overtake, and that every consumer it overtakes detects the
+trim and recovers.
+
+| Consumer | What a TTL trim can overtake | Detection | Recovery | Detector |
+|----------|------------------------------|-----------|----------|----------|
+| Leaf materialiser with a durable checkpoint | Nothing. The scan stops at the partition's durable materialiser offset floor, the minimum of every leaf's `min(checkpoint, coverage)`, before eligibility is evaluated (`LatticeWalGc.TrimShardAsync`), so the TTL arm never reaches an entry a leaf has not durably applied or snapshotted. | Not needed. | Not needed. | `LatticeWalGcRetentionLeafFloorTests.RunOnceAsync_retention_ttl_never_trims_past_a_leafs_durable_offset_floor` (red when the floor stop is dropped). |
+| Leaf materialiser with no durable checkpoint on the partition (a standing `Zero` block pin: a data-bearing leaf that has never checkpointed, present in the registry or not, including a tree none of whose leaves has checkpointed yet) | Nothing. Every durable pin at or below `Zero` that the offset floor does not cover holds the partition it names against every admitting arm, the TTL arm included (`DurableMaterialiserFloor.IsPartitionHeldByBlockPin`, issue #4622), because such a leaf replays from the `-1` sentinel on a cold activation and could not detect a trimmed prefix. Every other uncovered leaf pin caps the partition's TTL ceiling at its frontier (`DurableMaterialiserFloor.RetentionCeilingFor`): the frontier was published by an empty release, when the leaf held no row in the partition and had applied nothing there, so every entry the leaf has written there since is stamped above it, although the pin store's max merge keeps the frontier once that write turns the partition into a block. That precondition is the empty-release arm's, and the replay-latched publish barrier (the F08 probe) is what keeps an unapplied owned entry from being missed by it. | Not needed. | Not needed. | `WalRetentionBlockPinTests.A_retention_trim_keeps_an_acknowledged_write_a_never_checkpointed_leaf_owns` (real grains, silo lost; red when the TTL arm passes a block pin), `WalRetentionBlockPinTests.A_retention_trim_keeps_a_write_a_leaf_applied_after_it_released_the_partition_empty` (real grains: an empty release by a graceful deactivation, then a write, then the silo is lost; red when only a `Zero` pin holds the TTL arm), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_does_not_trim_a_partition_a_standing_block_pin_holds` (red when the TTL arm passes a block pin), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_is_capped_at_an_uncovered_leaf_pins_frontier` (red when the cap is dropped), `LatticeWalGcBlockPinHoldTests.A_registered_leafs_cursor_does_not_trim_a_partition_its_standing_block_pin_holds` (red when only registry-absent pins hold) and `LeafDurablePinCoreTests.Live_never_checkpointed_rows_over_an_unproven_wal_keep_the_block` (the empty-release precondition: a partition holding a live row never releases empty). |
+| Replication shipper | Entries it has not durably acknowledged. | A shipping read whose first sequence is above the one requested (`ReplicationShipperGrain.ForcedGap`). | The shipper withholds saga records and asks the peer to re-seed (`ReplicationBatch.ReseedAfterEpoch`); the receiver bootstraps from an export taken after the gap, and the shipper then rewinds every partition to its lowest retained entry (#4534, #4599). | `CrossClusterAtomicVisibilityTests.Saga_whose_prepare_was_trimmed_unshipped_is_never_delivered_torn`, `CrossClusterAtomicVisibilityTests.Shipper_asks_a_peer_it_took_off_the_log_to_reseed_and_resumes_once_it_has` and `SourceWalTrimFallOffIntegrationTests.Receiver_behind_a_source_wal_trim_is_re_seeded_and_converges`. |
+| View maintainer | Entries past its durable read position. | `WalLogSubscriber` reports a fall-off when the tail has passed the next offset it needs, probed before the read and again whenever a read jumps an offset. | The maintainer logs the warning `View '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.` (`ViewMaintainerGrain.DrainAsync`; the aggregation drain logs its own), rebuilds from current source state and resumes tailing from the heads it captured. An accumulative (history) view's rebuild collapses its timeline to one revision per key: that is its contract, since a history view's timeline is bounded by WAL retention (`docs/lattice/history-views.md`), and the warning makes the collapse observable. | `WalGcViewOffsetFloorTests.A_view_a_retention_trim_overtakes_falls_off_and_rebuilds_from_source_state` (red when the maintainer ignores the fall-off), `HistoryViewWalFallOffTests.A_history_view_a_retention_trim_overtakes_logs_the_fall_off_and_collapses_to_current_state` (asserts the warning and the collapse; red likewise), `WalLogSubscriberTests.DrainAsync_reports_fell_off_log_when_a_trim_lands_between_the_tail_probe_and_the_read` and `ViewMaintainerAggregationDrainTests.Aggregation_drain_rebuilds_when_the_source_WAL_trimmed_past_the_checkpoint`. |
+| Incremental backup capture | Its delta window (it is not a retention reader). | `LatticeBackupCaptureService.HasFallenOffAsync` before the drain, and `WalLogSubscriber` during it. | A full capture, whose cut is read from leaf state and is newer than the window it replaces. | `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_falls_back_to_a_full_when_the_base_resume_point_fell_off_the_wal` and `IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`. |
+
 ## Deliberate abstraction gaps
 
 These are modelled abstractly or not at all. **No conclusion about them may be drawn
@@ -201,19 +218,24 @@ from this specification.**
 - **Splits, merges and resharding.** Split handoff, checkpoint hints
   (`BPlusLeafGrain.ApplyCheckpointHintAsync`), moved-away slots and the warm-cache
   rescue are not modelled; the shard ownership module (#4434) owns them.
-- **Retention TTL.** An operator-configured `WalRetention` lets the GC trim past the
-  durable floor by design (`WalGcTrimCore.ClassifyEntry` keeps the TTL arm
-  independent). The model assumes no TTL; with one configured, an acknowledged write
-  can be trimmed before it is snapshotted, and that is the documented contract of the
-  setting rather than a defect.
 - **Replication, view maintainers, log subscribers and backup capture.** They are
-  WAL consumers the offset floor does not speak for; production bounds the trim by
-  their cursors (`WalGcOffsetAdmission.UncoveredCursor`). They are absent here,
-  which only over-approximates the trim, so nothing here speaks for them. That bound
-  is not sound for the replication shipper today (issue #4579): its cursor is an HLC,
-  and an entry stamped below the cursor at a higher offset is trimmed before it is
-  shipped. `WalMove.tla`'s consumer, which floors the trim in offset space, states
-  the intended bound; see `MoveRefinement.md`'s `GcTrim` row.
+  WAL consumers the offset floor does not speak for. They are absent here, which
+  only over-approximates the trim, so nothing here speaks for them. Production
+  bounds the trim for each retention reader in offset space, on every silo, as
+  `WalMove.tla`'s consumer states (`t - 1 <= cons`): the replication shipper and
+  every view maintainer register with the log's durable
+  `IWalOffsetConsumerRegistryGrain` before they read it, and each GC pass refuses
+  any entry at or above the lowest per-partition read position they publish
+  (`WalGcTrimCore.ClassifyEntry`, `consumerOffsetFloor`; issues #4579, #4584).
+  Their HLC cursors, which are not an offset bound and which only the silo they
+  run on can see, no longer carry that guarantee. An incremental backup capture is
+  deliberately not a retention reader: the GC may trim past it, and its fall-off
+  decision is exact by offset and made against what was actually read
+  (`WalLogSubscriber` probes the tail again when a read jumps an offset), so a
+  trim it misses makes the capture fall back to a full backup, whose cut is read
+  from leaf state the durable pins protect and is newer than the window it replaces
+  (`IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`).
+  A configured retention TTL may trim past a reader; see "Retention TTL" below.
 - **Two arms of `LeafDurablePinCore.Resolve`.** The `ReleaseEmpty` arm for a leaf
   whose clock is live but which holds no row and has applied nothing (the
   abstaining `(clock, -1)` release, #1490's narrowest arm) needs a projection that
@@ -222,34 +244,36 @@ from this specification.**
   a snapshot, which is not modelled. TLC exercises neither; both are pinned by
   `LeafDurablePinCoreTests` (`An_empty_partition_with_nothing_applied_releases_with_its_sentinel_checkpoint`
   and `Live_never_checkpointed_rows_over_a_proven_empty_wal_release_the_block_issue_3103`).
-- **Two fall-off boundary cells.** `WalFallOffCore.IsPrefixLost` never reports a
-  checkpoint of 0 as lost, a boundary that predates the #2703
-  `ProjectionCheckpointOffsetAssigned` flag disambiguating an assigned 0; the model
-  states the same rule (`FallsOff`), so it cannot report a latch the core exempts. And a cold
-  start over a snapshot that existed and is now absent: the model never deletes a
-  snapshot, so it reaches the cold-path guard only for a leaf that never kept one.
-  That guard compares the trimmed tail with the persisted checkpoint, not with
-  offset 0, so a cold start over a WAL trimmed through the persisted checkpoint
-  passes it. No conclusion about either cell may be drawn from this specification.
-- **Flushes that land unacknowledged, or late.** The model's in-flight write is
-  either flushed and acknowledged, or lost with a shard crash. Production has two
-  more outcomes. `WalShardGrain.HandleFlushFailureAsync` faults the acknowledgements
-  of later slots even when their provider write succeeded, then resyncs the
-  allocator above the provider's highest offset, so a write can be durable and
-  unacknowledged. And a provider call abandoned by a crash or by an expired drain
-  (`ForceFaultRemainingSlotsForDrainBudgetExpiry`) can land after a new activation
-  has recovered its allocator below it (`WalOffsetAllocationCore.RecoveredNextOffset`
-  reads the provider's highest offset). The argument that no checked property is
-  affected: every WAL provider writes an offset create-only (the in-memory and file
-  providers throw on an existing offset, and the Azure Table provider uses a
-  transactional `Add`), so of a late write and a new append at the same offset one
-  fails and its acknowledgement is faulted; no acknowledged write is overwritten and
-  no offset carries two acknowledged writes (`OffsetContiguity`). A durable but
-  unacknowledged entry is outside `AckedWriteDurable`, `TrimCoveredBySnapshot` and
-  `EveryAckedWriteMaterialised`, which quantify over acknowledged writes, and it is
-  never in flight once the allocator has resynced above it, so `ShippingNeverSkips`
-  may show it to a reader. The argument rests on the providers' create-only write;
-  provider durability semantics beyond that are not modelled.- **Shard moves.** Specified in `WalMove.tla`, not here.
+- **A cold start over a snapshot that existed and is now absent (issue #4433,
+  review finding F17).** The model never deletes a snapshot, so it reaches the
+  cold-path guard only for a leaf that never kept one. That guard compares the
+  trimmed tail with the persisted checkpoint, not with offset 0, so a cold start over
+  a WAL trimmed through the persisted checkpoint passes it. Snapshot disappearance is
+  in the threat model (storage loss or operator deletion must not be silent), and its
+  fix - a durable record that the leaf held a snapshot, so the cold start fails
+  closed - is assigned; no conclusion about this cell may be drawn until it lands.
+  The other boundary cell F17 named, the checkpoint of 0, is fixed:
+  `WalFallOffCore.IsPrefixLost` and the cold guard now treat a durably recorded 0 as a
+  real read position, as the model's `FallsOff` does (see the `Activate` row).
+- **Flushes that land unacknowledged, or late: an open defect, issue #4621.** The
+  model's in-flight write is either flushed and acknowledged, or lost with a shard
+  crash. Production has two more outcomes. `WalShardGrain.HandleFlushFailureAsync`
+  faults the acknowledgements of later slots even when their provider write
+  succeeded, then resyncs the allocator above the provider's highest offset, so a
+  write can be durable and unacknowledged. And a provider call abandoned at its
+  flush deadline, by an expired drain or by a crash can land after the allocator
+  has resynced above it. Every WAL provider writes an offset create-only, so no
+  acknowledged write is ever overwritten and no offset carries two acknowledged
+  writes (`OffsetContiguity`). But the review's argument that nothing else is
+  affected was wrong: the abandoned offset is a hole below the watermark, readers
+  advance past it, and when the write lands it sits below their cursors, so the
+  shipper, views and a warm leaf never see it while a cold rebuild applies it.
+  Reproduced on the real `WalShardGrain`, and by TLC at depth 7 with the model
+  extended by a late-landing action and the invariant that every readable owned
+  entry at or below a read position is in the projection. Until #4621 is fixed and
+  the model carries the late-landing action, no conclusion about late landings may
+  be drawn from this specification.
+- **Shard moves.** Specified in `WalMove.tla`, not here.
 - **Atomicity of a grain turn.** Each action is one atomic step. Production
   interleaves grain turns at await points (`[AlwaysInterleave]` methods, timers,
   the background replay task of #2909); the model's actions are coarser, so an

@@ -60,9 +60,9 @@ public partial class ReplicationApplierTests
         {
             VectorClock = DependencyOn(RemoteCluster, Hlc(10), "site-c", Hlc(5)),
         };
-        var firstVectorRead = new TaskCompletionSource<VersionVector>();
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>())
-            .Returns(firstVectorRead.Task, Task.FromResult(DependencyOn("site-c", Hlc(5))));
+        var firstCheck = new TaskCompletionSource<CausalDependencyVerdict[]>();
+        hwm.CheckDependenciesAsync(Arg.Any<IReadOnlyList<VersionVector>>(), Arg.Any<CancellationToken>())
+            .Returns(firstCheck.Task, Task.FromResult(new[] { CausalDependencyVerdict.Met }));
 
         var first = applier.ApplyAsync(entry);
         Assert.That(first.IsCompleted, Is.False, "The first delivery must be held at its dependency check.");
@@ -76,7 +76,7 @@ public partial class ReplicationApplierTests
                 "A duplicate of a delivery still deciding whether to park must be deferred.");
         });
 
-        firstVectorRead.SetException(new TimeoutException("simulated abort"));
+        firstCheck.SetException(new TimeoutException("simulated abort"));
         Assert.ThrowsAsync<TimeoutException>(async () => await first);
 
         var redelivered = await applier.ApplyAsync(entry);
@@ -106,7 +106,8 @@ public partial class ReplicationApplierTests
     public async Task ApplyAsync_still_acknowledges_a_duplicate_of_a_completed_park()
     {
         var (applier, _, _, hwm) = CreateApplier();
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+        hwm.CheckDependenciesAsync(Arg.Any<IReadOnlyList<VersionVector>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new[] { CausalDependencyVerdict.Unmet }));
         var entry = SetEntry("k", Hlc(10)) with
         {
             VectorClock = DependencyOn(RemoteCluster, Hlc(10), "site-c", Hlc(5)),

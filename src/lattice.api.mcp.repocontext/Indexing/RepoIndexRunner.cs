@@ -161,7 +161,7 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
         // A null authority result leaves the ambient credential untouched.
         var runCredential = _runAuthority.Resolve();
         using var credentialScope = runCredential is null
-            ? NullDisposable.Instance
+            ? NoOpDisposable.Instance
             : LatticeCredentialContext.With(runCredential);
 
         // Begun immediately before the try, so every path out of it settles the pass
@@ -247,20 +247,6 @@ internal sealed class RepoIndexRunner : IRepoIndexRunner
 
     private static string Describe(Exception ex) =>
         $"{ex.GetType().Name}: {ex.Message}";
-
-    /// <summary>
-    /// A no-op <see cref="IDisposable"/> used when the run authority resolves no
-    /// credential, so the credential-scope <c>using</c> can leave the ambient
-    /// credential untouched without allocating a real scope.
-    /// </summary>
-    private sealed class NullDisposable : IDisposable
-    {
-        public static readonly NullDisposable Instance = new();
-
-        public void Dispose()
-        {
-        }
-    }
 
     /// <summary>
     /// The per-run bookkeeping the runner keeps in its live-runs map: the run's

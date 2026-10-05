@@ -44,10 +44,17 @@ internal sealed class LatticeSagaGrpcMethods
     /// <summary>The <c>GetStatus</c> unary RPC method name.</summary>
     public const string GetStatusMethodName = "GetStatus";
 
+    /// <summary>
+    /// The <c>GetDecision</c> unary RPC method name: a prepared participant asks
+    /// the saga's coordinator cluster for its durable decision (issue #4637).
+    /// </summary>
+    public const string GetDecisionMethodName = "GetDecision";
+
     private readonly Method<SagaControlRequestBox, SagaControlResponseBox> _prepare;
     private readonly Method<SagaControlRequestBox, SagaControlResponseBox> _commit;
     private readonly Method<SagaControlRequestBox, SagaControlResponseBox> _abort;
     private readonly Method<SagaControlRequestBox, SagaControlResponseBox> _getStatus;
+    private readonly Method<SagaControlRequestBox, SagaControlResponseBox> _getDecision;
 
     /// <summary>
     /// Initialises the method holder by composing the request and
@@ -67,6 +74,7 @@ internal sealed class LatticeSagaGrpcMethods
         _commit = Create(CommitMethodName, requestMarshaller, responseMarshaller);
         _abort = Create(AbortMethodName, requestMarshaller, responseMarshaller);
         _getStatus = Create(GetStatusMethodName, requestMarshaller, responseMarshaller);
+        _getDecision = Create(GetDecisionMethodName, requestMarshaller, responseMarshaller);
     }
 
     private static Method<SagaControlRequestBox, SagaControlResponseBox> Create(
@@ -91,4 +99,7 @@ internal sealed class LatticeSagaGrpcMethods
 
     /// <summary>The unary <c>GetStatus</c> RPC.</summary>
     public Method<SagaControlRequestBox, SagaControlResponseBox> GetStatus => _getStatus;
+
+    /// <summary>The unary <c>GetDecision</c> RPC.</summary>
+    public Method<SagaControlRequestBox, SagaControlResponseBox> GetDecision => _getDecision;
 }

@@ -149,7 +149,7 @@ reads it.
 
 ##### Membership-sensitive consumers
 
-These are the four drivers whose behaviour depends on which peers
+These are the drivers whose behaviour depends on which peers
 are currently reachable. Every one of them reads
 `IReplicationTopology` and nothing else (other membership-sensitive
 paths - the anti-entropy digest probe, the source-identity rebind, the
@@ -159,7 +159,7 @@ on each pass):
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
-| Driver activation background service (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. No silo restart required. |
+| Driver activation background service (startup pass + runtime adds and removes) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. On `Removed`, detaches each of the removed peer's shippers from the write-ahead log (see *Shipper-lifetime asymmetry*). No silo restart required. |
 | Commit-time doorbell sink (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
 | Per-tree fall-off probe (per-cadence) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
 | Per-peer shipper pump | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
@@ -207,11 +207,17 @@ empty topology rather than a surprising re-emergence of a stale list.
    ringing the removed peer on the next commit. The next fall-off
    cadence tick excludes it from the probe set. The activation service
    does *not* tear down the existing shipper - see the asymmetry rule
-   below.
+   below - but it does detach it from the write-ahead log, so the
+   removed peer no longer holds the log's trims or the tree's saga
+   decision purges.
 3. **Re-add (peer disappears and reappears).** If the original shipper
    activation is still in memory, it is reused - there is no fresh
    activation, and the durable cursor on that activation continues
-   from where the previous run left off.
+   from where the previous run left off. Activating it re-attaches it
+   to the write-ahead log. It is still off the log, so it withholds saga
+   records until the peer is re-seeded; that re-seed's drain also clears
+   any pending bucket the peer staged before the removal whose decision
+   the source purged meanwhile.
 4. **Replace (host swaps the topology implementation).** Possible only
    at silo startup, before `AddLatticeReplication` registers the
    default. After registration the `TryAddSingleton` slot is occupied
@@ -243,6 +249,27 @@ any in-flight batch and any cursor advance that had not yet been
 persisted. The cost is that a peer removed from the topology is not
 the same as a peer disconnected from the wire - reachability is the
 transport's responsibility, not the topology's.
+
+What `Removed` does change is what the shipper *holds*
+([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A
+running shipper holds the tree's write-ahead log at its durable read
+position (the WAL GC trims below it), and a trim the `WalRetention`
+ceiling forces past it records a saga decision-purge hold (*Forced
+gaps* below). A peer that is gone for good must hold neither, so on
+`Removed` the activation service calls
+`IReplicationShipperGrain.DetachFromLogAsync` for each replicated
+tree. The shipper durably marks itself detached and takes the peer off
+the log (*Forced gaps* below) in the same write, withdraws from the
+log's offset consumers, and releases its purge hold. The GC no longer
+waits for it, so a trim can pass a prepare it has not read; it
+therefore keeps shipping only plain writes and withholds every saga
+record, and it keeps the re-seed marker for as long as it is detached.
+Topology removal is the escape hatch for a peer that will never
+re-seed. A detach that loses
+a race with the peer being added back is skipped. `EnsureActiveAsync`
+(the `Added` path and the startup pass) re-attaches the shipper. A
+peer removed while no silo was running stays attached until it is
+removed again with the cluster up.
 
 ##### Mismatch scenarios at a glance
 
@@ -434,20 +461,20 @@ restore-to-drop-keys cutover meant to discard, which plain last-writer-wins
 cross-cluster shipping never retracts). Pushing the rebind synchronously with
 the swap shrinks that window to the notification latency.
 
-Two further per-tick metadata resolutions are memoised on the same principle -
+The other per-tick metadata resolutions are memoised on the same principle -
 recompute only when an input changed, not every tick. Peer wire-version
 negotiation and shared-dictionary negotiation both key off the receiver's
 advertised capability on `ReplicationAck`, so their results are cached and
 recomputed only when a new ack changes the peer's advertised capability (or
 the shipper's options instance or effective dictionary id changes), not on
-every pump tick. Together with the source-identity rebind this removes all
-three steady-state idle registry/metadata resolutions, so an idle shipper's
+every pump tick. Together with the source-identity rebind this removes
+steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
 
 ### Doorbell
 
 The shipper grain is the log-first replication producer: it tails the
-single per-shard leaf write-ahead log (the leaf commit-log writer is the
+partitioned per-tree write-ahead log (the leaf commit-log writer is the
 sole WAL appender) from a durable per-partition cursor and is the only
 ship driver. The commit-time doorbell sink does not append to the
 WAL and does not ship; it maintains no producer-side vector clock state
@@ -521,70 +548,49 @@ exponential backoff sized by:
 `Random.Shared` is the jitter source - sufficient for distribution
 purposes, not cryptographic.
 
-### Permanent encode failure: dead-letter routing
+### Unencodable batches
 
 When building the outbound framing header throws an `ArgumentException`
-or `InvalidOperationException` - schema-shape failures the batch can
-never recover from in its current form - the shipper:
+or `InvalidOperationException` - a schema-shaped failure the batch can
+never recover from in its current form - the batch cannot reach the peer
+through the log. Parking it on this cluster's dead-letter queue would not
+help: a replay applies a parked entry here, where it is a no-op, and never
+sends it to the peer. So the shipper treats the batch like a
+[forced gap](#forced-gap-a-peer-taken-off-the-log) (#4614):
 
-1. Poisons the saga of every prepare in the batch (see
-   [Poisoned sagas](#poisoned-sagas)).
-2. Parks every entry in the offending batch on the per-tree
-   dead-letter store tagged with
-   `LatticeReplicationMetrics.ReasonSchema` so a single poison entry never
-   stalls the stream forever.
-3. Advances the cursor past the batch so the stream makes forward
-   progress, and persists the cursor with the poison list at once.
-4. Logs a warning with the entry count and the new cursor position.
+1. It takes the peer off the log: it takes the replay hold, records the
+   tree's current export epoch as the re-seed marker, withholds saga
+   records, and asks the peer to re-seed on every push and liveness probe.
+   On the first failure it also drops its terminal holds, as the forced gap
+   does.
+2. It quarantines the batch: per partition, the hull from that partition's
+   cursor through the batch's last read sequence, merged with any earlier
+   quarantine. The marker and the hull are written durably **before** the
+   cursor moves.
+3. It advances the cursor past the batch, so plain writes keep shipping.
 
-The DLQ enqueue is best-effort; a deterministically-failing DLQ does not
-pin the ship loop. The original entries remain in the WAL until the GC
-pass trims them, so an operator can still recover off the WAL even when
-the DLQ is unavailable.
+Every further failure raises the marker to the current export epoch: an
+export already opened past the old epoch predates the new batch and must
+not clear the marker. The peer re-bootstraps from an export after the
+marker, which carries the quarantined writes (committed rows, prepared rows
+of sagas still in flight, and decision rows), encoded by the snapshot path
+rather than the batch framing. After the echo, the rewind consumes every
+quarantined position without shipping it - every record in the hull was
+appended before the marker, so the export already carried it - and the
+quarantine clears once no re-seed is outstanding and every partition's
+cursor has passed it. A rebind to a new source log clears it too, because
+its sequences belong to the retired log. The quarantine is one sequence
+range per partition, so it needs no capacity bound and never stalls the
+link.
 
-Parking is a loss for the peer, not a deferral: replaying a parked entry
-through `ILatticeReplicationDeadLetters` applies it on **this** cluster,
-where it is a no-op, and never sends it to the peer.
+The shipper logs a warning naming the batch size and the epoch, and the
+link reports `Stalled` (with `ReseedRequiredSeconds` set) until the peer
+has re-seeded. Nothing is written to the dead-letter queue.
 
-#### Poisoned sagas
-
-A saga terminal that reached the peer after one of its prepares was
-parked would commit the saga there without that write - a torn batch the
-peer keeps, because the parked prepare never arrives. So a parked prepare
-poisons its saga for that peer (#4494):
-
-- Every later prepare and every terminal of the saga is parked too, with
-  reason `poisoned_saga`, instead of being shipped. A terminal already
-  held behind its prepares is parked rather than released. The peer keeps
-  the saga invisible: it serves it as never written, while this cluster
-  has it decided. A re-bootstrap of the peer ships the saga whole and
-  settles the prepares it already staged. No abort is sent to settle them:
-  this cluster never decided one.
-- Each poisoning logs a warning naming the transaction and the peer, and
-  counts on `orleans.lattice.replication.shipper.saga_poisoned`
-  (`outcome=poisoned`). Treat any increment as a divergence that needs a
-  re-bootstrap of that peer.
-- The poison list is persisted in the shipper's state with the cursors, so
-  a reactivation keeps withholding the saga. An entry retires only once the
-  saga can append no further record: the shipper has seen the origin
-  registry hold the saga's decision (or parked one of its terminals) and
-  later hold no row for it for a 10-minute grace - every terminal, a split's
-  late sweep terminal included, needs a recorded decision, and the grace lets
-  a sweep that read the decision just before the purge append its terminal
-  first - and the durable cursor has passed every partition tail sampled
-  after that. A count of the saga's terminals
-  is not a bound, because an unstamped or late sweep terminal can follow
-  the stamped ones. The registry is probed at most every 30 seconds, for
-  up to 64 sagas at a time.
-- The list is bounded (16,384 sagas). When it is full the shipper fails
-  closed: it neither parks the failing batch nor advances past it, logs an
-  error, counts `saga_poisoned{outcome=refused}`, and retries the batch on
-  its ship backoff, so the stream to that peer stalls rather than letting
-  a saga through torn.
-- A rebind to a new source log after a coordinated restore drops the list
-  (both clusters were reset to the cut). Any other rebind keeps it, because
-  the new copy can mirror the saga's records; partition tails sampled from
-  the retired log are dropped and re-sampled from the new one.
+A shipper whose state still carries a poison list from an earlier build
+(#4494, which parked the batch and poisoned its sagas) takes the peer off
+the log on activation and forgets the list: the re-seed delivers each of
+those sagas whole.
 
 ### Buffer reuse
 
@@ -694,9 +700,10 @@ held terminal are not re-shipped on every tick. After a restart, a held
 terminal whose prepares were acknowledged earlier releases on the tail
 barrier.
 
-A held terminal is never stranded. A terminal of a saga whose prepare was
-dead-lettered is parked rather than released (see
-[Poisoned sagas](#poisoned-sagas)), so it never reaches the peer:
+A held terminal is never stranded. A batch that could not be encoded takes
+the peer off the log and drops every hold (see
+[Unencodable batches](#unencodable-batches)), so no terminal of a saga that
+lost a prepare in it is released before the peer has re-seeded:
 
 - A prepare trimmed before it shipped (a peer that fell off the log) is
   passed by the acknowledged frontier like any other sequence.
@@ -730,16 +737,72 @@ partition the commit-log writer fans across (see
 
 A `WalRetention` ceiling trims the write-ahead log past a lagging consumer by design, so it can remove records the shipper has not yet delivered to its peer. Skipping the trimmed prefix is harmless for plain writes, but not for a saga: if the trimmed record was one of a saga's prepares and its terminal is still retained, the terminal reaches the peer without it, the receiver commits the saga and drains its other keys, and the lost key is missing - a torn saga ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A shipper cannot even name the transactions it lost.
 
-The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** (offsets are dense, and only a trim removes them). On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
+The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** when the source WAL's trim watermark has reached the requested sequence. Offsets are not dense: a flush abandoned at its deadline that never lands leaves a hole, and a hole directly above a trim point leaves the lowest stored offset above the requested sequence although nothing the peer needs was trimmed. The trim watermark tells the two apart (issue #4621; see [the WAL](../lattice/wal.md#abandoned-flushes-holes-and-the-trim-watermark)). When the source cannot report a trusted watermark - a provider that keeps none, or a silo in the cluster that predates it - every jump is treated as a forced gap, which re-seeds a peer needlessly at worst and never skips a trim. On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
 
-- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible;
+- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible. The withheld records stay in the log for the rewind: the shipper records each partition's durable cursor (or its lowest retained entry, past a trim) in `ReplicationShipperState.ReseedRetainFrom`, and its published read positions never pass it, so the WAL GC keeps every record it withholds. If the retention ceiling trims past that point anyway, the shipper does not rewind on the next echo, because the echoed export may predate a withheld saga's decision: it takes the peer off the log again, at the current export epoch ([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533));
 - **asks the peer to re-seed** on every push and liveness probe. The gRPC transport sends the recorded epoch in the `x-lattice-replication-reseed-after` call header. The receiver, having verified the caller's origin, starts a full bootstrap from that sender when it has not completed one from an export with a greater epoch and none is running (governed by `AutoBootstrapOnFallOffLog`), and echoes the epoch of its last completed one in `ReplicationAck.BootstrapEpoch`.
 
-Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. The shipper then clears the marker, rewinds every partition to its lowest retained entry, and resumes: the export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them. A range-scoped re-replay never advances the echoed epoch.
+Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. Any ack can carry the echo: a push from a serial or a pipelined (`ShipMaxInFlight` > 1) window, or a liveness probe on a quiet link. At the end of the pump tick, after every batch of the tick has folded its cursors, the shipper clears the marker, rewinds every partition to its lowest retained entry, and resumes ([#4606](https://github.com/NSTA1/Orleans.Lattice/issues/4606)). Rewinding before a batch's fold would let that fold raise the partition past the retained saga records the rewind exists to re-ship. The export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them; the [replay filter](#replay-filter-a-non-contiguous-stream-over-purged-sagas) withholds any saga whose decision the origin has purged. A range-scoped re-replay never advances the echoed epoch.
 
 While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
 
 A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
+
+#### Decision-purge holds
+
+The re-seed can only settle a saga whose decision the origin's transaction registry still stores, but a trimmed saga's decision becomes purgeable once its records are gone from the log. So a trim never passes a shipper silently: each WAL GC pass reads every registered shipper's durable read position, and before it trims an offset at or past one (only the `WalRetention` ceiling admits such a trim) it durably records a hold for that shipper in the tree's `IWalPurgeHoldGrain`, keyed by the physical tree and the shipper's grain id. A failed hold write skips the trim, and so does a pass that could not read the set of registered shippers; a shipper whose own position could not be read counts as position 0, so a forced trim holds it. While any hold is outstanding the registry purges no decision on the tree.
+
+The shipper releases its own hold, conditionally in the hold grain so a hold a concurrent trim widened is never released by an older read:
+
+- when the peer acknowledges the re-seed, since every partition then re-ships from its lowest retained entry, past whatever was trimmed;
+- on its phase timer (at most every 30 s), when no re-seed is outstanding and its durable read position is past every trimmed offset, as when the trimmed records were already in flight and were acknowledged after the trim;
+- when its peer is removed from the topology (*Shipper-lifetime asymmetry* above).
+
+An old silo never records a hold, and a host that has none behaves exactly as before.
+
+### Replay filter: a non-contiguous stream over purged sagas
+
+A host that ran without replication, or before the decision-purge guard ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) existed, purged saga decisions on retention alone while the write-ahead log kept their records. So does a registry activation on a silo that predates the guard, during a rolling upgrade. Re-shipping such a saga to a peer strands it there: nothing can settle it ([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A stream that delivers the log in order delivers every saga whole, prepares before terminals, and is never filtered. Only a **replay** is: after a re-seed rewinds the shipper to the lowest retained entry, or after a source-identity rebind restarts it on a new log.
+
+A replay records a horizon, `ReplicationShipperState.ReplayFilterHorizon`: every partition's next sequence when it began. While it is set, the shipper decides once per saga, on the first record of it that it reads, whether the origin proves the saga forgotten and its decision purged:
+
+1. It reads the saga's **participant row**. A saga registers its participants durably before it appends any prepare (the shard root awaits the registration and fails the write if it fails), and only `ForgetAsync`, after the decision, removes them. A row means the saga is live, or decided and not yet forgotten: it ships.
+2. With no row, it reads the **stored decision**. A decision means the saga was forgotten but its decision is still stored, which the peer's re-seed carried: it ships. No decision means it was purged: the decision is recorded before the forget and purged after it, so "no participants, then no decision" proves the purge.
+
+The verdict is cached for the replay and applies to every record of the saga, terminals included, so a saga is shipped whole or withheld whole. A failed read fails the tick, so the partition holds and retries rather than guessing. Every record of a purged saga was appended before its purge, so a purged verdict raises the horizon to the log's current next sequences, and the filter clears only once every partition's cursor has passed it. The cache lives only while the filter is set: it holds at most one entry per saga with a record between the cursors and the horizon, which the retained log bounds, and it is cleared when the filter starts, when it clears, and with the activation.
+
+A saga in flight when the peer is taken off the log can be decided, forgotten and, its records having been trimmed, purged while the replay runs; read as purged, its terminals would be withheld from a peer that the re-seed's export re-staged it on. So the shipper takes a **replay hold** on the tree's decision purges (`IWalPurgeHoldGrain`, the registry purges nothing while any hold is outstanding) before it reads the export epoch for the re-seed marker, or before a rebind replay begins, and releases it once the filter has cleared with no re-seed outstanding. A purged verdict is then only ever a saga purged before the hold, which no export can carry either. The hold is only honoured by silos that host `IWalPurgeHoldGrain`, so during a rolling upgrade the shipper reads the cluster manifest and, while any active silo lacks it, does not rewind for a re-seed: it stays off the log, withholding saga records and shipping plain writes. If such a silo joins while a replay runs, it takes the peer off the log again.
+
+A withheld saga must still converge on the peer, so the shipper withholds one only when the replay carries its effects. A re-seed's snapshot carries a committed saga's values as committed rows (an aborted saga has none), and the receiver clears the source's stale pending buckets during that drain (see [Snapshot bootstrap](snapshot-bootstrap.md#re-seed-stale-pending-clear)). Otherwise the verdict takes the peer off the log instead, and the re-seed that follows restarts the replay with a carrier:
+
+- a replay that a **rebind** started has no snapshot;
+- a replay that an **earlier activation** started may have shipped part of the saga under a verdict that died with that activation.
+
+A rebind that meets no purged saga, which is the normal case, costs nothing beyond one registry read per saga in the replayed region. Every saga record in every released build's write-ahead log was appended after a durable participant registration, because both shipped together in lattice 4.0.0, so the predicate holds across rolling upgrades.
+
+### Applied low watermark: what the shipper vouches for
+
+Beside every batch, and on an idle link's liveness probe, the shipper ships `ReplicationBatch.SourceFrontier` ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). Every write this cluster authored to the tree and stamped strictly below its `TreeLowWatermark` was acknowledged by the peer, and is visible there, in the peer's lineage of the tree that the frontier names. `OriginLowWatermark` is the same claim over every tree this cluster replicates to the peer.
+
+- **Per partition.** A shipping read returns the partition's clock floor paired with the offset it was in force at: every fresh local write at or after that offset is stamped at or above the floor. Once the durable cursor has passed that offset, the floor is covered. The durable cursor moves only on acknowledgements and is capped at held saga terminals.
+- **Per tree.** The watermark is the minimum covered floor over the tree's partitions. A partition with no covered floor means the tree has no watermark.
+- **Clamps.** The watermark never passes:
+  - the earliest acknowledged prepare of a saga whose terminals the peer has not all acknowledged (`ReplicationShipperState.Frontier`), because a prepared write stays invisible on the peer until its terminal lands;
+  - a local record the cursor passed without delivering it (a batch that could not be encoded, quarantined as in #4614), until a re-seed from a later export carries it;
+  - a prepare it could not track, because more than 4096 shipped sagas awaited their terminals.
+- **No watermark at all** while any of these holds:
+  - the peer is off the log, or a replay filter is set;
+  - the latest acknowledgement did not report the peer's lineage, or the peer reports `Guid.Empty`, meaning it tracks no lineage;
+  - the cluster's clock floor gate is closed;
+  - the tree is key-filtered, since a filtered write never reaches the peer.
+- **Lineage.** Every acknowledgement reports the peer's lineage of the tree (`ReplicationAck.ReceiverLineage`). The receiver re-mints it whenever the tree's contents may lose writes: a restore, revert, alias swap, purge or recreate.
+  - A move to a different non-empty lineage is a [forced gap](#forced-gap-a-peer-taken-off-the-log): the peer's new contents may lack writes already shipped, so the shipper re-seeds the peer and vouches again only after the rewind's replay filter clears. This covers a move from none seen or from an empty lineage too, once anything was acknowledged.
+  - A peer's lineage re-seeds run one tree at a time (`IReplicationSourceFrontierAggregateGrain`), so a rollout does not re-seed every tree at once.
+- **Across trees.** The per-peer aggregate grain keeps each tree's latest watermark. The origin watermark is their minimum, or zero while any replicated tree has no fresh one.
+  - It carries a generation that rises on every activation, every lineage change and every tree joining.
+  - The receiver ignores an aggregate from an older generation than one it has seen.
+
+A rebind discards the floors of the retired log. A replay filter a rebind begins clears once every partition has passed its horizon. A partition never consumed counts as being at offset 0, so it no longer holds the filter open ([#4656](https://github.com/NSTA1/Orleans.Lattice/issues/4656)).
 
 ### Deferred cursor persistence
 
@@ -1097,10 +1160,8 @@ emits; the table shows which driver is the source of each.
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
 | `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
-| `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
-| `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |
-| `shipper.saga_poisoned` | Shipper grain (poisoned saga) | A saga withheld from the peer (`outcome=poisoned`), or a full poison list refusing to advance (`outcome=refused`). |
-| `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
+| `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
+| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
 
 ---
 
