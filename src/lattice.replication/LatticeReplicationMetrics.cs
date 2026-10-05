@@ -1040,6 +1040,25 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string WalEntriesShippedName = "orleans.lattice.replication.wal.entries_shipped";
 
+    // --- Causal frontier (issue #4586 part 2b) -----------------------------------
+
+    /// <summary>
+    /// UpDownCounter of (tree, origin) pairs on this silo's receiver tree
+    /// frontiers, tagged by <see cref="TagTree"/>, <see cref="TagOrigin"/> and
+    /// <see cref="TagMode"/>: <c>exact</c> (the origin ships an applied low
+    /// watermark the tree accepted), <c>pending</c> (the tree tracks a lineage
+    /// but the origin has shipped no watermark yet - an older sender, or its
+    /// clock floor is not enabled), <c>awaiting_reseed</c> (the tree's contents
+    /// were replaced and await a full bootstrap) or <c>degraded</c> (the tree
+    /// registry tracks no lineage for the tree). Every mode but <c>exact</c> is
+    /// sound: only an applied write's exact identity meets a dependency on it.
+    /// A pair that stays outside <c>exact</c> on a fully upgraded cluster is the
+    /// signal to investigate.
+    /// </summary>
+    public static readonly UpDownCounter<long> CausalFrontierOrigins =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.causal.frontier_origins", unit: "{origin}",
+            description: "Receiver tree-frontier (tree, origin) pairs by mode: exact, pending, awaiting_reseed or degraded.");
+
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
     /// <summary>
@@ -2118,6 +2137,13 @@ public static class LatticeReplicationMetrics
     /// resolved the participant to abort while its coordinator was unreachable).
     /// </summary>
     public const string TagCause = "cause";
+
+    /// <summary>
+    /// Tag key for a receiver tree frontier's mode for one origin
+    /// (<see cref="CausalFrontierOrigins"/>): <c>exact</c>, <c>pending</c>,
+    /// <c>awaiting_reseed</c> or <c>degraded</c>.
+    /// </summary>
+    public const string TagMode = "mode";
 
     /// <summary><see cref="TagPhase"/> value: the unfenced, resumable prepare (shadow build) phase.</summary>
     public const string SagaPhasePrepare = "prepare";

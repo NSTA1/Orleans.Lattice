@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -185,6 +186,15 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the tree recorded <paramref name="originClusterId"/>'s write at
+    /// <paramref name="timestamp"/> as applied and still remembers it (issue
+    /// #4586 part 2b). Interleaves: the origin's frontier asks while this grain
+    /// may be waiting on it inside <see cref="CheckDependenciesAsync"/>.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HasAppliedAsync(string originClusterId, HybridLogicalClock timestamp);
 
     /// <summary>
     /// Durably records that the write of <paramref name="originClusterId"/> at

@@ -14,15 +14,36 @@ namespace Orleans.Lattice.Replication.Grains;
 internal interface IReplicationOriginFrontierGrain : IGrainWithStringKey
 {
     /// <summary>
-    /// Raises the recorded low watermark to <paramref name="lowWatermark"/> when
-    /// it is higher, and returns whether it moved. The watermark is kept in
-    /// memory only: a reactivation forgets it until the origin ships the next
-    /// one, which only delays dependents.
+    /// Records the origin's shipped aggregate low watermark under its aggregate
+    /// <paramref name="generation"/> (issue #4586 part 2b), and returns whether
+    /// the recorded value changed. A generation older than one already seen, or
+    /// than the oldest still accepted, is ignored; a newer one replaces the
+    /// value, which may lower it; the same generation only raises it. Persisted
+    /// lazily, which only delays dependents.
     /// </summary>
-    Task<bool> RecordLowWatermarkAsync(HybridLogicalClock lowWatermark, CancellationToken cancellationToken = default);
+    Task<bool> RecordLowWatermarkAsync(HybridLogicalClock lowWatermark, long generation, CancellationToken cancellationToken = default);
 
-    /// <summary>The recorded low watermark, or zero when none was received since activation.</summary>
+    /// <summary>
+    /// The effective low watermark: the recorded aggregate, capped by every
+    /// tree whose lineage changed and that the origin has not yet re-covered.
+    /// </summary>
     Task<HybridLogicalClock> GetLowWatermarkAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Caps the effective low watermark at <paramref name="cap"/> on behalf of
+    /// <paramref name="treeId"/>, replacing any cap that tree had: the tree's
+    /// contents changed lineage, so the origin's aggregate may still count
+    /// coverage of writes the new contents lack. Durable before it returns.
+    /// </summary>
+    Task SetTreeCapAsync(string treeId, HybridLogicalClock cap, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lifts <paramref name="treeId"/>'s cap once the origin re-covered the tree
+    /// in its new lineage at aggregate <paramref name="generation"/>, and from
+    /// then on ignores any aggregate of an older generation. Durable before it
+    /// returns.
+    /// </summary>
+    Task LiftTreeCapAsync(string treeId, long generation, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Replaces the set of this origin's writes that <paramref name="source"/>
