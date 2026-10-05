@@ -1185,23 +1185,33 @@ again: it is often trimmed, which is why the peer fell off the log. So
     sibling's own terminal reaches this receiver.
   - A re-driven drain records the same arrival again, and a terminal of the
     tree shipped later overwrites it. Both are no-ops.
-- **An import that names the operation nowhere still arrives.** The origin
-  keeps a cross-tree sub-saga's decision until every peer of every
+- **An import that names the operation nowhere can still arrive.** The
+  origin keeps a cross-tree sub-saga's decision until every peer of every
   participant has acknowledged past it (see
   [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)),
   but a decision purged before that hold existed reaches an export only as
-  the sub-saga's committed rows. So before it requests the export, the drain
-  reads the barriers that wait for this tree from the same source and
-  already hold a sibling's arrival
-  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). For each
-  whose operation no row of the export names, the tree arrives with the
-  siblings' verdict - one operation has one verdict - and stays read-fenced
-  until the barrier decides. Reading the barriers first is what makes this
-  sound: the export then opened after a sibling's terminal arrived, so after
-  the operation decided at the origin and so after this tree's sub-saga
-  prepared there. An export that opened earlier can predate the prepare, and
-  its rows can be pre-saga, so a barrier that opens during the drain leaves
-  the tree pending.
+  the sub-saga's committed rows
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). So at the
+  end of every drain from an export the source served under the hold, the
+  drain records the import in the tree's barrier index: the export's epoch
+  and every cross-tree operation one of its rows named. It then has every
+  barrier waiting for the tree re-evaluate. A barrier does the same whenever
+  it opens or records an arrival, so the order of the import and the sibling's
+  terminal does not matter. A tree that has not arrived arrives with its
+  siblings' verdict - one operation has one verdict - when its latest import
+  named the operation nowhere and its export opened after the operation's
+  decision: the export's epoch is greater than the tree's **decision stamp**,
+  the tree's export epoch the origin read after the decision was durable
+  (see [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+  An export that opened before the decision can predate the sub-saga's
+  prepare, so its rows can be pre-saga, and the tree stays pending. An
+  operation decided by a silo that predates stamping carries no stamps; the
+  source serves no export while such a silo is up, so every export it served
+  opened after that decision.
+- **The tree stays fenced while any barrier waits for it.** The drain does
+  not lift the read fence, and the bootstrap does not complete, while any
+  barrier indexed under the tree is undecided, including one that opened
+  after the drain while the fence was still up.
 
 A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's

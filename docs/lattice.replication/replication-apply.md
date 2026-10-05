@@ -345,6 +345,20 @@ its wait set, under every tree it waits for (`ICrossTreeBarrierIndexGrain`,
 keyed by the receiver tree), and withdraws once decided, so an import of one
 of those trees can find it.
 
+A shipped cross-tree terminal carries the operation's **decision stamps**:
+per participating tree, the export epoch the origin read after the decision
+was durable (`WalRecord.CrossTreeDecisionStamps`, on the wire only). The
+applier records them on the barrier before it applies the terminal. A
+barrier compares each tree that has not arrived with the tree's latest
+snapshot import, which the same index records, and records the tree's
+arrival with the operation's verdict when that import named the operation
+nowhere and its export opened after the decision
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
+Such an arrival finalizes nothing, because the import already settled the
+tree; a real terminal of the tree that arrives later replaces it, so its
+pending bucket is still finalized.
+
 Public readers therefore observe the receiver-side same-cluster
 atomic-visibility property end-to-end: at every point in time,
 either every key the saga prepared on the receiver is at its

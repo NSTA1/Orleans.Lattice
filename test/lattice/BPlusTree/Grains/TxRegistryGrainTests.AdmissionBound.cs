@@ -272,6 +272,12 @@ public partial class TxRegistryGrainTests
                     {
                         OperationId = "tree-with-a-realistically-long-physical-tree-id/" + Guid.NewGuid(),
                         Participants = ["tree-with-a-realistically-long-tree-id-a", "tree-with-a-realistically-long-tree-id-b"],
+                        DecisionStamps = System.Collections.Immutable.ImmutableDictionary.CreateRange(
+                            StringComparer.Ordinal,
+                            [
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-a", long.MaxValue),
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-b", long.MaxValue),
+                            ]),
                     };
                     break;
             }

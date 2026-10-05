@@ -144,6 +144,7 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// membership. The first recorded stamps stand; a sub-saga with no
     /// membership is left unchanged. Durable before it returns.
     /// </summary>
+    [AlwaysInterleave]
     Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps);
 
     /// <summary>
