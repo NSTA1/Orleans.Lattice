@@ -13,7 +13,7 @@ using Orleans.Serialization;
 namespace Orleans.Lattice.Replication.Grpc.Tests;
 
 [TestFixture]
-public class LatticeReplicationGrpcServiceTests
+public partial class LatticeReplicationGrpcServiceTests
 {
     private static LatticeReplicationGrpcService CreateService(IReplicationApplier applier, out LatticeReplicationGrpcMethod method)
     {

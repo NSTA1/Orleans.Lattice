@@ -32,6 +32,59 @@ internal static class ReplicationSourceLineageGate
     }
 
     /// <summary>
+    /// The admission check every replicated apply entry runs (issue #4707):
+    /// checks the stamp of the active <see cref="ReplicationSourceLineageScope"/>
+    /// against the lineage <paramref name="treeName"/> last drained from the
+    /// stamping source, through <see cref="CheckAsync"/>. An unstamped apply,
+    /// and the bootstrap drain's own rows, are admitted without a grain call.
+    /// The frontier epoch is the one the transport observed for the delivery,
+    /// or read from the tree frontier when it supplied none. The verdict is
+    /// cached on the scope, so a delivery split into several runs pays for one
+    /// check.
+    /// </summary>
+    public static async ValueTask<Verdict> AdmitAsync(
+        IGrainFactory grainFactory,
+        string treeName,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        if (LatticeBootstrapApplyContext.IsActive
+            || ReplicationSourceLineageScope.Active is not { Stamp: { } stamp } scope)
+        {
+            return Verdict.Apply;
+        }
+
+        if (scope.TryGetVerdict(treeName, out var cached))
+        {
+            return cached;
+        }
+
+        var epoch = scope.ObservedFrontierEpoch;
+        if (epoch is null)
+        {
+            try
+            {
+                epoch = (await grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+                    .GetAsync(cancellationToken)
+                    .ConfigureAwait(false)).Epoch;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Without an epoch the check below refuses transiently, which
+                // never discards the entry.
+                logger.LogWarning(ex,
+                    "Tree '{TreeName}': could not read the tree frontier epoch to check an entry stamped by '{Source}'.",
+                    treeName, stamp.SourceClusterId);
+            }
+        }
+
+        var verdict = await CheckAsync(grainFactory, treeName, stamp.SourceClusterId, stamp.Lineage, epoch, logger)
+            .ConfigureAwait(false);
+        scope.Record(treeName, verdict);
+        return verdict;
+    }
+
+    /// <summary>
     /// Decides whether a batch <paramref name="originClusterId"/> stamped with
     /// <paramref name="stampedLineage"/> may apply to <paramref name="treeName"/>.
     /// <list type="bullet">

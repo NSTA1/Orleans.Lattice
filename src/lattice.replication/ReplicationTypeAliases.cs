@@ -336,4 +336,8 @@ public static class ReplicationTypeAliases
 
     // A receiver's record of the source lineage it last drained (#4673).
     internal const string ReplicationDrainedLineage = "olr.dn";
+
+    // The source lineage a sender stamped on an entry, carried with it into the
+    // causal-apply buffer and the dead-letter queue (#4707).
+    internal const string ReplicationSourceLineageStamp = "olr.ls";
 }

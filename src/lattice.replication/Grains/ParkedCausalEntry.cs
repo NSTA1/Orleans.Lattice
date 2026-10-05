@@ -27,4 +27,12 @@ internal sealed class ParkedCausalEntry
     /// an entry parked before the epoch was recorded.
     /// </summary>
     [Id(2)] public long AdmissionEpoch { get; init; }
+
+    /// <summary>
+    /// The source lineage the entry's sender stamped on the batch it arrived in
+    /// (issue #4707). The drain checks the entry against the lineage the tree has
+    /// drained by then. <see langword="null"/> for an unstamped entry, and for an
+    /// entry parked before the stamp was recorded, which apply as before.
+    /// </summary>
+    [Id(3)] public ReplicationSourceLineageStamp? SourceLineage { get; init; }
 }

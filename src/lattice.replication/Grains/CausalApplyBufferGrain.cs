@@ -37,6 +37,11 @@ internal sealed class CausalApplyBufferGrain(
     // #4593), keyed by the buffer's dedup identity. Mirrors the persisted
     // ParkedCausalEntry.AdmissionEpoch and is rebuilt with the buffer.
     private readonly Dictionary<CausalApplyBuffer.EntryKey, long> _epochs = new();
+
+    // The source lineage each stamped parked entry's sender read it under (issue
+    // #4707). Mirrors the persisted ParkedCausalEntry.SourceLineage and is
+    // rebuilt with the buffer; an unstamped entry has no row.
+    private readonly Dictionary<CausalApplyBuffer.EntryKey, ReplicationSourceLineageStamp> _lineages = new();
     private string? _treeId;
 
     /// <inheritdoc />
@@ -45,7 +50,7 @@ internal sealed class CausalApplyBufferGrain(
     private string TreeId => _treeId ??= context.GrainId.Key.ToString() ?? string.Empty;
 
     /// <inheritdoc />
-    public async Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0)
+    public async Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0, ReplicationSourceLineageStamp? sourceLineage = null)
     {
         var buffer = EnsureLoaded();
         var resolved = options.Get(TreeId);
@@ -57,7 +62,17 @@ internal sealed class CausalApplyBufferGrain(
 
         if (outcome != AddOutcome.Duplicate)
         {
-            _epochs[CausalApplyBuffer.EntryKey.From(entry)] = admissionEpoch;
+            var parkedKey = CausalApplyBuffer.EntryKey.From(entry);
+            _epochs[parkedKey] = admissionEpoch;
+            if (sourceLineage is { } stamp)
+            {
+                _lineages[parkedKey] = stamp;
+            }
+            else
+            {
+                _lineages.Remove(parkedKey);
+            }
+
             foreach (var displaced in evicted)
             {
                 _epochs.Remove(CausalApplyBuffer.EntryKey.From(displaced));
@@ -78,7 +93,13 @@ internal sealed class CausalApplyBufferGrain(
                             failureReason: "Causal-apply buffer full; evicted blocked entry to make room.",
                             retryCount: 0,
                             reasonTag: LatticeReplicationMetrics.ReasonHlcSkew,
-                            CancellationToken.None).ConfigureAwait(true);
+                            CancellationToken.None,
+                            LineageOf(displaced)).ConfigureAwait(true);
+                    }
+
+                    foreach (var displaced in evicted)
+                    {
+                        _lineages.Remove(CausalApplyBuffer.EntryKey.From(displaced));
                     }
                 }
 
@@ -203,8 +224,9 @@ internal sealed class CausalApplyBufferGrain(
                 }
 
                 // Entries taken out of the in-memory buffer that must stay parked
-                // because the dead-letter queue is full (#4603); re-inserted before
-                // the removal below is persisted.
+                // because the dead-letter queue is full (#4603), or because their
+                // source lineage could not be checked yet (#4707); re-inserted
+                // before the removal below is persisted.
                 List<WalRecord>? keepParked = null;
 
                 // A dependency on a write this tree lost for good can never be
@@ -215,7 +237,8 @@ internal sealed class CausalApplyBufferGrain(
                             ent,
                             "A causal dependency of this entry names a write this cluster acknowledged and then lost "
                             + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
-                            LatticeReplicationMetrics.ReasonDependencyLost).ConfigureAwait(true))
+                            LatticeReplicationMetrics.ReasonDependencyLost,
+                            LineageOf(ent)).ConfigureAwait(true))
                     {
                         (keepParked ??= new List<WalRecord>()).Add(ent);
                     }
@@ -226,7 +249,24 @@ internal sealed class CausalApplyBufferGrain(
                 {
                     try
                     {
-                        await applier.ApplyDrainedEntryAsync(ent, EpochOf(ent), CancellationToken.None).ConfigureAwait(true);
+                        var lineageVerdict = await applier
+                            .ApplyDrainedEntryAsync(ent, EpochOf(ent), LineageOf(ent), CancellationToken.None)
+                            .ConfigureAwait(true);
+                        if (lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseLineage)
+                        {
+                            // Issue #4707: the entry's sender read it under a
+                            // source lineage this tree no longer holds - a source
+                            // restore, purge and recreate, or alias move since -
+                            // so it is not part of what the tree now replicates.
+                            // A push of it would be refused; discard it here.
+                            logger.LogInformation(
+                                "Causal-apply buffer for tree {Tree} discarded an entry its sender read under a replaced source lineage (key {Key}).",
+                                TreeId, ent.Key);
+                        }
+                        else if (lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseTransient)
+                        {
+                            (keepParked ??= new List<WalRecord>()).Add(ent);
+                        }
                     }
                     catch (TxDecisionGateRefusedException gated)
                         when (gated.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
@@ -271,7 +311,7 @@ internal sealed class CausalApplyBufferGrain(
                         var reasonTag = ex is ArgumentException or InvalidOperationException
                             ? LatticeReplicationMetrics.ReasonSchema
                             : LatticeReplicationMetrics.ReasonUnknown;
-                        if (!await TryDeadLetterAsync(ent, ex.Message ?? "<no message>", reasonTag).ConfigureAwait(true))
+                        if (!await TryDeadLetterAsync(ent, ex.Message ?? "<no message>", reasonTag, LineageOf(ent)).ConfigureAwait(true))
                         {
                             (keepParked ??= new List<WalRecord>()).Add(ent);
                         }
@@ -289,6 +329,7 @@ internal sealed class CausalApplyBufferGrain(
                     if (keepParked is null || !keepParked.Contains(ent))
                     {
                         _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                        _lineages.Remove(CausalApplyBuffer.EntryKey.From(ent));
                     }
                 }
 
@@ -297,14 +338,16 @@ internal sealed class CausalApplyBufferGrain(
                     if (keepParked is null || !keepParked.Contains(ent))
                     {
                         _epochs.Remove(CausalApplyBuffer.EntryKey.From(ent));
+                        _lineages.Remove(CausalApplyBuffer.EntryKey.From(ent));
                     }
                 }
 
                 if (keepParked is not null)
                 {
-                    // The dead-letter queue is full: keep these acknowledged
-                    // entries parked rather than lose them, and stop this drain so
-                    // they are retried on the next one instead of spinning here.
+                    // The dead-letter queue is full, or a source lineage could not
+                    // be checked: keep these acknowledged entries parked rather
+                    // than lose them, and stop this drain so they are retried on
+                    // the next one instead of spinning here.
                     foreach (var ent in keepParked)
                     {
                         buffer.Restore(ent, DateTime.UtcNow.Ticks);
@@ -334,11 +377,18 @@ internal sealed class CausalApplyBufferGrain(
     private long EpochOf(WalRecord entry) =>
         _epochs.TryGetValue(CausalApplyBuffer.EntryKey.From(entry), out var epoch) ? epoch : 0;
 
+    private ReplicationSourceLineageStamp? LineageOf(WalRecord entry) =>
+        _lineages.TryGetValue(CausalApplyBuffer.EntryKey.From(entry), out var stamp) ? stamp : null;
+
     /// <summary>
     /// Dead-letters <paramref name="entry"/>, or returns <see langword="false"/>
     /// when the dead-letter queue is full (#4603) so the caller keeps it parked.
     /// </summary>
-    private async Task<bool> TryDeadLetterAsync(WalRecord entry, string failureReason, string reasonTag)
+    private async Task<bool> TryDeadLetterAsync(
+        WalRecord entry,
+        string failureReason,
+        string reasonTag,
+        ReplicationSourceLineageStamp? sourceLineage)
     {
         try
         {
@@ -347,7 +397,8 @@ internal sealed class CausalApplyBufferGrain(
                 failureReason,
                 retryCount: 0,
                 reasonTag,
-                CancellationToken.None).ConfigureAwait(true);
+                CancellationToken.None,
+                sourceLineage).ConfigureAwait(true);
             return true;
         }
         catch (ReplicationDeadLetterQueueFullException)
@@ -419,10 +470,16 @@ internal sealed class CausalApplyBufferGrain(
 
         var buffer = new CausalApplyBuffer(TreeId);
         _epochs.Clear();
+        _lineages.Clear();
         foreach (var parked in state.State.Entries)
         {
             buffer.Restore(parked.Entry, parked.ParkedAtTicks);
-            _epochs.TryAdd(CausalApplyBuffer.EntryKey.From(parked.Entry), parked.AdmissionEpoch);
+            var key = CausalApplyBuffer.EntryKey.From(parked.Entry);
+            _epochs.TryAdd(key, parked.AdmissionEpoch);
+            if (parked.SourceLineage is { } stamp)
+            {
+                _lineages.TryAdd(key, stamp);
+            }
         }
 
         _buffer = buffer;
@@ -442,7 +499,13 @@ internal sealed class CausalApplyBufferGrain(
         var entries = new List<ParkedCausalEntry>(snapshot.Count);
         foreach (var (entry, parkedAtTicks) in snapshot)
         {
-            entries.Add(new ParkedCausalEntry { Entry = entry, ParkedAtTicks = parkedAtTicks, AdmissionEpoch = EpochOf(entry) });
+            entries.Add(new ParkedCausalEntry
+            {
+                Entry = entry,
+                ParkedAtTicks = parkedAtTicks,
+                AdmissionEpoch = EpochOf(entry),
+                SourceLineage = LineageOf(entry),
+            });
         }
 
         var previous = state.State.Entries;
