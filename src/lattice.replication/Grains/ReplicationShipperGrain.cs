@@ -3449,7 +3449,8 @@ internal sealed partial class ReplicationShipperGrain(
             _partitionPages[partition] = null;
             return;
         }
-        if (page.Entries[0].Sequence > _partitionNextSeq[partition])
+        if (page.Entries[0].Sequence > _partitionNextSeq[partition]
+            && await IsTrimmedPastAsync(grain, _partitionNextSeq[partition], cancellationToken))
         {
             // A trim removed records this shipper never delivered (#4534).
             await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
@@ -3459,6 +3460,20 @@ internal sealed partial class ReplicationShipperGrain(
         _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
     }
+
+    /// <summary>
+    /// Whether a shipping read that jumped past <paramref name="requested"/> did
+    /// so because a trim removed it, rather than because the offset is a hole that
+    /// was never written (issue #4621). Offsets are not dense: a flush abandoned at
+    /// its deadline that never lands leaves a permanent hole the allocator has
+    /// already moved past. The shard's trusted trim watermark separates the two;
+    /// without one (a provider that keeps none, or a silo in the cluster that
+    /// predates it) every jump is treated as a trim, which re-seeds the peer
+    /// needlessly at worst and never skips a trim silently.
+    /// </summary>
+    private static async Task<bool> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
+        => await grain.GetTrimWatermarkAsync(cancellationToken) is not { } trimmedThrough
+            || trimmedThrough >= requested;
 
     /// <summary>
     /// Grows the activation-scoped scratch arrays in lockstep when the

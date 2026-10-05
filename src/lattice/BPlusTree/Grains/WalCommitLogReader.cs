@@ -189,7 +189,11 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
-        return grain.GetNextSequenceAsync(cancellationToken).AsTask();
+
+        // The readable head, not the allocator's next sequence: a reader resumes
+        // from this value, so it must not pass an offset a write can still land at
+        // (issue #4621).
+        return grain.GetReadableHeadAsync(cancellationToken).AsTask();
     }
 
     /// <inheritdoc />
@@ -207,6 +211,20 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
 
+        // A trusted trim watermark decides exactly (issue #4621): everything at or
+        // below it was trimmed, and a missing sequence above it is a hole that was
+        // never written, which no reader has fallen off. A trim may name an offset
+        // past everything ever written (a tree discard, or a trim through
+        // long.MaxValue); the tail then collapses to the next sequence, as it does
+        // for any fully trimmed log, and the addition never overflows.
+        if (await grain.GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(false) is { } trimmedThrough)
+        {
+            var next = await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
+            return trimmedThrough >= next - 1 ? next : trimmedThrough + 1;
+        }
+
+        // Without one, the oldest readable entry is the tail: a conservative rule
+        // that reads a hole directly above a trim point as part of the trim.
         // Probe for the oldest readable entry by asking for a single
         // entry from sequence 0. If the WAL has been trimmed, the page
         // will yield the first surviving entry whose sequence is > 0.
