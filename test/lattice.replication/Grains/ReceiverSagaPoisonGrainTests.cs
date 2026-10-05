@@ -67,4 +67,54 @@ public sealed class ReceiverSagaPoisonGrainTests
 
         Assert.That(recorded, Is.False);
     }
+    [Test]
+    public async Task RetireAsync_remembers_the_retired_sagas_durably_and_only_those()
+    {
+        var state = new FakePersistentState<ReceiverSagaPoisonState>();
+        var grain = new ReceiverSagaPoisonGrain(state);
+        var (retired, kept, other) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        await grain.PoisonAsync("site-a", retired, "one");
+        await grain.PoisonAsync("site-a", kept, "two");
+
+        await grain.RetireAsync("site-a", new[] { retired, other });
+        var restarted = new ReceiverSagaPoisonGrain(state);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await restarted.IsRetiredAsync("site-a", retired), Is.True, "issue #4692: a re-seed retired it");
+            Assert.That(await restarted.IsRetiredAsync("site-a", kept), Is.False, "still poisoned, not retired");
+            Assert.That(await restarted.IsRetiredAsync("site-a", other), Is.False, "never poisoned, so nothing to remember");
+            Assert.That(await restarted.IsRetiredAsync("site-b", retired), Is.False, "per origin");
+        });
+    }
+
+    [Test]
+    public async Task QuarantineAsync_is_durable_idempotent_and_classified_apart_from_poison()
+    {
+        var state = new FakePersistentState<ReceiverSagaPoisonState>();
+        var grain = new ReceiverSagaPoisonGrain(state);
+        var (quarantined, poisoned, clean) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        await grain.PoisonAsync("site-a", poisoned, "poisoned");
+
+        Assert.That(await grain.QuarantineAsync("site-a", quarantined, "integrity fault"), Is.True);
+        var writes = state.WriteCount;
+        Assert.That(await grain.QuarantineAsync("site-a", quarantined, "again"), Is.True);
+        var restarted = new ReceiverSagaPoisonGrain(state);
+        var classified = await restarted.ClassifyAsync("site-a", new[] { quarantined, poisoned, clean });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(state.WriteCount, Is.EqualTo(writes), "a repeat quarantine writes nothing");
+            Assert.That(classified.Quarantined, Is.EquivalentTo(new[] { quarantined }));
+            Assert.That(classified.Poisoned, Is.EquivalentTo(new[] { poisoned }));
+            Assert.That(await restarted.GetQuarantinedAsync("site-a"), Is.EquivalentTo(new[] { quarantined }));
+            Assert.That(await restarted.GetQuarantinedAsync("site-b"), Is.Empty);
+            Assert.That((await restarted.ClassifyAsync("site-a", Array.Empty<Guid>())).Quarantined, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void QuarantineAsync_rejects_an_empty_transaction_id() =>
+        Assert.ThrowsAsync<ArgumentException>(() =>
+            new ReceiverSagaPoisonGrain(new FakePersistentState<ReceiverSagaPoisonState>()).QuarantineAsync("site-a", Guid.Empty, "reason"));
 }

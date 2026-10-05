@@ -143,6 +143,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
     internal const string ReceiverSagaPoisonRecord = "olr.yr";
 
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonClassification"/>.</summary>
+    internal const string ReceiverSagaPoisonClassification = "olr.yq";
+
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
 

@@ -900,6 +900,14 @@ public static class LatticeReplicationMetrics
     public const string OutcomeReceiverSagaPoisonedTerminalTimeout = "terminal_timeout";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga whose poison a completed re-seed had already retired failed again,
+    /// so it was quarantined instead of re-seeded (issue #4692). Its records are
+    /// parked without being applied. An input-integrity fault.
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantined = "quarantined";
+
+    /// <summary>
     /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
     /// host-trusted operator request recorded receiver-side poison.
     /// </summary>
