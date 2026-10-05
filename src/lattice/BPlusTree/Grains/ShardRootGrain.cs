@@ -3220,6 +3220,13 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         await (isCrossShardMigration ? PrepareForOperationAsync() : PrepareForWriteAsync());
+        // A merge that is not a split's own migration import is a write like
+        // any other: it is refused for a slot this shard is handing off, so the
+        // caller re-routes (the resize mirror's refusal chase, #4478; a
+        // replication apply's stale-routing retry), and during a split's drain
+        // it is forwarded to the split destination below (issue #4522).
+        if (!isCrossShardMigration)
+            ThrowIfRejectedForAnyMergeKey(entries);
         RecordWrite(entries.Count);
 
         if (entries.Count == 0)
@@ -3247,6 +3254,8 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(entries, isCrossShardMigration,
                 Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
+            if (!isCrossShardMigration)
+                await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
             await forwardTask;
             return;
         }
@@ -3290,6 +3299,9 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
         }
+
+        if (!isCrossShardMigration)
+            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
 
         // Await forwardTask at the end of the grouped path - matches the
         // root-is-leaf fast path and surfaces any forward failure to the

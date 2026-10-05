@@ -269,6 +269,50 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// The write-path reject gate for a merge batch: applies
+    /// <see cref="ThrowIfRejectedForKey"/> to each key, after the same cheap
+    /// no-split, no-moved-slots short-circuit as the batch gate.
+    /// </summary>
+    private void ThrowIfRejectedForAnyMergeKey(Dictionary<string, LwwValue<byte[]>> entries)
+    {
+        ThrowIfWriteFenced();
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var key in entries.Keys)
+            ThrowIfRejectedForKey(key);
+    }
+
+    /// <summary>
+    /// Forwards the rows a merge just stored for keys in a split's moved
+    /// slots to the split destination, at their own stamps, as the write paths
+    /// do (<see cref="ForwardLocalWriteToShadowIfNeededAsync"/>). Awaited
+    /// before the merge returns, so a row this shard accepted reaches the
+    /// destination before the shard starts refusing the slot and the final
+    /// drain can no longer be the only copy (issue #4522).
+    /// </summary>
+    private async Task ForwardMergedRowsToSplitShadowIfNeededAsync(IEnumerable<string> keys)
+    {
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var key in keys)
+        {
+            var target = TryResolveSplitShadowTarget(key);
+            if (target is null) continue;
+
+            var leafId = RootIsLeafTyped
+                ? state.State.RootNodeId!.Value
+                : await TraverseToLeafAsync(key);
+            var raw = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).GetRawEntryAsync(key);
+            if (raw is null) continue;
+
+            await ForwardWithDeadlineAsync(() =>
+                target.MergeManyAsync(new Dictionary<string, LwwValue<byte[]>>(1) { [key] = raw.Value.ToLwwValue() }, isCrossShardMigration: true));
+        }
+    }
+
+    /// <summary>
     /// Read-path gate. Throws <see cref="StaleShardRoutingException"/> as
     /// soon as a split has advanced to <see cref="ShardSplitPhase.Swap"/>
     /// (the registry's <see cref="ShardMap"/> has been swapped to the new
