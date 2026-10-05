@@ -2,6 +2,7 @@ using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -22,6 +23,7 @@ public partial class ShardRootGrainShadowForwardTests
         var shard = Substitute.For<IShardRootGrain>();
         shard.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.CompletedTask);
         shard.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(Task.CompletedTask);
+        shard.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).Returns(Task.CompletedTask);
         shard.GetSplitForwardTargetsAsync().Returns(Task.FromResult(new List<int>()));
         h.Factory.GetGrain<IShardRootGrain>($"{DestTreeId}/{index}").Returns(shard);
         return shard;
@@ -36,11 +38,11 @@ public partial class ShardRootGrainShadowForwardTests
         SetShadowPhase(h.State, ShadowForwardPhase.Drained);
         var first = DestinationShard(h, ShardIndex);
         var owner = DestinationShard(h, MovedTo);
-        first.SetAsync("k", Arg.Any<byte[]>()).ThrowsAsync(MovedSlot(ShardIndex, MovedTo));
+        first.MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("k")), false).ThrowsAsync(MovedSlot(ShardIndex, MovedTo));
 
         await h.Grain.SetAsync("k", [1]);
 
-        await owner.Received(1).SetAsync("k", Arg.Any<byte[]>());
+        await owner.Received(1).MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => MirrorsRow(h, d, "k")), false);
     }
 
     [Test]
@@ -50,15 +52,15 @@ public partial class ShardRootGrainShadowForwardTests
         SetShadowPhase(h.State, ShadowForwardPhase.Drained);
         var first = DestinationShard(h, ShardIndex);
         var owner = DestinationShard(h, MovedTo);
-        first.SetManyAsync(Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Any(e => e.Key == "moved")))
+        first.MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("moved")), false)
             .ThrowsAsync(MovedSlot(ShardIndex, MovedTo));
         List<KeyValuePair<string, byte[]>> entries = [new("stays", [1]), new("moved", [2])];
 
         await h.Grain.SetManyAsync(entries);
 
-        await first.Received(1).SetManyAsync(Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 1 && l[0].Key == "stays"));
-        await owner.Received(1).SetManyAsync(Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Count == 1 && l[0].Key == "moved"));
-        await owner.DidNotReceive().SetManyAsync(Arg.Is<List<KeyValuePair<string, byte[]>>>(l => l.Any(e => e.Key == "stays")));
+        await first.Received(1).MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.Count == 1 && MirrorsRow(h, d, "stays")), false);
+        await owner.Received(1).MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.Count == 1 && MirrorsRow(h, d, "moved")), false);
+        await owner.DidNotReceive().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("stays")), Arg.Any<bool>());
     }
 
     [Test]
@@ -73,12 +75,12 @@ public partial class ShardRootGrainShadowForwardTests
         for (var i = 0; i < shards.Length; i++)
         {
             shards[i] = DestinationShard(h, i);
-            shards[i].SetAsync("k", Arg.Any<byte[]>()).ThrowsAsync(MovedSlot(i, i + 1));
+            shards[i].MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).ThrowsAsync(MovedSlot(i, i + 1));
         }
 
         Assert.ThrowsAsync<StaleShardRoutingException>(() => h.Grain.SetAsync("k", [1]));
 
-        shards[ShadowForwardRefusal.MaxHops + 1].DidNotReceiveWithAnyArgs().SetAsync(default!, default!);
+        shards[ShadowForwardRefusal.MaxHops + 1].DidNotReceiveWithAnyArgs().MergeManyAsync(default!, default);
     }
 
     [Test]
@@ -88,7 +90,7 @@ public partial class ShardRootGrainShadowForwardTests
         // shard that absorbed its slots; there is nowhere to follow it.
         var h = CreateHarness();
         SetShadowPhase(h.State, ShadowForwardPhase.Drained);
-        DestinationShard(h, ShardIndex).SetAsync("k", Arg.Any<byte[]>()).ThrowsAsync(MovedSlot(ShardIndex, -1));
+        DestinationShard(h, ShardIndex).MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>()).ThrowsAsync(MovedSlot(ShardIndex, -1));
 
         Assert.ThrowsAsync<StaleShardRoutingException>(() => h.Grain.SetAsync("k", [1]));
     }

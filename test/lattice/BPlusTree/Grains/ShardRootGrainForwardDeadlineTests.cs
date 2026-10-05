@@ -47,7 +47,13 @@ public class ShardRootGrainForwardDeadlineTests
 
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>()).Returns(Task.FromResult<SplitResult?>(null));
-        leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<LwwEntry?>(null));
+        // The resize mirror ships the row the local apply stored (issue #4522).
+        leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(ci => Task.FromResult<LwwEntry?>(new LwwEntry
+        {
+            Key = (string)ci[0],
+            Value = [1],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1_000, Counter = 1 },
+        }));
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
         var cache = Substitute.For<ILeafCacheGrain>();
@@ -55,7 +61,7 @@ public class ShardRootGrainForwardDeadlineTests
         factory.GetGrain<ILeafCacheGrain>(Arg.Any<string>()).Returns(cache);
 
         var shadowTarget = Substitute.For<IShardRootGrain>();
-        shadowTarget.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+        shadowTarget.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>())
             .Returns(_ => shadowSetBehavior?.Invoke() ?? Task.CompletedTask);
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shadowTarget);
 
@@ -84,7 +90,7 @@ public class ShardRootGrainForwardDeadlineTests
         await h.Grain.SetAsync("k", [1]);
 
         // The fast-returning forward was observed by the foreground turn.
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("k")), false);
     }
 
     [Test]
@@ -114,7 +120,7 @@ public class ShardRootGrainForwardDeadlineTests
 
         await h.Grain.SetAsync("k", [1]);
 
-        await h.ShadowTarget.Received().SetAsync("k", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received().MergeManyAsync(Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("k")), false);
     }
 
     [Test]
@@ -126,6 +132,6 @@ public class ShardRootGrainForwardDeadlineTests
 
         await h.Grain.SetAsync("k", [1]);
 
-        await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<bool>());
     }
 }
