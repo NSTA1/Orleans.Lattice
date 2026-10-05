@@ -3031,6 +3031,15 @@ internal sealed partial class BPlusLeafGrain(
                 changed = true;
             }
 
+            // The donor's applied-terminal witnesses for the keys this sibling
+            // receives (issue #4545). A union, like the clock, so it needs no
+            // revert if the persist below fails: a witness for a key that has no
+            // row here yet claims nothing a later row from the donor contradicts.
+            if (AdoptTerminalWitnesses(init.TerminalWitnesses))
+            {
+                changed = true;
+            }
+
             if (changed)
             {
                 // A split sibling is a topology seed: an unbound donor (#1744) mints
@@ -4609,6 +4618,10 @@ internal sealed partial class BPlusLeafGrain(
             // - and re-running this method on a leaf whose state is already
             // cleared is idempotent and resumes the snapshot clear where it left off.
             await ClearSnapshotStorageAsync();
+
+            // The applied-terminal witness sidecar is keyed by the leaf too
+            // (issue #4545), and goes with it on the same terms.
+            await ClearTerminalWitnessSidecarAsync();
         }
         finally
         {

@@ -1,16 +1,20 @@
-# Pairs with RStrictIsolation. The receiver records every terminal as a commit,
-# whatever outcome it carries, so an aborted saga's tally completes as
-# committed and its staged buckets surface post-saga on the receiver - a saga
-# the origin aborted, made visible.
+# Pairs with RStrictIsolation. The receiver records every terminal of a saga it
+# has not yet decided as a commit, whatever outcome it carries, so an aborted
+# saga's tally completes as committed and its staged buckets surface post-saga
+# on the receiver - a saga the origin aborted, made visible. A saga the receiver
+# has already decided (a bootstrap's decision row) keeps its recorded outcome,
+# so a re-shipped terminal is not refused as conflicting, which would leave it
+# undeliverable and race the target against a deadlock.
 MODULE: RStrictIsolationTerminalOutcomeIgnored
 TARGET: RStrictIsolation
 CLASS: Invariant
-SUMMARY: the receiver records every terminal as a commit, so an aborted saga surfaces
+SUMMARY: the receiver records an undecided saga's terminals as a commit, so an aborted saga surfaces
 PERTURBS: DeliverTerminal
 
 --- FIND
            o == Outcome(m.commit)
 --- REPLACE
-\* MUTATION: the terminal's outcome is ignored.
-           o == "committed"
+\* MUTATION: the terminal's outcome is ignored; an undecided saga is recorded
+\* as committed, and a decided one keeps its recorded outcome.
+           o == IF rdec[TreeOf(m.key)] = "inflight" THEN "committed" ELSE rdec[TreeOf(m.key)]
 --- END
