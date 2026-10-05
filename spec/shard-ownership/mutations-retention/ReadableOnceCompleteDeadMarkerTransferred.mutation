@@ -1,0 +1,35 @@
+# Pairs with ReadableOnceComplete. Reproduces current production (#4545): the
+# split sweep's replay of a prepare installs a shadow marker on the destination
+# leaf even when the saga's terminal has already applied there, so the marker is
+# dead on arrival; a leaf split's TransferShadowMarkersToSiblingAsync then
+# copies it to a fresh sibling that never sees the terminal, where it comes
+# alive and gates the key (StaleShardRoutingException(-1, -1, -1)) for as long
+# as the registry still reports the saga Committed. Production's gate also does
+# not check the row against the saga's prepare stamp.
+MODULE: ReadableOnceCompleteDeadMarkerTransferred
+TARGET: ReadableOnceComplete
+CLASS: Invariant
+SUMMARY: a marker installed after its terminal is copied to a fresh sibling leaf, which gates the key after the saga completed
+PERTURBS: DeliverLate, LeafSplit
+
+--- FIND
+    /\ lk /\ ~term[c][s]
+    /\ row[c][s][k] < SagaV
+--- REPLACE
+\* MUTATION: the gate does not check the row against the saga's prepare stamp.
+    /\ lk /\ ~term[c][s]
+--- END
+
+--- FIND
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
+--- REPLACE
+\* MUTATION: the marker is installed even when the leaf applied the terminal.
+    /\ lk' = IF ~Gone(spCopy) THEN TRUE ELSE lk
+--- END
+
+--- FIND
+    /\ lk' = (lk /\ ~term[spCopy][s2])
+--- REPLACE
+\* MUTATION: the transfer copies a marker whose terminal the donor applied.
+    /\ lk' = lk
+--- END

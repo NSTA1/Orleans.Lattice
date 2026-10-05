@@ -13,12 +13,12 @@ RegistryMask ==
     /\ dec # "none"
     /\ ~forgotten
     /\ masked' = ~masked
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, forgotten, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, forgotten, late, wDone, reacted, ackOn, lk>>
 --- REPLACE
 RegistryMask ==
     /\ dec # "none"
     /\ ~forgotten
 \* MUTATION: the masked row is reported as absent.
     /\ forgotten' = TRUE
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, late, wDone, reacted, ackOn, lk>>
 --- END

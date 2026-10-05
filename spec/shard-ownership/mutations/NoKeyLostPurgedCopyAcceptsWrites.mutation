@@ -1,4 +1,4 @@
-# Pairs with NoKeyLost. Reproduces current production (#4503): a routed write
+# Pairs with NoKeyLost. Reproduces production before #4503 was fixed (#4528): a routed write
 # through a router that cached the purged old copy is accepted
 # (PrepareForWriteAsync re-seeds a purged tree) and acknowledged, but lands on
 # a copy the tree no longer resolves to, so the resized copy never holds it.
