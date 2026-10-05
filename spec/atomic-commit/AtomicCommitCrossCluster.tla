@@ -129,7 +129,7 @@ VARIABLES xtree, oext, orcv, outbox, dlv, rconn,
           rpend, rterm, rproj,
           rarr, rexp, rdec, rout, rstage, rdeleg, rdial,
           carr, cdec, rfin, rtodo,
-          gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict
+          gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh
 
 originVars == <<phase, vote, decision, terminal, pend, orphanDone, forgotten, masked, revision>>
 
@@ -141,7 +141,7 @@ registryVars == <<rarr, rexp, rdec, rout, rstage, rdeleg, rdial>>
 
 barrierVars == <<carr, cdec, rfin, rtodo>>
 
-lossVars == <<gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict>>
+lossVars == <<gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh>>
 
 xvars == <<xtree, netVars, leafVars, registryVars, barrierVars, lossVars>>
 
@@ -213,6 +213,10 @@ TypeOK ==
     /\ preguard \in BOOLEAN
     /\ filt \in BOOLEAN
     /\ verdict \in {"none", "ship", "withhold"}
+    /\ afence \in BOOLEAN
+    /\ ubnd \subseteq MsgSet
+    /\ decom \in BOOLEAN
+    /\ afresh \in BOOLEAN
 
 (***************************************************************************)
 (* Receiver reader visibility.                                             *)
@@ -236,7 +240,8 @@ RView(tr) ==
     ELSE "inflight"
 
 RObserved(k) ==
-    IF rpend[k] = "pending"
+    IF (afence \/ afresh) /\ TreeOf(k) = "A" THEN "hidden"
+    ELSE IF rpend[k] = "pending"
     THEN IF RView(TreeOf(k)) = "indeterminate" THEN "hidden"
          ELSE IF RView(TreeOf(k)) = "committed" /\ rterm[k] = "none" THEN "post"
          ELSE rproj[k]
@@ -264,15 +269,32 @@ RObserved(k) ==
 \*   JoinStart      the single-tree receiver: 0 follows the stream from the
 \*                  saga's start, 1 joins through a bootstrap, 2 either.
 \*   SagaOutcome    the origin saga: 0 commits, 1 aborts, 2 either.
-\* The cross-tree shape is checked only with no loss path: every loss path
-\* is single-tree.
+\*   Shape          0 the single-tree saga, 1 the cross-tree saga, 2 either.
 LossPath == 0
+
+Shape == 2
 
 JoinStart == 2
 
 SagaOutcome == 2
 
 Starts(n) == CASE n = 0 -> {FALSE} [] n = 1 -> {TRUE} [] OTHER -> BOOLEAN
+
+\* The imported tree. A bootstrap, a re-seed and every loss path act on tree
+\* A's stream; in the cross-tree shape tree B stays on its own stream
+\* throughout. Each tree holds one key there and the two are symmetric, so
+\* fixing which tree is imported loses nothing.
+AKeys == KeysOf("A")
+
+Aff(r) == TreeOf(r.key) = "A"
+
+\* The cross-tree import fix (#4683): a drain that imports a decided sub-saga
+\* of a cross-tree operation records the tree's arrival with the receiver
+\* barrier, as the tree's own terminal would, and keeps the tree's read fence
+\* up until the barrier has decided.
+ViaBarrier(snap) == xtree /\ snap \in {"committed", "aborted"}
+
+\* What an import of tree A does with the barrier and the fence.
 
 \* The prepare votes an instance admits. An aborting saga takes one vote set,
 \* no participant acking: which participant refused is invisible to the
@@ -284,11 +306,11 @@ VotesAdmitted(v) ==
          [] SagaOutcome = 1 -> aborts
          [] OTHER -> commits \/ aborts
 
-Preps == {Prep(k) : k \in XKeys}
+Preps == {Prep(k) : k \in AKeys}
 
 Appended ==
     (IF phase[T] = "init" THEN {} ELSE Preps)
-    \cup {Term(k, terminal[T][k] = "commit", ShardCount(TreeOf(k))) : k \in {j \in XKeys : terminal[T][j] # "none"}}
+    \cup {Term(k, terminal[T][k] = "commit", ShardCount(TreeOf(k))) : k \in {j \in AKeys : terminal[T][j] # "none"}}
 
 Retained == (Appended \ gone) \ (IF ptrim THEN Preps ELSE {})
 
@@ -300,18 +322,38 @@ FirstSight ==
 
 ReplayShips == ~filt \/ FirstSight = "ship"
 
+\* A record of tree A's stream ships only while the peer is attached and on
+\* the log, and during a replay only under a ship verdict.
+OnStream(r) == Aff(r) => (rconn /\ rs = "none" /\ ReplayShips)
+
 \* The origin registry suspends every decision purge while a hold exists:
 \* the replay hold from the re-seed marker until the filter clears (#4533),
 \* and the forced-trim hold (#4534-B), both released on a detach.
 Held == ~detached /\ (rs # "none" \/ filt)
 
+\* The trees a decommission took out of the barrier's wait set.
+Dropped == IF decom THEN {"A"} ELSE {}
+
+\* The cross-tree purge hold (#4684's fix): the origin keeps a cross-tree
+\* saga's decision until every configured peer of every participant tree has
+\* acknowledged past that saga's terminal on that tree. A receiver tree
+\* acknowledges a cross-tree terminal only after it has notified the barrier,
+\* so once every participant has acknowledged, the barrier has decided; the
+\* model's DeliverTerminal acknowledges before that hand-off, so the hold
+\* waits for the barrier's decision directly. A detached peer does not
+\* release it.
+CrossTreeAcked ==
+    \/ ~xtree
+    \/ decom
+    \/ /\ cdec # "inflight"
+       /\ ~\E r \in outbox : r.type = "term"
+
 Init ==
     /\ Origin!Init
-    /\ xtree \in IF LossPath = 0 THEN BOOLEAN ELSE {FALSE}
-    \* A receiver either follows the stream from the saga's start or joins
-    \* later through a bootstrap snapshot. Bootstrap is modelled for the
-    \* single-tree shape only (see Bootstrap).
-    /\ rconn \in IF xtree THEN {TRUE} ELSE {~j : j \in Starts(JoinStart)}
+    /\ xtree \in Starts(Shape)
+    \* Tree A's receiver either follows the stream from the saga's start or
+    \* joins later through a bootstrap snapshot.
+    /\ rconn \in {~j : j \in Starts(JoinStart)}
     /\ oext = [tr \in Trees |-> FALSE]
     /\ orcv = [tr \in Trees |-> FALSE]
     /\ outbox = {}
@@ -340,9 +382,13 @@ Init ==
     \* A registry that predates #4508's guard and #4534-B's hold (a mixed-version
     \* silo) purges on retention alone until UpgradeDone. Starting with one
     \* loses nothing: UpgradeDone may be the first step.
-    /\ preguard = ~xtree
+    /\ preguard = TRUE
     /\ filt = FALSE
     /\ verdict = "none"
+    /\ afence = FALSE
+    /\ ubnd = {}
+    /\ decom = FALSE
+    /\ afresh = FALSE
 
 (***************************************************************************)
 (* ORIGIN ACTIONS. Each is AtomicCommit's action for t1, plus what that    *)
@@ -433,12 +479,10 @@ SettleView(k) ==
 \* forgets here, so that refusal sits behind the settle: a leaf has a
 \* terminal only once its registry has decided.
 DeliverPrepare(m) ==
-    /\ rconn
     /\ m \in outbox
     /\ m.type = "prep"
-    /\ rs = "none"
-    /\ ReplayShips
-    /\ verdict' = IF filt THEN "ship" ELSE verdict
+    /\ OnStream(m)
+    /\ verdict' = IF filt /\ Aff(m) THEN "ship" ELSE verdict
     /\ dlv' = dlv \cup {m}
     /\ \/ outbox' = outbox \ {m}
        \/ outbox' = outbox
@@ -446,7 +490,7 @@ DeliverPrepare(m) ==
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
     /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh>>
 
 \* A source-shard terminal reaches the receiver: IReplicationApplyGrain.
 \* ApplyTxTerminalAsync records it against the tree's registry tally
@@ -461,13 +505,11 @@ DeliverPrepare(m) ==
 \* the terminal to every observed source shard's leaves. A cross-tree saga
 \* instead hands off to the barrier: ReceiverRegister, then ReceiverNotify.
 DeliverTerminal(m) ==
-    /\ rconn
     /\ m \in outbox
     /\ m.type = "term"
-    /\ rs = "none"
-    /\ ~rpoison
-    /\ ReplayShips
-    /\ verdict' = IF filt THEN "ship" ELSE verdict
+    /\ OnStream(m)
+    /\ Aff(m) => ~rpoison
+    /\ verdict' = IF filt /\ Aff(m) THEN "ship" ELSE verdict
     /\ \A p \in outbox : (p.type = "prep" /\ p.key = m.key) => p \in dlv
     /\ LET tr == TreeOf(m.key)
            o == Outcome(m.commit)
@@ -492,7 +534,7 @@ DeliverTerminal(m) ==
     /\ \/ outbox' = outbox \ {m}
        \/ outbox' = outbox
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, rdeleg, rdial, carr, cdec, rfin,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh>>
 
 (***************************************************************************)
 (* THE CROSS-TREE RECEIVER BARRIER.                                        *)
@@ -516,11 +558,12 @@ ReceiverRegister(tr) ==
 ReceiverNotify(tr) ==
     /\ rstage[tr] = "notify"
     /\ LET carr2 == [carr EXCEPT ![tr] = rout[tr]]
-           complete == \A w \in WaitSet : carr2[w] # "none"
+           live == WaitSet \ Dropped
+           complete == \A w \in live : carr2[w] # "none"
        IN /\ carr' = carr2
           /\ IF complete
-             THEN /\ cdec' = IF \A w \in WaitSet : carr2[w] = "committed" THEN "committed" ELSE "aborted"
-                  /\ rfin' = rfin \cup WaitSet
+             THEN /\ cdec' = IF \A w \in live : carr2[w] = "committed" THEN "committed" ELSE "aborted"
+                  /\ rfin' = rfin \cup live
              ELSE UNCHANGED <<cdec, rfin>>
     /\ rstage' = [rstage EXCEPT ![tr] = "done"]
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo, lossVars>>
@@ -636,24 +679,59 @@ ExportsPrepared(snap, k) ==
 
 Decided(snap) == snap \in {"committed", "aborted"}
 
-Carried(snap) == \E k \in XKeys : ExportsPrepared(snap, k)
+Carried(snap) == \E k \in AKeys : ExportsPrepared(snap, k)
+
+\* An export that names nothing of the operation, taken while the barrier
+\* already holds a sibling's final tally (the operation is decided at the
+\* origin), proves the tree's sub-saga was decided and purged there: its
+\* committed rows carry the operation's outcome, which is uniform across its
+\* trees. The import records the tree's arrival with the siblings' verdict.
+UniformArrival(snap) == xtree /\ snap = "inflight" /\ ~Carried(snap) /\ rout["B"] # "none"
+
+NotifiesBarrier(snap) == ViaBarrier(snap) \/ UniformArrival(snap)
+
+HoldsFence(snap) == NotifiesBarrier(snap)
+
+ArrivalVerdict(snap) == IF ViaBarrier(snap) THEN snap ELSE rout["B"]
+
+\* The import of tree A waits for the hold's boundaries: no cross-tree export
+\* is served while a silo predates the hold, and after the upgrade, or after
+\* the tree is added back to the peer, none until the peer has applied every
+\* sibling tree's records written before that boundary.
+ImportGate == ~xtree \/ (~preguard /\ ubnd \cap outbox = {})
+
+\* The drain's arrival at the barrier (the decision row's NotifyTerminalAsync)
+\* and the fence it holds: rout and rstage take the tree into the barrier's
+\* hand-off as a final tally would, and afence keeps tree A unreadable.
+BarrierImport(snap) ==
+    /\ rout' = IF NotifiesBarrier(snap) THEN [rout EXCEPT !["A"] = ArrivalVerdict(snap)] ELSE rout
+    /\ rstage' = IF NotifiesBarrier(snap) /\ rstage["A"] = "idle"
+                 THEN [rstage EXCEPT !["A"] = "register"] ELSE rstage
+    /\ afence' = (afence \/ HoldsFence(snap))
 
 \* The bootstrap waits while any silo predates the purge hold
 \* (PurgeHoldSupport.AllSilosHonour) and arms the replay filter.
 Bootstrap ==
     /\ ~rconn
+    /\ ~decom
     /\ ~preguard
-    /\ \E kept \in SUBSET outbox :
+    /\ ImportGate
+    /\ \E kept \in SUBSET {r \in outbox : Aff(r)} :
        \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> ExportRow(snap, k)]
-         /\ rpend' = [k \in XKeys |-> IF ExportsPrepared(snap, k) THEN "pending" ELSE "none"]
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys THEN ExportRow(snap, k) ELSE rproj[k]]
+         /\ rpend' = [k \in XKeys |->
+                        IF k \notin AKeys THEN rpend[k]
+                        ELSE IF ExportsPrepared(snap, k) THEN "pending"
+                        ELSE "none"]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
-         /\ outbox' = kept
+         /\ BarrierImport(snap)
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
     /\ rconn' = TRUE
     /\ filt' = TRUE
     /\ verdict' = "none"
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard>>
+    /\ afresh' = FALSE
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rdeleg, rdial, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, ubnd, decom>>
 
 (***************************************************************************)
 (* LOSS PATHS AND THEIR FIXES. Each path loses one record to the receiver, *)
@@ -677,20 +755,22 @@ OriginPurge ==
     /\ IF preguard
        THEN UNCHANGED <<outbox, ptrim>>
        ELSE /\ ~Held
+            /\ CrossTreeAcked
             /\ \/ ~rconn
                \/ detached
-               \/ ~\E p \in outbox : p.type = "prep"
+               \/ ~\E p \in outbox : p.type = "prep" /\ Aff(p)
             /\ ptrim' = TRUE
-            /\ outbox' = {r \in outbox : r.type # "prep"}
+            /\ outbox' = {r \in outbox : r.type # "prep" \/ ~Aff(r)}
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, rs, detached, rpoison, losses, preguard, filt, verdict>>
+                   gone, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh>>
 
 \* Every silo comes to host the purge hold.
 UpgradeDone ==
     /\ preguard
     /\ preguard' = FALSE
+    /\ ubnd' = {r \in outbox : ~Aff(r)}
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, filt, verdict>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, filt, verdict, afence, decom, afresh>>
 
 \* The shipper loses an unacknowledged record: a WalRetention trim passed it
 \* (issue #4534) or it could not encode its batch (issue #4651). Since #4577
@@ -699,24 +779,23 @@ UpgradeDone ==
 \* ReseedRetainFrom, and its saga records withheld until a re-seed.
 ShipperGap(m) ==
     /\ LossPath = 1
-    /\ ~xtree
     /\ rconn
     /\ losses = 0
     /\ rs = "none"
     /\ m \in outbox
+    /\ Aff(m)
     /\ outbox' = outbox \ {m}
     /\ gone' = {m}
     /\ rs' = "marked"
     /\ losses' = 1
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   purged, ptrim, detached, rpoison, preguard, filt, verdict>>
+                   purged, ptrim, detached, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh>>
 
 \* A peer is removed from the topology (#4534-B). In one write its shipper
 \* marks itself DetachedFromLog and takes the peer off the log, then leaves
 \* the offset consumers and releases its forced-trim and replay holds.
 Detach ==
     /\ LossPath = 2
-    /\ ~xtree
     /\ rconn
     /\ losses = 0
     /\ ~detached
@@ -724,17 +803,75 @@ Detach ==
     /\ rs' = "marked"
     /\ losses' = 1
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rpoison, preguard, filt, verdict>>
+                   gone, purged, ptrim, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh>>
 
 \* The peer is added back (EnsureActiveAsync): the shipper re-takes the
 \* replay hold and re-marks the re-seed at the current export epoch, so no
 \* export drained while it was detached settles it.
 Readd ==
     /\ detached
+    /\ ~decom
     /\ detached' = FALSE
     /\ rs' = "marked"
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rpoison, losses, preguard, filt, verdict>>
+                   gone, purged, ptrim, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh>>
+
+\* The operator removes the detached peer from tree A's replication for good.
+\* The origin releases the peer's cross-tree holds; the receiver takes tree A
+\* out of every undecided barrier's wait set - deciding one whose other trees
+\* have all arrived - and stops treating tree A as a replica of the origin:
+\* its pending buckets from that origin are discarded and its reads carry no
+\* replication guarantee.
+Decommission ==
+    /\ detached
+    /\ ~decom
+    /\ decom' = TRUE
+    /\ afresh' = TRUE
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ LET live == WaitSet \ {"A"}
+           complete == cdec = "inflight" /\ live # {} /\ \A w \in live : carr[w] # "none"
+       IN /\ cdec' = IF complete
+                     THEN (IF \A w \in live : carr[w] = "committed" THEN "committed" ELSE "aborted")
+                     ELSE cdec
+          /\ rfin' = IF complete THEN (rfin \ {"A"}) \cup live ELSE rfin \ {"A"}
+    /\ rtodo' = rtodo \ AKeys
+    \* Tree A is no longer attached to the peer and owes it no re-seed.
+    /\ rconn' = FALSE
+    /\ rs' = "none"
+    /\ filt' = FALSE
+    /\ verdict' = "none"
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, rterm, rproj, registryVars, carr,
+                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd>>
+
+\* A decommissioned peer is added back as a fresh replica of tree A: the
+\* receiver resets tree A's state from that origin - its buckets, terminal
+\* memory, registry rows and barrier arrival - keeps it unreadable until a fresh
+\* bootstrap imports it, and the shipper starts again as a new consumer.
+ReaddFresh ==
+    /\ decom
+    /\ decom' = FALSE
+    /\ detached' = FALSE
+    /\ rconn' = FALSE
+    /\ rs' = "none"
+    /\ filt' = FALSE
+    /\ verdict' = "none"
+    /\ afence' = FALSE
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ rterm' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rterm[k]]
+    /\ rproj' = [k \in XKeys |-> IF k \in AKeys THEN "pre" ELSE rproj[k]]
+    /\ rarr' = [rarr EXCEPT !["A"] = {}]
+    /\ rexp' = [rexp EXCEPT !["A"] = 0]
+    /\ rdec' = [rdec EXCEPT !["A"] = "inflight"]
+    /\ rout' = [rout EXCEPT !["A"] = "none"]
+    /\ rstage' = [rstage EXCEPT !["A"] = "idle"]
+    /\ rdeleg' = [rdeleg EXCEPT !["A"] = FALSE]
+    /\ rdial' = [rdial EXCEPT !["A"] = FALSE]
+    /\ carr' = [carr EXCEPT !["A"] = "none"]
+    \* A tree added to the peer is a boundary like the upgrade's: its import
+    \* waits until the peer has applied every sibling record written before it.
+    /\ ubnd' = ubnd \cup {r \in outbox : ~Aff(r)}
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec, rfin, rtodo,
+                   gone, purged, ptrim, rpoison, losses, preguard, afresh>>
 
 \* The receiver's applier gives up on a prepare it deferred past
 \* SagaDeferralTimeout (issue #4591, fixed by #4633): it poisons the saga
@@ -743,11 +880,11 @@ Readd ==
 \* has decided. While poisoned, the saga's terminals stay unacknowledged.
 ReceiverPoison(m) ==
     /\ LossPath = 3
-    /\ ~xtree
     /\ rconn
     /\ losses = 0
     /\ rs = "none"
     /\ m \in outbox
+    /\ Aff(m)
     /\ m.type = "prep"
     /\ ReplayShips
     /\ rdec["A"] = "inflight"
@@ -756,7 +893,7 @@ ReceiverPoison(m) ==
     /\ losses' = 1
     /\ verdict' = IF filt THEN "ship" ELSE verdict
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, preguard, filt, afence, ubnd, decom, afresh>>
 
 \* The poison's re-seed: a bootstrap the receiver starts
 \* (ReceiverSagaPoisonReseed), drained behind the read fence. Committed rows
@@ -766,17 +903,20 @@ ReceiverPoison(m) ==
 \* (IBPlusLeafGrain.DiscardPendingTransactionAsync); the poison retires.
 PoisonReseed ==
     /\ rpoison
+    /\ ImportGate
     /\ \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> IF ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
          /\ rpend' = [k \in XKeys |->
-                        IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        IF k \notin AKeys THEN rpend[k]
+                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
                         ELSE IF Carried(snap) THEN rpend[k]
                         ELSE "none"]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
-         /\ rtodo' = IF Decided(snap) THEN rtodo \cup XKeys ELSE rtodo
+         /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
+         /\ BarrierImport(snap)
     /\ rpoison' = FALSE
-    /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, carr, cdec, rfin,
-                   gone, purged, ptrim, rs, detached, losses, preguard, filt, verdict>>
+    /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
+                   gone, purged, ptrim, rs, detached, losses, preguard, filt, verdict, ubnd, decom, afresh>>
 
 \* The receiver drains the first export opened after the sender's marker
 \* (issue #4533). Taken atomically: the export's late-decision pass ships a
@@ -788,20 +928,23 @@ PoisonReseed ==
 ReseedDrain ==
     /\ rconn
     /\ rs = "marked"
+    /\ ImportGate
     /\ \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> IF ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
          /\ rpend' = [k \in XKeys |->
-                        IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        IF k \notin AKeys THEN rpend[k]
+                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
                         ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"
                         ELSE rpend[k]]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
-         /\ rtodo' = IF Decided(snap) THEN rtodo \cup XKeys ELSE rtodo
+         /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
+         /\ BarrierImport(snap)
     \* A drain while any silo predates the purge hold does not settle the
     \* re-seed: a purge it ignores could strand what the export carried
     \* (issue #4664's fix).
     /\ rs' = IF preguard THEN rs ELSE "drained"
-    /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rout, rstage, rdeleg, rdial, carr, cdec, rfin,
-                   gone, purged, ptrim, detached, rpoison, losses, preguard, filt, verdict>>
+    /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
+                   gone, purged, ptrim, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh>>
 
 \* The peer's ack echoes the drained export's epoch past the marker and the
 \* shipper rewinds to its lowest retained record with the replay filter
@@ -817,7 +960,7 @@ ReseedRewind ==
     /\ filt' = TRUE
     /\ verdict' = "none"
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, detached, rpoison, losses, preguard>>
+                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh>>
 
 \* The replay filter withholds a record of a purged saga: the shipper
 \* consumes it without shipping it.
@@ -825,22 +968,32 @@ ReplayWithhold(m) ==
     /\ filt
     /\ rs = "none"
     /\ m \in outbox
+    /\ Aff(m)
     /\ FirstSight = "withhold"
     /\ outbox' = outbox \ {m}
     /\ verdict' = "withhold"
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh>>
 
 \* Every cursor has passed the replay horizon: the filter clears, and with
 \* it the replay hold.
 FilterClear ==
     /\ filt
     /\ rs = "none"
-    /\ outbox = {}
+    /\ ~\E r \in outbox : Aff(r)
     /\ filt' = FALSE
     /\ verdict' = "none"
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh>>
+
+\* The barrier has decided: the drain that imported tree A lifts its read
+\* fence (#4683's fix).
+FenceLift ==
+    /\ afence
+    /\ cdec # "inflight"
+    /\ afence' = FALSE
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh>>
 
 (***************************************************************************)
 (* Quiescence: the origin saga is done, every record has been acked, and   *)
@@ -857,6 +1010,7 @@ Quiesced ==
     /\ rs = "none"
     /\ ~detached
     /\ ~rpoison
+    /\ ~afence
 
 Stutter == Quiesced /\ UNCHANGED vars
 
@@ -879,12 +1033,15 @@ Next ==
     \/ \E m \in MsgSet : ShipperGap(m)
     \/ Detach
     \/ Readd
+    \/ Decommission
+    \/ ReaddFresh
     \/ \E m \in MsgSet : ReceiverPoison(m)
     \/ PoisonReseed
     \/ ReseedDrain
     \/ ReseedRewind
     \/ \E m \in MsgSet : ReplayWithhold(m)
     \/ FilterClear
+    \/ FenceLift
     \/ Stutter
 
 (***************************************************************************)
@@ -917,6 +1074,7 @@ Spec ==
     /\ WF_vars(ReseedDrain)
     /\ WF_vars(ReseedRewind)
     /\ WF_vars(\E m \in MsgSet : ReplayWithhold(m))
+    /\ WF_vars(FenceLift)
 
 (***************************************************************************)
 (* Safety invariants - claims about the receiver.                          *)
@@ -965,9 +1123,11 @@ RMonotonicVisibility ==
 \* visible on the receiver: every key materialised post-saga in the
 \* receiver's projection. Stated over materialisation, as AtomicCommit's
 \* EveryCommittedKeyReadable is, because a dial fault may hide a delegated
-\* key for as long as it lasts and nothing bounds that.
+\* key for as long as it lasts and nothing bounds that. A tree a decommission
+\* removed from the peer for good is not a replica of the origin, so it owes
+\* nothing until it is added back.
 RCommittedEventuallyVisible ==
-    (decision[T] = "committed") ~> (\A k \in XKeys : rproj[k] = "post")
+    (decision[T] = "committed") ~> (\A k \in XKeys : rproj[k] = "post" \/ (decom /\ TreeOf(k) = "A"))
 
 \* No prepared bucket is stranded on the receiver: every bucket the receiver
 \* stages is eventually consumed by a terminal, committed or aborted.
