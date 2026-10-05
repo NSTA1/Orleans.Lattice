@@ -49,6 +49,17 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
     public void TrimBefore(string tree, int shard, long offset) =>
         _trimBefore[(tree, shard)] = offset;
 
+    /// <summary>
+    /// Makes <paramref name="offset"/> a hole: never returned by a read, while the
+    /// tail does not move past it - the shape a slot whose flush failed leaves.
+    /// </summary>
+    public void HoleAt(string tree, int shard, long offset) => _holes.Add((tree, shard, offset));
+
+    /// <summary>Runs once at the start of every <see cref="ReadAsync"/>, after any probe the caller made first.</summary>
+    public Action? BeforeRead { get; set; }
+
+    private readonly HashSet<(string Tree, int Shard, long Offset)> _holes = new();
+
     /// <inheritdoc />
     public async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadAsync(
         string treeId,
@@ -57,6 +68,7 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         Reads.Add((treeId, shardIndex, fromOffsetExclusive));
+        BeforeRead?.Invoke();
         await Task.Yield();
         var key = (treeId, shardIndex);
         var trim = _trimBefore.GetValueOrDefault(key, 0);
@@ -65,6 +77,11 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
             for (var offset = Math.Max(fromOffsetExclusive + 1, trim); offset < list.Count; offset++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (_holes.Contains((treeId, shardIndex, offset)))
+                {
+                    continue;
+                }
+
                 yield return (offset, list[(int)offset]);
             }
         }

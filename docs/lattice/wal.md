@@ -843,21 +843,31 @@ can recover from its staging state; it is inert while no consumer reports a
 pin.
 
 A fourth clause bounds the trim by the **read position of every
-offset-reading consumer** (issue #4579). The replication shipper reads each
-partition by offset, so the HLC cursor it reports cannot hold the entries it
-has not read: a WAL partition is not HLC-ordered in offset (a silo whose clock
-trails, a merge that keeps its source stamp), so
-an unread entry can carry an HLC at or below a cursor already reported. Each
-offset-reading consumer registers with the tree's durable consumer set before
-it reads the log. On every pass the GC asks each registered consumer for the
+offset-reading consumer** (issues #4579, #4584). The replication shipper and
+every materialised-view maintainer read each partition by offset, so the HLC
+cursor they report cannot hold the entries they have not read: a WAL partition
+is not HLC-ordered in offset (a silo whose clock trails, a merge that keeps its
+source stamp), so an unread entry can carry an HLC at or below a cursor already
+reported. That cursor is also visible only to the GC pass on the silo the
+consumer runs on, while every silo runs a pass. Each offset-reading consumer
+registers with the tree's durable consumer set before it reads the log. On every pass the GC asks each registered consumer for the
 lowest offset per partition it has not durably consumed, and refuses any entry
 at or above it. The consumer's own persisted position is the answer, so the
 bound holds on every silo and across a restart. This clause overrules the
 cursor arm and the materialiser offset admission, but not the TTL ceiling,
-which stays a bound: a shipper that falls behind it detects the trimmed gap on
+which stays a bound: a consumer that falls behind it detects the trimmed gap on
 its next read. A registered consumer that has read nothing holds the whole
 log, and a pass that cannot read the set or any member trims only past the TTL
 ceiling.
+
+An incremental backup capture is deliberately not an offset-reading consumer:
+the GC may trim past it, and the capture then falls back to a full backup. Its
+gap detection, like a view's, is exact by offset and made against what was
+actually read. The shared WAL subscriber probes the tail again whenever a read
+jumps an offset, so a trim that lands after its pre-read check is reported as a
+fall-off rather than read across. A jump the tail has not passed is a slot whose
+flush failed and was never acknowledged, and is read past as before (issue #4621
+tracks such a slot whose write lands after the reader has passed it).
 
 The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to
