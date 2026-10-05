@@ -8,7 +8,7 @@ SUMMARY: a terminal to the old copy is not mirrored, so the resized copy keeps t
 PERTURBS: SagaTerminal
 
 --- FIND
-                  ELSE {<<target, s>>} \cup (IF ResizeMirrors(target, s) THEN {<<R, s>>} ELSE {})
+                  ELSE {<<target, s>>} \cup (IF ResizeMirrors(target, s) THEN {<<R, s>>} \cup TermClosure(s) ELSE {})
 --- REPLACE
 \* MUTATION: the terminal is not shadow-forwarded.
                   ELSE {<<target, s>>}

@@ -457,7 +457,20 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   the correct answer), and so is any saga whose backstop terminal has
   already landed on *T*. Otherwise the read raises
   `StaleShardRoutingException` and the deadline-bounded retry loop
-  re-fans once the backstop lands. A saga whose decision has aged out of
+  re-fans once the backstop lands. A marker can also sit on a leaf the
+  terminal will never reach again: an install delayed past a terminal the
+  leaf then forgot on reactivation, or a marker a later leaf split carries
+  onto a new sibling with its key. The marker therefore carries the saga's
+  original prepare stamp whenever the prepare is a marked last-writer-wins
+  write, and the gate also serves a migrated row stamped at or above it:
+  such a row is the saga's own value or a later write, so serving it never
+  tears the batch. A row below that stamp is the pre-saga value and stays
+  gated, and a marker without a marked stamp (a CRDT delta, a resize copy,
+  or an install from an older silo) keeps the gate described above. A leaf
+  also never installs, or carries across its own split, a marker for a
+  saga whose terminal it has already applied (issue
+  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)). A saga
+  whose decision has aged out of
   `TxDecisionRetention` reads as `Indeterminate` and takes the same
   conservative arm as a committed one - serving the migrated pre-saga
   value there would be an affirmative claim that the saga did not commit,

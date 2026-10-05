@@ -520,7 +520,7 @@ internal sealed partial class ShardRootGrain
             var shadowTxId = LatticeTransactionContext.Current;
             // Issue #4522: carry the local prepare's original stamp, so the
             // destination buckets it AT that stamp and marks it.
-            var originalStamps = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
+            var (originalStamps, markerStamps) = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
             using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
             using (LatticeOriginalPrepareStampContext.With(originalStamps))
             {
@@ -565,7 +565,18 @@ internal sealed partial class ShardRootGrain
             // marker presence, so a terminal that races ahead of the marker
             // cannot strand an un-clearable guard - the marker degenerates to
             // a harmless no-op once the terminal has been applied.
-            await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
+            //
+            // The marker carries the prepare's marked original stamp P when it
+            // has one (issue #4545), so the destination's read gate releases it
+            // once the row it guards is stamped at or above P - a marker the
+            // destination never sees a terminal for, because a leaf split moved
+            // the key or a reactivation forgot the terminal, no longer gates the
+            // key until the decision ages out.
+            using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+            using (LatticeOriginalPrepareStampContext.With(markerStamps))
+            {
+                await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
+            }
             return;
         }
 
@@ -643,7 +654,7 @@ internal sealed partial class ShardRootGrain
         if (target is null) return;
 
         var shadowTxId = LatticeTransactionContext.Current;
-        var originalStamps = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
+        var (originalStamps, markerStamps) = await ResolveOriginalPrepareStampAsync(key, shadowTxId);
 
         // Forward the prepared tombstone (registers the destination as a
         // participant and buckets the tombstone into _pendingTx[txid][key]),
@@ -657,7 +668,12 @@ internal sealed partial class ShardRootGrain
         {
             await ForwardWithDeadlineAsync(() => target.DeleteAsync(key));
         }
-        await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
+        // The marker carries the marked P as on the write path (issue #4545).
+        using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+        using (LatticeOriginalPrepareStampContext.With(markerStamps))
+        {
+            await ForwardWithDeadlineAsync(() => target.MarkSagaShadowAsync(shadowTxId, new[] { key }));
+        }
     }
 
     /// <summary>
@@ -669,12 +685,19 @@ internal sealed partial class ShardRootGrain
     /// the shadow-forward carries exactly the stamp the local leaf minted. A
     /// <see langword="null"/> result forwards the prepare unmarked, which keeps
     /// the destination on the pre-#4522 drain - never a wrong stamp.
+    /// <para>
+    /// The second map is the stamp the destination's shadow marker may carry
+    /// (issue #4545): the same P, but only for a last-writer-wins prepare. A
+    /// CRDT-delta prepare folds at its terminal's stamp, so a row stamped at or
+    /// above its P does not show that the delta was folded in, and its marker
+    /// keeps the pre-#4545 gate.
+    /// </para>
     /// </summary>
-    private async Task<Dictionary<string, HybridLogicalClock>?> ResolveOriginalPrepareStampAsync(string key, Guid transactionId)
+    private async Task<(Dictionary<string, HybridLogicalClock>? Forward, Dictionary<string, HybridLogicalClock>? Marker)> ResolveOriginalPrepareStampAsync(string key, Guid transactionId)
     {
         var vsc = state.State.SplitInProgress?.VirtualShardCount ?? state.State.MovedAwayVirtualShardCount;
         if (vsc is not > 0)
-            return null;
+            return (null, null);
 
         var leafId = RootIsLeafTyped
             ? state.State.RootNodeId!.Value
@@ -683,7 +706,7 @@ internal sealed partial class ShardRootGrain
         var pending = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
             .GetPendingMutationsForSlotsAsync(new[] { slot }, vsc.Value);
         if (pending is not { Count: > 0 })
-            return null;
+            return (null, null);
 
         foreach (var snapshot in pending)
         {
@@ -691,14 +714,15 @@ internal sealed partial class ShardRootGrain
                 && snapshot.StampIsOriginal
                 && string.Equals(snapshot.Key, key, StringComparison.Ordinal))
             {
-                return new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal)
+                var stamps = new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal)
                 {
                     [key] = snapshot.Timestamp,
                 };
+                return (stamps, PreparedBucketSweep.IsLastWriterWins(snapshot) ? stamps : null);
             }
         }
 
-        return null;
+        return (null, null);
     }
 
     private static bool SlotsEqual(int[] sortedExisting, int[] candidate)

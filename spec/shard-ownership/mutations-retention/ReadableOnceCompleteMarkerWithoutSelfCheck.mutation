@@ -1,0 +1,21 @@
+# Pairs with ReadableOnceComplete. The #4545 fix without its self-verifying
+# marker: the marker is installed, and transferred, only while the leaf has not
+# applied the saga's terminal, but the gate does not check the row against the
+# saga's prepare stamp. A leaf that lost its terminal memory (a reactivation,
+# or a fresh sibling after a leaf split) accepts a late replay's marker for a
+# saga whose terminal already applied there, and no terminal comes again. The
+# row already holds the saga's value, which the self-check would serve. The
+# edit lies in LeafGated, the read gate's leaf operator, so the mutation
+# declares no PERTURBS.
+MODULE: ReadableOnceCompleteMarkerWithoutSelfCheck
+TARGET: ReadableOnceComplete
+CLASS: Invariant
+SUMMARY: without the self-check, a leaf that lost its terminal memory takes a late marker that gates the key after the saga completed
+
+--- FIND
+    /\ lk /\ ~term[c][s]
+    /\ row[c][s][k] < SagaV
+--- REPLACE
+\* MUTATION: the gate does not check the row against the saga's prepare stamp.
+    /\ lk /\ ~term[c][s]
+--- END

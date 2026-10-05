@@ -160,7 +160,17 @@ internal static class PreparedBucketSweep
                 // register dest as a participant BEFORE its
                 // shadow marker lands so that a terminal arriving
                 // mid-replay cannot install an un-clearable marker.
-                await target.MarkSagaShadowAsync(snapshot.TransactionId, new[] { snapshot.Key });
+                //
+                // On an adaptive split the marker carries the prepare's marked
+                // original stamp P (issue #4545), so the destination's read gate
+                // releases it once the row it guards is stamped at or above P; a
+                // resize copy, whose writes P does not order, installs it without.
+                using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+                using (LatticeOriginalPrepareStampContext.With(
+                    carryOriginalStamps ? MarkerStamp(snapshot) : null))
+                {
+                    await target.MarkSagaShadowAsync(snapshot.TransactionId, new[] { snapshot.Key });
+                }
 
                 // Track for post-sweep cleanup. Lazy allocation - the
                 // chaos-free path leaves the dictionary null.
@@ -234,6 +244,25 @@ internal static class PreparedBucketSweep
             }
         }
     }
+
+    /// <summary>
+    /// Whether <paramref name="snapshot"/> is a last-writer-wins prepare, whose
+    /// committed value is applied at its own stamp (issue #4522), as opposed to a
+    /// CRDT-delta prepare, which folds at its terminal's stamp.
+    /// </summary>
+    internal static bool IsLastWriterWins(PendingMutationSnapshot snapshot) =>
+        snapshot.Mode == LatticeMergeMode.LwwRegister && snapshot.Delta is null;
+
+    /// <summary>
+    /// The stamp a shadow marker installed for <paramref name="snapshot"/> may
+    /// carry (issue #4545): its original stamp P when the snapshot is a marked
+    /// last-writer-wins prepare, tombstone or not, else <see langword="null"/>,
+    /// which keeps the marker on the pre-#4545 read gate.
+    /// </summary>
+    internal static Dictionary<string, HybridLogicalClock>? MarkerStamp(PendingMutationSnapshot snapshot) =>
+        snapshot.StampIsOriginal && IsLastWriterWins(snapshot)
+            ? new Dictionary<string, HybridLogicalClock>(1, StringComparer.Ordinal) { [snapshot.Key] = snapshot.Timestamp }
+            : null;
 
     /// <summary>
     /// The original stamp of each marked, live-valued snapshot, keyed by key, or

@@ -40,4 +40,13 @@ internal readonly record struct ReplicationPeerStatusRow(
     /// classifies as stalled. Legacy rows decode to <see langword="null"/>.
     /// </summary>
     [Id(8)] public double? ReseedRequiredSeconds { get; init; }
+
+    /// <summary>
+    /// Seconds since the per-tree dead-letter queue first refused an entry of
+    /// this link because it was full, or <see langword="null"/> when it is not
+    /// refusing (#4603). The refused entry is kept unacknowledged, so the link
+    /// makes no progress and classifies as stalled. Legacy rows decode to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(9)] public double? DeadLetterFullSeconds { get; init; }
 }
