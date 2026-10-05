@@ -6,12 +6,11 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Online shadow-forwarding primitive for the shard root.
 /// <para>
 /// When <see cref="Orleans.Lattice.BPlusTree.State.ShardRootState.ShadowForward"/> is non-null, the shard's
-/// last-writer-wins mutation paths (point, batched and conditional writes,
-/// deletes, range deletes, batched merges, and atomic-write terminals) are
-/// mirrored in parallel to the shard with the same index on
+/// mutation paths (point, batched and conditional writes, deletes, range
+/// deletes, batched merges, atomic-write terminals, typed CRDT delta applies and
+/// bulk appends) are mirrored to the shard with the same index on
 /// <c>ShadowForwardState.DestinationPhysicalTreeId</c>,
-/// <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>; the typed CRDT delta paths
-/// and bulk appends are not mirrored. The target is chosen by index alone. The
+/// <c>{DestinationPhysicalTreeId}/{MyShardIndex}</c>. The target is chosen by index alone. The
 /// snapshot coordinator registers the destination tree with this tree's pinned
 /// shard count and its routing <see cref="ShardMap"/>
 /// (<c>TreeSnapshotGrain.InitiateSnapshotStateAsync</c>), and begins forwarding
