@@ -282,6 +282,17 @@ public static class LatticeEventConstants
     internal const string ForwardedPrepareRequestContextKey = "ol.prep.fwd";
 
     /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key carrying a create intent
+    /// for one leaf: the string form of the leaf's grain id. A leaf whose state row
+    /// is missing writes a first row only under an intent naming it, so a leaf whose
+    /// row was lost cannot be silently re-created empty by a call that merely
+    /// reaches it (issue #4654). Internal - set through
+    /// <see cref="LatticeNewLeafIntentContext"/> by the paths that create leaves
+    /// (shard bootstrap, leaf split, bulk load, recovery reseed), and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string NewLeafIntentRequestContextKey = "ol.leaf.new";
+    /// <summary>
     /// Orleans <c>RequestContext</c> key naming the shard
     /// (<c>{physicalTreeId}/{shardIndex}</c>) the routing tier dispatched a saga
     /// prepare-phase write to (issue #4522). A leaf treats the prepare stamp it

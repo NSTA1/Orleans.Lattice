@@ -14,18 +14,22 @@ SUMMARY: re-shipped pre-cut prepares are staged with no decision row to settle t
 PERTURBS: Bootstrap, DeliverPrepare
 
 --- FIND
-         /\ rdec' = [rdec EXCEPT !["A"] = IF snap \in {"committed", "aborted"} THEN snap ELSE @]
+         /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
+         /\ outbox' = kept
 --- REPLACE
 \* MUTATION: the export carries no decision rows.
          /\ rdec' = rdec
+         /\ outbox' = kept
 --- END
 --- FIND
     /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
 --- REPLACE
 \* MUTATION: no settle; every replicated prepare is staged.
     /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
 --- END

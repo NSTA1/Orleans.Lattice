@@ -34,31 +34,36 @@ Coyote models of the receiver, described under
 Do not read coverage of either half as coverage of the other. The single-cluster
 properties say nothing about a receiver, and the cross-cluster properties are all
 claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
-barrier, and a transport that may reorder, drop a delivery and duplicate, but is
-assumed never to lose a record) and its failure modes are its own. The
-cross-cluster check is also narrower than its name:
+barrier, and a transport that may reorder, drop a delivery and duplicate) and its
+failure modes are its own. What the cross-cluster check covers, stated
+precisely:
 
 - It assumes a source shard's terminal reaches the receiver after that shard's
   prepares, which the built-in shipper's terminal hold provides (issue #4480); a
   bridge built on `IChangeFeed` relies on the feed's own ordering instead (issue
   #4511, fixed by #4519).
-- It assumes the transport never loses a record. Production violates that: the
-  receiver's dead-letter applier acknowledges a saga record it parked (issue
-  #4591), and a WAL retention (TTL) trim can pass an entry the shipper has not
-  read (issue #4534; a trim without the TTL is fixed by #4595, issue #4579).
-  After such a trim the shipper withholds the peer's saga records
-  until it re-seeds (#4577). A prepare the shipper itself dead-letters poisons its saga
-  instead, which is safe but leaves the saga invisible on that peer (issue
-  #4494, fixed by #4570).
+- It models every way production loses a record to a peer, each with its fix:
+  a WAL retention trim past the shipper (issue #4534) or a batch it cannot
+  encode (#4651) takes the peer off the log and withholds its saga records until
+  a re-seed (#4577); a removed peer's shipper detaches from the log and re-marks
+  its re-seed when it returns (#4652); and the receiver poisons a saga whose
+  prepare it gave up on, withholding the saga's terminals until its own re-seed
+  (issue #4591, fixed by #4633). The re-seed's drain discards a purged saga's
+  leftover buckets and drains a decided one's (#4631), the replay that follows
+  withholds a purged saga whole while purges are held (#4533, #4534-B), and no
+  export drained while a silo predates the purge hold settles a re-seed (issue
+  #4664, fixed by #4666). The module checks each loss path in its own variant
+  configurations, one loss per behaviour.
 - It imports a bootstrap atomically. The receiver's drain installs the rows one
   at a time, but behind a read fence for the whole drain (issue #4526, fixed by
-  #4594), so no reader observes a partial import. Under a forced gap the
-  export's own two-pass race can lose a key (issue #4627).
+  #4594), so no reader observes a partial import, and the export ships a
+  decision row for a saga that decided while it ran (issue #4627), so its
+  decision read and its rows are of one instant.
 - It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
   shipper drops the filtered prepares but ships every terminal, so all-or-nothing
   holds only over the keys that peer replicates.
 
-Those departures are recorded as defects or scope limits, not covered. The
+The key filter is a scope limit, not a defect. The
 bootstrap is modelled as production now ships it: the export carries the
 recorded verdict of every saga the origin stores (issue #4481, fixed by #4501),
 retained pre-cut records are shipped again and settled against it (issue #4482,
@@ -185,6 +190,12 @@ its tag in Coyote's bug report rather than accepted as any violation. Two of
 those guards reproduce production as it stood before a fix (issue #4480 before the
 shipper's terminal hold, and issue #4448 before #4461), which is why they are
 guards rather than fixed-design tests; they now stand as regression checks.
+
+Neither model loses a record: they deliver every prepare and terminal. The loss
+paths and their repair - the re-seed, the replay filter and the purge holds -
+are grain-level mechanisms rather than pure cores, so the TLA+ module checks
+them, in its variant configurations, and real-grain detectors cited in its
+refinement note pin each fix.
 
 ### Every model ships a non-vacuous guard test
 
@@ -335,8 +346,8 @@ The same directory holds the cross-cluster module,
 [`AtomicCommitCrossCluster.tla`](../../spec/atomic-commit/AtomicCommitCrossCluster.tla),
 which instances `AtomicCommit` for the origin cluster and specifies the
 receiver: replication of each prepare and terminal over a transport that may
-reorder, drop a delivery and duplicate, but is assumed never to lose a record
-(production violates that, issues #4591 and #4534); the receiver's per-source-shard tally, including the
+reorder, drop a delivery and duplicate; every way production loses a record to
+a peer, with its re-seed; the receiver's per-source-shard tally, including the
 ungated legacy path; the cross-tree receiver barrier and the registry's
 delegation to it, with an undiallable barrier answering Indeterminate; the two
 delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its

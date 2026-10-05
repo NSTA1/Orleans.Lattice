@@ -389,6 +389,24 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
+        // Record, before the first leaf is cleared, that this shard's leaves are
+        // being cleared on purpose (issue #4654). A purge that dies part-way leaves
+        // routed leaves with no state row, which recovery can then re-create empty
+        // without mistaking a leaf whose row was lost for one the purge cleared.
+        if (!state.State.LeafClearsBegun)
+        {
+            state.State.LeafClearsBegun = true;
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch
+            {
+                state.State.LeafClearsBegun = false;
+                throw;
+            }
+        }
+
         GrainId? leafId;
         // Decide leaf-vs-internal by node TYPE so a corrupt RootIsLeaf flag
         // over an internal root (issue 899) still purges the internal subtree
@@ -581,6 +599,7 @@ internal sealed partial class ShardRootGrain
         // the full walk to be correct is the right trade.
         var leafIds = new List<GrainId>();
         var internalIds = new List<GrainId>();
+        var recreateClearedLeaves = state.State.LeafClearsBegun;
         bool truncated;
         try
         {
@@ -613,8 +632,30 @@ internal sealed partial class ShardRootGrain
         await BoundedFanOut.RunAsync(leafIds.Count, ReseedFanOutWidth, async slot =>
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
-            await leaf.SetTreeIdAsync(TreeId);
-            await leaf.SetShardIndexAsync(MyShardIndex);
+
+            // A routed leaf with no state row is re-created empty only when a purge
+            // of this shard began clearing its leaves: their data was discarded on
+            // purpose. Otherwise it cannot be told apart from a leaf whose row was
+            // lost (issue #4654), so it carries no create intent, refuses the
+            // binding, and stays failed closed; recovery of the rest goes on.
+            using var createIntent = recreateClearedLeaves ? LatticeNewLeafIntentContext.BeginScope(leafIds[slot]) : null;
+            try
+            {
+                await leaf.SetTreeIdAsync(TreeId);
+                await leaf.SetShardIndexAsync(MyShardIndex);
+            }
+            catch (LeafStateRowLostException ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Leaf {LeafId} of shard {ShardIndex} of tree {TreeId} has no state row and no purge of the shard "
+                    + "began, so recovery did not re-create it: it may be a leaf whose row was lost, and re-creating it "
+                    + "empty would report its keys absent. Its key range fails closed until the leaf, or the tree, is "
+                    + "restored from a backup.",
+                    leafIds[slot],
+                    MyShardIndex,
+                    TreeId);
+            }
         });
 
         await BoundedFanOut.RunAsync(internalIds.Count, ReseedFanOutWidth, slot =>
@@ -625,11 +666,28 @@ internal sealed partial class ShardRootGrain
             logger.LogWarning(
                 "Re-asserted node bindings on the first {NodeCount} nodes of shard {ShardIndex} of tree {TreeId} "
                 + "after recovery, but the shard has more than the {MaxReseedNodes}-node repair budget; "
-                + "keys routed to the nodes beyond it are re-bound by the write path on their next typed CRDT write.",
+                + "keys routed to the nodes beyond it are re-bound by the write path on their next typed CRDT write; "
+                + "a node beyond it with no state row fails closed (issue #4654).",
                 leafIds.Count + internalIds.Count,
                 MyShardIndex,
                 TreeId,
                 MaxReseedNodes);
+        }
+
+        // The purge's leaves are re-created; the shard is live again, so a leaf
+        // that loses its row from here on is a lost leaf, not a purged one.
+        if (recreateClearedLeaves)
+        {
+            state.State.LeafClearsBegun = false;
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch
+            {
+                state.State.LeafClearsBegun = true;
+                throw;
+            }
         }
     }
 
