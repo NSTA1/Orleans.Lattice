@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree.State;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -123,4 +125,14 @@ internal readonly record struct SiblingInitialization
     /// applying the saga's value at its own P would overwrite that later write.
     /// </summary>
     [Id(9)] public HybridLogicalClock DonorClock { get; init; }
+
+    /// <summary>
+    /// The donor's applied-terminal witnesses for the keys that move to the
+    /// sibling (issue #4545), or <see langword="null"/> when there are none or
+    /// an older donor sent none. The sibling adopts them before it receives a
+    /// single migrated row, so a delayed shadow marker for a saga whose
+    /// terminal the donor already applied to a moved key is recognised on the
+    /// sibling, which never sees that terminal.
+    /// </summary>
+    [Id(10)] public AppliedTerminalWitness[]? TerminalWitnesses { get; init; }
 }

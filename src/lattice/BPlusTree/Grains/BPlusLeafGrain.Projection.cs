@@ -652,6 +652,11 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     private async Task FlushPendingCheckpointAsync(bool persistEvenWithoutPendingAdvance)
     {
+        // Retire applied-terminal witnesses the registry has forgotten (issue
+        // #4545) ahead of the write that persists the witness. Throttled and
+        // best-effort: it never fails the flush.
+        await PruneTerminalWitnessAsync();
+
         if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
         {
             var undo = ApplyPendingCheckpointAdvance(pending);
@@ -1222,6 +1227,12 @@ internal sealed partial class BPlusLeafGrain
         };
         MergeIntoProjection(mutation.Key, incoming);
         AdvanceProjectionClock(mutation.Timestamp);
+        // A replayed terminal backstop settled its key here (issue #4545). The
+        // record does not say whether it carried a prepare stamp, so it is
+        // recorded either way: a superset of the witness is still exact about
+        // what the terminal settled.
+        if (mutation.IsBackstop)
+            RecordTerminalWitness(mutation.TransactionId, mutation.Key);
     }
 
     /// <summary>
