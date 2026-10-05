@@ -233,6 +233,7 @@ internal sealed class ReplicationTreeFrontierGrain(
             Epoch = state.State.Epoch,
             RegistryLineage = state.State.ObservedRegistryLineage,
             LowWatermarks = watermarks,
+            KnownOrigins = state.State.Epoch == Guid.Empty ? Array.Empty<string>() : [.. state.State.Origins.Keys],
         };
     }
 

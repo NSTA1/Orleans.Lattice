@@ -28,11 +28,15 @@ public partial class CrossClusterAtomicVisibilityTests
         public ReplicationTreeFrontierGrain Frontier { get; }
         public ReplicationHighWaterMarkGrain Hwm { get; }
 
+        /// <summary>The grain factory the receiver's grains resolve each other through.</summary>
+        public IGrainFactory Factory { get; }
+
         private int _observed;
 
         public FrontierReceiver(string tree, Guid? lineage)
         {
             var factory = HighWaterMarkTestGrains.FrontierFactory(Origins);
+            Factory = factory;
             Hwm = HighWaterMarkTestGrains.Real(grainFactory: factory, treeId: tree);
             factory.GetGrain<IReplicationHighWaterMarkGrain>(tree, Arg.Any<string?>()).Returns(Hwm);
             Lineage.GetLineageAsync(tree, Arg.Any<CancellationToken>()).Returns(lineage);
