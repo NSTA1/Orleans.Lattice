@@ -22,7 +22,10 @@ namespace Orleans.Lattice.Backup.Tests;
 /// shows the two are mutually redundant, so one test pins the re-observation's
 /// epoch clause alone and the other the pair together. A third pins the fence
 /// itself (the <c>Fence</c> row): between the drain and the gate only the fence
-/// refuses a new delegation.
+/// refuses a new delegation. A fourth pins the set's lease validation (the
+/// <c>Validate</c> row's release clause, issue #4441 F4): a member's gate lost
+/// after the capture, while a single-tree saga decides on that member, must
+/// discard the attempt, because only the release reports the loss.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -166,6 +169,41 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
         });
     }
 
+    [Test]
+    public async Task A_member_gate_lost_while_a_single_tree_saga_decides_on_it_forces_a_second_attempt()
+    {
+        var (treeA, treeB, suffix) = await SeedAsync("lost-gate");
+        var decided = false;
+
+        // Attempt 1, after every member was captured and before the step-6
+        // release: tree A's gate is lost (a registry reactivation drops the hold),
+        // so a single-tree saga on tree A records its decision and commits. The
+        // cross-tree epoch does not move and nothing is in flight, so only the
+        // release can report that the gate was not held for the whole attempt.
+        HoldLossFilter.Arm(static (_, _, _, _) => Task.CompletedTask);
+        HoldLossFilter.ArmFirstGateRelease(async (token, grainFactory) =>
+        {
+            await LoseFenceAsync(grainFactory, token, treeA);
+            await grainFactory.GetGrain<ILattice>(treeA).SetManyAtomicAsync(
+            [
+                new KeyValuePair<string, byte[]>("k", Bytes("saga")),
+                new KeyValuePair<string, byte[]>("k2", Bytes("saga")),
+            ]);
+            decided = true;
+        });
+
+        var result = await CaptureSetAsync(treeA, treeB, suffix);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HoldLossFilter.ReleaseFired, Is.True, "the gate must have been lost inside the first attempt");
+            Assert.That(decided, Is.True, "the single-tree saga must have decided while the gate was lost");
+            Assert.That(result.SetManifest.Fence, Is.Not.Null);
+            Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2),
+                "a member gate lost inside the attempt must discard it, though the window looked quiet");
+        });
+    }
+
     private async Task<(string TreeA, string TreeB, string Suffix)> SeedAsync(string prefix)
     {
         var suffix = Guid.NewGuid().ToString("N");
@@ -221,8 +259,27 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
         private static readonly ConcurrentDictionary<(Guid, TxRegistryCaptureGateMode), Task> s_runs = new();
         private static readonly Dictionary<TxRegistryCaptureGateMode, int> s_ordinals = [];
         private static Func<TxRegistryCaptureGateMode, int, Guid, IGrainFactory, Task>? s_action;
+        private static Func<Guid, IGrainFactory, Task>? s_releaseAction;
+        private static Task? s_releaseRun;
+        private static Guid s_firstGateToken;
+        private static readonly AsyncLocal<bool> s_inReleaseAction = new();
 
         internal static bool Fired { get; private set; }
+
+        internal static bool ReleaseFired { get; private set; }
+
+        /// <summary>
+        /// Runs <paramref name="action"/> once, before the first registry release
+        /// carrying the first attempt's gate token: the set's step-6 release with
+        /// validation, after every member was captured.
+        /// </summary>
+        internal static void ArmFirstGateRelease(Func<Guid, IGrainFactory, Task> action)
+        {
+            lock (s_lock)
+            {
+                s_releaseAction = action;
+            }
+        }
 
         internal static void Arm(Func<TxRegistryCaptureGateMode, int, Guid, IGrainFactory, Task> action)
         {
@@ -240,6 +297,10 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
                 s_runs.Clear();
                 s_ordinals.Clear();
                 Fired = false;
+                s_releaseAction = null;
+                s_releaseRun = null;
+                s_firstGateToken = Guid.Empty;
+                ReleaseFired = false;
             }
         }
 
@@ -260,7 +321,10 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
                     {
                         var ordinal = s_ordinals[mode] = s_ordinals.GetValueOrDefault(mode) + 1;
                         if (mode == TxRegistryCaptureGateMode.Gate && ordinal == 1)
+                        {
                             Fired = true;
+                            s_firstGateToken = token;
+                        }
                         run = action(mode, ordinal, token, grainFactory);
                         s_runs[(token, mode)] = run;
                     }
@@ -268,8 +332,41 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
 
                 await run;
             }
+            else if (context.MethodName == nameof(ITxRegistryGrain.ReleaseCaptureGateAsync)
+                && !s_inReleaseAction.Value
+                && context.Request.GetArgument(0) is Guid releaseToken)
+            {
+                Task release;
+                lock (s_lock)
+                {
+                    if (s_releaseAction is not { } releaseAction
+                        || releaseToken == Guid.Empty
+                        || releaseToken != s_firstGateToken)
+                    {
+                        release = Task.CompletedTask;
+                    }
+                    else
+                    {
+                        if (s_releaseRun is null)
+                        {
+                            ReleaseFired = true;
+                            s_releaseRun = RunReleaseActionAsync(releaseAction, releaseToken);
+                        }
+
+                        release = s_releaseRun;
+                    }
+                }
+
+                await release;
+            }
 
             await context.Invoke();
+        }
+
+        private async Task RunReleaseActionAsync(Func<Guid, IGrainFactory, Task> action, Guid token)
+        {
+            s_inReleaseAction.Value = true;
+            await action(token, grainFactory);
         }
     }
 }

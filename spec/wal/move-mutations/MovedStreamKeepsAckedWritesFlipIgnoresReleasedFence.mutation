@@ -10,11 +10,11 @@ SUMMARY: the flip does not require the durable fence, so it completes after a la
 PERTURBS: MoveSwitch
 
 --- FIND
-    /\ move = "copied"
-    /\ dfence
-    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move[m] = "copied"
+    /\ dfence = m
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
 --- REPLACE
 \* MUTATION: the flip's compare-and-swap does not require this move's fence.
-    /\ move = "copied"
-    /\ durable' = {o \in moveCopy : o >= tail}
+    /\ move[m] = "copied"
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
 --- END

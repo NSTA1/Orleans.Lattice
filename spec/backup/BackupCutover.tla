@@ -6,7 +6,8 @@
 (* alias and shard map that move together, the redirect armed on the copy *)
 (* the alias moved off so a stale routing activation self-heals, the alias *)
 (* reservation that refuses a delete while the tree's copies are in        *)
-(* motion, and a crash at any step with an idempotent retry.               *)
+(* motion, and a crash at any step of the restore or of its revert with   *)
+(* an idempotent retry (issue #4441 F9).                                  *)
 (*                                                                         *)
 (* It models the DESIGN, not the code. The tree has two physical copies:   *)
 (* "prev", which the alias resolves to before the restore, and "shadow",   *)
@@ -14,7 +15,7 @@
 (* routing snapshot (a StatelessWorker LatticeGrain activation) that may   *)
 (* be arbitrarily stale. See Refinement.md for the mapping.                *)
 (*                                                                         *)
-(* Epic #4430, issue #4440.                                                *)
+(* Epic #4430, issues #4440 and #4441.                                     *)
 (***************************************************************************)
 EXTENDS Naturals, TLC
 
@@ -29,7 +30,8 @@ Other(p) == IF p = "prev" THEN "shadow" ELSE "prev"
 (*  redir[p]   where copy p forwards logical-alias traffic, or "none"      *)
 (*             (MarkRetainedTreeRedirectAsync).                            *)
 (*  rp         the operation: idle -> built -> swapped -> committed, then  *)
-(*             optionally reverting -> reverted; failed after a crash.     *)
+(*             optionally revertBegun -> reverting -> reverted; failed or  *)
+(*             revertFailed after a crash.                                 *)
 (*  reserved   the tree's alias reservation is held                        *)
 (*             (ITreeDeletionGrain.BeginAliasChangeAsync / End...).        *)
 (*  deleted    the tree has been deleted.                                  *)
@@ -40,7 +42,8 @@ VARIABLES alias, map, route, redir, rp, reserved, deleted, crashed
 
 vars == <<alias, map, route, redir, rp, reserved, deleted, crashed>>
 
-Phases == {"idle", "built", "swapped", "committed", "reverting", "reverted", "failed"}
+Phases == {"idle", "built", "swapped", "committed", "revertBegun", "reverting", "reverted",
+           "failed", "revertFailed"}
 
 TypeOK ==
     /\ alias \in Copies
@@ -108,19 +111,27 @@ ArmRedirect ==
     /\ UNCHANGED <<alias, map, route, deleted, crashed>>
 
 (***************************************************************************)
-(* RevertSwap: a revert takes the reservation and moves the alias and the  *)
-(* map back onto the previous copy in one registry write                   *)
-(* (AliasCutoverShardMaps.RevertAsync). Optional: not fair.                *)
+(* RevertBegin: a revert takes the alias reservation                       *)
+(* (ITreeDeletionGrain.BeginAliasChangeAsync). Optional: not fair.         *)
 (***************************************************************************)
-RevertSwap ==
+RevertBegin ==
     /\ rp = "committed"
     /\ ~deleted
     /\ ~reserved
     /\ reserved' = TRUE
+    /\ rp' = "revertBegun"
+    /\ UNCHANGED <<alias, map, route, redir, deleted, crashed>>
+
+(***************************************************************************)
+(* RevertSwap: the revert moves the alias and the map back onto the        *)
+(* previous copy in one registry write (AliasCutoverShardMaps.RevertAsync). *)
+(***************************************************************************)
+RevertSwap ==
+    /\ rp = "revertBegun"
     /\ alias' = "prev"
     /\ map' = "prev"
     /\ rp' = "reverting"
-    /\ UNCHANGED <<route, redir, deleted, crashed>>
+    /\ UNCHANGED <<route, redir, reserved, deleted, crashed>>
 
 (***************************************************************************)
 (* RevertRedirect: the revert clears the previous copy's redirect and arms *)
@@ -144,25 +155,33 @@ Refresh ==
     /\ UNCHANGED <<alias, map, redir, rp, reserved, deleted, crashed>>
 
 (***************************************************************************)
-(* Crash: the restore fails part-way. The reservation it took is KEPT, and *)
-(* the shadow stays registered, until the same request is retried to       *)
-(* completion. Not fair.                                                   *)
+(* Crash: the restore or its revert fails part-way. The reservation it    *)
+(* took is KEPT, and the shadow stays registered, until the same request  *)
+(* is retried to completion. Between a revert's swap and its redirect     *)
+(* fix-up a stale reader is still forwarded to the shadow; the retry       *)
+(* completes the fix-up, so RevertNeverServesRestored holds once the       *)
+(* revert returns and RevertReturns guarantees it does. Not fair.         *)
 (***************************************************************************)
 Crash ==
-    /\ rp \in {"built", "swapped"}
+    /\ rp \in {"built", "swapped", "revertBegun", "reverting"}
     /\ ~crashed
     /\ crashed' = TRUE
-    /\ rp' = "failed"
+    /\ rp' = IF rp \in {"built", "swapped"} THEN "failed" ELSE "revertFailed"
     /\ UNCHANGED <<alias, map, route, redir, reserved, deleted>>
 
 (***************************************************************************)
 (* Retry: the same request retried resumes where the failure left it: the  *)
 (* deterministic operation id reuses the shadow and the reservation it     *)
-(* already holds.                                                          *)
+(* already holds. A retried revert (RevertRestoreAsync again, with the     *)
+(* same result) re-runs the swap, a no-op once the alias is back, and the  *)
+(* whole redirect fix-up.                                                  *)
 (***************************************************************************)
 Retry ==
-    /\ rp = "failed"
-    /\ rp' = IF alias = "shadow" THEN "swapped" ELSE "built"
+    /\ rp \in {"failed", "revertFailed"}
+    /\ rp' = CASE rp = "failed" /\ alias = "shadow" -> "swapped"
+               [] rp = "failed" -> "built"
+               [] alias = "prev" -> "reverting"
+               [] OTHER -> "revertBegun"
     /\ UNCHANGED <<alias, map, route, redir, reserved, deleted, crashed>>
 
 (***************************************************************************)
@@ -181,6 +200,7 @@ Next ==
     \/ Build
     \/ Swap
     \/ ArmRedirect
+    \/ RevertBegin
     \/ RevertSwap
     \/ RevertRedirect
     \/ Refresh
@@ -188,7 +208,7 @@ Next ==
     \/ Retry
     \/ Delete
 
-Progress == Swap \/ ArmRedirect \/ RevertRedirect \/ Retry
+Progress == Swap \/ ArmRedirect \/ RevertSwap \/ RevertRedirect \/ Retry
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Progress)
 
@@ -213,5 +233,9 @@ DeleteNeverMidCutover == deleted => rp \in {"idle", "committed", "reverted"}
 (***************************************************************************)
 (* Liveness: a restore whose shadow is built eventually returns.           *)
 (***************************************************************************)
-RestoreReturns == (rp = "built") ~> (rp \in {"committed", "reverting", "reverted"})
+RestoreReturns == (rp = "built") ~> (rp \in {"committed", "revertBegun", "reverting", "reverted"})
+
+\* A revert that has taken its reservation eventually returns, a crash
+\* included (the same request is retried).
+RevertReturns == (rp = "revertBegun") ~> (rp = "reverted")
 =============================================================================

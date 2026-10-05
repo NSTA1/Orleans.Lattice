@@ -98,6 +98,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.BootstrapCoordinatorStatus"/>.</summary>
     internal const string BootstrapCoordinatorStatus = "olr.bx";
 
+    /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
+    internal const string SnapshotSourceGeneration = "olr.sg";
+
     // Production replication drivers
 
     /// <summary>Alias for the per-(tree, peer) outbound shipper grain interface.</summary>

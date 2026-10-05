@@ -8,19 +8,17 @@ SUMMARY: the move copies at the instant it fences, before in-flight appends drai
 PERTURBS: MoveFence
 
 --- FIND
-    /\ move' = "fenced"
-    /\ dfence' = TRUE
+    /\ move' = [move EXCEPT ![m] = "fenced"]
+    /\ dfence' = m
     /\ lapsed' = FALSE
     /\ afence' = TRUE
-    /\ moves' = moves + 1
     /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moveCopy, crashes, coordCrashes>>
 --- REPLACE
 \* MUTATION: fence and copy in one step.
-    /\ move' = "copied"
-    /\ moveCopy' = durable
-    /\ dfence' = TRUE
+    /\ move' = [move EXCEPT ![m] = "copied"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = durable]
+    /\ dfence' = m
     /\ lapsed' = FALSE
     /\ afence' = TRUE
-    /\ moves' = moves + 1
     /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, crashes, coordCrashes>>
 --- END

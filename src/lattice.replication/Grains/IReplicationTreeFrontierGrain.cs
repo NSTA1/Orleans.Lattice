@@ -29,6 +29,17 @@ internal interface IReplicationTreeFrontierGrain : IGrainWithStringKey
     Task OnContentsReplacingAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The tree registry is about to persist <paramref name="nextLineage"/> as
+    /// the tree's lineage (<see langword="null"/>: the tree is being unregistered
+    /// or purged): force the gap as <see cref="OnContentsReplacingAsync"/> does,
+    /// and record the lineage the change produces, so settling against the
+    /// registry afterwards does not force a second one. Durable before it
+    /// returns; a failure propagates and the registry does not persist the
+    /// change.
+    /// </summary>
+    Task OnLineageChangingAsync(Guid? nextLineage, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// A full bootstrap begun under <paramref name="epoch"/> completed: install
     /// the source's per-origin low watermarks and the writes the source held at
     /// export open. Ignored, returning <see langword="false"/>, when the epoch

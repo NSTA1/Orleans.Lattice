@@ -7,8 +7,8 @@ SUMMARY: a retry enters an undeclared phase
 PERTURBS: Retry
 
 --- FIND
-    /\ rp' = IF alias = "shadow" THEN "swapped" ELSE "built"
+    /\ rp' = CASE rp = "failed" /\ alias = "shadow" -> "swapped"
 --- REPLACE
     \* MUTATION: an undeclared phase.
-    /\ rp' = "retrying"
+    /\ rp' = CASE rp = "failed" /\ alias = "shadow" -> "retrying"
 --- END

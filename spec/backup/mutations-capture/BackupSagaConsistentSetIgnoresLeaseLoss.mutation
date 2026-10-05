@@ -1,0 +1,19 @@
+# Pairs with BackupSagaConsistent, and is the model side of issue #4441 F4. A
+# SET capture accepts an attempt whose member lease was lost: its release
+# result and renewal are ignored. With the gate gone the single-tree saga s
+# on T1 decides and broadcasts between two shards' captures, so the set holds
+# s torn inside one member. A single-tree capture is unaffected, so this
+# mutation fires only through the set path (#4441 F3: the property is no
+# longer blind for set captures).
+MODULE: BackupSagaConsistentSetIgnoresLeaseLoss
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a set capture accepts an attempt whose member lease lapsed
+PERTURBS: Validate
+
+--- FIND
+    /\ IF /\ \A T \in Members : held[T]
+--- REPLACE
+    \* MUTATION: the set ignores its members' lease validation.
+    /\ IF /\ kind = "set" \/ \A T \in Members : held[T]
+--- END

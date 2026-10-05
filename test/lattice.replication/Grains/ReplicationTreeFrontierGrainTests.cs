@@ -339,6 +339,42 @@ public sealed class ReplicationTreeFrontierGrainTests
     }
 
     [Test]
+    public async Task A_registry_lineage_change_forces_one_gap_and_records_the_lineage_it_produces()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        var before = await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        var next = Guid.NewGuid();
+
+        await grain.OnLineageChangingAsync(next, CancellationToken.None);
+        var during = (await grain.GetAsync(CancellationToken.None)).Epoch;
+
+        // The registry persisted it; a later activation settles without a second gap.
+        h.Lineage.GetLineageAsync(Tree, Arg.Any<CancellationToken>()).Returns(next);
+        var reactivated = await h.Activate().ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(during, Is.Not.EqualTo(before).And.Not.EqualTo(Guid.Empty));
+            Assert.That(reactivated, Is.EqualTo(during));
+            Assert.That(h.State.State.ObservedRegistryLineage, Is.EqualTo(next));
+            Assert.That(await h.Origin(OriginA).GetLowWatermarkAsync(CancellationToken.None), Is.EqualTo(HybridLogicalClock.Zero));
+        });
+    }
+
+    [Test]
+    public async Task An_unregistration_or_purge_puts_the_frontier_in_degraded_mode()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+
+        await grain.OnLineageChangingAsync(nextLineage: null, CancellationToken.None);
+
+        Assert.That((await grain.GetAsync(CancellationToken.None)).Epoch, Is.EqualTo(Guid.Empty));
+    }
+
+    [Test]
     public void Arguments_are_validated()
     {
         var grain = new Harness(RegistryLineage).Activate();

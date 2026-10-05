@@ -181,4 +181,72 @@ public class GrpcRemoteSnapshotTransportClientIntegrationTests
 
         Assert.That(count, Is.EqualTo(0));
     }
+
+    private static readonly SnapshotSourceGeneration OpenGeneration = new()
+    {
+        PhysicalTreeId = "phys",
+        ShardMapVersion = 2,
+        Lineage = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+        DeleteEpoch = 1,
+        IsDeleted = false,
+    };
+
+    private static readonly SnapshotSourceGeneration CloseGeneration = OpenGeneration with { DeleteEpoch = 2 };
+
+    private SnapshotStream StageWithGenerations(params string[] keys)
+    {
+        SnapshotStream? stream = null;
+        async IAsyncEnumerable<SnapshotEntry> Entries()
+        {
+            foreach (var key in keys)
+            {
+                yield return new SnapshotEntry { Key = key, Value = new byte[] { 1 }, Timestamp = new HybridLogicalClock { WallClockTicks = 1, Counter = 0 } };
+            }
+
+            await Task.CompletedTask;
+            stream!.CloseGeneration = CloseGeneration;
+        }
+
+        stream = new SnapshotStream(Tree, new HybridLogicalClock { WallClockTicks = 9, Counter = 0 }, new VersionVector(), Entries())
+        {
+            OpenGeneration = OpenGeneration,
+        };
+        _sender.Stage(Tree, stream);
+        return stream;
+    }
+
+    [Test]
+    public async Task The_source_generation_crosses_the_wire_as_metadata_and_a_closing_trailer()
+    {
+        StageWithGenerations("a", "b");
+
+        var metadata = await _transport.GetMetadataAsync(Tree, Source, HybridLogicalClock.Zero, CancellationToken.None);
+        var items = new List<RemoteSnapshotStreamItem>();
+        await foreach (var item in _transport.RequestSnapshotItemsAsync(Tree, Source, HybridLogicalClock.Zero, CancellationToken.None))
+        {
+            items.Add(item);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(metadata.OpenGeneration, Is.EqualTo(OpenGeneration));
+            Assert.That(items.Take(2).Select(i => i.Entry.Key), Is.EqualTo(new[] { "a", "b" }));
+            Assert.That(items, Has.Count.EqualTo(3));
+            Assert.That(items[2].CloseGeneration, Is.EqualTo(CloseGeneration));
+        });
+    }
+
+    [Test]
+    public async Task RequestSnapshotAsync_drops_the_closing_trailer_so_legacy_callers_see_entries_only()
+    {
+        StageWithGenerations("a", "b");
+
+        var drained = new List<string>();
+        await foreach (var entry in _transport.RequestSnapshotAsync(Tree, Source, HybridLogicalClock.Zero, CancellationToken.None))
+        {
+            drained.Add(entry.Key);
+        }
+
+        Assert.That(drained, Is.EqualTo(new[] { "a", "b" }), "the trailer is not a snapshot entry");
+    }
 }

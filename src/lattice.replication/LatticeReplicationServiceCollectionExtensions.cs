@@ -100,10 +100,13 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // TryAdd, mirroring the IMutationObserver registration convention.
         builder.Services.AddSingleton<ITreeAliasObserver, ReplicationTreeAliasObserver>();
 
-        // Receiver tree frontier lineage (issue #4586 part 2b). The tree
-        // registry stamps no lineage yet, so every tree stays in degraded mode
-        // until a lineage-tracking source replaces this one.
-        builder.Services.TryAddSingleton<ITreeLineageSource, UntrackedTreeLineageSource>();
+        // Receiver tree frontier lineage (issue #4586 part 2b): the frontier
+        // settles against the tree registry's lineage, and the registry tells it
+        // before it persists any lineage change, so a replacement of a tree's
+        // contents always forces a gap first. Registered additively, like the
+        // alias observer.
+        builder.Services.TryAddSingleton<ITreeLineageSource, RegistryTreeLineageSource>();
+        builder.Services.AddSingleton<ITreeLineageObserver, ReplicationTreeLineageObserver>();
 
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
         // Receiver-side bootstrap source. The bootstrap state machine

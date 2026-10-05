@@ -239,6 +239,7 @@ public sealed class LatticeWalGc(
         // the early-return passes a reader is investigating.
         PrimeTrimStopSeries(treeName, partitions);
         WalGcBlockedConsumerCensus.Prime(treeName);
+        WalGcLeafPinHoldCensus.Prime(treeName, partitions);
 
         // Resolve a provider per partition from the durable WAL placement pin so
         // a partition that was moved to a named storage backend is sampled and
@@ -374,6 +375,26 @@ public sealed class LatticeWalGc(
             ttlCeiling = new HybridLogicalClock { WallClockTicks = ceilingTicks, Counter = int.MaxValue };
         }
 
+        if (floorResult.CensusUnavailable)
+        {
+            WalGcLeafPinHoldCensus.RecordUnknown(treeName, partitions);
+        }
+        else
+        {
+            var held = new bool[partitions];
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                // With a retention window configured, a partition whose ceiling a
+                // leaf pin holds below it is held too: retention is not being
+                // honoured on it.
+                held[partition] = ttlCeiling is { } configured
+                    ? floorResult.IsRetentionHeld(partition, configured)
+                    : floorResult.IsPartitionHeldByBlockPin(partition);
+            }
+
+            WalGcLeafPinHoldCensus.Record(treeName, held, _time.GetUtcNow());
+        }
+
         // Range-delete entries carry HybridLogicalClock.Zero by design;
         // a min cursor that is itself Zero (or unset) must not flush
         // them out the moment they land. The cursor branch is therefore
@@ -406,7 +427,13 @@ public sealed class LatticeWalGc(
         //
         // Unattributable pins fail closed - see ApplyDurableMaterialiserFloorAsync.
         HybridLogicalClock? PartitionCursor(int partition) =>
-            floorResult.IsPartitionBlocked(partition) ? null : floorResult.Floor;
+            floorResult.IsPartitionHeldByBlockPin(partition) ? null : floorResult.Floor;
+
+        // The retention ceiling a given WAL partition trims against: none where a
+        // block pin, or any leaf pin the durable offset floor does not cover,
+        // holds it, because the ceiling never overtakes a leaf (issue #4622).
+        HybridLogicalClock? PartitionTtlCeiling(int partition) =>
+            floorResult.RetentionCeilingFor(partition, ttlCeiling);
 
         // The offset floor a given WAL partition trims against (issue #3178).
         //
@@ -458,7 +485,7 @@ public sealed class LatticeWalGc(
         WalGcOffsetAdmission? PartitionOffsetAdmission(int partition)
             => PartitionOffsetFloor(partition) is { } floor
                 && floorResult.UncoveredCursorComputed
-                && !floorResult.IsPartitionBlocked(partition)
+                && !floorResult.IsPartitionHeldByBlockPin(partition)
                     ? new WalGcOffsetAdmission(floor, floorResult.UncoveredCursor)
                     : null;
 
@@ -591,9 +618,12 @@ public sealed class LatticeWalGc(
         // The read positions of the consumers that read this log by offset
         // (issue #4579). Read once per pass, after the early return above, so a
         // tree with nothing to trim never asks.
-        var consumerOffsetFloors = await ReadOffsetConsumerFloorsAsync(treeName, partitions, cancellationToken).ConfigureAwait(false);
+        var consumerRead = await ReadOffsetConsumerFloorsAsync(treeName, partitions, cancellationToken).ConfigureAwait(false);
+        var consumerOffsetFloors = consumerRead.Floors;
         long? ConsumerOffsetFloor(int partition)
             => consumerOffsetFloors is { } floors && floors[partition] != long.MaxValue ? floors[partition] : null;
+        Func<long, Task>? ForcedTrimHold(int partition)
+            => consumerOffsetFloors is null ? null : lastEligible => RecordForcedTrimHoldsAsync(treeName, partitions, partition, lastEligible, consumerRead);
 
         // Durability hold budget (issue #3300), decided once per pass against
         // the pre-trim footprint sampled above, exactly as the byte-pressure
@@ -701,7 +731,7 @@ public sealed class LatticeWalGc(
                     tenantTag);
             }
 
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), PartitionTtlCeiling(partition), causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken, ForcedTrimHold(partition)).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
@@ -1062,6 +1092,8 @@ public sealed class LatticeWalGc(
 
         var floor = registryMin;
         bool[]? blockedPartitions = null;
+        bool[]? zeroPinPartitions = null;
+        HybridLogicalClock?[]? uncoveredPinFloors = null;
         var blockedCount = 0;
         string? blockingConsumerId = null;
         List<string>? blockingConsumerIds = null;
@@ -1069,6 +1101,52 @@ public sealed class LatticeWalGc(
 
         foreach (var (consumerId, pin) in pins)
         {
+            // The retention ceiling never overtakes a leaf (issue #4622). A leaf
+            // pin the durable offset floor does not cover caps its partition's
+            // retention ceiling at its frontier F. F was published by an empty
+            // release - the leaf held no row in the partition and had applied
+            // nothing there when its clock stood at F - so every entry the leaf
+            // has since written there is stamped above F, even though the pin
+            // store's max merge keeps the pin at (F, -1) once that write turns the
+            // partition into a Block. A Zero frontier is the block pin itself and
+            // holds the partition outright (below). A covered pin needs no cap:
+            // the offset-floor stop already bounds every arm, TTL included.
+            if (pin > HybridLogicalClock.Zero
+                && (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId)))
+            {
+                uncoveredPinFloors ??= new HybridLogicalClock?[Math.Max(1, partitions)];
+                if (TryResolvePinPartition(consumerId, partitions) is { } uncoveredPartition)
+                {
+                    LowerUncoveredPinFloor(uncoveredPinFloors, uncoveredPartition, pin);
+                }
+                else
+                {
+                    for (var p = 0; p < uncoveredPinFloors.Length; p++)
+                    {
+                        LowerUncoveredPinFloor(uncoveredPinFloors, p, pin);
+                    }
+                }
+            }
+
+            // A standing block pin holds its partition against every admitting arm,
+            // the retention ceiling included, whether or not the leaf is in the
+            // registry (issue #4622): a leaf that has never checkpointed replays from
+            // the "nothing applied" sentinel on a cold activation, so it cannot
+            // detect a trim it missed.
+            if (pin <= HybridLogicalClock.Zero
+                && (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId)))
+            {
+                zeroPinPartitions ??= new bool[Math.Max(1, partitions)];
+                if (TryResolvePinPartition(consumerId, partitions) is { } zeroPartition)
+                {
+                    zeroPinPartitions[zeroPartition] = true;
+                }
+                else
+                {
+                    Array.Fill(zeroPinPartitions, true);
+                }
+            }
+
             // A consumer present in the in-memory registry has a fresher
             // (>=) cursor already folded into registryMin; its durable pin
             // (possibly staler) must not raise the floor. "Present" means a
@@ -1263,14 +1341,16 @@ public sealed class LatticeWalGc(
         WalGcBlockedConsumerCensus.Record(treeName, blockingPopulation);
         if (populationGap is { } gap)
         {
-            return gap;
+            return gap with { ZeroPinPartitions = zeroPinPartitions, UncoveredPinFloors = uncoveredPinFloors };
         }
         if (blockedCount >= partitions
             && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
         {
             // Preserve the former short-circuit's trim/report shape exactly.
             return new DurableMaterialiserFloor(
-                null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false);
+                null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false,
+                ZeroPinPartitions: zeroPinPartitions,
+                UncoveredPinFloors: uncoveredPinFloors);
         }
         return new DurableMaterialiserFloor(
             floor,
@@ -1279,7 +1359,9 @@ public sealed class LatticeWalGc(
             blockingConsumerId,
             blockingConsumerIds,
             uncovered,
-            true);
+            true,
+            ZeroPinPartitions: zeroPinPartitions,
+            UncoveredPinFloors: uncoveredPinFloors);
     }
 
     /// <summary>
@@ -1331,6 +1413,18 @@ public sealed class LatticeWalGc(
 
         cache[partition] = empty ? (sbyte)1 : (sbyte)-1;
         return empty;
+    }
+
+    /// <summary>
+    /// Lowers <paramref name="floors"/>[<paramref name="partition"/>] to <paramref name="pin"/>
+    /// when it is unset or higher (issue #4622).
+    /// </summary>
+    private static void LowerUncoveredPinFloor(HybridLogicalClock?[] floors, int partition, HybridLogicalClock pin)
+    {
+        if ((uint)partition < (uint)floors.Length && (floors[partition] is not { } current || pin < current))
+        {
+            floors[partition] = pin;
+        }
     }
 
     /// <summary>
@@ -1465,7 +1559,9 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? UncoveredCursor = null,
         bool UncoveredCursorComputed = false,
         bool CensusUnavailable = false,
-        bool PinCensusUnreadable = false)
+        bool PinCensusUnreadable = false,
+        bool[]? ZeroPinPartitions = null,
+        HybridLogicalClock?[]? UncoveredPinFloors = null)
     {
         /// <summary>
         /// The fail-closed floor for a pass on which the durable pin census
@@ -1503,6 +1599,51 @@ public sealed class LatticeWalGc(
             => BlockedPartitions is { } blocked
                 && (uint)partition < (uint)blocked.Length
                 && blocked[partition];
+
+        /// <summary>
+        /// Whether a standing durable block pin - a <see cref="HybridLogicalClock.Zero"/>
+        /// frontier the durable offset floor does not cover, that is a data-bearing leaf
+        /// that has never checkpointed - holds <paramref name="partition"/>, whether or
+        /// not that leaf is in the in-memory registry (issue #4622). Such a partition
+        /// admits nothing: not by cursor, not by offset, and not by the retention
+        /// ceiling, because the leaf could not detect a trim it missed.
+        /// </summary>
+        public bool IsPartitionHeldByBlockPin(int partition)
+            => IsPartitionBlocked(partition)
+                || (ZeroPinPartitions is { } zero
+                    && (uint)partition < (uint)zero.Length
+                    && zero[partition]);
+
+        /// <summary>
+        /// The retention ceiling <paramref name="partition"/> trims against, so that
+        /// it never overtakes a leaf (issue #4622): none where a block pin holds the
+        /// partition, and otherwise <paramref name="ttlCeiling"/> capped at the lowest
+        /// frontier of the leaf pins the durable offset floor does not cover there.
+        /// Such a pin's frontier was published by an empty release, and every entry
+        /// the leaf has since written to the partition is stamped above it.
+        /// </summary>
+        public HybridLogicalClock? RetentionCeilingFor(int partition, HybridLogicalClock? ttlCeiling)
+        {
+            if (ttlCeiling is not { } ceiling || IsPartitionHeldByBlockPin(partition))
+            {
+                return null;
+            }
+
+            return UncoveredPinFloors is { } floors
+                && (uint)partition < (uint)floors.Length
+                && floors[partition] is { } cap
+                && cap < ceiling
+                    ? cap
+                    : ceiling;
+        }
+
+        /// <summary>
+        /// Whether the retention ceiling of <paramref name="partition"/> is held below
+        /// <paramref name="ttlCeiling"/> by a block pin or an uncovered leaf pin, so
+        /// the configured retention window is not being honoured there.
+        /// </summary>
+        public bool IsRetentionHeld(int partition, HybridLogicalClock ttlCeiling)
+            => RetentionCeilingFor(partition, ttlCeiling) is not { } effective || effective < ttlCeiling;
     }
 
     /// <summary>
@@ -2635,7 +2776,8 @@ public sealed class LatticeWalGc(
         WalGcOffsetAdmission? offsetAdmission,
         long? consumerOffsetFloor,
         bool durabilityHold,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<long, Task>? beforeTrim = null)
     {
         long lastEligibleOffset = -1;
         long fromOffsetExclusive = -1;
@@ -2856,6 +2998,14 @@ public sealed class LatticeWalGc(
             return (0, stopReason, floorHeadDistance);
         }
 
+        // A trim that passes an offset-reading consumer's unshipped position
+        // (only the retention ceiling can) records the consumer's purge hold
+        // first (#4534); a failure throws and the trim does not happen.
+        if (beforeTrim is not null)
+        {
+            await beforeTrim(lastEligibleOffset).ConfigureAwait(false);
+        }
+
         await provider.TrimAsync(treeId, shardIndex, lastEligibleOffset, cancellationToken).ConfigureAwait(false);
         return (eligibleCount, stopReason, floorHeadDistance);
     }
@@ -3045,20 +3195,24 @@ public sealed class LatticeWalGc(
     /// registered consumer reads.
     /// </summary>
     /// <returns>
-    /// <see langword="null"/> when no consumer is registered, or when the grain
-    /// runtime is unavailable (a bare-<see cref="IServiceProvider"/>
-    /// construction). When the set or any member cannot be read the floors are
-    /// all zero, so the pass fails closed and only the retention ceiling trims:
-    /// an unknown read position must never be treated as a consumed one.
+    /// No floors when no consumer is registered, or when the grain runtime is
+    /// unavailable (a bare-<see cref="IServiceProvider"/> construction). A
+    /// member whose position cannot be read counts as position 0 in every
+    /// partition, so the pass fails closed for it and only the retention
+    /// ceiling trims: an unknown read position must never be treated as a
+    /// consumed one. When the set itself cannot be read the floors are all zero
+    /// and the read is marked unreadable, so a trim the retention ceiling
+    /// admits is skipped (#4534): the pass cannot tell whose records it would
+    /// remove.
     /// </returns>
-    private async Task<long[]?> ReadOffsetConsumerFloorsAsync(
+    private async Task<OffsetConsumerRead> ReadOffsetConsumerFloorsAsync(
         string treeName,
         int partitions,
         CancellationToken cancellationToken)
     {
         if (GrainFactory is not { } factory)
         {
-            return null;
+            return default;
         }
 
         try
@@ -3069,18 +3223,36 @@ public sealed class LatticeWalGc(
                 .ConfigureAwait(false);
             if (consumers.Count == 0)
             {
-                return null;
+                return default;
             }
 
             var floors = new long[partitions];
             Array.Fill(floors, long.MaxValue);
+            var read = new List<(GrainId Consumer, long[] Positions)>(consumers.Count);
             foreach (var consumer in consumers)
             {
-                var positions = await factory.GetGrain(consumer)
-                    .AsReference<IWalOffsetConsumer>()
-                    .GetDurableReadPositionsAsync(treeName)
-                    .WaitAsync(cancellationToken)
-                    .ConfigureAwait(false);
+                long[]? positions;
+                try
+                {
+                    positions = await factory.GetGrain(consumer)
+                        .AsReference<IWalOffsetConsumer>()
+                        .GetDurableReadPositionsAsync(treeName)
+                        .WaitAsync(cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+                {
+                    // Unknown is not consumed: position 0 everywhere, and a
+                    // forced trim records this consumer's purge hold (#4534).
+                    services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+                        ex,
+                        "WAL GC pass for tree {Tree} could not read the read positions of offset-reading consumer {Consumer}; "
+                        + "the pass treats it as having consumed nothing. The next pass retries.",
+                        treeName,
+                        consumer);
+                    positions = [];
+                }
+
                 if (positions is null)
                 {
                     // The consumer no longer reads this log. It unregisters
@@ -3096,18 +3268,80 @@ public sealed class LatticeWalGc(
                 {
                     floors[p] = Math.Min(floors[p], p < positions.Length ? Math.Max(0, positions[p]) : 0);
                 }
+
+                read.Add((consumer, positions));
             }
 
-            return floors;
+            return new OffsetConsumerRead(floors, read, Unreadable: false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
                 ex,
                 "WAL GC pass for tree {Tree} could not read the read positions of its offset-reading consumers; "
-                + "the pass trims only past the retention ceiling. The next pass retries.",
+                + "the pass trims no offset any consumer could still need, even past the retention ceiling. The next pass retries.",
                 treeName);
-            return new long[partitions];
+            return new OffsetConsumerRead(new long[partitions], null, Unreadable: true);
         }
+    }
+
+    /// <summary>
+    /// The offset-reading consumers' positions as one GC pass read them: the
+    /// folded per-partition floors, each consumer's own positions, and whether
+    /// the read failed (in which case the floors are all zero).
+    /// </summary>
+    private readonly record struct OffsetConsumerRead(
+        long[]? Floors,
+        List<(GrainId Consumer, long[] Positions)>? Positions,
+        bool Unreadable);
+
+    /// <summary>
+    /// Records a purge hold (#4534) for every offset-reading consumer whose
+    /// durable position a trim through <paramref name="lastEligible"/> in
+    /// <paramref name="partition"/> passes - only the retention ceiling can
+    /// admit such a trim, and the consumer has then lost records it never
+    /// shipped. The transaction registry purges no decision while a hold is
+    /// outstanding, because the consumer's peer can only be re-seeded with
+    /// decisions that are still stored. Throws, so the trim does not happen,
+    /// when the positions could not be read or a hold could not be written.
+    /// </summary>
+    private async Task RecordForcedTrimHoldsAsync(
+        string treeName, int partitions, int partition, long lastEligible, OffsetConsumerRead read)
+    {
+        if (read.Unreadable)
+        {
+            throw new InvalidOperationException(
+                $"WAL GC on tree '{treeName}' could not read its offset-reading consumers' positions, so it cannot tell whether "
+                + $"trimming partition {partition} through offset {lastEligible} passes one; the trim is skipped until they are readable.");
+        }
+
+        List<string>? passed = null;
+        foreach (var (consumer, positions) in read.Positions ?? [])
+        {
+            var position = partition < positions.Length ? Math.Max(0, positions[partition]) : 0;
+            if (lastEligible >= position)
+            {
+                (passed ??= new List<string>()).Add(consumer.ToString());
+            }
+        }
+
+        if (passed is null)
+        {
+            return;
+        }
+
+        var trimmedThrough = new long[partitions];
+        Array.Fill(trimmedThrough, -1L);
+        trimmedThrough[partition] = lastEligible;
+        var hold = GrainFactory!.GetGrain<IWalPurgeHoldGrain>(treeName);
+        foreach (var consumer in passed)
+        {
+            await hold.AddAsync(consumer, trimmedThrough).ConfigureAwait(false);
+        }
+
+        services.GetService<ILogger<LatticeWalGc>>()?.LogWarning(
+            "WAL GC on tree {Tree} trims partition {Partition} through offset {Offset} past the unshipped position of "
+            + "{Consumers}; saga decision purges on the tree are held until each re-seeds.",
+            treeName, partition, lastEligible, string.Join(", ", passed));
     }
 }

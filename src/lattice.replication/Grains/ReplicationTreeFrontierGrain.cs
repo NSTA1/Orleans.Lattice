@@ -113,6 +113,18 @@ internal sealed class ReplicationTreeFrontierGrain(
     }
 
     /// <inheritdoc />
+    public async Task OnLineageChangingAsync(Guid? nextLineage, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await RestampAsync(nextLineage is null ? Guid.Empty : Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
+        state.State.ObservedRegistryLineage = nextLineage;
+        state.State.Unsettled = false;
+        _settledThisActivation = true;
+        await WriteStateAsync().ConfigureAwait(true);
+        PublishModes();
+    }
+
+    /// <inheritdoc />
     public async Task<bool> PinAsync(
         Guid epoch,
         IReadOnlyDictionary<string, HybridLogicalClock> sourceLowWatermarks,

@@ -44,6 +44,12 @@ internal sealed partial class ReplicationShipperGrain : IWalOffsetConsumer
     /// <inheritdoc />
     public Task<long[]?> GetDurableReadPositionsAsync(string walTreeId)
     {
+        if (state.State.DetachedFromLog)
+        {
+            // The peer was removed from the topology: hold nothing.
+            return Task.FromResult<long[]?>(null);
+        }
+
         var snapshot = _readPositions;
         if (snapshot is null)
         {
@@ -80,6 +86,11 @@ internal sealed partial class ReplicationShipperGrain : IWalOffsetConsumer
     private async Task EnsureReadPositionsPublishedAsync()
     {
         var log = _walTreeId;
+        if (state.State.DetachedFromLog)
+        {
+            return;
+        }
+
         if (!string.Equals(_registeredReadLog, log, StringComparison.Ordinal))
         {
             var previous = _registeredReadLog;

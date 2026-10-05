@@ -10,7 +10,7 @@ SUMMARY: a re-activated source ignores the durable fence, so a guarded flip stil
 PERTURBS: ShardCrash
 
 --- FIND
-    /\ afence' = (dfence /\ ~lapsed)
+    /\ afence' = (dfence # NoMove /\ ~lapsed)
 --- REPLACE
 \* MUTATION: the new activation ignores the durable fence.
     /\ afence' = FALSE

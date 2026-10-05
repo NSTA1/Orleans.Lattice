@@ -24,7 +24,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `WalDurability` | 9 | 4 | 14 | 22 | 26 | 91,389 |
-| `WalMove` | 5 | 2 | 13 | 17 | 18 | 1,617 |
+| `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
 `Stutter`. `Behaviour rows` counts the action rows of the module's refinement note,
@@ -38,6 +38,11 @@ invariant and both action properties with a budget of two faults instead of one:
 445,516 distinct states to depth 32. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
+`WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
+with its own coordinator, so one can take over the other's lapsed fence while the
+other is still copying. It checks every property, safety and liveness: 16,225
+distinct states to depth 21, about fifteen seconds on two workers.
+
 ## Files
 
 | File | What it is |
@@ -47,7 +52,7 @@ because at two the full configuration takes about ten minutes, past the TLC budg
 | [`mutations/`](mutations/) | One or more deliberate defects per property and per action of `WalDurability`. |
 | [`Refinement.md`](Refinement.md) | `WalDurability` mapped to production: variables, actions, properties, detectors, classification and gaps. |
 | `WalMove.tla` / `.cfg` / `.manifest.json` | The move module, its TLC model and its manifest. |
-| [`move-mutations/`](move-mutations/) | `WalMove`'s mutation catalogue. |
+| `WalMove.TwoMoves.cfg` | The move module with two moves contending for the stream, checked with every property. |
 | [`MoveRefinement.md`](MoveRefinement.md) | `WalMove` mapped to production. |
 
 ## Properties checked
@@ -120,7 +125,9 @@ the reproducing mutation.
 
 It covers the leaf lifecycle's durability logic on one partition shared by two
 leaves - with two faults per behaviour for safety and one for liveness - and the
-move protocol with one move, one shard crash and one coordinator crash. It does NOT
+move protocol with one shard crash and one coordinator crash, for one move and, in the
+`TwoMoves` variant, for two moves contending for the stream (a move may take over
+another's lapsed fence). It does NOT
 cover:
 
 - multi-partition checkpoint arrays;
@@ -144,7 +151,8 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -config WalMove.cfg WalMove.tla
 Pass `-metadir` with a directory outside the repository, or delete the `states/`
 directory TLC leaves beside the module. On two workers `WalDurability` takes about
 two minutes, because it checks two liveness properties over the full state graph;
-its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds.
+its `TwoFaults` variant takes about forty seconds; `WalMove` takes seconds, and its
+`TwoMoves` variant about fifteen.
 
 ## The Coyote companion
 
