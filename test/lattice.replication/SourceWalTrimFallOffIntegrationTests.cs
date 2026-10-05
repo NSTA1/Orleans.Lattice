@@ -164,6 +164,11 @@ public sealed class SourceWalTrimFallOffIntegrationTests
         await TestPoll.UntilAsync(
             async () =>
             {
+                // A leaf that has not yet checkpointed holds its partitions with a
+                // durable block pin, against the retention ceiling too (issue
+                // #4622), so the source leaves make their writes durable first:
+                // a graceful deactivation checkpoints and captures.
+                await DeactivateSourceLeavesAsync();
                 await Task.Delay(TimeSpan.FromMilliseconds(25));
                 latest = await gc.RunOnceAsync(Tree, CancellationToken.None);
                 return latest.EntriesTrimmed > 0;
@@ -173,6 +178,38 @@ public sealed class SourceWalTrimFallOffIntegrationTests
             PollCadence);
 
         Assert.That(latest.EntriesTrimmed, Is.GreaterThan(0), "the trim pass must remove entries the shipper has not sent");
+    }
+
+    private async Task DeactivateSourceLeavesAsync()
+    {
+        var pinKeys = WalMaterialiserPinRouting.EnumerateReadKeys(
+            Tree,
+            WalMaterialiserPinRouting.ResolveShardCount(
+                SiloServices(_siteA).GetService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>()));
+        foreach (var pinKey in pinKeys)
+        {
+            foreach (var (consumerId, pin) in await _siteA.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetPinsAsync())
+            {
+                // A per-partition pin id ends in "_<partition>"; a single-partition
+                // log's pin id ends at the leaf guid.
+                var start = consumerId.IndexOf("bplusleaf/", StringComparison.Ordinal);
+                var end = consumerId.LastIndexOf('_');
+                if (end <= start)
+                {
+                    end = consumerId.Length;
+                }
+
+                if (pin <= HybridLogicalClock.Zero
+                    && start >= 0 && end > start + 10
+                    && Guid.TryParseExact(consumerId[(start + 10)..end], "N", out var leaf))
+                {
+                    await _siteA.Client.GetGrain<Orleans.Lattice.BPlusTree.IBPlusLeafGrain>(leaf).ForceDeactivateAsync();
+                }
+            }
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(250));
+        await _siteA.Client.GetGrain<ILattice>(Tree).GetAsync("stable");
     }
 
     private static IServiceProvider SiloServices(TestCluster cluster) =>

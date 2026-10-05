@@ -132,6 +132,10 @@ public sealed class SingleClusterWalDurabilityTests
         {
             await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
         }
+        // Issue #4622: a leaf that has never checkpointed holds its partitions with
+        // a durable block pin, against the retention ceiling too, so the leaves
+        // make their writes durable first.
+        await CheckpointLeavesAsync(treeId, tree, 10);
 
         var sp = RequireSiloServices();
         var provider = sp.GetRequiredService<IWalStorageProvider>();
@@ -349,6 +353,9 @@ public sealed class SingleClusterWalDurabilityTests
         {
             await tree.SetAsync($"k{i:D4}", Bytes($"v{i}"));
         }
+        // Issue #4622: leaves that have never checkpointed hold their partitions
+        // against every trim arm, so they make their writes durable first.
+        await CheckpointLeavesAsync(treeId, tree, 10);
 
         var sp = RequireSiloServices();
         var registry = sp.GetRequiredService<IWalCursorRegistry>();
@@ -536,6 +543,68 @@ public sealed class SingleClusterWalDurabilityTests
     }
 
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);
+
+    /// <summary>
+    /// Deactivates the tree's leaves and reads every written key back until each
+    /// partition holding entries is free of block pins, so a pass has writes the
+    /// leaves have made durable to trim (issue #4622).
+    /// </summary>
+    private async Task CheckpointLeavesAsync(string treeId, ILattice tree, int keyCount)
+    {
+        var sp = RequireSiloServices();
+        var pinKeys = WalMaterialiserPinRouting.EnumerateReadKeys(
+            treeId,
+            WalMaterialiserPinRouting.ResolveShardCount(sp.GetService<IOptionsMonitor<LatticeOptions>>()));
+        var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(120).TotalMilliseconds;
+        while (true)
+        {
+            var pins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+            foreach (var pinKey in pinKeys)
+            {
+                foreach (var (consumerId, pin) in await _cluster.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetPinsAsync())
+                {
+                    pins[consumerId] = pin;
+                }
+            }
+
+            // At least one partition holding entries must be free of block pins, so
+            // a pass has something it may legitimately trim. Under load a leaf's
+            // snapshot capture can lag, which keeps its own data partition held.
+            var held = new HashSet<int>(pins
+                .Where(static pin => pin.Value <= HybridLogicalClock.Zero)
+                .Select(static pin => int.Parse(pin.Key[(pin.Key.LastIndexOf('_') + 1)..], System.Globalization.CultureInfo.InvariantCulture)));
+            var provider = sp.GetRequiredService<IWalStorageProvider>();
+            var partitions = (await sp.GetRequiredService<LatticeOptionsResolver>().ResolveAsync(treeId)).WalPartitions;
+            var free = false;
+            for (var partition = 0; partition < partitions && !free; partition++)
+            {
+                free = !held.Contains(partition)
+                    && await provider.GetHighestOffsetAsync(treeId, partition, CancellationToken.None) >= 0;
+            }
+
+            if (pins.Count > 0 && free)
+            {
+                return;
+            }
+
+            Assert.That(Environment.TickCount64, Is.LessThan(deadline), "the tree's leaves did not checkpoint within the deadline: " + string.Join(", ", pins.Select(p => p.Key + "@" + p.Value)));
+            foreach (var consumerId in pins.Keys)
+            {
+                var start = consumerId.IndexOf("bplusleaf/", StringComparison.Ordinal);
+                var end = consumerId.LastIndexOf('_');
+                if (start >= 0 && end > start + 10 && Guid.TryParseExact(consumerId[(start + 10)..end], "N", out var leaf))
+                {
+                    await _cluster.Client.GetGrain<IBPlusLeafGrain>(leaf).ForceDeactivateAsync();
+                }
+            }
+
+            await Task.Delay(250);
+            for (var i = 0; i < keyCount; i++)
+            {
+                await tree.GetAsync($"k{i:D4}");
+            }
+        }
+    }
 
     private sealed class SiloConfigurator : ISiloConfigurator
     {

@@ -406,7 +406,12 @@ public sealed class LatticeWalGc(
         //
         // Unattributable pins fail closed - see ApplyDurableMaterialiserFloorAsync.
         HybridLogicalClock? PartitionCursor(int partition) =>
-            floorResult.IsPartitionBlocked(partition) ? null : floorResult.Floor;
+            floorResult.IsPartitionHeldByBlockPin(partition) ? null : floorResult.Floor;
+
+        // The retention ceiling a given WAL partition trims against: none where a
+        // standing block pin holds it (issue #4622).
+        HybridLogicalClock? PartitionTtlCeiling(int partition) =>
+            floorResult.IsPartitionHeldByBlockPin(partition) ? null : ttlCeiling;
 
         // The offset floor a given WAL partition trims against (issue #3178).
         //
@@ -458,7 +463,7 @@ public sealed class LatticeWalGc(
         WalGcOffsetAdmission? PartitionOffsetAdmission(int partition)
             => PartitionOffsetFloor(partition) is { } floor
                 && floorResult.UncoveredCursorComputed
-                && !floorResult.IsPartitionBlocked(partition)
+                && !floorResult.IsPartitionHeldByBlockPin(partition)
                     ? new WalGcOffsetAdmission(floor, floorResult.UncoveredCursor)
                     : null;
 
@@ -701,7 +706,7 @@ public sealed class LatticeWalGc(
                     tenantTag);
             }
 
-            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), ttlCeiling, causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
+            var shardScan = await TrimShardAsync(partitionProvider, treeName, partition, PartitionCursor(partition), PartitionTtlCeiling(partition), causalStable, blockedFloor, partitionOffsetFloor, PartitionOffsetAdmission(partition), ConsumerOffsetFloor(partition), holdHasBudget, cancellationToken).ConfigureAwait(false);
             totalTrimmed += shardScan.EligibleCount;
             retainedBacklog |= IsRetentionStop(shardScan.StopReason);
             RecordTrimStop(treeName, partition, shardScan.StopReason);
@@ -1062,6 +1067,7 @@ public sealed class LatticeWalGc(
 
         var floor = registryMin;
         bool[]? blockedPartitions = null;
+        bool[]? zeroPinPartitions = null;
         var blockedCount = 0;
         string? blockingConsumerId = null;
         List<string>? blockingConsumerIds = null;
@@ -1069,6 +1075,25 @@ public sealed class LatticeWalGc(
 
         foreach (var (consumerId, pin) in pins)
         {
+            // A standing block pin holds its partition against every admitting arm,
+            // the retention ceiling included, whether or not the leaf is in the
+            // registry (issue #4622): a leaf that has never checkpointed replays from
+            // the "nothing applied" sentinel on a cold activation, so it cannot
+            // detect a trim it missed.
+            if (pin <= HybridLogicalClock.Zero
+                && (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId)))
+            {
+                zeroPinPartitions ??= new bool[Math.Max(1, partitions)];
+                if (TryResolvePinPartition(consumerId, partitions) is { } zeroPartition)
+                {
+                    zeroPinPartitions[zeroPartition] = true;
+                }
+                else
+                {
+                    Array.Fill(zeroPinPartitions, true);
+                }
+            }
+
             // A consumer present in the in-memory registry has a fresher
             // (>=) cursor already folded into registryMin; its durable pin
             // (possibly staler) must not raise the floor. "Present" means a
@@ -1263,14 +1288,15 @@ public sealed class LatticeWalGc(
         WalGcBlockedConsumerCensus.Record(treeName, blockingPopulation);
         if (populationGap is { } gap)
         {
-            return gap;
+            return gap with { ZeroPinPartitions = zeroPinPartitions };
         }
         if (blockedCount >= partitions
             && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
         {
             // Preserve the former short-circuit's trim/report shape exactly.
             return new DurableMaterialiserFloor(
-                null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false);
+                null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false,
+                ZeroPinPartitions: zeroPinPartitions);
         }
         return new DurableMaterialiserFloor(
             floor,
@@ -1279,7 +1305,8 @@ public sealed class LatticeWalGc(
             blockingConsumerId,
             blockingConsumerIds,
             uncovered,
-            true);
+            true,
+            ZeroPinPartitions: zeroPinPartitions);
     }
 
     /// <summary>
@@ -1465,7 +1492,8 @@ public sealed class LatticeWalGc(
         HybridLogicalClock? UncoveredCursor = null,
         bool UncoveredCursorComputed = false,
         bool CensusUnavailable = false,
-        bool PinCensusUnreadable = false)
+        bool PinCensusUnreadable = false,
+        bool[]? ZeroPinPartitions = null)
     {
         /// <summary>
         /// The fail-closed floor for a pass on which the durable pin census
@@ -1503,6 +1531,20 @@ public sealed class LatticeWalGc(
             => BlockedPartitions is { } blocked
                 && (uint)partition < (uint)blocked.Length
                 && blocked[partition];
+
+        /// <summary>
+        /// Whether a standing durable block pin - a <see cref="HybridLogicalClock.Zero"/>
+        /// frontier the durable offset floor does not cover, that is a data-bearing leaf
+        /// that has never checkpointed - holds <paramref name="partition"/>, whether or
+        /// not that leaf is in the in-memory registry (issue #4622). Such a partition
+        /// admits nothing: not by cursor, not by offset, and not by the retention
+        /// ceiling, because the leaf could not detect a trim it missed.
+        /// </summary>
+        public bool IsPartitionHeldByBlockPin(int partition)
+            => IsPartitionBlocked(partition)
+                || (ZeroPinPartitions is { } zero
+                    && (uint)partition < (uint)zero.Length
+                    && zero[partition]);
     }
 
     /// <summary>
