@@ -817,6 +817,20 @@ if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
 }
 ```
 
+### Source lineage gate
+
+When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
+
+From then on, the push path refuses a batch from that source in two cases:
+- the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
+- the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
+
+A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
+- A sender whose binding is stale rebinds and never re-sends the old log.
+- A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
+
+The gate refuses more than the reconcile strictly needs, because a lineage cannot be ordered and a refusal only costs a re-seed. A batch with no stamp (a sender that predates the header), or from a source this tree never drained, applies as before. A failure to read the record refuses the batch for now without asking for a re-seed.
+
 ### Sample usage
 
 ```csharp verify

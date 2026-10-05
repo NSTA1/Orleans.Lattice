@@ -324,4 +324,7 @@ public static class ReplicationTypeAliases
     internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
     internal const string SourceFrontierShipperState = "olr.fw";
     internal const string SourceFrontierPrepare = "olr.fx";
+
+    // A receiver's record of the source lineage it last drained (#4673).
+    internal const string ReplicationDrainedLineage = "olr.dn";
 }

@@ -113,6 +113,17 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<bool> IsReseedPendingAsync(string sourceClusterId);
 
     /// <summary>
+    /// The source lineage of the last whole-tree export from
+    /// <paramref name="sourceClusterId"/> this receiver began draining, with the
+    /// tree frontier epoch it began in, or <see langword="null"/> when none was
+    /// recorded (issue #4673). A pushed batch the source stamped with another
+    /// lineage, or arriving once the frontier epoch has moved on, is refused.
+    /// </summary>
+    /// <param name="sourceClusterId">The sender's cluster id.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId);
+
+    /// <summary>
     /// Returns the export epoch of the last full bootstrap from
     /// <paramref name="sourceClusterId"/> that reached
     /// <see cref="LatticeBootstrapState.LiveIncremental"/>, or

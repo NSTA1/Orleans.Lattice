@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ReapedSourceDeleteReconcileIntegrationTests
+public partial class ReapedSourceDeleteReconcileIntegrationTests
 {
     private const string SiteAClusterId = "rsdr-site-a";
     private const string SiteBClusterId = "rsdr-site-b";

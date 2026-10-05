@@ -109,6 +109,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#ApplyDuration	unresolved	re
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyFifoViolations	unresolved	reason=single-value domain tree -> [treeId]; likely under-resolved, not a constant
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyLag	unresolved	reason=dimension (unread-tag-argument:ViewTenantTag): tag argument(s) ViewTenantTag are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice.replication/LatticeReplicationMetrics.cs#ApplyParallelRuns	unresolved	reason=constant tag tenant -> [_platform_]; read from a static member, enrolment not yet chosen
+src/lattice.replication/LatticeReplicationMetrics.cs#ApplySourceLineageRefused	unresolved	reason=dimension reason: no declaration found for reason
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapBytesReceived	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapDuration	unresolved	reason=dimension outcome: no declaration found for outcome
 src/lattice.replication/LatticeReplicationMetrics.cs#BootstrapEntriesReceived	open	open=origin, tenant, tree; open dimension: tree carries a runtime identifier (treeName)

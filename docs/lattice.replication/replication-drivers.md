@@ -400,8 +400,9 @@ new alias is durably persisted and **only** when the effective physical id
 actually changed. The replication package registers an observer that fans the
 `TreeAliasChange` to the affected per-`(tree, peer)` shipper grains via
 `IReplicationShipperGrain.NotifySourceIdentityChangedAsync`, which rebinds
-immediately - the new physical id travels in the notification itself, so the
-rebind reads the registry **zero** times. Because the observer runs on the
+immediately - the new physical id travels in the notification itself, and the
+rebind reads only the tree's registry row, once, for the lineage the new
+binding is stamped with (see [Source lineage stamp](#source-lineage-stamp)). Because the observer runs on the
 source silo as an ordinary grain call, it reaches the shipper even while the
 inter-site delivery edge is partitioned, so the rebind is applied the moment
 the swap commits rather than after the edge heals.
@@ -470,6 +471,24 @@ the shipper's options instance or effective dictionary id changes), not on
 every pump tick. Together with the source-identity rebind this removes
 steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
+
+### Source lineage stamp
+
+A restore, revert, purge and recreate, or alias move re-stamps the source tree's registry lineage (`TreeRegistryEntry.Lineage`, #4537). A batch the source read before that re-stamp can still reach a peer afterwards, as a push already in flight or a retry. If the peer has meanwhile drained the new lineage, the batch plants a source-origin row the new lineage never held, and the peer's next delete reconcile, aligned with the new lineage, would delete it on the source's behalf although the source never deleted it ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). So:
+
+- **Every push is stamped.** It carries the lineage the shipper's binding was read under (`ReplicationBatch.SourceLineage`, sent as the `x-lattice-replication-source-lineage` call header). The shipper reads the physical id and the lineage from one registry row, which an alias move re-stamps in the same write, so the pair is consistent.
+  - The stamp is `Guid.Empty` while the lineage is unknown, which happens briefly when a notified rebind finds the registry already moved on.
+  - There is no stamp when the registry tracks no lineage for the tree.
+  - A liveness probe carries no records and is not stamped.
+- **A binding whose lineage changes forces a gap.** The shipper first reads each partition's next sequence of the newly bound log as a boundary, then takes the peer off the log ([Forced gap](#forced-gap-a-peer-taken-off-the-log)).
+  - Every record below the boundary was appended before the re-seed marker, so the export that settles the re-seed carries it.
+  - The shipper consumes such a record without shipping it for as long as the binding holds, the re-seed rewind included, so the rewind cannot loop on it.
+  - This covers a purge and recreate too, whose old-lineage records stay in the same log. No old-lineage write lands after the re-stamp, so they are all below the boundary.
+  - A move of the physical log under an unchanged lineage, such as a resize, is no gap and keeps the replay it always had.
+- **A refusal re-resolves the binding.** A peer refuses a batch stamped with a lineage it did not drain (see [Snapshot bootstrap](snapshot-bootstrap.md#source-lineage-gate)). The ack reports `ReplicationAck.SourceLineageRefused` and the cursor holds. At the end of the tick the shipper resolves its binding again:
+  - A stale binding rebinds, and never re-sends the old log.
+  - A current, known binding means the peer drained another lineage, so the shipper takes the peer off the log, and the re-seed drains the current lineage.
+  - An unknown binding only backs off until the next resolve.
 
 ### Doorbell
 

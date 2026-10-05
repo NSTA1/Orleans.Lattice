@@ -259,4 +259,35 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(21)]
     public bool ReseedSpansPreHoldSilo { get; set; }
+
+    /// <summary>
+    /// The source tree lineage the shipper's binding was resolved under (issue
+    /// #4673), stamped on every push. <see langword="null"/> when the source
+    /// registry tracks no lineage for the tree. Meaningful only while
+    /// <see cref="BoundSourceLineageKnown"/>.
+    /// </summary>
+    [Id(22)]
+    public Guid? BoundSourceLineage { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="BoundSourceLineage"/> describes the current binding
+    /// (issue #4673). While it does not, pushes are stamped
+    /// <see cref="Guid.Empty"/>, which a receiver that drained the source
+    /// refuses. A state written before this slot decodes to
+    /// <see langword="false"/>, so the first resolve records the lineage without
+    /// treating it as a change.
+    /// </summary>
+    [Id(23)]
+    public bool BoundSourceLineageKnown { get; set; }
+
+    /// <summary>
+    /// Per partition, the bound log's next sequence when the binding's lineage
+    /// last changed (issue #4673). Every record below it was appended before the
+    /// re-seed marker that change set, so the settling export carries it, and
+    /// it is consumed without shipping for as long as the binding holds. Empty
+    /// when no lineage change is in force; cleared on a rebind to another log.
+    /// A state written before this slot decodes to an empty map.
+    /// </summary>
+    [Id(24)]
+    public Dictionary<int, long> SourceLineageBoundary { get; set; } = new();
 }
