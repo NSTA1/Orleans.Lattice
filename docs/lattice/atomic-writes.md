@@ -1479,6 +1479,18 @@ tag-index flag-membership rows, which use the same per-entry carry: an
 active-active membership add on each cluster converges to the union
 through the atomic (prepared) path, not only the eventual accessor path.
 
+A key whose committed value reaches a leaf as a cross-migration backstop
+(a leaf split moved the key away between the prepare and the terminal, or
+the saga's coordinator re-delivers committed values to a leaf that holds no
+prepared bucket for it) has no delta to fold there. On a tree whose merge
+mode resolves to a CRDT, that leaf **joins** the staged merged state into
+the key's current state through the primitive's state merge and stores the
+result at a stamp above the row, durably, so a mutation acknowledged on the
+key after the stage-time snapshot survives the terminal. The join keeps
+exactly what the delta fold keeps: both are pointwise per replica (or per
+dot), so concurrent writes from different replicas accumulate (issue
+[#4611](https://github.com/NSTA1/Orleans.Lattice/issues/4611)).
+
 Value-only sagas - a plain `Set(key, bytes)` slice with no staged CRDT
 delta - stay on the last-writer-wins prepared path unchanged: the highest
 HLC wins, because there is no typed delta to fold.
