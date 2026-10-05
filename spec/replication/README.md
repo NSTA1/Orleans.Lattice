@@ -114,21 +114,24 @@ can carry every delete the source ever made. Production reaps a tombstone after
 a trim that did not wait for it. A delete that is both behind the trim point and
 reaped then reaches the receiver by no path: not the stream, not the export.
 
-`ReplicationReBootstrap.tla` checks the design of #4537, a reconcile in the
-re-bootstrap's drain, over one key and two clusters. Before the export opens,
-the receiver pre-captures each live entry whose origin is the source. A
-pre-captured key the export does not carry is deleted, attributed to the source
-at the captured HLC. The reconcile fabricates a write, so it is gated on every
-other way a key can be missing from an export: the export's scope, a reshard
-during the scan, and a restore, purge or rebind since the receiver's copy was
-aligned with the source. `ReconcileDeletesOnlyDeleted` checks that every
+`ReplicationReBootstrap.tla` checks the reconcile in the re-bootstrap's
+drain, over one key and two clusters. A live source-origin entry the receiver
+pre-captured at export open, and the export does not carry, is deleted at the
+captured HLC when the receiver is aligned with the source's lineage (#4537,
+built by #4647). A row of another origin the export does not carry is deleted
+when its HLC is below the source's low watermark for that origin at open
+(#4549). The reconcile fabricates a write, so it is gated on every other way a
+key can be missing from an export: the export's scope, a reshard, resize or
+soft delete during the scan, and a restore, purge or rebind since the
+receiver's copy was aligned. `ReconcileDeletesOnlyDeleted` checks that every
 fabricated tombstone is dominated by a delete the source really authored.
-`EventualConvergenceReapedDeleteNotReconciled` is current production, with no
-reconcile.
 
-A key the receiver holds under another origin cannot be reconciled: the
-receiver cannot prove the source held that value. The module states that
-residual exactly, as `Residual`, and #4549 owns it.
+The module also checks the reap guard (#4615), the refusal of a batch read
+under a source lineage the receiver has left (#4673), the re-seed a receiver
+restore and a detach force, and the source-restore contract: a unilateral
+source restore never fabricates a delete, peers may diverge after one, and a
+coordinated restore converges them. `EventualConvergence` holds on every
+behaviour with no unilateral source restore, with no other carve-out.
 
 ## Production defects this module found
 
@@ -178,11 +181,14 @@ fixes.
   in the re-bootstrap companion).
 - #4586 - the causal dependency check compares against a high-water mark that
   is not downward-closed; no property checks causal order until its fix.
-- #4537 - an in-place re-bootstrap cannot reconcile a delete whose source
-  tombstone was reaped (`EventualConvergenceReapedDeleteNotReconciled`, in
-  the re-bootstrap companion).
-- #4549 - the residual of #4537: a reaped delete of a key the receiver holds
-  under another origin.
+- #4549 - a reaped delete of a key the receiver holds under another origin
+  is not reconciled (`EventualConvergenceForeignRowNotReconciled`, in the
+  re-bootstrap companion). #4537, the source-origin half, was fixed by #4647
+  (`EventualConvergenceReapedDeleteNotReconciled`).
+- #4673 - a receiver aligned with a new source lineage applies a batch read
+  under the old one, which a later pass reconciles as a delete
+  (`ReconcileDeletesOnlyDeletedStaleLineageApplied`, in the re-bootstrap
+  companion).
 [`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md#territory-owned-by-other-open-issues)
 marks the rows they touch.
 
@@ -205,7 +211,7 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 (1,604,442 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
-held over 56,135 distinct states (163,127 generated) at a depth of 17.
+held over 378,636 distinct states (1,052,531 generated) at a depth of 18.
 
 ## Counts
 
@@ -220,4 +226,4 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 4 | 3 | 14 | 22 | 19 | 308,258 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
-| `ReplicationReBootstrap` | 2 | 1 | 10 | 12 | 11 | 56,135 |
+| `ReplicationReBootstrap` | 2 | 1 | 16 | 26 | 17 | 378,636 |

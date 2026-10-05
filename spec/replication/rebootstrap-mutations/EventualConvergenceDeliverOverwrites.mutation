@@ -7,8 +7,8 @@ SUMMARY: the receiver installs a delivered write instead of merging it, so an ol
 PERTURBS: Deliver
 
 --- FIND
-       IN /\ reg' = [reg EXCEPT ![e[2]] = Merge(@, AsReg(w))]
+          ELSE /\ reg' = [reg EXCEPT ![e[2]] = Merge(@, AsReg(w))]
 --- REPLACE
 \* MUTATION: no merge.
-       IN /\ reg' = [reg EXCEPT ![e[2]] = AsReg(w)]
+          ELSE /\ reg' = [reg EXCEPT ![e[2]] = AsReg(w)]
 --- END

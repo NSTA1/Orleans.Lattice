@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A resize swaps in a new
+# physical tree with the same content. If the receiver compares its aligned
+# generation with the physical tree, every reconcile after a resize skips for ever.
+MODULE: EventualConvergenceAlignedComparesPhysicalTree
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the aligned generation includes the physical tree, so after a resize the reconcile never runs
+PERTURBS: EndExport
+
+--- FIND
+           okSrc == orphan /\ stable /\ ex.gen0 = aligned
+--- REPLACE
+\* MUTATION: the aligned comparison also requires the original physical tree.
+           okSrc == orphan /\ stable /\ ex.gen0 = aligned /\ ex.phys0 = 0
+--- END
