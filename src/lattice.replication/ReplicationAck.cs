@@ -230,6 +230,22 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(8)] public long? BootstrapEpoch { get; init; }
+
+    /// <summary>
+    /// The receiver's current lineage of the batch's tree (issue #4586): an
+    /// identity re-stamped whenever the tree's contents are replaced - a
+    /// restore, revert, alias swap or purge and recreate. A sender tags the
+    /// applied low watermark it ships with the lineage its covering
+    /// acknowledgements were taken under, and treats a change as a forced gap:
+    /// it re-seeds the peer, because the new contents may lack writes it
+    /// already shipped. <see langword="null"/> when the receiver tracks no
+    /// lineage for the tree, in which case the sender ships no watermark.
+    /// <para>
+    /// Strictly additive on the wire: receivers built before this slot omit
+    /// it.
+    /// </para>
+    /// </summary>
+    [Id(9)] public Guid? ReceiverLineage { get; init; }
 }
 
 /// <summary>
