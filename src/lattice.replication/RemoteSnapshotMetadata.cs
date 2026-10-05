@@ -94,8 +94,9 @@ public readonly record struct RemoteSnapshotMetadata
     [Id(5)] public SnapshotSourceGeneration? OpenGeneration { get; init; }
 
     /// <summary>
-    /// The source tree's applied frontier read when the export opened, or
-    /// <see langword="null"/> from a sender that predates it.
+    /// The source's applied frontier for the tree as read when the export
+    /// opened (issue #4586 part 2b); see <c>SnapshotStream.OpenFrontier</c>.
+    /// A receiver that predates the slot ignores it.
     /// </summary>
     [Id(6)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
 }

@@ -398,6 +398,72 @@ public sealed class ReplicationTreeFrontierGrainTests
     }
 
     [Test]
+    public async Task An_origin_is_durable_from_its_first_push()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        var writes = h.State.WriteCount;
+
+        await grain.ObserveAsync(OriginB, shipped: null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(h.State.WriteCount, Is.GreaterThan(writes), "a forgotten origin would vanish from the reap gate's view");
+            Assert.That(h.State.State.Origins.ContainsKey(OriginB), Is.True);
+        });
+    }
+
+    [Test]
+    public async Task Each_pin_replaces_the_writes_the_previous_export_lacked()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        var epoch = (await grain.GetAsync(CancellationToken.None)).Epoch;
+        var none = new Dictionary<string, HybridLogicalClock>();
+
+        await grain.PinAsync(epoch, none, new Dictionary<string, HybridLogicalClock[]> { [OriginA] = [Hlc(12)] }, CancellationToken.None);
+        var afterFirst = await h.Origin(OriginA).GetHeldForTreeAsync(Tree, CancellationToken.None);
+        await grain.PinAsync(epoch, none, new Dictionary<string, HybridLogicalClock[]>(), CancellationToken.None);
+        var afterSecond = await h.Origin(OriginA).GetHeldForTreeAsync(Tree, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterFirst, Is.EqualTo(new[] { Hlc(12) }));
+            Assert.That(afterSecond, Is.Empty, "an export that held nothing clears the last one's list");
+            Assert.That(h.State.State.ExportHeldOrigins, Is.Empty);
+        });
+    }
+
+    [Test]
+    public async Task An_accepted_watermark_drops_the_export_held_writes_below_it()
+    {
+        var h = new Harness(RegistryLineage);
+        var grain = h.Activate();
+        var epoch = await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        await grain.PinAsync(
+            epoch,
+            new Dictionary<string, HybridLogicalClock>(),
+            new Dictionary<string, HybridLogicalClock[]> { [OriginA] = [Hlc(12), Hlc(40)] },
+            CancellationToken.None);
+
+        await grain.ObserveAsync(OriginA, Shipped(epoch, 20, 20), CancellationToken.None);
+        var partly = await h.Origin(OriginA).GetHeldForTreeAsync(Tree, CancellationToken.None);
+        var stillTracked = h.State.State.ExportHeldOrigins.Contains(OriginA);
+        await grain.ObserveAsync(OriginA, Shipped(epoch, 50, 50), CancellationToken.None);
+        var cleared = await h.Origin(OriginA).GetHeldForTreeAsync(Tree, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(partly, Is.EqualTo(new[] { Hlc(40) }), "acknowledged here in this epoch, so no longer missing");
+            Assert.That(stillTracked, Is.True);
+            Assert.That(cleared, Is.Empty);
+            Assert.That(h.State.State.ExportHeldOrigins, Is.Empty, "nothing left to drop, so no further calls");
+        });
+    }
+
+    [Test]
     public void Arguments_are_validated()
     {
         var grain = new Harness(RegistryLineage).Activate();

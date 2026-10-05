@@ -1078,6 +1078,18 @@ public static class LatticeReplicationMetrics
         Meter.CreateUpDownCounter<long>("orleans.lattice.replication.causal.frontier_origins", unit: "{origin}",
             description: "Receiver tree-frontier (tree, origin) pairs by mode: exact, pending, awaiting_reseed or degraded.");
 
+    /// <summary>
+    /// Counter of replacements of a replicated tree's contents - a restore,
+    /// revert or alias rebind - that happened outside a coordinated restore
+    /// (issue #4586), tagged by <see cref="TagTree"/>. After one, peers keep the
+    /// writes the replacement discarded and may diverge from this cluster, and a
+    /// peer write that depends on a discarded write may become visible there
+    /// without it. A coordinated restore converges them.
+    /// </summary>
+    public static readonly Counter<long> SourceRestoreUncoordinated =
+        Meter.CreateCounter<long>("orleans.lattice.replication.source_restore.uncoordinated", unit: "{restamp}",
+            description: "Replacements of a replicated tree's contents outside a coordinated restore, tagged by tree.");
+
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
     /// <summary>

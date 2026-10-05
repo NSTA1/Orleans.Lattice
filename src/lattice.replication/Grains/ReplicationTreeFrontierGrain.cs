@@ -55,9 +55,11 @@ internal sealed class ReplicationTreeFrontierGrain(
         if (!state.State.Origins.TryGetValue(originClusterId, out var entry))
         {
             // An origin first seen in this epoch has nothing in the tree a
-            // replacement could have lost, so it starts uncapped.
+            // replacement could have lost, so it starts uncapped. Durable at
+            // once: a forgotten origin would vanish from the reap gate's view.
             entry = new ReplicationTreeOriginFrontier();
             state.State.Origins[originClusterId] = entry;
+            await WriteStateAsync().ConfigureAwait(true);
         }
 
         if (shipped is not { } frontier
@@ -69,13 +71,17 @@ internal sealed class ReplicationTreeFrontierGrain(
             return epoch;
         }
 
+        var origin = grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId);
         if (frontier.TreeLowWatermark > entry.LowWatermark)
         {
             entry.LowWatermark = frontier.TreeLowWatermark;
             _watermarksDirty = true;
+            if (state.State.ExportHeldOrigins.Contains(originClusterId))
+            {
+                await DropExportHeldBelowAsync(origin, originClusterId, entry.LowWatermark, cancellationToken).ConfigureAwait(true);
+            }
         }
 
-        var origin = grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId);
         if (entry.Capped || !_capConfirmed.Contains(originClusterId))
         {
             // The origin re-covered the tree in this epoch: its aggregates from
@@ -144,16 +150,25 @@ internal sealed class ReplicationTreeFrontierGrain(
         }
 
         // The source's held writes are not in the export, so they are held here
-        // until applied. Published before any watermark that would pass them.
-        foreach (var (origin, held) in sourceHeld)
+        // until applied. Published before any watermark that would pass them,
+        // and replacing what the previous export published, so an origin the
+        // new export holds nothing for is cleared.
+        var heldOrigins = new HashSet<string>(state.State.ExportHeldOrigins, StringComparer.Ordinal);
+        heldOrigins.UnionWith(sourceHeld.Keys);
+        var stillHeld = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var origin in heldOrigins)
         {
+            var held = sourceHeld.TryGetValue(origin, out var identities) ? identities : [];
+            await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                .SetHeldAsync(ReplicationOriginFrontierGrain.ExportSource(TreeId), held, cancellationToken)
+                .ConfigureAwait(true);
             if (held.Length > 0)
             {
-                await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
-                    .SetHeldAsync(ReplicationOriginFrontierGrain.ExportSource(TreeId), held, cancellationToken)
-                    .ConfigureAwait(true);
+                stillHeld.Add(origin);
             }
         }
+
+        state.State.ExportHeldOrigins = stillHeld;
 
         // Every origin is installed, not only those the export lists: the tree
         // now reflects the source's contents, and an origin the export carries
@@ -338,6 +353,32 @@ internal sealed class ReplicationTreeFrontierGrain(
             // replace the contents.
             this.DeactivateOnIdle();
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Drops the export-held writes of <paramref name="originClusterId"/> below
+    /// its newly accepted watermark. Best effort: a held write left listed only
+    /// delays a dependent, and the next accepted watermark retries.
+    /// </summary>
+    private async Task DropExportHeldBelowAsync(
+        IReplicationOriginFrontierGrain origin,
+        string originClusterId,
+        HybridLogicalClock below,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var remaining = await origin.DropExportHeldBelowAsync(TreeId, below, cancellationToken).ConfigureAwait(true);
+            if (remaining == 0)
+            {
+                state.State.ExportHeldOrigins.Remove(originClusterId);
+                _watermarksDirty = true;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogDebug(ex, "Dropping the export-held writes of origin {Origin} for tree {Tree} failed; retried on its next watermark", originClusterId, TreeId);
         }
     }
 

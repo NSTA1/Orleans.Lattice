@@ -40,8 +40,8 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
     private static Func<Task>? _onDrainStarted;
 
     /// <summary>
-    /// While set, supplies the source frontier an export carries at open when the
-    /// sender itself carries none (issue #4549), from the opening metadata.
+    /// While set, replaces the source frontier an export carries at open (issue
+    /// #4549), from the opening metadata, so a test controls the third origin's watermark.
     /// </summary>
     private static Func<RemoteSnapshotMetadata, SnapshotSourceFrontier?>? _openFrontier;
 
@@ -584,7 +584,7 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
             string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)
         {
             var metadata = await inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
-            if (_openFrontier is { } frontierFor && metadata.SourceFrontier is null)
+            if (_openFrontier is { } frontierFor)
             {
                 metadata = metadata with { SourceFrontier = frontierFor(metadata) };
             }

@@ -67,10 +67,21 @@ public sealed class SnapshotStream
     public SnapshotSourceGeneration? CloseGeneration { get; internal set; }
 
     /// <summary>
-    /// The source tree's applied frontier read when the export opened, after
-    /// <see cref="OpenGeneration"/>, or <see langword="null"/> when the sender
-    /// predates it. The receiver installs it as the bootstrap drop floor before
-    /// the drain (issue #4549).
+    /// The source's applied low watermarks and held writes for the tree (issue
+    /// #4586 part 2b), set when an unbounded export's entries have been
+    /// enumerated; <see langword="null"/> for a bounded or scoped export, or a
+    /// source that predates it.
+    /// </summary>
+    internal SnapshotSourceFrontier? SourceFrontier { get; set; }
+
+    /// <summary>
+    /// The same frontier as read when the export opened, before any entry is
+    /// enumerated (issue #4586 part 2b), so a receiver can put its bootstrap drop
+    /// floor in force before the drain applies anything. Its own-origin entry is
+    /// the source's WAL clock floor without the clamp below prepared rows, which
+    /// is known only at close: sound for dropping deliveries the export reflects
+    /// (a prepared row ships as prepared), not for meeting a causal dependency,
+    /// which uses <see cref="SourceFrontier"/>.
     /// </summary>
     internal SnapshotSourceFrontier? OpenFrontier { get; init; }
 

@@ -62,6 +62,25 @@ internal interface IReplicationOriginFrontierGrain : IGrainWithStringKey
     Task RecordLostAsync(IReadOnlyCollection<HybridLogicalClock> lost, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The origin's writes this receiver holds for <paramref name="treeId"/>
+    /// without having applied them - listed by the tree's causal-apply buffer or
+    /// dead-letter queue, or by the export it last installed - together with
+    /// every write marked lost (issue #4586 part 2b). A snapshot export carries
+    /// them, so its receiver does not treat them as reflected.
+    /// </summary>
+    Task<HybridLogicalClock[]> GetHeldForTreeAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Drops the writes <paramref name="treeId"/>'s last installed export lacked
+    /// that are stamped strictly below <paramref name="below"/>, and returns how
+    /// many remain (issue #4586 part 2b-2). The tree accepted this origin's
+    /// watermark <paramref name="below"/> in its current epoch, so every such
+    /// write was acknowledged here: applied, or listed by the tree's buffer or
+    /// dead-letter queue in its own right.
+    /// </summary>
+    Task<int> DropExportHeldBelowAsync(string treeId, HybridLogicalClock below, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Decides each dependency on this origin's write at an HLC in
     /// <paramref name="required"/> by <see cref="CausalFrontierCore.Decide"/>. A
     /// write a source still lists is confirmed with that source first, so a

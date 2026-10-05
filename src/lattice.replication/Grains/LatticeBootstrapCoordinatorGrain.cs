@@ -925,6 +925,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
         state.State.SnapshotExportEpoch = snapshot.ExportEpoch;
         state.State.FrontierEpoch = frontierEpoch;
+        state.State.ExportedFrontier = null;
         // Whether the receiver held no source-origin row before this import began
         // (issue #4537). Captured only while no entry of the import has been
         // applied: a resumed or re-driven drain of a partial import would see its
@@ -1112,6 +1113,14 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 floorInstalled,
                 cancellationToken)
             .ConfigureAwait(true);
+
+        // The export's applied frontier describes the imported contents only if
+        // the source generation held still under its lineage (#4586 part 2b).
+        // Persisted by the drain-end write; the handoff pins it.
+        state.State.ExportedFrontier = BootstrapFrontierInstall.Decide(
+            snapshot.OpenGeneration,
+            snapshot.CloseGeneration,
+            snapshot.SourceFrontier);
 
         // Settle the poisoned sagas this re-seed was asked for (#4591). A saga
         // the export shipped as prepared rows was still in flight at the source:
@@ -1790,16 +1799,17 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         // Install the export on the tree frontier (#4586 part 2b): the tree now
         // reflects the source's contents, which ends a re-seed the tree was
-        // awaiting after a replacement of its contents. The export carries no
-        // per-origin watermark yet, so every origin starts again from zero and
-        // rises on the watermarks its own sender ships from here on. Refused
+        // awaiting after a replacement of its contents. Each origin starts from
+        // the export's watermark for it - zero when the export carried none or
+        // its source generation moved - and rises on the watermarks its own
+        // sender ships from here on. Refused
         // when the contents were replaced during the drain; the replacement's
         // own forced gap brings a fresh bootstrap.
         var pinned = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
             .PinAsync(
                 state.State.FrontierEpoch,
-                EmptyFrontierWatermarks,
-                EmptyFrontierHeld,
+                state.State.ExportedFrontier?.LowWatermarks ?? EmptyFrontierWatermarks,
+                state.State.ExportedFrontier?.Held ?? EmptyFrontierHeld,
                 CancellationToken.None)
             .ConfigureAwait(true);
         if (!pinned)

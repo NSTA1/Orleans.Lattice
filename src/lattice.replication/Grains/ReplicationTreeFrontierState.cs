@@ -24,4 +24,12 @@ internal sealed class ReplicationTreeFrontierState
 
     /// <summary>Per origin that has pushed to the tree.</summary>
     [Id(3)] public Dictionary<string, ReplicationTreeOriginFrontier> Origins { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Origins whose writes the last installed export lacked because its source
+    /// held them (issue #4586 part 2b-2), published on each origin's frontier
+    /// under the tree's export source until the origin's own watermark passes
+    /// them.
+    /// </summary>
+    [Id(4)] public HashSet<string> ExportHeldOrigins { get; set; } = new(StringComparer.Ordinal);
 }

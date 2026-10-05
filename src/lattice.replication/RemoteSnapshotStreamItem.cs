@@ -36,4 +36,12 @@ public readonly record struct RemoteSnapshotStreamItem
     /// present the message is a trailer rather than a snapshot entry.
     /// </summary>
     [Id(1)] public SnapshotSourceGeneration? CloseGeneration { get; init; }
+
+    /// <summary>
+    /// The source's applied low watermarks and held writes for the tree (issue
+    /// #4586 part 2b), carried on the trailer beside
+    /// <see cref="CloseGeneration"/>. A receiver that predates the slot ignores
+    /// it.
+    /// </summary>
+    [Id(2)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
 }
