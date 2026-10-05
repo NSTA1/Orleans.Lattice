@@ -208,7 +208,12 @@ internal sealed class ReplicationTreeFrontierGrain(
         // Withdraw this activation's contribution; the next one republishes it.
         foreach (var (origin, mode) in _published)
         {
-            LatticeReplicationMetrics.CausalFrontierOrigins.Add(-1, ModeTags(origin, mode));
+            LatticeReplicationMetrics.CausalFrontierOrigins.Add(
+                -1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, origin),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagMode, mode),
+                LatticeTenantLabel.ForTree(TreeId));
         }
 
         _published.Clear();
@@ -336,21 +341,23 @@ internal sealed class ReplicationTreeFrontierGrain(
                     continue;
                 }
 
-                LatticeReplicationMetrics.CausalFrontierOrigins.Add(-1, ModeTags(origin, previous));
+                LatticeReplicationMetrics.CausalFrontierOrigins.Add(
+                -1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, origin),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagMode, previous),
+                LatticeTenantLabel.ForTree(TreeId));
             }
 
-            LatticeReplicationMetrics.CausalFrontierOrigins.Add(1, ModeTags(origin, mode));
+            LatticeReplicationMetrics.CausalFrontierOrigins.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, TreeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, origin),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagMode, mode),
+                LatticeTenantLabel.ForTree(TreeId));
             _published[origin] = mode;
         }
     }
-
-    private System.Diagnostics.TagList ModeTags(string origin, string mode) => new()
-    {
-        { LatticeReplicationMetrics.TagTree, TreeId },
-        { LatticeReplicationMetrics.TagOrigin, origin },
-        { LatticeReplicationMetrics.TagMode, mode },
-        LatticeTenantLabel.ForTree(TreeId),
-    };
 
     private async Task MaybePersistWatermarksAsync()
     {
