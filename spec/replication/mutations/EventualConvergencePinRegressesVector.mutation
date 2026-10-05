@@ -1,4 +1,4 @@
-# Pairs with EventualConvergence. Reproduces current production:
+# Pairs with EventualConvergence. Reproduces production before #4483 (#4464):
 # PinSnapshotAsync replaces the receiver's HWM vector with the frontier instead
 # of joining it. A receiver that had already applied an origin's writes above
 # the source's frontier goes backwards, and an entry parked on a dependency

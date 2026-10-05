@@ -120,7 +120,7 @@ internal sealed class ReplicationHighWaterMarkGrain(
         var raised = false;
         foreach (var (origin, clock) in frontier.Entries)
         {
-            if (clock > merged.GetClock(origin))
+            if (ReplicationReceiveDedup.AdvancesHighWaterMark(merged.GetClock(origin), clock))
             {
                 merged.Entries[origin] = clock;
                 raised = true;
