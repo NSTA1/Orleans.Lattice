@@ -239,6 +239,7 @@ public sealed class LatticeWalGc(
         // the early-return passes a reader is investigating.
         PrimeTrimStopSeries(treeName, partitions);
         WalGcBlockedConsumerCensus.Prime(treeName);
+        WalGcLeafPinHoldCensus.Prime(treeName, partitions);
 
         // Resolve a provider per partition from the durable WAL placement pin so
         // a partition that was moved to a named storage backend is sampled and
@@ -374,6 +375,26 @@ public sealed class LatticeWalGc(
             ttlCeiling = new HybridLogicalClock { WallClockTicks = ceilingTicks, Counter = int.MaxValue };
         }
 
+        if (floorResult.CensusUnavailable)
+        {
+            WalGcLeafPinHoldCensus.RecordUnknown(treeName, partitions);
+        }
+        else
+        {
+            var held = new bool[partitions];
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                // With a retention window configured, a partition whose ceiling a
+                // leaf pin holds below it is held too: retention is not being
+                // honoured on it.
+                held[partition] = ttlCeiling is { } configured
+                    ? floorResult.IsRetentionHeld(partition, configured)
+                    : floorResult.IsPartitionHeldByBlockPin(partition);
+            }
+
+            WalGcLeafPinHoldCensus.Record(treeName, held, _time.GetUtcNow());
+        }
+
         // Range-delete entries carry HybridLogicalClock.Zero by design;
         // a min cursor that is itself Zero (or unset) must not flush
         // them out the moment they land. The cursor branch is therefore
@@ -409,9 +430,10 @@ public sealed class LatticeWalGc(
             floorResult.IsPartitionHeldByBlockPin(partition) ? null : floorResult.Floor;
 
         // The retention ceiling a given WAL partition trims against: none where a
-        // standing block pin holds it (issue #4622).
+        // block pin, or any leaf pin the durable offset floor does not cover,
+        // holds it, because the ceiling never overtakes a leaf (issue #4622).
         HybridLogicalClock? PartitionTtlCeiling(int partition) =>
-            floorResult.IsPartitionHeldByBlockPin(partition) ? null : ttlCeiling;
+            floorResult.RetentionCeilingFor(partition, ttlCeiling);
 
         // The offset floor a given WAL partition trims against (issue #3178).
         //
@@ -1068,6 +1090,7 @@ public sealed class LatticeWalGc(
         var floor = registryMin;
         bool[]? blockedPartitions = null;
         bool[]? zeroPinPartitions = null;
+        HybridLogicalClock?[]? uncoveredPinFloors = null;
         var blockedCount = 0;
         string? blockingConsumerId = null;
         List<string>? blockingConsumerIds = null;
@@ -1075,6 +1098,33 @@ public sealed class LatticeWalGc(
 
         foreach (var (consumerId, pin) in pins)
         {
+            // The retention ceiling never overtakes a leaf (issue #4622). A leaf
+            // pin the durable offset floor does not cover caps its partition's
+            // retention ceiling at its frontier F. F was published by an empty
+            // release - the leaf held no row in the partition and had applied
+            // nothing there when its clock stood at F - so every entry the leaf
+            // has since written there is stamped above F, even though the pin
+            // store's max merge keeps the pin at (F, -1) once that write turns the
+            // partition into a Block. A Zero frontier is the block pin itself and
+            // holds the partition outright (below). A covered pin needs no cap:
+            // the offset-floor stop already bounds every arm, TTL included.
+            if (pin > HybridLogicalClock.Zero
+                && (coveredConsumerIds is null || !coveredConsumerIds.Contains(consumerId)))
+            {
+                uncoveredPinFloors ??= new HybridLogicalClock?[Math.Max(1, partitions)];
+                if (TryResolvePinPartition(consumerId, partitions) is { } uncoveredPartition)
+                {
+                    LowerUncoveredPinFloor(uncoveredPinFloors, uncoveredPartition, pin);
+                }
+                else
+                {
+                    for (var p = 0; p < uncoveredPinFloors.Length; p++)
+                    {
+                        LowerUncoveredPinFloor(uncoveredPinFloors, p, pin);
+                    }
+                }
+            }
+
             // A standing block pin holds its partition against every admitting arm,
             // the retention ceiling included, whether or not the leaf is in the
             // registry (issue #4622): a leaf that has never checkpointed replays from
@@ -1288,7 +1338,7 @@ public sealed class LatticeWalGc(
         WalGcBlockedConsumerCensus.Record(treeName, blockingPopulation);
         if (populationGap is { } gap)
         {
-            return gap with { ZeroPinPartitions = zeroPinPartitions };
+            return gap with { ZeroPinPartitions = zeroPinPartitions, UncoveredPinFloors = uncoveredPinFloors };
         }
         if (blockedCount >= partitions
             && blockingConsumerIds is { Count: >= MaxReportedBlockingConsumers })
@@ -1296,7 +1346,8 @@ public sealed class LatticeWalGc(
             // Preserve the former short-circuit's trim/report shape exactly.
             return new DurableMaterialiserFloor(
                 null, blockedPartitions, true, blockingConsumerId, blockingConsumerIds, null, false,
-                ZeroPinPartitions: zeroPinPartitions);
+                ZeroPinPartitions: zeroPinPartitions,
+                UncoveredPinFloors: uncoveredPinFloors);
         }
         return new DurableMaterialiserFloor(
             floor,
@@ -1306,7 +1357,8 @@ public sealed class LatticeWalGc(
             blockingConsumerIds,
             uncovered,
             true,
-            ZeroPinPartitions: zeroPinPartitions);
+            ZeroPinPartitions: zeroPinPartitions,
+            UncoveredPinFloors: uncoveredPinFloors);
     }
 
     /// <summary>
@@ -1358,6 +1410,18 @@ public sealed class LatticeWalGc(
 
         cache[partition] = empty ? (sbyte)1 : (sbyte)-1;
         return empty;
+    }
+
+    /// <summary>
+    /// Lowers <paramref name="floors"/>[<paramref name="partition"/>] to <paramref name="pin"/>
+    /// when it is unset or higher (issue #4622).
+    /// </summary>
+    private static void LowerUncoveredPinFloor(HybridLogicalClock?[] floors, int partition, HybridLogicalClock pin)
+    {
+        if ((uint)partition < (uint)floors.Length && (floors[partition] is not { } current || pin < current))
+        {
+            floors[partition] = pin;
+        }
     }
 
     /// <summary>
@@ -1493,7 +1557,8 @@ public sealed class LatticeWalGc(
         bool UncoveredCursorComputed = false,
         bool CensusUnavailable = false,
         bool PinCensusUnreadable = false,
-        bool[]? ZeroPinPartitions = null)
+        bool[]? ZeroPinPartitions = null,
+        HybridLogicalClock?[]? UncoveredPinFloors = null)
     {
         /// <summary>
         /// The fail-closed floor for a pass on which the durable pin census
@@ -1545,6 +1610,37 @@ public sealed class LatticeWalGc(
                 || (ZeroPinPartitions is { } zero
                     && (uint)partition < (uint)zero.Length
                     && zero[partition]);
+
+        /// <summary>
+        /// The retention ceiling <paramref name="partition"/> trims against, so that
+        /// it never overtakes a leaf (issue #4622): none where a block pin holds the
+        /// partition, and otherwise <paramref name="ttlCeiling"/> capped at the lowest
+        /// frontier of the leaf pins the durable offset floor does not cover there.
+        /// Such a pin's frontier was published by an empty release, and every entry
+        /// the leaf has since written to the partition is stamped above it.
+        /// </summary>
+        public HybridLogicalClock? RetentionCeilingFor(int partition, HybridLogicalClock? ttlCeiling)
+        {
+            if (ttlCeiling is not { } ceiling || IsPartitionHeldByBlockPin(partition))
+            {
+                return null;
+            }
+
+            return UncoveredPinFloors is { } floors
+                && (uint)partition < (uint)floors.Length
+                && floors[partition] is { } cap
+                && cap < ceiling
+                    ? cap
+                    : ceiling;
+        }
+
+        /// <summary>
+        /// Whether the retention ceiling of <paramref name="partition"/> is held below
+        /// <paramref name="ttlCeiling"/> by a block pin or an uncovered leaf pin, so
+        /// the configured retention window is not being honoured there.
+        /// </summary>
+        public bool IsRetentionHeld(int partition, HybridLogicalClock ttlCeiling)
+            => RetentionCeilingFor(partition, ttlCeiling) is not { } effective || effective < ttlCeiling;
     }
 
     /// <summary>

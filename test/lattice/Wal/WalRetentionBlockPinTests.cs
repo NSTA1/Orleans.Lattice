@@ -102,6 +102,146 @@ public sealed class WalRetentionBlockPinTests
         }
     }
 
+    [Test]
+    public async Task A_retention_trim_keeps_a_write_a_leaf_applied_after_it_released_the_partition_empty()
+    {
+        // 57704fda's trace: the leaf releases partition q empty at frontier F (no
+        // rows there, no checkpoint), then writes w to q. The pin store merges
+        // frontiers by max, so q's durable pin stays (F, -1) rather than falling
+        // back to a Zero block pin, and nothing but the retention hold keeps w.
+        var treeName = "ttl-empty-release-" + _run;
+        var first = await DeployAsync();
+        string writeKey;
+        try
+        {
+            await first.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(
+                treeName,
+                new TreeRegistryEntry { ShardCount = 1, WalPartitions = 2, MaxLeafKeys = 64, MaxInternalChildren = 4 });
+            var tree = first.Client.GetGrain<ILattice>(treeName);
+            var (otherKey, key, q) = PickKeys(2);
+            writeKey = key;
+            var services = ((InProcessSiloHandle)first.Primary).SiloHost.Services;
+
+            // A write to the other partition, then a graceful deactivation, whose
+            // barrier checkpoints and captures that write and publishes the leaf's
+            // pin for q at a real frontier: q has no rows and no checkpoint, so it
+            // releases empty.
+            await tree.SetAsync(otherKey, [1]);
+            await first.Client.GetGrain<IBPlusLeafGrain>(await ReadLeafAsync(first, services, treeName)).ForceDeactivateAsync();
+            await Task.Delay(250);
+            var released = await ReadPinsAsync(first, services, treeName, q);
+            Assert.That(released, Is.Not.Empty, "the leaf published its pin for the partition");
+            Assert.That(released.All(p => p.Frontier > HybridLogicalClock.Zero && p.Offset < 0), Is.True,
+                "the leaf released the partition empty: a real frontier and no offset ("
+                + string.Join(", ", released) + ")");
+
+            // The leaf reactivates and applies w to q; it does not checkpoint it.
+            await tree.SetAsync(writeKey, [7]);
+            var afterWrite = await ReadPinsAsync(first, services, treeName, q);
+            Assert.That(afterWrite.All(p => p.Frontier > HybridLogicalClock.Zero && p.Offset < 0), Is.True,
+                "the write did not lower the max-merged frontier, and the leaf has not checkpointed ("
+                + string.Join(", ", afterWrite) + ")");
+
+            await Task.Delay(5);
+            await new LatticeWalGc(
+                    services,
+                    services.GetRequiredService<IWalCursorRegistry>(),
+                    new FixedLatticeOptionsMonitor(new LatticeOptions
+                    {
+                        WalRetention = TimeSpan.FromMilliseconds(1),
+                        WalDurabilityHoldCeilingBytes = 0,
+                    }))
+                .RunOnceAsync(treeName);
+
+            // The silo is lost before the leaf checkpoints or captures a snapshot.
+            await first.KillSiloAsync(first.Primary);
+        }
+        finally
+        {
+            await first.DisposeAsync();
+        }
+
+        var second = await DeployAsync();
+        try
+        {
+            Assert.That(await second.Client.GetGrain<ILattice>(treeName).GetAsync(writeKey), Is.EqualTo(new byte[] { 7 }),
+                "an acknowledged write was lost to a retention trim");
+        }
+        finally
+        {
+            await second.StopAllSilosAsync();
+            await second.DisposeAsync();
+        }
+    }
+
+    private static (string Other, string Key, int Q) PickKeys(int partitions)
+    {
+        const int q = 0;
+        string? other = null;
+        string? key = null;
+        for (var i = 0; other is null || key is null; i++)
+        {
+            var candidate = $"k{i:D3}";
+            if (WalPartitionHash.Compute(candidate, partitions) == q)
+            {
+                key ??= candidate;
+            }
+            else
+            {
+                other ??= candidate;
+            }
+        }
+
+        return (other, key, q);
+    }
+
+    private static async Task<Guid> ReadLeafAsync(TestCluster cluster, IServiceProvider services, string treeName)
+    {
+        var pinKeys = WalMaterialiserPinRouting.EnumerateReadKeys(
+            treeName,
+            WalMaterialiserPinRouting.ResolveShardCount(services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>()));
+        foreach (var pinKey in pinKeys)
+        {
+            foreach (var consumerId in (await cluster.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey).GetPinsAsync()).Keys)
+            {
+                var start = consumerId.IndexOf("bplusleaf/", StringComparison.Ordinal);
+                var end = consumerId.LastIndexOf('_');
+                if (start >= 0 && end > start + 10 && Guid.TryParseExact(consumerId[(start + 10)..end], "N", out var leaf))
+                {
+                    return leaf;
+                }
+            }
+        }
+
+        throw new AssertionException("the tree's leaf published no durable pin");
+    }
+
+    private static async Task<List<(HybridLogicalClock Frontier, long Offset)>> ReadPinsAsync(
+        TestCluster cluster,
+        IServiceProvider services,
+        string treeName,
+        int partition)
+    {
+        var pinKeys = WalMaterialiserPinRouting.EnumerateReadKeys(
+            treeName,
+            WalMaterialiserPinRouting.ResolveShardCount(services.GetService<Microsoft.Extensions.Options.IOptionsMonitor<LatticeOptions>>()));
+        var pins = new List<(HybridLogicalClock, long)>();
+        foreach (var pinKey in pinKeys)
+        {
+            var grain = cluster.Client.GetGrain<IWalMaterialiserPinGrain>(pinKey);
+            var offsets = await grain.GetPinOffsetsAsync();
+            foreach (var (consumerId, pin) in await grain.GetPinsAsync())
+            {
+                if (consumerId.EndsWith("_" + partition, StringComparison.Ordinal))
+                {
+                    pins.Add((pin, offsets.GetValueOrDefault(consumerId, -1)));
+                }
+            }
+        }
+
+        return pins;
+    }
+
     private static async Task<TestCluster> DeployAsync()
     {
         var builder = new TestClusterBuilder(initialSilosCount: 1);

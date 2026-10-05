@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 199 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 200 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -468,4 +468,5 @@ src/lattice/LatticeStorageUsageMetrics.cs#(unassigned:LatticeMetrics.StorageTota
 src/lattice/LatticeStorageUsageMetrics.cs#(unassigned:LatticeMetrics.StorageUsageDeepPublishedName)	unresolved	reason=dimension tree: Key is declared in 3 files; resolving it would union unrelated taxonomies
 src/lattice/LatticeStorageUsageMetrics.cs#(unassigned:LatticeMetrics.StorageWalBytesName)	unresolved	reason=dimension (unread-observable-callback:static () => ObserveAll(static r => r.WalRetainedBytes, requireDeep: false)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
 src/lattice/WalGcBlockedConsumerCensus.cs#Gauge	unresolved	reason=dimension tree: Key is declared in 3 files; resolving it would union unrelated taxonomies
+src/lattice/WalGcLeafPinHoldCensus.cs#Gauge	unresolved	reason=dimension shard: read from this observable instrument's measurement callback, which yields [partition]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/WalGcSchedulerPhaseCensus.cs#Gauge	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain

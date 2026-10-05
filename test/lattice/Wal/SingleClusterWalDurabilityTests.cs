@@ -556,6 +556,7 @@ public sealed class SingleClusterWalDurabilityTests
             treeId,
             WalMaterialiserPinRouting.ResolveShardCount(sp.GetService<IOptionsMonitor<LatticeOptions>>()));
         var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(120).TotalMilliseconds;
+        var attempt = 0;
         while (true)
         {
             var pins = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
@@ -588,15 +589,35 @@ public sealed class SingleClusterWalDurabilityTests
             }
 
             Assert.That(Environment.TickCount64, Is.LessThan(deadline), "the tree's leaves did not checkpoint within the deadline: " + string.Join(", ", pins.Select(p => p.Key + "@" + p.Value)));
+            // Alternate the WAL GC's own bank step (checkpoint, capture recheck and
+            // pin publish on the live activation) with a graceful deactivation: under
+            // load a deactivation barrier can skip once its deadline is spent, which
+            // leaves the block pin standing.
+            var leaves = new HashSet<Guid>();
             foreach (var consumerId in pins.Keys)
             {
                 var start = consumerId.IndexOf("bplusleaf/", StringComparison.Ordinal);
                 var end = consumerId.LastIndexOf('_');
                 if (start >= 0 && end > start + 10 && Guid.TryParseExact(consumerId[(start + 10)..end], "N", out var leaf))
                 {
-                    await _cluster.Client.GetGrain<IBPlusLeafGrain>(leaf).ForceDeactivateAsync();
+                    leaves.Add(leaf);
                 }
             }
+
+            foreach (var leaf in leaves)
+            {
+                var grain = _cluster.Client.GetGrain<IBPlusLeafGrain>(leaf);
+                if (attempt % 2 == 0)
+                {
+                    await grain.BankDurablePinAsync();
+                }
+                else
+                {
+                    await grain.ForceDeactivateAsync();
+                }
+            }
+
+            attempt++;
 
             await Task.Delay(250);
             for (var i = 0; i < keyCount; i++)
