@@ -1,0 +1,22 @@
+# Pairs with DeleteNeverMidCutover. A revert that moves the alias without
+# taking the alias reservation lets a delete run while the tree's copies are
+# in motion.
+MODULE: DeleteNeverMidCutoverRevertUnreserved
+TARGET: DeleteNeverMidCutover
+CLASS: Invariant
+SUMMARY: a revert begins without taking the alias reservation
+PERTURBS: RevertBegin
+
+--- FIND
+    /\ rp = "committed"
+    /\ ~deleted
+    /\ ~reserved
+    /\ reserved' = TRUE
+    /\ rp' = "revertBegun"
+--- REPLACE
+    /\ rp = "committed"
+    /\ ~deleted
+    /\ ~reserved
+    \* MUTATION: the reservation is not taken.
+    /\ rp' = "revertBegun"
+--- END

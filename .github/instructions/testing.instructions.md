@@ -1109,19 +1109,18 @@ its window, #4589).
 
 | Module | TLA+ property | Plain-language property | Coyote encoding (guard) |
 |--------|---------------|-------------------------|-------------------------|
-| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree. Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) are the detectors. |
-| `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (`Reobservation_ignoring_the_epoch_accepts_a_torn_set`, `Skipping_the_drain_gate_accepts_a_torn_set`; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
+| `BackupCapture` | `BackupSagaConsistent` | An accepted capture never holds part of an atomic batch within one tree, checked for single-tree and set captures alike; a post terminal never sits beside a shard that reads pre or hides the saga, including a decision whose tombstone expired before the gate (#4619). Models the #4485 decision-gate fix. | None of its own; `SnapshotCaptureSagaAtomicityTests` (#4485's regression tests) and `LatticeBackupSetCaptureHoldLossTests` are the detectors. |
+| `BackupCapture` | `SetSagaConsistent` | An accepted cross-tree set never holds a batch on one member and not another. | `CrossTreeFenceCaptureModel` (guards `Without_the_recheck_and_reobservation_a_lost_fence_admits_a_torn_set`, `Without_the_drain_a_saga_registered_before_the_capture_is_captured_torn`; four single-defence arms; witness `Exploration_reaches_an_accepted_set_holding_the_committed_saga`). |
 | `BackupCapture` | `SetComplete`, `CaptureStrictIsolation` | An accepted capture holds every member; a capture never holds an uncommitted write. | None; integration detectors in the note. |
 | `BackupCapture` | `SetCaptureCompletes` | Every capture is accepted or fails explicitly (liveness). | None; three protocol mutations under the asserted fairness. |
 | `BackupIncremental` | `BackupSagaConsistent`, `CaptureStrictIsolation` | No restore of a backup chain holds part of a saga, or a write of a saga that did not commit. Models the #4589 fix. | None of its own; `LatticeBackupIncrementalSagaConsistencyTests` (red against the pre-fix collector) and `IncrementalSagaStagingTests`. |
 | `BackupIncremental` | `ChainCoversCommitted`, `SagaFallbackOnlyAcrossFull` | A link whose decision snapshot holds a saga committed restores it whole; an increment falls back to a full backup only for a saga straddling the full capture's frontier. | None; detectors in the note. |
 | `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
-| `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
+| `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. The participant fence timer is modelled; its unilateral compensation is a gap filed as #4637. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
-| `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
+| `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns`, `RevertReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore, and a revert crashed between its swap and its fix-up, complete on retry (liveness). | None; integration and chaos detectors in the note. |
 
-What these do not cover - the participant fence timer, a batch in flight across
-a whole cutover, reader atomicity across set members, in-place and cold
+What these do not cover - a batch in flight across a whole cutover, reader atomicity across set members, in-place and cold
 restores, resharded trees, and the receiver side (#4480) - is listed in each
 module's refinement note and in
 [`docs/lattice.backup/verified-backup.md`](../../docs/lattice.backup/verified-backup.md).
@@ -1209,7 +1208,10 @@ tier: the Coyote models verify the *implementation* of an extracted core under
 systematic schedule exploration, while the TLA+ spec checks the protocol
 *design* exhaustively over small bounded instances. See `spec/README.md` for how
 to run it and the module layout, and `spec/atomic-commit/Refinement.md` for the
-mapping from spec actions to the code cores.
+mapping from spec actions to the code cores. The other modules are
+`spec/replication/`, `spec/shard-ownership/`, `spec/wal/` and `spec/backup/`
+(capture, incremental, provenance, restore and cutover), each with its own
+refinement note; the property catalogues above list what each one checks.
 
 Every directory under `spec/` is a module, and the Formal gates discover the
 modules from disk rather than naming them: each gate takes a `SpecModule` and

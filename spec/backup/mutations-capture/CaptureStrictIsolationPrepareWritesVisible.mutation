@@ -9,10 +9,10 @@ PERTURBS: Prepare
 
 --- FIND
     /\ prep' = [prep EXCEPT ![t][sh] = TRUE]
-    /\ UNCHANGED <<reg, deleg, epoch, dec, loc, term>>
+    /\ UNCHANGED <<reg, deleg, epoch, dec, loc, term, expired>>
 --- REPLACE
     /\ prep' = [prep EXCEPT ![t][sh] = TRUE]
     \* MUTATION: the write lands visible, as if already committed.
     /\ term' = [term EXCEPT ![t][sh] = "commit"]
-    /\ UNCHANGED <<reg, deleg, epoch, dec, loc>>
+    /\ UNCHANGED <<reg, deleg, epoch, dec, loc, expired>>
 --- END

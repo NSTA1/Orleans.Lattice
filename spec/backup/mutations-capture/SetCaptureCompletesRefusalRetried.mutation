@@ -11,9 +11,9 @@ PERTURBS: RegisterRefused
 --- FIND
     /\ Fenced(T)
     /\ dec' = [dec EXCEPT ![t] = "aborted"]
-    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term, expired>>
 --- REPLACE
     /\ Fenced(T)
     \* MUTATION: the refusal is retried; nothing aborts.
-    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term, dec>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term, dec, expired>>
 --- END

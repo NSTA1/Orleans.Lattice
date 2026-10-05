@@ -113,6 +113,27 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
+    public async Task Gate_status_lookup_keeps_a_decision_the_live_map_drops_under_the_gate()
+    {
+        // ForgetAsync is not gated, and with zero retention it drops the
+        // decision row outright. A lookup that read the live map would then
+        // answer InFlight (pre-saga) for a saga the capture's own shards may
+        // already hold post-saga; the snapshot taken at acquisition must win.
+        var (grain, state) = CreateGrain(retention: TimeSpan.Zero);
+        var committed = Guid.NewGuid();
+        await grain.MarkCommittedAsync(committed);
+        var token = Guid.NewGuid();
+        await grain.AcquireCaptureGateAsync(token, TxRegistryCaptureGateMode.Gate, GateLease);
+
+        await grain.ForgetAsync(committed);
+        Assert.That(state.State.Decisions.ContainsKey(committed), Is.False, "the live map dropped the decision");
+
+        var statuses = await grain.GetCaptureGateStatusManyAsync(token, [committed]);
+
+        Assert.That(statuses[committed], Is.EqualTo(TxStatus.Committed));
+    }
+
+    [Test]
     public async Task Gate_captures_an_expired_but_stored_tombstone_at_its_recorded_verdict()
     {
         // Issue #4619: a live read reports an expired tombstone Indeterminate so
@@ -341,8 +362,34 @@ public partial class TxRegistryGrainTests
             Assert.That(many[txid], Is.EqualTo(TxStatus.InFlight));
             Assert.That(d0[txid], Is.EqualTo(TxStatus.InFlight), "D0 holds local decisions only");
         });
+
+        // Nothing is dialled while the gate holds: a terminal-intent read under
+        // the gate answers from local decisions alone (#4441 N4).
+        await coordinator.DidNotReceive().GetDecisionAsync();
     }
 
+    [Test]
+    public async Task Gated_registry_answers_a_terminal_intent_read_for_a_receiver_delegated_txid_as_InFlight_without_dialling()
+    {
+        // The receiver-side form of the gated terminal-intent read (#4441 N4):
+        // under the gate it answers from local decisions alone and dials no
+        // receiver coordinator.
+        var txid = Guid.NewGuid();
+        var (grain, _, coordinator) = CreateGrainWithReceiverCoordinator("rop-terminal-gated");
+        coordinator.GetDecisionAsync().Returns(TxStatus.Committed);
+        await grain.RegisterReceiverDecisionAuthorityAsync(txid, "rop-terminal-gated");
+        await grain.AcquireCaptureGateAsync(Guid.NewGuid(), TxRegistryCaptureGateMode.Gate, GateLease);
+
+        var single = await grain.GetStatusForTerminalAsync(txid);
+        var many = await grain.GetStatusManyForTerminalAsync([txid]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(single, Is.EqualTo(TxStatus.InFlight));
+            Assert.That(many[txid], Is.EqualTo(TxStatus.InFlight));
+        });
+        await coordinator.DidNotReceive().GetDecisionAsync();
+    }
     [Test]
     public async Task Ungated_terminal_intent_read_caches_a_delegated_verdict_before_reporting_it()
     {
