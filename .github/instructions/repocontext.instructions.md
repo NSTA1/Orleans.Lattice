@@ -369,7 +369,7 @@ mid-task.
     `grep` only if the terms you have are too generic.
   - `empty` - no matches.
 - **Then read `retrievalPath`, which says exactly which path served the answer
-  and, for a keyword answer, why.** Its six values are `semantic.approximate`
+  and, for a keyword answer, why.** The values are `semantic.approximate`
   (the default), `semantic.exact`, `keyword.no_embedder` (no embedding provider
   is bound - an intended keyword-only deployment, not a fault),
   `keyword.vector_plane_unavailable`, `keyword.index_degraded`, and
@@ -796,7 +796,7 @@ with `neighbors` instead of guessing search terms.
   - `partOf` - the target is a whole this entry is a component of.
   Author one direction and let the reader infer the inverse; do not write both
   `broader` and `narrower` for the same pair. The
-  [backlog](#the-agent-operated-backlog) extends this set with five further
+  [backlog](#the-agent-operated-backlog) extends this set with further
   relations (`blockedBy`, `anchoredTo`, `claims`, `integrates`, `informs`)
   under the same discipline. Extend it there, in one documented place, so an
   audit of memory does not prune a relation it does not recognise.
@@ -979,8 +979,8 @@ algorithm for callers.
   reports `available: true` while capture, recall, and scan keep working. A
   `retrievalPhase` of `building` means searches are answered by degraded keyword
   recall and results are incomplete; `keyword_only` is an intended deployment
-  with no embedding provider bound and IS ready. The full set is five values:
-  on the no-argument host call, `serving`, `keyword_only`, and
+  with no embedding provider bound and IS ready. On the no-argument host call,
+  `serving`, `keyword_only`, and
   `nothing_registered` (no repository onboarded yet) are ready, and `building`
   and `saturated_unavailable` are not. With `repoId`, `nothing_registered`
   instead means that repository has no indexed files or vectors, and it reports

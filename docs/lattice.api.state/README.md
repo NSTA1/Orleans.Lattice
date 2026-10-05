@@ -6,7 +6,7 @@ A read-only cluster state-API add-on for [Orleans.Lattice](../../README.md) - qu
 
 `Orleans.Lattice.Api.State` is the **outward-facing read surface** of a lattice cluster. The core library is a write-and-query data plane reached through grain interfaces; this package adds the read-only introspection plane a dashboard, a CLI explorer, or the `Orleans.Lattice.Api.Mcp` MCP server needs - without granting any of them a mutation path.
 
-It is built in two layers:
+It is built in layered form:
 
 - **A transport-agnostic facade.** `ILatticeStateQuery`, `ILatticeStateObserver`, and `ILatticeStateMetricsObserver` expose discovery, structure, entry inspection, per-key change history, dead-letter inspection, change observation, metrics, and cluster identity over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one. The facade interfaces live in the shared `Orleans.Lattice.Api.Abstractions` contract package and are `public`, so an out-of-package in-process host reuses them by referencing that package and resolving them from DI directly, or by co-hosting the gRPC binding and dialing it over a loopback channel - see [Client](client.md#in-process-reuse).
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.State.Grpc` projects the facade onto a long-lived gRPC service whose messages are Orleans-serialized C# records that wrap or reuse the facade DTOs, plus a public `LatticeStateApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.

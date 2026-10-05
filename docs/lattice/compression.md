@@ -243,7 +243,7 @@ siloBuilder.AddLatticeAutoSharedDictionary(o =>
 });
 ```
 
-The helper registers the auto-training provider (as the active dictionary provider, replacing the default operator-supplied one), the dictionary-aware Zstandard compressor, and the training pump, and turns on `LatticeReplicationOptions.AutoSharedDictionaryEnabled` for every replicated tree; sampling needs no registration of its own, because the replication package's commit-time observer already samples through the provider. Default build behaviour is unchanged - with the switch off there is no sampling, no training, no new RPC traffic, and the wire stays byte-identical. Four parts make the auto path work end to end:
+The helper registers the auto-training provider (as the active dictionary provider, replacing the default operator-supplied one), the dictionary-aware Zstandard compressor, and the training pump, and turns on `LatticeReplicationOptions.AutoSharedDictionaryEnabled` for every replicated tree; sampling needs no registration of its own, because the replication package's commit-time observer already samples through the provider. Default build behaviour is unchanged - with the switch off there is no sampling, no training, no new RPC traffic, and the wire stays byte-identical. The auto path works end to end through these parts:
 
 - **Sampling.** `ReplicationMutationObserver` feeds outbound point-`Set` payloads into the provider's reservoir through the `ILatticeCompressionDictionarySampler` seam, so the reservoir fills from real ship traffic without host code. Deletes, range marks, and empty values are never sampled.
 - **Pumping.** The hosted `AutoSharedDictionaryTrainingService` calls `TryTrain()` on a turn-safe, rate-limited cadence (bounded by `MinTrainingInterval`), off the hot path.
@@ -324,7 +324,7 @@ The default (`256`) was chosen empirically for JSON values, the dominant payload
 | 2185 | 620 | 72% |
 | 4226 | 1008 | 76% |
 
-Two findings drive the default:
+The findings that drive the default:
 
 1. **JSON never inflates.** Compressed-plus-prefix output was smaller than the input at *every* size measured, down to a metadata-only 112-byte payload. So unlike incompressible binary, JSON has no break-even floor the threshold must protect against - the threshold's only job here is to avoid spending CPU for a saving too small to matter.
 2. **The reduction crosses ~25% near 256 encoded bytes and climbs steeply above it**, while below ~190 bytes it falls under ~15% (tens of bytes) for the same roughly-fixed ~5 µs per-row compression cost. `256` sits at that knee: it captures the high-value range and skips only the smallest payloads where the fixed cost isn't repaid.

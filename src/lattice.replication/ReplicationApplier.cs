@@ -434,7 +434,7 @@ internal sealed partial class ReplicationApplier(
             // saga-id-keyed and idempotent on the receiver
             // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
             // _recentlyTerminal HashSet dedup). They bypass the
-            // per-origin HWM check, the shadow-forward dedup cache, and
+            // shadow-forward dedup cache and
             // the causal-buffer parking path: those primitives are
             // per-key data-flow dedup primitives and have no defined
             // semantics on saga linearization records. The receiver-side
@@ -555,8 +555,7 @@ internal sealed partial class ReplicationApplier(
                 //
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass the
-                // causal-park gate for the same reason they bypass
-                // the HWM gate (see the HWM dedup comment above):
+                // causal-park gate:
                 // parallel cross-leaf saga writes carry VectorClock
                 // frontiers whose entries point at sibling per-leaf
                 // clocks, and parking them would produce a

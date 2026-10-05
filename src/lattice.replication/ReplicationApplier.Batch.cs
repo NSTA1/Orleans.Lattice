@@ -599,8 +599,8 @@ internal sealed partial class ReplicationApplier
     /// <remarks>
     /// <para>The per-entry classification is preserved exactly:</para>
     /// <list type="bullet">
-    ///   <item><description>Range-delete entries bypass HWM dedup and
-    ///   apply through the range path because one issue HLC covers a whole
+    ///   <item><description>Range-delete entries apply
+    ///   through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
     ///   <item><description>Point entries have no HLC drop threshold:
     ///   neither the incrementally advanced per-origin diagonal (per-origin
@@ -706,8 +706,8 @@ internal sealed partial class ReplicationApplier
         // gate must be suppressed and the end-of-run HWM advance must
         // be skipped, mirroring the per-entry path's bypass at
         // <see cref="ApplyAsync"/>. The snapshot exporter visits
-        // shards / leaves in arbitrary order, so applying steady-state
-        // HWM dedup during bootstrap replay can drop a still-pending
+        // shards / leaves in arbitrary order, so a mid-drain HWM
+        // advance during bootstrap replay can later suppress a still-pending
         // saga key with a strictly-earlier source HLC and break
         // per-saga all-or-nothing visibility on the bootstrapped peer.
         // The post-drain
@@ -782,7 +782,7 @@ internal sealed partial class ReplicationApplier
 
         // Pending batched typed-CRDT delta items. Mirror of pendingItems
         // for non-prepared CRDT-mode Set entries: each passes the same
-        // classification gauntlet (HWM dedup, shadow-forward dedup, causal
+        // classification gauntlet (shadow-forward dedup, causal
         // park) and is deferred into a single ApplyCrdtDeltaManyAsync at
         // end of run, which folds every delta inside one grain turn (no
         // per-entry read-merge-write round trip). A tree resolves to a

@@ -1,7 +1,5 @@
 using System.Collections.Generic;
-using System.Globalization;
 using System.Runtime.InteropServices;
-using System.Text;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice;
@@ -61,7 +59,7 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
         for (var i = 0; i < deltas.Count; i++)
         {
             var delta = (PnCounterDelta)deltas[i].Delta;
-            total += CountPositive(delta.Increments) + CountPositive(delta.Decrements);
+            total += CounterProvenance.CountPositive(delta.Increments) + CounterProvenance.CountPositive(delta.Decrements);
         }
         if (total == 0) return Array.Empty<CrdtMemberChange>();
 
@@ -71,8 +69,8 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
             var entry = deltas[i];
             var delta = (PnCounterDelta)entry.Delta;
             var start = result.Count;
-            Emit(result, delta.Increments, CrdtMemberChangeKind.Added, entry.WallClock);
-            Emit(result, delta.Decrements, CrdtMemberChangeKind.Removed, entry.WallClock);
+            CounterProvenance.Emit(result, delta.Increments, CrdtMemberChangeKind.Added, entry.WallClock);
+            CounterProvenance.Emit(result, delta.Decrements, CrdtMemberChangeKind.Removed, entry.WallClock);
             CollectionsMarshal.AsSpan(result).Slice(start, result.Count - start).Sort(CrdtMemberChangeCausalComparer.Comparison);
         }
         return result;
@@ -95,12 +93,12 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
     {
         ArgumentNullException.ThrowIfNull(state);
         var counter = (PnCounter)state;
-        var total = CountPositive(counter.Increments) + CountPositive(counter.Decrements);
+        var total = CounterProvenance.CountPositive(counter.Increments) + CounterProvenance.CountPositive(counter.Decrements);
         if (total == 0) return Array.Empty<CrdtMemberChange>();
 
         var result = new List<CrdtMemberChange>(total);
-        Emit(result, counter.Increments, CrdtMemberChangeKind.Added, null);
-        Emit(result, counter.Decrements, CrdtMemberChangeKind.Removed, null);
+        CounterProvenance.Emit(result, counter.Increments, CrdtMemberChangeKind.Added, null);
+        CounterProvenance.Emit(result, counter.Decrements, CrdtMemberChangeKind.Removed, null);
         result.Sort(CrdtMemberChangeCausalComparer.Comparison);
         return result;
     }
@@ -127,47 +125,6 @@ public sealed class PnCounterProvenanceDecoder : ICrdtProvenanceDecoder
         var counter = (PnCounter)state;
         if (counter.IsBottom) return Array.Empty<CrdtMemberValue>();
 
-        var value = counter.Value;
-        return new[]
-        {
-            new CrdtMemberValue
-            {
-                Element = Encoding.UTF8.GetBytes(value.ToString(CultureInfo.InvariantCulture)),
-                ReplicaId = string.Empty,
-                Ordinal = value,
-            },
-        };
-    }
-
-    private static void Emit(
-        List<CrdtMemberChange> sink,
-        Dictionary<string, long>? side,
-        CrdtMemberChangeKind kind,
-        HybridLogicalClock? wallClock)
-    {
-        if (side is not { Count: > 0 }) return;
-        foreach (var (replicaId, magnitude) in side)
-        {
-            if (magnitude <= 0) continue;
-            sink.Add(new CrdtMemberChange
-            {
-                Element = Encoding.UTF8.GetBytes(replicaId),
-                Kind = kind,
-                ReplicaId = replicaId,
-                Ordinal = magnitude,
-                WallClock = wallClock,
-            });
-        }
-    }
-
-    private static int CountPositive(Dictionary<string, long>? side)
-    {
-        if (side is not { Count: > 0 }) return 0;
-        var n = 0;
-        foreach (var magnitude in side.Values)
-        {
-            if (magnitude > 0) n++;
-        }
-        return n;
+        return CounterProvenance.CurrentValue(counter.Value);
     }
 }

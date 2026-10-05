@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
 using ModelContextProtocol.Server;
@@ -96,7 +95,7 @@ internal sealed class TenantSelfAwarenessToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var service = context.Services!.GetRequiredService<ILatticeTenantSelfService>();
                 return TenantSelfAwarenessToolInvocations.GetCurrentTenantAsync(service, cancellationToken);
             },
@@ -118,7 +117,7 @@ internal sealed class TenantSelfAwarenessToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var service = context.Services!.GetRequiredService<ILatticeTenantSelfService>();
                 return TenantSelfAwarenessToolInvocations.ListAccessibleTenantsAsync(service, cancellationToken);
             },
@@ -144,7 +143,7 @@ internal sealed class TenantSelfAwarenessToolGroup : ILatticeApiMcpToolGroup
                 [Description("The tenant id to inspect. Must be a valid, non-empty tenant id the caller is authorized to see.")] string tenantId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var service = context.Services!.GetRequiredService<ILatticeTenantSelfService>();
                 return TenantSelfAwarenessToolInvocations.GetTenantAsync(service, tenantId, cancellationToken);
             },
@@ -162,27 +161,4 @@ internal sealed class TenantSelfAwarenessToolGroup : ILatticeApiMcpToolGroup
                 Destructive = false,
                 UseStructuredContent = true,
             });
-
-    private static IDisposable StampCredential(IServiceProvider services)
-    {
-        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
-        if (httpContext is null)
-        {
-            return NullScope.Instance;
-        }
-
-        var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
-        // A null credential leaves the ambient context cleared (fail-closed): the
-        // facade then resolves the caller as anonymous, which administers no tenant.
-        return LatticeCredentialContext.With(credential);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
-    }
 }

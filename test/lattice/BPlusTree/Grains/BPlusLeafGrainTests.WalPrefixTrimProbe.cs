@@ -119,7 +119,8 @@ public partial class BPlusLeafGrainTests
         // one, and the trimmed prefix survived. The DidNotReceive is the
         // discriminating assertion - a cold replay slices THROUGH offset 4,
         // so only the absence of the from-oldest read proves the resume.
-        await p0.Received().ReadSliceAsync(4L, 13L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // Head 13 is exclusive; the newest record is 12, the inclusive bound (#3489).
+        await p0.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
         await p0.DidNotReceive().ReadSliceAsync(-1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         for (var i = 1; i <= 12; i++)

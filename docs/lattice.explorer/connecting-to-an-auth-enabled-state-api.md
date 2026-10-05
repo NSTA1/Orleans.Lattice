@@ -94,7 +94,9 @@ win over the endpoint advertisement; advertised values only fill in unset option
 An advertised authority is admitted only when it is an absolute `https` URL and
 its host is allowed. With no custom allow-list, the provider accepts the known
 Entra login hosts. When `AllowedAuthorityHosts` is non-empty, it replaces that
-set.
+set. When scopes are not configured, an advertised audience is admitted only when
+it is an `api://` resource, an `https` resource on the endpoint host, or an exact
+match in `AllowedAudiences`.
 
 For the Blazor Server web head, use
 [`Orleans.Lattice.Explorer.Entra.Web`](../lattice.explorer.entra.web/README.md)

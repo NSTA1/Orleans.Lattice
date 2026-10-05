@@ -25,8 +25,8 @@ namespace Orleans.Lattice.Replication;
 ///     and <see cref="TagPeer"/>.
 ///   </item>
 ///   <item>
-///     <b>Per-operation histograms</b> - <c>ship_duration</c>,
-///     <c>apply_duration</c>. Reported in milliseconds as <c>double</c>.
+///     <b>Per-operation histograms</b> - <c>orleans.lattice.replication.ship.duration</c>,
+///     <c>orleans.lattice.replication.apply.duration</c>. Reported in milliseconds as <c>double</c>.
 ///     Tagged with <see cref="TagTree"/>, <see cref="TagPeer"/>, and (for
 ///     terminal outcomes) <see cref="TagOutcome"/>.
 ///   </item>

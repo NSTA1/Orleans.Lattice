@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// opaque failure.
 /// </remarks>
 [TestFixture]
-public class LatticeTagIndexRoundTripBatchingTests
+public partial class LatticeTagIndexRoundTripBatchingTests
 {
     private const string TreeId = "subject-tree";
     private const string IndexName = "idx";
@@ -36,11 +36,35 @@ public class LatticeTagIndexRoundTripBatchingTests
         public int SetManyAsyncCalls;
         public int GetManyAsyncCalls;
         public int DeleteAsyncCalls;
+        public int ExistsAsyncCalls;
+        public int GateAccountedCalls;
+        public int ApplyCrdtDeltaCalls;
         public readonly List<int> SetManyWidths = [];
         public readonly List<int> GetManyWidths = [];
+        public readonly List<int> GateAccountedWidths = [];
+
+        /// <summary>Row keys each CRDT delta apply targeted, in arrival order.</summary>
+        public readonly List<string> CrdtDeltaKeys = [];
 
         /// <summary>Optional gate awaited by every delete, used to prove overlap.</summary>
         public Func<Task>? DeleteGate;
+
+        /// <summary>Optional gate awaited by every CRDT delta apply, used to prove overlap.</summary>
+        public Func<Task>? ApplyCrdtDeltaGate;
+
+        /// <summary>
+        /// How many keys the read-path access gate reports it pruned from each
+        /// gate-accounted read, so a test can present the index with a window
+        /// whose absences are uninterpretable.
+        /// </summary>
+        public int PrunedByAccessGate;
+
+        /// <summary>
+        /// Keys present in <see cref="Data"/> but withheld from key scans, so a
+        /// test can model a key committed after a reconcile's live snapshot was
+        /// taken but before its orphan candidates are re-verified.
+        /// </summary>
+        public readonly HashSet<string> HiddenFromScan = new(StringComparer.Ordinal);
 
         public ILattice Lattice { get; }
 
@@ -56,7 +80,52 @@ public class LatticeTagIndexRoundTripBatchingTests
                 .Returns(ci => Task.FromResult(Data.TryGetValue(ci.Arg<string>(), out var v) ? v : null));
 
             tree.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-                .Returns(ci => Task.FromResult(Data.ContainsKey(ci.Arg<string>())));
+                .Returns(ci =>
+                {
+                    Interlocked.Increment(ref ExistsAsyncCalls);
+                    return Task.FromResult(Data.ContainsKey(ci.Arg<string>()));
+                });
+
+            tree.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    var keys = ci.Arg<List<string>>();
+                    GateAccountedCalls++;
+                    GateAccountedWidths.Add(keys.Count);
+                    var values = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                    foreach (var key in keys)
+                    {
+                        if (Data.TryGetValue(key, out var v))
+                        {
+                            values[key] = v;
+                        }
+                    }
+                    return Task.FromResult(new GatedMultiReadResult
+                    {
+                        Values = values,
+                        PrunedByAccessGate = PrunedByAccessGate,
+                    });
+                });
+
+            tree.ApplyCrdtDeltaAsync(
+                    Arg.Any<string>(),
+                    Arg.Any<LatticeMergeMode>(),
+                    Arg.Any<byte[]>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(async ci =>
+                {
+                    Interlocked.Increment(ref ApplyCrdtDeltaCalls);
+                    lock (CrdtDeltaKeys)
+                    {
+                        CrdtDeltaKeys.Add(ci.ArgAt<string>(0));
+                    }
+                    var gate = ApplyCrdtDeltaGate;
+                    if (gate is not null)
+                    {
+                        await gate().ConfigureAwait(false);
+                    }
+                    return default(HybridLogicalClock);
+                });
 
             tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
@@ -142,6 +211,10 @@ public class LatticeTagIndexRoundTripBatchingTests
             }
             foreach (var key in keys)
             {
+                if (HiddenFromScan.Contains(key))
+                {
+                    continue;
+                }
                 if (startInclusive is not null && string.CompareOrdinal(key, startInclusive) < 0)
                 {
                     continue;

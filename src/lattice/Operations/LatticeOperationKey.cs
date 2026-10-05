@@ -66,6 +66,25 @@ internal static class LatticeOperationKey
     /// <returns>A 32-character lowercase hexadecimal id.</returns>
     internal static string NewId() => Guid.NewGuid().ToString("N", CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// Resolves the id a start verb runs under: a caller-supplied id is validated
+    /// (see <see cref="ThrowIfInvalid"/>) and returned unchanged, and an absent
+    /// one is replaced by a fresh <see cref="NewId"/>.
+    /// </summary>
+    /// <param name="operationId">The caller-supplied id, or <see langword="null"/> to generate one.</param>
+    /// <returns>The operation id.</returns>
+    /// <exception cref="ArgumentException">A supplied id is empty, too long, or carries a disallowed character.</exception>
+    internal static string ValidateOrGenerate(string? operationId)
+    {
+        if (operationId is null)
+        {
+            return NewId();
+        }
+
+        ThrowIfInvalid(operationId, nameof(operationId));
+        return operationId;
+    }
+
     /// <summary>Composes an operation grain key.</summary>
     /// <param name="tenantId">The tenant id.</param>
     /// <param name="operationId">A validated operation id.</param>

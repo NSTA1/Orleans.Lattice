@@ -61,6 +61,24 @@ internal sealed class LeafCursorReporter(
         new();
 
     /// <summary>
+    /// Per-<c>(treeName, consumerId)</c> record of the highest frontier and
+    /// checkpoint offset that has been <i>noted</i> but not yet acknowledged
+    /// as durably written - an advance the debounce coalesced, or a write that
+    /// is in flight, was shed, or faulted (issue #3509). The silo-stop flush
+    /// (<see cref="FlushPendingDurablePinsAsync"/>) persists whatever is still
+    /// pending so a coalesced advance is not lost at shutdown.
+    /// </summary>
+    /// <remarks>
+    /// The value is a mutable box, allocated once per consumer and then merged
+    /// in place under its own lock. A <see cref="ConcurrentDictionary{TKey, TValue}"/>
+    /// overwrite of a value type wider than a pointer replaces the whole node,
+    /// so a struct-valued map would allocate on every coalesced note - the
+    /// per-checkpoint path that must stay allocation-free.
+    /// </remarks>
+    private readonly ConcurrentDictionary<(string TreeName, string ConsumerId), PendingDurablePin> _pendingDurable =
+        new();
+
+    /// <summary>
     /// Test seam for the monotonic clock backing the durable-pin debounce
     /// (<see cref="MinDurableWriteSpacingMs"/>). Defaults to
     /// <see cref="TimeProvider.System"/>; unit tests substitute a controllable
@@ -175,6 +193,14 @@ internal sealed class LeafCursorReporter(
                 _durableDebounce.TryRemove(key, out _);
             }
         }
+
+        foreach (var key in _pendingDurable.Keys)
+        {
+            if (string.Equals(key.TreeName, treeName, StringComparison.Ordinal))
+            {
+                _pendingDurable.TryRemove(key, out _);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -219,6 +245,11 @@ internal sealed class LeafCursorReporter(
             shouldWrite = crossingZero || now - current.LastWriteTickMs >= MinDurableWriteSpacingMs;
             if (!shouldWrite)
             {
+                // Coalesced: remember the advance so the silo-stop flush can
+                // persist it (issue #3509). The box is allocated on the first
+                // coalesced note for this consumer and merged in place after,
+                // so the steady-state coalesced path stays allocation-free.
+                NotePending(key, frontier, checkpointOffset);
                 return;
             }
 
@@ -320,6 +351,86 @@ internal sealed class LeafCursorReporter(
 
         cancellationToken.ThrowIfCancellationRequested();
         await PersistPinBatchDurablyAsync(treeName, reports, seed: true).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Writes every durable pin advance that the debounce in
+    /// <see cref="NoteDurableMaterialiserFrontier"/> coalesced and never wrote,
+    /// so a silo stop does not discard them (issue #3509). Driven once at silo
+    /// stop by <see cref="LeafCursorReporterShutdownFlushParticipant"/>.
+    /// </summary>
+    /// <param name="deadline">The bound on the whole flush; a flush that has
+    /// not landed by then is abandoned, so shutdown is never held hostage.</param>
+    /// <param name="cancellationToken">The silo-stop cancellation token.</param>
+    /// <returns>A task that completes when the flush has landed, faulted, timed
+    /// out, or been cancelled. It never throws.</returns>
+    /// <remarks>
+    /// Losing a coalesced advance is not a safety problem - the pin only
+    /// over-retains WAL - so every fault is logged and swallowed. A landed
+    /// write clears its pending entry through
+    /// <see cref="RecordDurableWrite"/>.
+    /// </remarks>
+    internal async Task FlushPendingDurablePinsAsync(TimeSpan deadline, CancellationToken cancellationToken)
+    {
+        if (grainFactory is null || _pendingDurable.IsEmpty)
+        {
+            return;
+        }
+
+        Dictionary<string, List<MaterialiserPinReport>>? byTree = null;
+        foreach (var entry in _pendingDurable)
+        {
+            if (!entry.Value.TryTake(out var frontier, out var offset))
+            {
+                continue;
+            }
+
+            byTree ??= new Dictionary<string, List<MaterialiserPinReport>>(StringComparer.Ordinal);
+            if (!byTree.TryGetValue(entry.Key.TreeName, out var list))
+            {
+                list = [];
+                byTree[entry.Key.TreeName] = list;
+            }
+
+            list.Add(new MaterialiserPinReport(entry.Key.ConsumerId, frontier, offset));
+        }
+
+        if (byTree is null)
+        {
+            return;
+        }
+
+        var flushes = new Task[byTree.Count];
+        var i = 0;
+        foreach (var (tree, reports) in byTree)
+        {
+            flushes[i++] = FlushDurableMaterialiserFrontierAsync(tree, reports, cancellationToken);
+        }
+
+        try
+        {
+            await Task.WhenAll(flushes).WaitAsync(deadline, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            logger?.LogWarning(
+                "Shutdown flush of {TreeCount} tree(s) of coalesced durable materialiser pins did not land within {Deadline}; the pins over-retain WAL until the next advance.",
+                byTree.Count,
+                deadline);
+        }
+        catch (OperationCanceledException)
+        {
+            logger?.LogWarning(
+                "Shutdown flush of {TreeCount} tree(s) of coalesced durable materialiser pins was cancelled; the pins over-retain WAL until the next advance.",
+                byTree.Count);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(
+                ex,
+                "Shutdown flush of {TreeCount} tree(s) of coalesced durable materialiser pins faulted; the pins over-retain WAL until the next advance.",
+                byTree.Count);
+        }
     }
 
     /// <inheritdoc />
@@ -520,6 +631,8 @@ internal sealed class LeafCursorReporter(
             {
                 _durableDebounce[debounceKey] = (report.Frontier, report.CheckpointOffset, now);
             }
+
+            ClearPendingIfCovered(debounceKey, report.Frontier, report.CheckpointOffset);
         }
     }
 
@@ -1055,6 +1168,15 @@ internal sealed class LeafCursorReporter(
                 // dictionary lookup, and the first checkpoint after the window
                 // closes lands the pin.
                 _durableDebounce.TryRemove((treeName, consumerId), out _);
+
+                // Keep the shed value for the shutdown flush too: if no later
+                // checkpoint arrives before the silo stops, nothing else would
+                // ever re-attempt it (issue #3509).
+                NotePending((treeName, consumerId), frontier, checkpointOffset);
+            }
+            else
+            {
+                ClearPendingIfCovered((treeName, consumerId), frontier, checkpointOffset);
             }
         }
         catch (Exception ex)
@@ -1062,6 +1184,7 @@ internal sealed class LeafCursorReporter(
             // Roll the debounce state back so a subsequent note retries
             // rather than treating the failed write as durably landed.
             _durableDebounce.TryRemove((treeName, consumerId), out _);
+            NotePending((treeName, consumerId), frontier, checkpointOffset);
             logger?.LogWarning(
                 ex,
                 "Failed to persist durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at {Frontier}; will retry on next checkpoint.",
@@ -1119,6 +1242,7 @@ internal sealed class LeafCursorReporter(
         await Task.WhenAll(removals).ConfigureAwait(false);
 
         _durableDebounce.TryRemove((treeName, consumerId), out _);
+        _pendingDurable.TryRemove((treeName, consumerId), out _);
     }
 
     /// <summary>
@@ -1161,6 +1285,112 @@ internal sealed class LeafCursorReporter(
                 treeName,
                 consumerId,
                 grainKey);
+        }
+    }
+
+    /// <summary>
+    /// Records a durable-pin advance that was not persisted (coalesced by the
+    /// debounce, shed, or faulted) so the shutdown flush can write it. Once the
+    /// key's slot exists this is a lock-protected in-place merge with no allocation.
+    /// </summary>
+    private void NotePending((string TreeName, string ConsumerId) key, HybridLogicalClock frontier, long checkpointOffset)
+    {
+        if (_pendingDurable.TryGetValue(key, out var pending))
+        {
+            pending.Merge(frontier, checkpointOffset);
+            return;
+        }
+
+        _pendingDurable.AddOrUpdate(
+            key,
+            static (_, state) => new PendingDurablePin(state.frontier, state.checkpointOffset),
+            static (_, existing, state) =>
+            {
+                existing.Merge(state.frontier, state.checkpointOffset);
+                return existing;
+            },
+            (frontier, checkpointOffset));
+    }
+
+    /// <summary>
+    /// Clears the key's pending advance when a persisted write covers it on both axes.
+    /// </summary>
+    private void ClearPendingIfCovered((string TreeName, string ConsumerId) key, HybridLogicalClock frontier, long checkpointOffset)
+    {
+        if (_pendingDurable.TryGetValue(key, out var pending))
+        {
+            pending.TryClearIfCovered(frontier, checkpointOffset);
+        }
+    }
+
+    /// <summary>
+    /// The highest durable-pin advance for one (tree, consumer) that is not yet known
+    /// to be persisted. A reusable mutable slot guarded by its own lock, so the
+    /// steady-state coalesced path updates it without allocating.
+    /// </summary>
+    private sealed class PendingDurablePin
+    {
+        private HybridLogicalClock _frontier;
+        private long _checkpointOffset;
+        private bool _hasValue;
+
+        /// <summary>Creates a slot holding the given advance.</summary>
+        public PendingDurablePin(HybridLogicalClock frontier, long checkpointOffset)
+        {
+            _frontier = frontier;
+            _checkpointOffset = checkpointOffset;
+            _hasValue = true;
+        }
+
+        /// <summary>Merges an advance into the slot, keeping the per-axis maximum.</summary>
+        public void Merge(HybridLogicalClock frontier, long checkpointOffset)
+        {
+            lock (this)
+            {
+                if (!_hasValue)
+                {
+                    _frontier = frontier;
+                    _checkpointOffset = checkpointOffset;
+                    _hasValue = true;
+                    return;
+                }
+
+                if (frontier > _frontier)
+                {
+                    _frontier = frontier;
+                }
+
+                if (checkpointOffset > _checkpointOffset)
+                {
+                    _checkpointOffset = checkpointOffset;
+                }
+            }
+        }
+
+        /// <summary>Empties the slot when the persisted advance covers it on both axes.</summary>
+        public void TryClearIfCovered(HybridLogicalClock frontier, long checkpointOffset)
+        {
+            lock (this)
+            {
+                if (_hasValue && _frontier <= frontier && _checkpointOffset <= checkpointOffset)
+                {
+                    _hasValue = false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Reads the pending advance without clearing it; a successful persist clears
+        /// it through <see cref="ClearPendingIfCovered"/>.
+        /// </summary>
+        public bool TryTake(out HybridLogicalClock frontier, out long checkpointOffset)
+        {
+            lock (this)
+            {
+                frontier = _frontier;
+                checkpointOffset = _checkpointOffset;
+                return _hasValue;
+            }
         }
     }
 }

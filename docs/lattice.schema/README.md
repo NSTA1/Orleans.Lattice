@@ -5,7 +5,7 @@ schema to a value, and typed access is a client-side convenience. That keeps the
 core fast and format-agnostic, but it also means the cluster cannot, on its own,
 stop a caller writing a malformed value or tell a v1 value from a v2 one.
 
-The companion **`Orleans.Lattice.Schema`** package closes that gap with two
+The companion **`Orleans.Lattice.Schema`** package closes that gap with
 independent, composable, strictly opt-in capabilities:
 
 - **Schema enforcement** - per-tree, server-side validation of the values a
@@ -25,7 +25,7 @@ independent, composable, strictly opt-in capabilities:
   upcast to the tree's target version at read time; the target version advances
   monotonically as an admin action.
 
-Both features share one serializable value-transform primitive
+The capabilities share one serializable value-transform primitive
 ([`LatticeValueTransform`](value-transforms.md)) and the same dead-letter queue,
 which is surfaced read-only through the State API and the Explorer UI. The remote
 schema facade starts remediations, eager migrations, and compliance scans as

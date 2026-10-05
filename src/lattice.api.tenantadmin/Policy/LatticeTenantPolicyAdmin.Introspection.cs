@@ -137,7 +137,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
 
                 var visibility = scope.Classify(rule);
                 if (visibility == TenantRuleVisibility.Hidden
-                    || !SelectorMatches(rule.Subject, subject.SubjectId, groups)
+                    || !rule.Subject.Matches(subject.SubjectId, groups)
                     || (treeId is not null && !Governs(rule, visibility, treeId, targetIsTenantLayer)))
                 {
                     continue;
@@ -202,7 +202,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
                 var visibility = scope.Classify(rule);
                 if (visibility is (TenantRuleVisibility.Tenant or TenantRuleVisibility.PlatformTree)
                     && (rule.Operations & operation) != LatticeOperation.None
-                    && SelectorMatches(rule.Subject, subject.SubjectId, groups)
+                    && rule.Subject.Matches(subject.SubjectId, groups)
                     && KeyMatches(rule.Scope, key))
                 {
                     matched.Add(rule);
@@ -291,14 +291,6 @@ internal sealed partial class LatticeTenantPolicyAdmin
             LatticeScopeKind.Key => string.Equals(scope.KeyOrPrefix, key, StringComparison.Ordinal),
             LatticeScopeKind.Prefix => key.StartsWith(scope.KeyOrPrefix!, StringComparison.Ordinal),
             _ => true,
-        };
-
-    private static bool SelectorMatches(LatticeSubjectSelector selector, string subjectId, HashSet<string> groups) =>
-        selector.Kind switch
-        {
-            LatticeSubjectSelectorKind.User => string.Equals(selector.Id, subjectId, StringComparison.Ordinal),
-            LatticeSubjectSelectorKind.Group => groups.Contains(selector.Id),
-            _ => false,
         };
 
     private static HashSet<string> ToGroupSet(IReadOnlyCollection<string> groupIds) =>

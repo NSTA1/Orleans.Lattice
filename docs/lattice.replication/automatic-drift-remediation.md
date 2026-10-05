@@ -78,7 +78,7 @@ siloBuilder.AddLatticeReplication(o =>
 });
 ```
 
-Two cross-cutting prerequisites apply to the repair stages:
+These cross-cutting prerequisites apply to the repair stages:
 
 - **A real transport.** The repair re-ship goes through `IReplicationTransport`; the default no-op transport delivers nothing and returns an unaccepted ack, so every repair pass reports zero entries shipped and counts toward the remediation circuit breaker. Wire the gRPC binding (or a custom transport) for genuine cross-cluster repair.
 - **Projection-digest maintenance must be on.** Detection reads the core library's leaf-projection digest, which only exists when `MaintainProjectionDigest` is `true` (the default for user trees). A tree that opts out of digest maintenance has no digest to compare, so the entire stack is inert for it - see [the projection-rebuild digest opt-out](../lattice/projection-rebuild.md) for the cross-cluster impact.
@@ -105,7 +105,7 @@ All metric names are exposed as constants on `LatticeReplicationMetrics` for das
 
 ## Failure-mode matrix
 
-The stack is designed to fail safe and to make *why* it is not repairing legible in telemetry. The three failure modes an operator most often needs to recognise:
+The stack is designed to fail safe and to make *why* it is not repairing legible in telemetry. The failure modes an operator most often needs to recognise:
 
 | Failure mode | What you see | What it means | Operator action |
 |---|---|---|---|
@@ -113,7 +113,7 @@ The stack is designed to fail safe and to make *why* it is not repairing legible
 | **Re-replay cannot reach the divergence** | `leaf_rereplay.skipped{reason=wal_trimmed}` or `{reason=range_empty}`, then either `bootstrap_fallback.triggered` (fallback on) or `bootstrap_fallback.skipped{reason=disabled}` (fallback off) | Re-replay could not supply the missing writes for the localised range (a trimmed WAL or a below-cursor gap). | Enable `BootstrapFallbackEnabled` so the snapshot fallback can re-derive the committed projection of the divergent range. While it is off, the divergence is detected and localised but not repaired. |
 | **Circuit-breaker tripped** | `digest_remediation.disabled{reason=circuit_open}` for a `(tree, peer)`, with `digest_remediation.skipped{reason=circuit_open}` per skipped pass | Repair failed `RemediationFailureThreshold` times in a row for that pair, so the breaker opened and is fencing further repair for `RemediationCircuitResetInterval`. | Investigate the underlying repair failures (transport, peer health). The breaker half-opens after the cooldown and closes itself on a successful trial pass; no manual reset is required. |
 
-Two further skip reasons are normal background noise rather than failures: `digest_probe.compared{outcome=remote_unavailable}` (the peer has digesting turned off for that tree, or no real probe transport is registered) and `digest_remediation.skipped{reason=opt_out}` / `digest_remediation.disabled{reason=opt_out}` (you have not set `AutoRemediateOnDigestMismatch`, so detection runs but repair is intentionally off). A spent rate cap surfaces as `digest_remediation.skipped{reason=budget_exhausted}`; the skips stop once the `RemediationTrafficWindow` rolls over, while the matching `digest_remediation.disabled{reason=budget_exhausted}` series clears only on the pair's next remediation pass that completes without failing.
+These further skip reasons are normal background noise rather than failures: `digest_probe.compared{outcome=remote_unavailable}` (the peer has digesting turned off for that tree, or no real probe transport is registered) and `digest_remediation.skipped{reason=opt_out}` / `digest_remediation.disabled{reason=opt_out}` (you have not set `AutoRemediateOnDigestMismatch`, so detection runs but repair is intentionally off). A spent rate cap surfaces as `digest_remediation.skipped{reason=budget_exhausted}`; the skips stop once the `RemediationTrafficWindow` rolls over, while the matching `digest_remediation.disabled{reason=budget_exhausted}` series clears only on the pair's next remediation pass that completes without failing.
 
 ## Recommended rollout
 
