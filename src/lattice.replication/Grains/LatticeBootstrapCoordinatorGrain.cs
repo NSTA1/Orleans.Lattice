@@ -222,6 +222,35 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        return Task.FromResult<ReplicationDrainedLineage?>(
+            state.State.DrainedLineageBySource.TryGetValue(sourceClusterId, out var lineage)
+                ? new ReplicationDrainedLineage(
+                    lineage,
+                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty)
+                : null);
+    }
+
+    /// <summary>
+    /// Records the source lineage a whole-tree export opened under, with the
+    /// tree frontier epoch the drain began in (issue #4673). An export from a
+    /// sender that reports no lineage records nothing, and leaves any earlier
+    /// record in place.
+    /// </summary>
+    private void RecordDrainedLineage(string sourceClusterId, SnapshotSourceGeneration? openGeneration)
+    {
+        if (openGeneration?.Lineage is not { } lineage)
+        {
+            return;
+        }
+
+        state.State.DrainedLineageBySource[sourceClusterId] = lineage;
+        state.State.DrainedFrontierEpochBySource[sourceClusterId] = state.State.FrontierEpoch;
+    }
+
+    /// <inheritdoc />
     public async Task BootstrapForReseedAsync(string sourceClusterId, long reseedAfterEpoch, bool start, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
@@ -935,6 +964,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.HeldNoSourceRowsAtImportStart = preCapture.HeldNoSourceRows;
         }
 
+        // From here the tree holds the export's lineage, so a pushed batch the
+        // source read under any other lineage is refused (issue #4673). Recorded
+        // at drain open, durable with the write below, so a stale push that
+        // escapes it must straddle the whole drain, where the end-of-drain scan
+        // finds the row it left. Kept when the reconcile below skips.
+        RecordDrainedLineage(sourceClusterId, snapshot.OpenGeneration);
+
         // Recorded before the first entry is applied: from here on the tree may
         // hold a partial import, so a failure keeps the read fence up (#4526).
         state.State.ImportApplied = true;
@@ -1258,6 +1294,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         if (decision.RecordAlignedLineage && openGeneration?.Lineage is { } lineage)
         {
             state.State.AlignedLineageBySource[sourceClusterId] = lineage;
+            RecordDrainedLineage(sourceClusterId, openGeneration);
         }
 
         // The aligned-lineage and owed slots are persisted by the drain-end write

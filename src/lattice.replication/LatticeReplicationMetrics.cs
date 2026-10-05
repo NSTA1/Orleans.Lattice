@@ -1136,6 +1136,38 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string ReapBoundPeerFrontier = "peer_frontier";
 
+    // --- Source lineage gate (issue #4673) -----------------------------------------
+
+    /// <summary>
+    /// Counter of pushed batches the receiver refused because the source read
+    /// them under a lineage this tree does not hold, tagged by
+    /// <see cref="TagTree"/>, <see cref="TagOrigin"/> and <see cref="TagReason"/>:
+    /// <see cref="SourceLineageRefusedStale"/> (the batch's source lineage is not
+    /// the one this tree last drained from the origin) or
+    /// <see cref="SourceLineageRefusedReplaced"/> (this tree's contents were
+    /// replaced since that drain). Each refusal is retried by the sender, which
+    /// re-resolves its source binding and re-seeds the peer when it is current,
+    /// so a sustained rate means a link stalled on a re-seed.
+    /// </summary>
+    public static readonly Counter<long> ApplySourceLineageRefused =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.source_lineage_refused", unit: "{batch}",
+            description: "Pushed batches refused because the source read them under a lineage this tree does not hold.");
+
+    /// <summary>Canonical name of the <see cref="ApplySourceLineageRefused"/> counter.</summary>
+    public const string ApplySourceLineageRefusedName = "orleans.lattice.replication.apply.source_lineage_refused";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="ApplySourceLineageRefused"/>:
+    /// the batch's source lineage is not the one this tree last drained.
+    /// </summary>
+    public const string SourceLineageRefusedStale = "stale_lineage";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="ApplySourceLineageRefused"/>:
+    /// this tree's contents were replaced since it last drained the origin.
+    /// </summary>
+    public const string SourceLineageRefusedReplaced = "replaced";
+
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
     /// <summary>

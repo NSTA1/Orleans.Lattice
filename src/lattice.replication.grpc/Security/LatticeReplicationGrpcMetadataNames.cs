@@ -44,4 +44,14 @@ internal static class LatticeReplicationGrpcMetadataNames
     /// missing or malformed value means the batch vouches for nothing.
     /// </summary>
     public const string SourceFrontierHeader = "x-lattice-replication-source-frontier";
+
+    /// <summary>
+    /// Header that carries the source tree lineage the sender read a pushed
+    /// batch under (issue #4673), as a <see cref="Guid"/> in the <c>D</c>
+    /// format. Read only after the caller's origin is authenticated and parsed
+    /// strictly. A receiver that drained the sender under another lineage
+    /// refuses the batch; a missing header (a sender that predates it) applies
+    /// as before, and a malformed one is refused.
+    /// </summary>
+    public const string SourceLineageHeader = "x-lattice-replication-source-lineage";
 }

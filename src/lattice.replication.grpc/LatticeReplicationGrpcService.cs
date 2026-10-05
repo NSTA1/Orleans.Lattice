@@ -407,6 +407,24 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
     }
 
+    /// <summary>
+    /// The source lineage the sender stamped on the push (issue #4673):
+    /// <see langword="null"/> when the header is absent (a sender that predates
+    /// it), the parsed value when it is a <see cref="Guid"/> in the <c>D</c>
+    /// format, and <see cref="Guid.Empty"/> - which matches no drained lineage -
+    /// when it is malformed.
+    /// </summary>
+    private static Guid? ReadSourceLineage(ServerCallContext context)
+    {
+        var header = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceLineageHeader);
+        if (header is null)
+        {
+            return null;
+        }
+
+        return Guid.TryParseExact(header, "D", out var lineage) ? lineage : Guid.Empty;
+    }
+
     /// <inheritdoc />
     public override async Task<ReplicationAckBox> Push(ReplicationBatchEnvelopeBox requestBox, ServerCallContext context)
     {
@@ -478,6 +496,36 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                     BootstrapEpoch = bootstrapEpoch,
                     ReceiverLineage = receiverLineage,
                     SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                },
+            };
+        }
+
+        // A batch the sender read under a source lineage this tree no longer
+        // holds - pushed before a source restore, purge or alias move, and
+        // arriving after this tree drained the new lineage - must not land
+        // (issue #4673). The origin was authenticated above, so the header is
+        // the authenticated sender's own claim; a malformed one vouches for no
+        // lineage and is refused like a mismatch.
+        var lineageVerdict = await ReplicationSourceLineageGate.CheckAsync(
+                _grainFactory,
+                request.TreeName,
+                request.OriginClusterId,
+                ReadSourceLineage(context),
+                receiverLineage,
+                _logger)
+            .ConfigureAwait(false);
+        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+        {
+            return new ReplicationAckBox
+            {
+                Value = new ReplicationAck
+                {
+                    Accepted = false,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = bootstrapEpoch,
+                    ReceiverLineage = receiverLineage,
+                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                    SourceLineageRefused = lineageVerdict == ReplicationSourceLineageGate.Verdict.RefuseLineage,
                 },
             };
         }
