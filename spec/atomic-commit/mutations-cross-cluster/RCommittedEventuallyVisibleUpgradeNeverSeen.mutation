@@ -8,7 +8,7 @@ TARGET: RCommittedEventuallyVisible
 CLASS: Temporal
 SUMMARY: the shipper never sees every silo honour the purge hold, so a joining receiver waits for ever
 PERTURBS: UpgradeDone
-BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ preguard

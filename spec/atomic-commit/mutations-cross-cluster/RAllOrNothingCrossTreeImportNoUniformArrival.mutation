@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. A sub-saga a pre-upgrade silo purged reaches the
+# receiver only as committed rows. Without the uniform-verdict arrival (#4684's
+# R2) the import serves the tree post-saga while the barrier, already holding the
+# sibling's final tally, waits for an arrival that never comes.
+MODULE: RAllOrNothingCrossTreeImportNoUniformArrival
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: an import whose export names a decided operation in no row leaves the tree pending in its barrier
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 1, DialFaults = 0
+
+--- FIND
+         /\ BarrierImport(snap)
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- REPLACE
+\* MUTATION: only a decision row records an arrival.
+         /\ rout' = IF ViaBarrier(snap) THEN [rout EXCEPT !["A"] = snap] ELSE rout
+         /\ rstage' = IF ViaBarrier(snap) /\ rstage["A"] = "idle"
+                      THEN [rstage EXCEPT !["A"] = "register"] ELSE rstage
+         /\ afence' = (afence \/ ViaBarrier(snap))
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- END

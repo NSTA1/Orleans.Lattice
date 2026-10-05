@@ -9,7 +9,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: a re-added peer's re-seed is settled by an export drained while its shipper was detached
 PERTURBS: Readd
-BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ detached' = FALSE

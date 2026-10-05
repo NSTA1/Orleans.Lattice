@@ -8,7 +8,7 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: a shipper that loses a record stays on the log and keeps shipping the saga
 PERTURBS: ShipperGap
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ gone' = {m}

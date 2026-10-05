@@ -7,14 +7,14 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: a bootstrap's replay starts while a silo predates the purge hold
 PERTURBS: Bootstrap
-BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
 
 --- FIND
-    /\ ~rconn
+    /\ ~decom
     /\ ~preguard
 
 --- REPLACE
-    /\ ~rconn
+    /\ ~decom
 \* MUTATION: no deferral for a silo that predates the hold.
 
 --- END

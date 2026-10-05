@@ -18,10 +18,10 @@ PERTURBS: DeliverPrepare
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
     /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh>>
 --- REPLACE
 \* MUTATION: no settle and no late-prepare refusal.
     /\ rpend' = [rpend EXCEPT ![m.key] = "pending"]
     /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh>>
 --- END

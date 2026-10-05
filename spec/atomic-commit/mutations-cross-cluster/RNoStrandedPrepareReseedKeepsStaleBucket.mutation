@@ -7,7 +7,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the re-seed drain leaves a leftover bucket of a saga the export names in no row
 PERTURBS: ReseedDrain
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
                         ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"

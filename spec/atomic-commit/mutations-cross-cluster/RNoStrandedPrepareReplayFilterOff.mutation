@@ -6,7 +6,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the shipper replays a purged saga's retained records
 PERTURBS: ReplayWithhold
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ FirstSight = "withhold"

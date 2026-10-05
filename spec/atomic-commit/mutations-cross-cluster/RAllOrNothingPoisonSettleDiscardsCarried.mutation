@@ -7,13 +7,13 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the poison's re-seed discards the buckets of a poisoned saga the export carried as prepared rows
 PERTURBS: PoisonReseed
-BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-                        IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
                         ELSE IF Carried(snap) THEN rpend[k]
                         ELSE "none"]
 --- REPLACE
 \* MUTATION: every poisoned bucket is discarded, carried or not.
-                        "none"]
+                        ELSE "none"]
 --- END

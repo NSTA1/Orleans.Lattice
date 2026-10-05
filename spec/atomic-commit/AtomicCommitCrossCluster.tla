@@ -265,14 +265,23 @@ RObserved(k) ==
 (***************************************************************************)
 \* The instance's bounds. Each variant cfg narrows them to one slice that fits
 \* the TLC budget; the slices of one loss path partition its instance.
-\*   LossPath       0 none, 1 a shipper gap, 2 a detach, 3 a receiver poison.
+\*   LossPath       0 none, 1 a shipper gap, 2 a detach and re-add, 3 a
+\*                  receiver poison, 4 a detach, decommission and fresh re-add.
 \*   JoinStart      the single-tree receiver: 0 follows the stream from the
 \*                  saga's start, 1 joins through a bootstrap, 2 either.
 \*   SagaOutcome    the origin saga: 0 commits, 1 aborts, 2 either.
 \*   Shape          0 the single-tree saga, 1 the cross-tree saga, 2 either.
+\*   PreHold        1 a silo predates the purge hold until UpgradeDone, 0
+\*                  every silo honours it from the start.
+\*   DialFaults     1 the receiver's dial to the barrier can fail, 0 it never
+\*                  does.
 LossPath == 0
 
 Shape == 2
+
+PreHold == 1
+
+DialFaults == 1
 
 JoinStart == 2
 
@@ -382,7 +391,7 @@ Init ==
     \* A registry that predates #4508's guard and #4534-B's hold (a mixed-version
     \* silo) purges on retention alone until UpgradeDone. Starting with one
     \* loses nothing: UpgradeDone may be the first step.
-    /\ preguard = TRUE
+    /\ preguard = (PreHold = 1)
     /\ filt = FALSE
     /\ verdict = "none"
     /\ afence = FALSE
@@ -612,6 +621,7 @@ ReceiverFanOut(k) ==
 \* ordering against anything. While it is failing the delegated status reads
 \* "indeterminate" and the gate hides the saga's keys.
 DialFault(tr) ==
+    /\ DialFaults = 1
     /\ xtree
     /\ rdeleg[tr]
     /\ rdial' = [rdial EXCEPT ![tr] = ~rdial[tr]]
@@ -795,7 +805,7 @@ ShipperGap(m) ==
 \* marks itself DetachedFromLog and takes the peer off the log, then leaves
 \* the offset consumers and releases its forced-trim and replay holds.
 Detach ==
-    /\ LossPath = 2
+    /\ LossPath \in {2, 4}
     /\ rconn
     /\ losses = 0
     /\ ~detached
@@ -809,8 +819,8 @@ Detach ==
 \* replay hold and re-marks the re-seed at the current export epoch, so no
 \* export drained while it was detached settles it.
 Readd ==
+    /\ LossPath = 2
     /\ detached
-    /\ ~decom
     /\ detached' = FALSE
     /\ rs' = "marked"
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
@@ -823,6 +833,7 @@ Readd ==
 \* its pending buckets from that origin are discarded and its reads carry no
 \* replication guarantee.
 Decommission ==
+    /\ LossPath = 4
     /\ detached
     /\ ~decom
     /\ decom' = TRUE
@@ -1070,6 +1081,7 @@ Spec ==
     /\ WF_vars(Bootstrap)
     /\ WF_vars(UpgradeDone)
     /\ WF_vars(Readd)
+    /\ WF_vars(Decommission)
     /\ WF_vars(PoisonReseed)
     /\ WF_vars(ReseedDrain)
     /\ WF_vars(ReseedRewind)

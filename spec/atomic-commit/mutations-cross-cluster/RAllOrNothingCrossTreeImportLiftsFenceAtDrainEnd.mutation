@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. The drain records the tree's arrival with the barrier
+# but lifts the read fence as soon as it has applied the rows: while the sibling's
+# terminal is still on its own stream, this tree serves the saga post and the
+# sibling pre. #4683's fix holds the fence until the barrier decides.
+MODULE: RAllOrNothingCrossTreeImportLiftsFenceAtDrainEnd
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a cross-tree import notifies the barrier but lifts the tree's read fence at the end of the drain
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+         /\ BarrierImport(snap)
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- REPLACE
+\* MUTATION: the fence is not held past the drain.
+         /\ rout' = IF NotifiesBarrier(snap) THEN [rout EXCEPT !["A"] = ArrivalVerdict(snap)] ELSE rout
+         /\ rstage' = IF NotifiesBarrier(snap) /\ rstage["A"] = "idle"
+                      THEN [rstage EXCEPT !["A"] = "register"] ELSE rstage
+         /\ afence' = afence
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- END

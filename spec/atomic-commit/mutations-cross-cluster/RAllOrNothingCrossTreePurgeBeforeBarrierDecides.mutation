@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. Regression check for issue #4684. The origin purges a
+# cross-tree sub-saga's decision row on its own tree's guard alone, before the
+# operation's barrier on the peer has decided: a later import of the tree carries
+# committed rows and no decision row, and nothing records its arrival. #4684's
+# cross-tree purge hold keeps the row until every participant's terminal is
+# acknowledged after its notify.
+MODULE: RAllOrNothingCrossTreePurgeBeforeBarrierDecides
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the origin purges a cross-tree sub-saga's decision before every participant's terminal is acknowledged
+PERTURBS: OriginPurge
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+       ELSE /\ ~Held
+            /\ CrossTreeAcked
+
+--- REPLACE
+\* MUTATION: no cross-tree purge hold.
+       ELSE /\ ~Held
+
+--- END

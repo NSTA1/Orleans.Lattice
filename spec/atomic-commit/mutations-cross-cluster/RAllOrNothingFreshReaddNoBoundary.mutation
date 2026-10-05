@@ -1,0 +1,19 @@
+# Pairs with RAllOrNothing. A tree added back after a decommission bootstraps
+# before the peer has applied the sibling records written before it was added:
+# the origin purged the sub-saga while the tree was removed, so the import carries
+# bare committed rows and no barrier holds the sibling's tally yet.
+MODULE: RAllOrNothingFreshReaddNoBoundary
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a tree added back to the peer is imported before the peer has applied its siblings' earlier records
+PERTURBS: ReaddFresh
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+    /\ ubnd' = ubnd \cup {r \in outbox : ~Aff(r)}
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec, rfin, rtodo,
+--- REPLACE
+\* MUTATION: no boundary at the re-add.
+    /\ ubnd' = ubnd
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec, rfin, rtodo,
+--- END

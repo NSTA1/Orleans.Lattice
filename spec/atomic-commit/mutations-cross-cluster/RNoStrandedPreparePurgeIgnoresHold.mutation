@@ -7,7 +7,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the registry purges a decision while a re-seed or its replay holds purges
 PERTURBS: OriginPurge
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
        ELSE /\ ~Held

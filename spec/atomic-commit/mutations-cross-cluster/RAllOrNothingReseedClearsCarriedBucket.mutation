@@ -6,15 +6,15 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the re-seed drain discards every leftover bucket of an undecided saga, the carried ones included
 PERTURBS: ReseedDrain
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-                        IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
                         ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"
 
 --- REPLACE
 \* MUTATION: the clear discards carried buckets too.
-                        IF snap = "inflight" THEN "none"
+                        ELSE IF snap = "inflight" THEN "none"
                         ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
 
 --- END

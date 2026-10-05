@@ -7,14 +7,12 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the receiver applies a terminal of a saga it poisoned
 PERTURBS: DeliverTerminal
-BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-    /\ rs = "none"
-    /\ ~rpoison
-    /\ ReplayShips
+    /\ Aff(m) => ~rpoison
+
 --- REPLACE
-    /\ rs = "none"
 \* MUTATION: a poisoned saga's terminal is applied.
-    /\ ReplayShips
+
 --- END

@@ -7,13 +7,15 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the re-seed drain records a decision row without draining the saga's leftover buckets
 PERTURBS: ReseedDrain
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-         /\ rtodo' = IF Decided(snap) THEN rtodo \cup XKeys ELSE rtodo
+         /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
+         /\ BarrierImport(snap)
     \* A drain while
 --- REPLACE
 \* MUTATION: the decision row is not fanned out.
          /\ rtodo' = rtodo
+         /\ BarrierImport(snap)
     \* A drain while
 --- END
