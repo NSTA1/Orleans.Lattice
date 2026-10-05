@@ -1,6 +1,6 @@
-# Pairs with EventualConvergence in ReplicationReBootstrap. The grace period is what
-# stops a late write the tombstone beats from resurrecting the key at s; without it
-# s holds the old value and r holds the delete.
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces current
+# production (#4615): the reap waits only for the wall-clock grace period, so a
+# late write the tombstone beats resurrects the key at s, while r holds the delete.
 MODULE: EventualConvergenceReapInsideGrace
 TARGET: EventualConvergence
 CLASS: Temporal
