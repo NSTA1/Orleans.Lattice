@@ -1,0 +1,18 @@
+# Pairs with RestoreAllOrNothing, and reproduces production before #4637. A
+# prepared participant compensates on its cutover-fence timer alone, without
+# asking the coordinator, so a commit decided meanwhile reaches it too late:
+# it refuses the commit while another cluster has already cut over.
+MODULE: RestoreAllOrNothingTimerCompensatesUnilaterally
+TARGET: RestoreAllOrNothing
+CLASS: Invariant
+SUMMARY: a participant's fence timer compensates without the coordinator's decision
+PERTURBS: TimerCompensate
+
+--- FIND
+    /\ rphase \in {"prepare", "abort"}
+    /\ rphase' = "abort"
+--- REPLACE
+    \* MUTATION: the timer compensates whatever the coordinator decided,
+    \* and records nothing with it.
+    /\ UNCHANGED rphase
+--- END

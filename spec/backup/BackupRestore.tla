@@ -26,7 +26,7 @@
 (* entry admitted under an older epoch than the restored copy's is         *)
 (* discarded.                                                              *)
 (*                                                                         *)
-(* Epic #4430, issues #4440 and #4593.                                     *)
+(* Epic #4430, issues #4440, #4593 and #4441.                             *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -278,27 +278,43 @@ Decide ==
     /\ UNCHANGED fence
 
 (***************************************************************************)
-(* Commit(c): c's participant engages the fence: it pauses receiving      *)
-(* (bumping the fence epoch), closes the restored copy with that epoch as  *)
-(* its floor, pauses writes and shipping, swaps the alias to the shadow,  *)
-(* and unblocks local writes. Shipping and receiving stay paused. The      *)
-(* swap pushes a source-identity change to the shipper, which may be lost *)
-(* (it is best-effort); a delivered push rebinds and resets the cursors.   *)
+(* Engage(c): c's participant engages the fence (SagaWriteFenceGrain       *)
+(* .EngageAsync): it pauses receiving (bumping the fence epoch), closes    *)
+(* the restored copy with that epoch as its floor, and pauses writes and   *)
+(* shipping. The swap is a separate step, so a participant that crashes    *)
+(* between the two is the interleaving where the re-driven, idempotent     *)
+(* commit resumes at CutoverSwap (issue #4441 F9).                         *)
 (***************************************************************************)
-Commit(c) ==
+Engage(c) ==
     /\ rphase = "commit"
+    /\ vote[c] = "yes"
     /\ alias[c] = "old"
-    /\ alias' = [alias EXCEPT ![c] = "new"]
+    /\ "new" \notin closed[c]
     /\ shipOn' = [shipOn EXCEPT ![c] = FALSE]
     /\ recvOn' = [recvOn EXCEPT ![c] = FALSE]
     /\ epoch' = [epoch EXCEPT ![c] = @ + 1]
     /\ closed' = [closed EXCEPT ![c] = @ \cup {"new"}]
     /\ floor' = [floor EXCEPT ![c]["new"] = epoch[c] + 1]
+    /\ UNCHANGED <<alias, data, log, bound, sent, rphase, vote, pre, post>>
+    /\ UNCHANGED <<seen, inflight, parked>>
+
+(***************************************************************************)
+(* CutoverSwap(c): with the fence engaged, the participant swaps the alias *)
+(* to the shadow and unblocks local writes. Shipping and receiving stay    *)
+(* paused. The swap pushes a source-identity change to the shipper, which *)
+(* may be lost (it is best-effort); a delivered push rebinds and resets    *)
+(* the cursors.                                                            *)
+(***************************************************************************)
+CutoverSwap(c) ==
+    /\ rphase = "commit"
+    /\ alias[c] = "old"
+    /\ "new" \in closed[c]
+    /\ alias' = [alias EXCEPT ![c] = "new"]
     /\ \E pushed \in BOOLEAN :
          /\ bound' = IF pushed THEN [bound EXCEPT ![c] = "new"] ELSE bound
          /\ sent' = IF pushed THEN [sent EXCEPT ![c] = {}] ELSE sent
-    /\ UNCHANGED <<data, log, rphase, vote, pre, post>>
-    /\ UNCHANGED <<seen, inflight, parked>>
+    /\ UNCHANGED <<data, log, shipOn, recvOn, rphase, vote, pre, post>>
+    /\ UNCHANGED fence
 
 (***************************************************************************)
 (* Abort(c): on the abort decision a participant that prepared reverts and *)
@@ -311,6 +327,26 @@ Abort(c) ==
     /\ data' = [data EXCEPT ![c]["new"] = {}]
     /\ log' = [log EXCEPT ![c]["new"] = {}]
     /\ UNCHANGED <<alias, bound, sent, shipOn, recvOn, rphase, pre, post>>
+    /\ UNCHANGED fence
+
+(***************************************************************************)
+(* TimerCompensate(c): a prepared participant that voted yes reaches its   *)
+(* bounded cutover-fence timer before it cut over. It does not compensate  *)
+(* on the timer alone: it asks the coordinator for the saga's durable      *)
+(* decision (#4637). Abort means compensate. No decision yet is recorded   *)
+(* as abort by the coordinator, so no commit can follow, and then          *)
+(* compensated. Commit means commit, which Engage does. An unreachable    *)
+(* coordinator leaves the fence up: no step. Not fair.                    *)
+(***************************************************************************)
+TimerCompensate(c) ==
+    /\ vote[c] = "yes"
+    /\ alias[c] = "old"
+    /\ rphase \in {"prepare", "abort"}
+    /\ rphase' = "abort"
+    /\ vote' = [vote EXCEPT ![c] = "comp"]
+    /\ data' = [data EXCEPT ![c]["new"] = {}]
+    /\ log' = [log EXCEPT ![c]["new"] = {}]
+    /\ UNCHANGED <<alias, bound, sent, shipOn, recvOn, pre, post>>
     /\ UNCHANGED fence
 
 (***************************************************************************)
@@ -360,8 +396,10 @@ Next ==
     \/ \E c \in Clusters : Rebind(c)
     \/ \E c \in Clusters : Build(c)
     \/ Decide
-    \/ \E c \in Clusters : Commit(c)
+    \/ \E c \in Clusters : Engage(c)
+    \/ \E c \in Clusters : CutoverSwap(c)
     \/ \E c \in Clusters : Abort(c)
+    \/ \E c \in Clusters : TimerCompensate(c)
     \/ Complete
     \/ \E c \in Clusters : Resume(c)
     \/ Stutter
@@ -372,7 +410,7 @@ Next ==
 (* and parking are not fair.                                               *)
 (***************************************************************************)
 Progress ==
-    \/ \E c \in Clusters : Ship(c) \/ Rebind(c) \/ Build(c) \/ Commit(c) \/ Abort(c) \/ Resume(c)
+    \/ \E c \in Clusters : Ship(c) \/ Rebind(c) \/ Build(c) \/ Engage(c) \/ CutoverSwap(c) \/ Abort(c) \/ Resume(c)
     \/ Decide
     \/ Complete
 

@@ -116,6 +116,88 @@ public sealed class ShadowCutoverShardMapIntegrationTests
             "after a revert, a routing activation still holding the restored copy must be redirected back, not served the restored snapshot");
     }
 
+    [Test]
+    public async Task A_revert_retried_after_failing_between_its_swap_and_its_redirect_fix_up_completes_the_fix_up()
+    {
+        // Issue #4441 F9: a revert that dies after moving the alias back but before
+        // its redirect fix-up leaves the previous copy forwarding to the restored
+        // one and the restored copy unarmed. The same revert retried must finish
+        // the fix-up, so a stale route reaches the previous copy once it returns.
+        var target = await RegisterAndGrowAsync($"revert-crash-{Guid.NewGuid():N}");
+        var backupId = await WriteAndCaptureAsync(target, keyCount: 4);
+        var restore = await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(
+            backupId, target, scope: null, mode: LatticeRestoreMode.ShadowCutover));
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            // The failed attempt: reservation taken and alias swapped back, then
+            // nothing more.
+            await _fixture.GrainFactory.GetGrain<ITreeDeletionGrain>(target)
+                .BeginAliasChangeAsync($"{restore.OperationId}:revert");
+            await AliasCutoverShardMaps.RevertAsync(
+                _fixture.GrainFactory, target, restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId!);
+        }
+
+        Assert.That(
+            await UnarmedShardsAsync(restore.ShadowPhysicalTreeId!, await ShardsOfAsync(restore.ShadowPhysicalTreeId!), logicalTreeId: target),
+            Is.Not.Empty,
+            "precondition: the failed revert left the restored copy unarmed");
+
+        await _fixture.Restore.RevertRestoreAsync(restore);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(
+                await UnarmedShardsAsync(restore.ShadowPhysicalTreeId!, await ShardsOfAsync(restore.ShadowPhysicalTreeId!), logicalTreeId: target),
+                Is.Empty,
+                "the retried revert must arm the restored copy to redirect back");
+            Assert.That(
+                await UnarmedShardsAsync(restore.PreviousPhysicalTreeId!, await ShardsOfAsync(restore.PreviousPhysicalTreeId!), logicalTreeId: target),
+                Is.EquivalentTo(await ShardsOfAsync(restore.PreviousPhysicalTreeId!)),
+                "the retried revert must clear the previous copy's redirect, so it answers again");
+        });
+    }
+
+    [Test]
+    public async Task A_revert_is_refused_while_another_operation_holds_the_trees_alias_reservation()
+    {
+        // Issue #4441 F9 (RevertBegin): a revert moves the alias only under the
+        // tree's alias reservation, so it cannot run while another alias change -
+        // or a delete - is in motion on the same tree.
+        var target = await RegisterAndGrowAsync($"revert-reserved-{Guid.NewGuid():N}");
+        var backupId = await WriteAndCaptureAsync(target, keyCount: 4);
+        var restore = await _fixture.Restore.RestoreAsync(new LatticeRestoreRequest(
+            backupId, target, scope: null, mode: LatticeRestoreMode.ShadowCutover));
+        var deletion = _fixture.GrainFactory.GetGrain<ITreeDeletionGrain>(target);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await deletion.BeginAliasChangeAsync("another-operation");
+        }
+
+        try
+        {
+            Assert.ThrowsAsync<InvalidOperationException>(() => _fixture.Restore.RevertRestoreAsync(restore));
+            Assert.That(await Registry.ResolveAsync(target), Is.EqualTo(restore.ShadowPhysicalTreeId),
+                "a refused revert must leave the alias on the restored copy");
+        }
+        finally
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await deletion.EndAliasChangeAsync("another-operation");
+            }
+        }
+    }
+
+    private async Task<IReadOnlyList<int>> ShardsOfAsync(string physicalTreeId)
+    {
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            var routing = await _fixture.GrainFactory.GetGrain<ILattice>(physicalTreeId).GetRoutingAsync(forceRefresh: true);
+            return routing.Map.GetPhysicalShardIndices();
+        }
+    }
+
     private async Task<string> RegisterAndGrowAsync(string treeId)
     {
         await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = InitialShards });

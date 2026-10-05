@@ -4,10 +4,10 @@
   "nonBehaviouralActions": [],
   "counts": {
     "invariants": 5,
-    "properties": 1,
-    "actions": 9,
-    "mutations": 10,
-    "behaviourRows": 14,
-    "distinctStates": 31
+    "properties": 2,
+    "actions": 10,
+    "mutations": 12,
+    "behaviourRows": 16,
+    "distinctStates": 39
   }
 }
