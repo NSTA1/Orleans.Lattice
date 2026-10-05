@@ -2405,6 +2405,14 @@ public static class LatticeMetrics
     public const string WalGcBlockedConsumersName = "orleans.lattice.wal.gc.blocked_consumers";
 
     /// <summary>
+    /// Name of the per-partition unusable-pin hold-age gauge, registered by
+    /// <c>WalGcLeafPinHoldCensus</c> (issue #4622): seconds a partition has
+    /// been held by a leaf's durable materialiser pin (unusable, or uncovered and capping the retention ceiling below a configured window), as of the latest pass.
+    /// Zero-primed per partition; 0 means not held; -1 means unknown.
+    /// </summary>
+    public const string WalGcLeafPinHoldAgeName = "orleans.lattice.wal.gc.leaf_pin_hold_age";
+
+    /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
     /// with <b>no durable materialiser offset floor</b> despite the durability
     /// hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) - either
