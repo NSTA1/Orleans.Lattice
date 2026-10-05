@@ -1187,7 +1187,20 @@ internal sealed partial class BPlusLeafGrain(
             RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
-        return SplitResult.Combine(recovered, await CommitSetAsync(key, value, expiresAtTicks));
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        SplitResult? committed;
+        try
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+
+        return SplitResult.Combine(recovered, committed);
     }
 
     /// <summary>
@@ -1873,7 +1886,17 @@ internal sealed partial class BPlusLeafGrain(
             // parameter is a single ~24 B allocation per call, dwarfed
             // by the per-call WalRecord[count] array allocation the
             // pool path replaces.
-            await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            try
+            {
+                await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            }
+            catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+            {
+                // Issue #4586: unreachable - the filter merges the leaf clock
+                // past the floor so the caller's retry is admitted. A batch is
+                // not re-run here: another partition may already hold part of it.
+                throw;
+            }
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2121,6 +2144,27 @@ internal sealed partial class BPlusLeafGrain(
             return new LeafDeleteResult { Split = recovered };
         }
 
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        try
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+    }
+
+    /// <summary>
+    /// Commit path for a single-key <see cref="MutationKind.Delete"/> once
+    /// <see cref="DeleteCoreAsync"/> has resolved routing: stamp, append, apply,
+    /// publish. Re-runnable until its WAL append succeeds, because nothing
+    /// before the append changes durable or visible state.
+    /// </summary>
+    private async Task<LeafDeleteResult> CommitDeleteAsync(string key, bool tracked, bool isPrepared, SplitResult? recovered)
+    {
         if (await IsLatePrepareForTerminalTransactionAsync())
         {
             return new LeafDeleteResult { Split = recovered };

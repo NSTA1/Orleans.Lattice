@@ -3562,10 +3562,88 @@ internal sealed partial class LatticeGrain(
         // frontier dominates and the inner walk inherits it. So does a
         // replicated or idempotency-keyed delete, whose stamp is the
         // source's or the caller's contract.
+        //
+        // A replicated tree's WAL partition refuses a fresh stamp below its
+        // clock floor (issue #4586). A long fan-out can outlive the floor lag,
+        // so a refusal re-issues a fresh dominating stamp for the remainder: the
+        // keys already tombstoned keep theirs, and the walk re-runs under the new
+        // stamp, which skips them. The delete then lands as one stamp per
+        // uninterrupted run. A nested delete keeps the outer stamp, which is its
+        // owner's contract, so a refusal propagates to that owner.
         var existingOverride = LatticeHlcOverrideContext.Current;
-        var issueHlc = existingOverride
-            ?? await IssueDominatingRangeDeleteHlcAsync(physicalTreeId, physicalShards, startInclusive, endExclusive, cancellationToken);
-        using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
+        if (existingOverride is { } outer)
+        {
+            using var outerScope = LatticeHlcOverrideContext.With(outer);
+            var (nestedDeleted, nestedRefusal) = await DeleteRangeFanOutAsync(
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+            if (nestedRefusal is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(nestedRefusal);
+            }
+
+            return nestedDeleted;
+        }
+
+        var total = 0;
+        for (var attempt = 0; ; attempt++)
+        {
+            var issueHlc = await IssueDominatingRangeDeleteHlcAsync(physicalTreeId, physicalShards, startInclusive, endExclusive, cancellationToken);
+            using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
+            using var freshScope = LatticeFreshStampContext.Begin();
+            var (deleted, refusal) = await DeleteRangeFanOutAsync(
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+            total += deleted;
+            if (refusal is null)
+            {
+                return total;
+            }
+
+            if (attempt >= MaxRangeDeleteReissues)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(refusal);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many times a range delete re-issues its stamp after a WAL partition
+    /// refuses it below the clock floor before reporting the refusal (issue
+    /// #4586). Each re-issue mints a stamp past every covered leaf's clock, so a
+    /// second refusal needs the fan-out to outlive another whole floor lag.
+    /// </summary>
+    private const int MaxRangeDeleteReissues = 3;
+
+    /// <summary>
+    /// A clock-floor refusal of one shard's range-delete walk, carrying how many
+    /// keys the walk had already deleted (issue #4586). Raised and caught inside
+    /// this grain only, so it never crosses a grain boundary.
+    /// </summary>
+    private sealed class RangeDeleteRefusedException(int deleted, WalStampBelowFloorException refusal)
+        : Exception(refusal.Message, refusal)
+    {
+        /// <summary>Keys the shard's walk deleted before the refusal.</summary>
+        public int Deleted { get; } = deleted;
+
+        /// <summary>The partition's refusal.</summary>
+        public WalStampBelowFloorException Refusal { get; } = refusal;
+    }
+
+    /// <summary>
+    /// Fans one range delete out to every physical shard under the HLC override
+    /// in scope and returns the total deleted. A clock-floor refusal from any
+    /// shard is returned, not thrown, once every shard has finished, with the
+    /// count of what the other shards and the refused shard's earlier batches
+    /// deleted, so the caller can re-issue for the remainder. Any other failure
+    /// is thrown.
+    /// </summary>
+    private async Task<(int Deleted, WalStampBelowFloorException? Refusal)> DeleteRangeFanOutAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        CancellationToken cancellationToken)
+    {
 
         // Fan out to all physical shards in parallel - any may contain keys in the range.
         // Per-shard ShardActivationRetry wrap: a single shard's cold-start
@@ -3584,13 +3662,40 @@ internal sealed partial class LatticeGrain(
             tasks[i] = DrainShardRangeDeleteAsync(shard, startInclusive, endExclusive, predicate, cancellationToken);
         }
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch
+        {
+            // Inspected per task below.
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var total = 0;
+        WalStampBelowFloorException? refusal = null;
         for (int i = 0; i < tasks.Length; i++)
-            total += tasks[i].Result;
-        return total;
+        {
+            var task = tasks[i];
+            if (task.IsCompletedSuccessfully)
+            {
+                total += task.Result;
+                continue;
+            }
+
+            var fault = task.Exception?.InnerException;
+            if (fault is RangeDeleteRefusedException refused)
+            {
+                total += refused.Deleted;
+                refusal ??= refused.Refusal;
+                continue;
+            }
+
+            await task;
+        }
+
+        return (total, refusal);
     }
 
     /// <summary>
@@ -3612,8 +3717,19 @@ internal sealed partial class LatticeGrain(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var cursor = from;
-            var page = await ShardActivationRetry.RunAsync(
-                () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            ShardRangeDeletePage page;
+            try
+            {
+                page = await ShardActivationRetry.RunAsync(
+                    () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            }
+            catch (WalStampBelowFloorException refusal)
+            {
+                // Issue #4586: carry what this shard already deleted, so the
+                // re-issued walk's count adds only the remainder.
+                throw new RangeDeleteRefusedException(total, refusal);
+            }
+
             total += page.Deleted;
 
             if (page.ResumeFromInclusive is not { } next)

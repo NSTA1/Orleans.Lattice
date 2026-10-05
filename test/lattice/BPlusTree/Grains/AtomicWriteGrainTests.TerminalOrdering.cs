@@ -125,6 +125,25 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
+    public async Task RunSagaAsync_forgets_the_decision_only_after_the_terminal_broadcast()
+    {
+        // Issue #4441 / #4619: a decision row may be pruned once forgotten, and
+        // a pending bucket of the saga would then read pre-saga. The saga forgets
+        // only after every touched shard acknowledged its terminal, so no bucket
+        // of it is still pending when the row can go (BackupCapture's Prune row).
+        var (grain, state, _, shard, registry) = CreateGrainForTerminalOrdering();
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("k", [1])));
+
+        Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+        await registry.Received(1).ForgetAsync(Arg.Any<Guid>());
+        Received.InOrder(() =>
+        {
+            ExpectTerminalBroadcast(shard, committed: true);
+            registry.ForgetAsync(Arg.Any<Guid>());
+        });
+    }
+    [Test]
     public async Task RunSagaAsync_abort_records_the_decision_before_broadcasting_terminals()
     {
         // Ordering site 2 of 3: the Compensate tail of RunSagaAsync. A

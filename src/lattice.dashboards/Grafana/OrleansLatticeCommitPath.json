@@ -527,7 +527,7 @@
     {
       "id": 114,
       "title": "WAL writer admission & dispatch (rate)",
-      "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure. Conditionally-emitted series here (wal.writer.append.admission_timeouts, wal.writer.append.drain.releases) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
+      "description": "Outbound WAL writer admission outcomes and dispatch rate: admission_saturation_refusals (writer refused an append because the per-partition admission cap was saturated), admission_timeouts (waiter timed out before admission), dispatched (appends handed to the provider) and drain.releases (admission slots released on drain), plus wal.append.floor_refusals (fresh writes a replicated tree's partition refused below its clock floor, issue #4586; a sustained rate means silo clock skew or a pipeline stalled past ReplicationClockFloorLag). A rising refusal/timeout rate is the writer-tier view of WAL back-pressure. Conditionally-emitted series here (wal.writer.append.admission_timeouts, wal.writer.append.drain.releases, wal.append.floor_refusals) carry no 'or vector(0)' zero-fill: they are recorded only when their condition occurs, so an empty result means that condition never arose. Absence is the healthy reading on those series, not a measured zero (issue #2520).",
       "type": "timeseries",
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 108 },
@@ -536,7 +536,8 @@
         { "refId": "A", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_saturation_refusals_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "saturation refusals/s" },
         { "refId": "B", "expr": "sum (rate(orleans_lattice_wal_writer_append_admission_timeouts_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "admission timeouts/s" },
         { "refId": "C", "expr": "sum (rate(orleans_lattice_wal_writer_append_dispatched_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) or vector(0)", "legendFormat": "dispatched/s" },
-        { "refId": "D", "expr": "sum (rate(orleans_lattice_wal_writer_append_drain_releases_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "drain releases/s" }
+        { "refId": "D", "expr": "sum (rate(orleans_lattice_wal_writer_append_drain_releases_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "drain releases/s" },
+        { "refId": "E", "expr": "sum (rate(orleans_lattice_wal_append_floor_refusals_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "clock-floor refusals/s" }
       ]
     },
     {
@@ -1183,6 +1184,21 @@
       },
       "targets": [
         { "refId": "A", "expr": "orleans_lattice_wal_gc_blocked_consumers{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}", "legendFormat": "{{tree}} {{instance}} blocked consumers (-1 = unknown)" }
+      ]
+    },
+    {
+      "id": 4622,
+      "title": "WAL partitions held by a leaf pin - age (issue #4622)",
+      "description": "Seconds each WAL partition has been held by a leaf's durable materialiser pin, as of the latest GC pass on each silo (orleans.lattice.wal.gc.leaf_pin_hold_age). Held means an unusable pin (a leaf that never checkpointed the partition, or one without snapshot coverage), which admits nothing; or, with a WalRetention window configured, an uncovered leaf pin whose frontier is older than the window, which caps the retention ceiling because it never overtakes a leaf. A held partition's WAL grows for as long as the hold stands, WalRetention notwithstanding. ALERT when a series stays above a bound well past the checkpoint and capture cadence (one hour is a reasonable default). A hold by a registry-absent leaf is also on the blocked-consumer panel and is driven by the sweep; a hold by a live leaf that never checkpoints is visible only here, and is cleared by a graceful deactivation of the leaf. Zero is primed per partition; -1 means the pin census could not be read. No cross-silo sum: silos observe the same durable pins.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 454 },
+      "fieldConfig": {
+        "defaults": { "unit": "s", "custom": { "spanNulls": false } },
+        "overrides": []
+      },
+      "targets": [
+        { "refId": "A", "expr": "orleans_lattice_wal_gc_leaf_pin_hold_age_seconds{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}", "legendFormat": "{{tree}} p{{shard}} {{instance}} held for (-1 = unknown)" }
       ]
     },
     {
