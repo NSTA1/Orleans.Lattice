@@ -89,6 +89,8 @@ public partial class ReplicationApplierTests
                 return Task.FromResult(clone);
             });
 
+        CausalDependencyTestDouble.Wire(hwm, vc);
+
         var resolved = options ?? new LatticeReplicationOptions { ClusterId = LocalCluster };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(resolved);
@@ -166,7 +168,7 @@ public partial class ReplicationApplierTests
         var result = await h.Applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await h.Hwm.DidNotReceiveWithAnyArgs().GetVectorAsync(default);
+        await h.Hwm.DidNotReceiveWithAnyArgs().CheckDependenciesAsync(default!, default);
     }
 
     [Test]
@@ -179,7 +181,7 @@ public partial class ReplicationApplierTests
         var result = await h.Applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await h.Hwm.DidNotReceiveWithAnyArgs().GetVectorAsync(default);
+        await h.Hwm.DidNotReceiveWithAnyArgs().CheckDependenciesAsync(default!, default);
     }
 
     [Test]

@@ -1067,6 +1067,48 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Joins a full CRDT <paramref name="incomingState"/> into this leaf's current
+    /// visible state for <paramref name="key"/> under <paramref name="mode"/>,
+    /// returning the re-serialised joined state: the state-based complement of
+    /// <see cref="FoldPreparedCrdtDelta"/> for a caller that holds a whole state
+    /// rather than a typed delta. The existing value (or an empty primitive when
+    /// the key is absent or tombstoned) and the incoming state are both stripped
+    /// of any version envelope, deserialised through the registered
+    /// <see cref="CrdtShape"/>, and merged with <see cref="CrdtShape.MergeStates"/>,
+    /// which is commutative, associative and idempotent, so a re-delivered state
+    /// joins to the same bytes. The result is written back unenveloped, exactly as
+    /// the fold's output is. The caller chooses the stamp.
+    /// <para>
+    /// The terminal backstop uses it to install a saga's committed CRDT value
+    /// without discarding contributions the row gained after the stage-time
+    /// snapshot the value was computed from (issue #4611).
+    /// </para>
+    /// </summary>
+    private byte[] JoinCrdtStateIntoRow(string key, LatticeMergeMode mode, byte[] incomingState)
+    {
+        var treeId = RequireBoundTreeId(key, mode, "the CRDT state join");
+        var shape = ResolveCrdtShapeRegistry().TryGet(treeId, mode)
+            ?? throw new LatticeCrdtShapeNotRegisteredException(
+                "No CrdtShape is registered for tree '"
+                + treeId
+                + "' at mode '"
+                + mode
+                + "'. A committed CRDT value cannot be joined into the row without a "
+                + "shape descriptor; register the OR-Map pair via "
+                + "ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) for OR-Map trees "
+                + "(closed-shape modes resolve through the global fallback).",
+                treeId);
+
+        var joined = Cache.TryGetRow(key, out var existing)
+            && !existing.IsTombstone
+            && existing.Value is { Length: > 0 } existingBytes
+                ? shape.DeserializeState(StripStateForFold(existingBytes))
+                : shape.CreateEmpty();
+        shape.MergeStates(joined, shape.DeserializeState(StripStateForFold(incomingState)));
+        return shape.SerializeState(joined);
+    }
+
+    /// <summary>
     /// Drops every pending-tx entry under <paramref name="transactionId"/>
     /// without ever making it visible to readers - the saga's
     /// prepare-phase writes are undone in a single linearization step.
@@ -2112,19 +2154,15 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether a stranded prepared value with no committed-values payload can
     /// be re-delivered to the leaf that declares its key through the
-    /// cross-migration backstop, which installs a plain live value. A
-    /// tombstone, an expiring value, or a CRDT typed delta cannot be expressed
-    /// that way, so such a key keeps the pre-#4335 local drain.
+    /// cross-migration backstop. A tombstone or an expiring value cannot be
+    /// expressed that way, so such a key keeps the pre-#4335 local drain. A
+    /// CRDT-delta prepare can: its bucketed value is the staged full state, and
+    /// the declaring leaf, which inherits this leaf's tree binding and so resolves
+    /// the same merge mode, joins it into its row (issue #4611). A delta is
+    /// recorded only when that mode resolves to a CRDT.
     /// </summary>
-    private bool IsForwardablePreparedValue(Guid transactionId, string key, in LwwValue<byte[]> prepared)
-    {
-        if (prepared.Value is null || prepared.IsTombstone || prepared.ExpiresAtTicks != 0)
-            return false;
-
-        return _pendingTxDeltas is null
-            || !_pendingTxDeltas.TryGetValue(transactionId, out var deltas)
-            || !deltas.ContainsKey(key);
-    }
+    private static bool IsForwardablePreparedValue(in LwwValue<byte[]> prepared) =>
+        prepared.Value is not null && !prepared.IsTombstone && prepared.ExpiresAtTicks == 0;
 
     /// <inheritdoc />
     public async Task ApplyTxTerminalAsync(
@@ -2205,7 +2243,7 @@ internal sealed partial class BPlusLeafGrain
                 if (DeclaresKey(key))
                     continue;
                 var hasCommittedValue = committedValues is not null && committedValues.ContainsKey(key);
-                if (!hasCommittedValue && !IsForwardablePreparedValue(transactionId, key, prepared))
+                if (!hasCommittedValue && !IsForwardablePreparedValue(prepared))
                     continue;
                 (strandedPrepared ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
             }
@@ -2463,10 +2501,18 @@ internal sealed partial class BPlusLeafGrain
             // Pre-advance baseClock past any existing entry for the
             // missing keys before Ticking so the backstop strictly
             // dominates the migrated pre-saga value.
+            // Issue #4611: on a tree whose merge mode resolves to a CRDT, a
+            // backstop value is a full CRDT state computed from a stage-time
+            // snapshot, so it is joined into the row rather than installed
+            // last-writer-wins, which would discard every contribution the row
+            // gained after that snapshot. The drain folds the delta under the
+            // same condition. Every such key is stamped above its row below.
+            var backstopMode = ResolveMergeMode();
+            var joinCrdtState = backstopMode != LatticeMergeMode.LwwRegister;
             var baseClock = state.State.Clock;
             foreach (var kvp in missingKeys)
             {
-                if (missingStamps is not null && missingStamps.ContainsKey(kvp.Key))
+                if (!joinCrdtState && missingStamps is not null && missingStamps.ContainsKey(kvp.Key))
                     continue;
                 if (Cache.TryGetRow(kvp.Key, out var preExisting)
                     && preExisting.Timestamp.CompareTo(baseClock) > 0)
@@ -2491,7 +2537,16 @@ internal sealed partial class BPlusLeafGrain
                 // and stands; the key is still recorded as backstopped below.
                 var keyStamp = stamp;
                 var migrated = false;
-                if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
+                var installed = kvp.Value;
+                if (joinCrdtState)
+                {
+                    // A join cannot overwrite a later write, so no original stamp
+                    // applies; it is stored at the fresh stamp, which strictly
+                    // dominates the row it already contains (StoreEntry is LWW).
+                    installed = JoinCrdtStateIntoRow(kvp.Key, backstopMode, kvp.Value);
+                    anyFreshStamp = true;
+                }
+                else if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
                 {
                     if (IsRowAtOrAboveOriginalStamp(kvp.Key, originalStamp))
                         continue;
@@ -2511,7 +2566,7 @@ internal sealed partial class BPlusLeafGrain
                         TreeId = treeId,
                         Op = MutationKind.Set,
                         Key = kvp.Key,
-                        Value = kvp.Value,
+                        Value = installed,
                         Timestamp = keyStamp,
                         IsTombstone = false,
                         ExpiresAtTicks = 0,
@@ -2523,6 +2578,9 @@ internal sealed partial class BPlusLeafGrain
                         IsBackstop = true,
                         ShardIndex = shardIndex,
                         IsMigrated = migrated,
+                        // A joined state carries no delta, so the encoder keeps its
+                        // Value and replay installs the joined state at this stamp.
+                        Mode = joinCrdtState ? backstopMode : LatticeMergeMode.LwwRegister,
                     };
 
                     // Emit the WAL append on the LeafWriteDuration
@@ -2552,13 +2610,15 @@ internal sealed partial class BPlusLeafGrain
 
                 var value = new Primitives.LwwValue<byte[]>
                 {
-                    Value = kvp.Value,
+                    Value = installed,
                     Timestamp = keyStamp,
                     OriginClusterId = origin,
                     VectorClock = vc,
                     IsMigrated = migrated,
                 };
                 StoreEntry(kvp.Key, value);
+                if (joinCrdtState)
+                    Cache.SetMergeMode(kvp.Key, backstopMode);
                 // A backstop at a fresh stamp, or at an original stamp minted
                 // on this shard, is a non-migration write: any prior
                 // migration-provenance marker for this key is now stale and
