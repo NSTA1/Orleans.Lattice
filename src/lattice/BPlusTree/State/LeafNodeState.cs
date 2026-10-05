@@ -432,6 +432,23 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }
 
     /// <summary>
+    /// Receiver-side saga prepare txids deliberately discarded from this leaf.
+    /// <para>
+    /// A poisoned receiver saga is not aborted in the receiver transaction
+    /// registry: the next re-seed either ships the source's settled decision rows
+    /// or restages the still-in-flight saga whole. The local discard still has to
+    /// survive a leaf reactivation before its projection checkpoint has moved
+    /// beyond the prepared WAL rows. Entries here tell replay to treat matching
+    /// prepared records as already discarded instead of rebuilding
+    /// <c>_pendingTx</c>. Partition offsets are best-effort pruning evidence:
+    /// when every recorded partition checkpoint has advanced past its offset the
+    /// entry can be removed, while entries with no offset remain as the safe
+    /// durable backstop.
+    /// </para>
+    /// </summary>
+    [Id(25)] public List<DiscardedSagaPrepare>? DiscardedSagaPrepares { get; set; }
+
+    /// <summary>
     /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
     /// so the next activation can reserve hydration budget accurately from its
     /// very first moment instead of re-learning the size by overshooting

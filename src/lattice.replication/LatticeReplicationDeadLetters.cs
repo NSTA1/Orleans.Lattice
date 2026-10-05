@@ -1,4 +1,8 @@
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication.Grains;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.Replication;
 
@@ -14,8 +18,15 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 internal sealed class LatticeReplicationDeadLetters(
     IGrainFactory grainFactory,
-    ReplicationApplier inner) : ILatticeReplicationDeadLetters
+    ReplicationApplier inner,
+    IOptionsMonitor<LatticeReplicationOptions>? options = null,
+    ILogger<LatticeReplicationDeadLetters>? logger = null) : ILatticeReplicationDeadLetters
 {
+    private readonly IOptionsMonitor<LatticeReplicationOptions> _options =
+        options ?? new StaticOptionsMonitor(new LatticeReplicationOptions { ClusterId = "test" });
+    private readonly ILogger<LatticeReplicationDeadLetters> _logger =
+        logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<LatticeReplicationDeadLetters>.Instance;
+
     /// <inheritdoc />
     public Task<IReadOnlyList<DeadLetterEntry>> ListAsync(string treeId, CancellationToken cancellationToken = default)
     {
@@ -73,7 +84,87 @@ internal sealed class LatticeReplicationDeadLetters(
         return result;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> PoisonSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        if (transactionId == Guid.Empty)
+        {
+            throw new ArgumentException("Transaction id must not be empty.", nameof(transactionId));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var recorded = await TxRegistryRouting.GetRegistry(grainFactory, treeId, transactionId)
+            .GetRecordedStatusAsync(transactionId)
+            .ConfigureAwait(false);
+        if (recorded != TxStatus.InFlight)
+        {
+            DeadLetterTrackingReplicationApplier.RecordReceiverSagaPoisoned(
+                treeId,
+                originClusterId,
+                LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedDecided);
+            _logger.LogWarning(
+                "Operator poison of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}' was refused because receiver registry status is {Status}.",
+                transactionId,
+                originClusterId,
+                treeId,
+                recorded);
+            return false;
+        }
+
+        var poison = grainFactory.GetGrain<IReceiverSagaPoisonGrain>(treeId);
+        var poisoned = await poison
+            .PoisonAsync(originClusterId, transactionId, "Operator requested receiver-side saga poison.")
+            .ConfigureAwait(false);
+        if (!poisoned)
+        {
+            DeadLetterTrackingReplicationApplier.RecordReceiverSagaPoisoned(
+                treeId,
+                originClusterId,
+                LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedFull);
+            _logger.LogWarning(
+                "Operator poison of receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}' was refused because the receiver poison set is full.",
+                transactionId,
+                originClusterId,
+                treeId);
+            return false;
+        }
+
+        DeadLetterTrackingReplicationApplier.RecordReceiverSagaPoisoned(
+            treeId,
+            originClusterId,
+            LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedOperator);
+        _logger.LogWarning(
+            "Operator poisoned receiver saga {TransactionId} from origin {Origin} on tree '{TreeId}'; the origin link will park matching saga records until re-seed settles it.",
+            transactionId,
+            originClusterId,
+            treeId);
+
+        _ = ReceiverSagaPoisonReseed.TryStartOrMarkOwedAsync(
+            grainFactory,
+            _options,
+            treeId,
+            originClusterId,
+            _logger,
+            CancellationToken.None);
+        return true;
+    }
+
     private IReplicationDeadLetterGrain Grain(string treeId) =>
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(treeId);
-}
 
+    private sealed class StaticOptionsMonitor(LatticeReplicationOptions value) : IOptionsMonitor<LatticeReplicationOptions>
+    {
+        public LatticeReplicationOptions CurrentValue => value;
+
+        public LatticeReplicationOptions Get(string? name) => value;
+
+        public IDisposable? OnChange(Action<LatticeReplicationOptions, string?> listener) => null;
+    }
+}
