@@ -65,15 +65,19 @@ public partial class BPlusLeafGrainTests
         FakePersistentState<LeafNodeState> state,
         ILeafSnapshotStorageGrain snapshot,
         ILeafReplayCoordinatorGrain coordinator,
-        Guid leafKey)
+        Guid leafKey,
+        ILeafSnapshotCoverageMarkerGrain? coverageMarker = null,
+        ILeafCursorReporter? reporter = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshot);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
+        if (coverageMarker is not null)
+            grainFactory.GetGrain<ILeafSnapshotCoverageMarkerGrain>(Arg.Any<Guid>()).Returns(coverageMarker);
 
         var services = new ServiceCollection();
         services.AddSingleton(Substitute.For<ICommitLogReader>());
-        services.AddSingleton(Substitute.For<ILeafCursorReporter>());
+        services.AddSingleton(reporter ?? Substitute.For<ILeafCursorReporter>());
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", leafKey.ToString("N")));

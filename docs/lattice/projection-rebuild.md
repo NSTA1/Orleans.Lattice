@@ -1075,6 +1075,35 @@ answers. A snapshot row the storage provider cannot read at all - so
 its storage grain cannot activate - is beyond the rebuild's reach;
 restore the tree from a backup.
 
+### A vanished leaf snapshot
+
+A snapshot that is **absent** is not, on its own, proof that the leaf
+never had one (issue #4634). When a leaf's snapshot store keeps a
+snapshot, the leaf records that fact - the offsets the snapshot
+covered, per WAL partition - in a separate durable marker row keyed by
+the leaf, and that record is written before the leaf publishes any WAL
+pin resolved against the snapshot's coverage. So the WAL GC can never
+trim behind a snapshot whose existence is not durably on record.
+
+If the snapshot later vanishes - lost storage, or a row deleted
+outside the lattice - the leaf's next cold start finds no snapshot,
+reads the marker, and checks each partition the marker covers. When
+the WAL has been trimmed under it (the partition's tail is past offset
+ ), the snapshot was the only durable copy of that prefix, and the
+replay **fails closed** exactly as for an unreadable snapshot: data
+operations fail with LeafSnapshotUnavailableException and nothing is
+replayed. A marker or WAL tail that cannot be read fails closed too.
+A leaf whose WAL was never trimmed under the snapshot rebuilds from the
+WAL as before, losing nothing, and a leaf with no persisted checkpoint
+never reads the marker.
+
+The remedy is the same: restore the snapshot or the tree from a
+backup, or call ILattice.RebuildLeafProjectionAsync for the leaf's
+shard to accept the loss. The rebuild deletes the marker along with
+the snapshot it describes, so the next activation rebuilds from the
+WAL that survives. Clearing a leaf (tree deletion, a merge) deletes its
+marker with it.
+
 ### Observe materialiser lag
 
 ```csharp verify

@@ -222,7 +222,13 @@ internal sealed partial class BPlusLeafGrain
         {
             var blob = await snapshotGrain.LoadAsync(CancellationToken.None);
             if (blob is null)
+            {
+                // The snapshot is already gone. The rebuild accepts what it held,
+                // so the record that it existed goes too (issue #4634); otherwise
+                // the rebuilt leaf would fail every cold start closed.
+                await ClearKeptSnapshotCoverageMarkerAsync();
                 return;
+            }
 
             unreadable = await DescribeUnreadableSnapshotAsync(snapshotGrain, blob);
         }
@@ -248,6 +254,10 @@ internal sealed partial class BPlusLeafGrain
             unreadable);
 
         await snapshotGrain.ClearAsync(CancellationToken.None);
+
+        // The loss is accepted, so the record of the discarded snapshot goes with
+        // it (issue #4634).
+        await ClearKeptSnapshotCoverageMarkerAsync();
     }
 
     /// <summary>
