@@ -9,7 +9,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// every tree of its wait set before it persists the wait set, and withdraws
 /// once it has decided, so an import of the tree can find every barrier that
 /// may still wait for it. An entry can outlive its barrier's decision (a
-/// withdrawal that failed): a reader checks the barrier itself.
+/// withdrawal that failed): a reader checks the barrier itself. The grain also
+/// keeps the tree's latest snapshot import per origin, which a barrier reads to
+/// decide whether the import settled the tree's part of its operation.
 /// </summary>
 [Alias(TypeAliases.ICrossTreeBarrierIndexGrain)]
 internal interface ICrossTreeBarrierIndexGrain : IGrainWithStringKey
@@ -23,4 +25,15 @@ internal interface ICrossTreeBarrierIndexGrain : IGrainWithStringKey
 
     /// <summary>Durably withdraws <paramref name="barrierKey"/>. Idempotent.</summary>
     Task RemoveAsync(string barrierKey);
+
+    /// <summary>
+    /// Durably records the tree's latest snapshot import from
+    /// <paramref name="originClusterId"/>. An import whose export epoch is below
+    /// the recorded one is ignored.
+    /// </summary>
+    Task RecordImportAsync(string originClusterId, CrossTreeImportRecord import);
+
+    /// <summary>The tree's latest snapshot import from <paramref name="originClusterId"/>, if any.</summary>
+    [AlwaysInterleave]
+    Task<CrossTreeImportRecord?> GetImportAsync(string originClusterId);
 }

@@ -187,6 +187,49 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
     }
 
     [Test]
+    public async Task A_shipped_cross_tree_terminal_carries_the_full_decision_stamp_vector()
+    {
+        // Issue #4684: a receiver's barrier judges a participant's import
+        // against that participant's decision stamp, so every terminal of the
+        // operation carries every participant's stamp, read after the decision.
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var treeA = "xth-stamp-a-" + suffix;
+        var treeB = "xth-stamp-b-" + suffix;
+        var client = _cluster.Client;
+        foreach (var tree in new[] { treeA, treeB })
+        {
+            await client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(
+                tree, new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 64, MaxInternalChildren = 4 });
+            await client.GetGrain<IReplicationShipperGrain>($"{tree}/{PeerClusterId}").EnsureActiveAsync(CancellationToken.None);
+        }
+
+        // Tree A was exported before the write, so its stamp is not zero.
+        await client.GetGrain<IReplicationExportEpochGrain>(treeA).AdvanceAsync();
+        var epochA = await client.GetGrain<IReplicationExportEpochGrain>(treeA).GetAsync();
+        await client.SetManyAtomicAsync(
+            [
+                new LatticeTreeBatch(treeA, [new("k", [1])]),
+                new LatticeTreeBatch(treeB, [new("k", [2])]),
+            ],
+            "xth-stamp-op-" + suffix);
+
+        await TestPoll.UntilAsync(
+            () => PerTreeGatedTransport.StampedTerminals.ContainsKey(treeA) && PerTreeGatedTransport.StampedTerminals.ContainsKey(treeB),
+            "both trees' cross-tree terminals to ship",
+            TimeSpan.FromSeconds(30));
+
+        Assert.Multiple(() =>
+        {
+            foreach (var tree in new[] { treeA, treeB })
+            {
+                var stamps = PerTreeGatedTransport.StampedTerminals[tree];
+                Assert.That(stamps?.Keys, Is.EquivalentTo(new[] { treeA, treeB }), $"tree '{tree}''s terminal carries every participant's stamp");
+                Assert.That(stamps?[treeA], Is.EqualTo(epochA), "a stamp is the participant's export epoch read after the decision");
+            }
+        });
+    }
+
+    [Test]
     public void The_hold_compares_only_the_partitions_a_shipper_reads_and_holds_on_no_published_position()
     {
         Assert.Multiple(() =>
@@ -302,16 +345,32 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
         public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
     }
 
-    /// <summary>A peer that acknowledges every batch except those of a refused tree.</summary>
-    private sealed class PerTreeGatedTransport : IReplicationTransport
+    /// <summary>
+    /// A peer that acknowledges every batch except those of a refused tree, and
+    /// records the decision stamps each shipped cross-tree terminal carries.
+    /// </summary>
+    private sealed class PerTreeGatedTransport(IWalRecordEncoder encoder) : IReplicationTransport
     {
         public static readonly ConcurrentDictionary<string, bool> Refused = new(StringComparer.Ordinal);
 
-        public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken) =>
-            Task.FromResult(new ReplicationAck
+        public static readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, long>?> StampedTerminals = new(StringComparer.Ordinal);
+
+        public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
+        {
+            var accepted = !Refused.ContainsKey(batch.TreeName);
+            if (accepted && batch.EncodedEnvelope is { } envelope)
             {
-                Accepted = !Refused.ContainsKey(batch.TreeName),
-                HighestAppliedHlc = HybridLogicalClock.Zero,
-            });
+                foreach (var segment in envelope.EncodedEntries.Span)
+                {
+                    var record = encoder.Decode(segment.AsSpan(), batch.TreeName, envelope.Header.Mode);
+                    if (record.Op is MutationKind.TxCommit or MutationKind.TxAbort && record.CrossTreeOperationId is not null)
+                    {
+                        StampedTerminals[batch.TreeName] = record.CrossTreeDecisionStamps;
+                    }
+                }
+            }
+
+            return Task.FromResult(new ReplicationAck { Accepted = accepted, HighestAppliedHlc = HybridLogicalClock.Zero });
+        }
     }
 }

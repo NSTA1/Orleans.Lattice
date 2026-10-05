@@ -8,4 +8,8 @@ internal sealed class CrossTreeBarrierIndexState
     /// <summary>The registered barrier keys.</summary>
     [Id(0)]
     public HashSet<string> Barriers { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>The tree's latest snapshot import per origin cluster.</summary>
+    [Id(1)]
+    public Dictionary<string, CrossTreeImportRecord> Imports { get; set; } = new(StringComparer.Ordinal);
 }

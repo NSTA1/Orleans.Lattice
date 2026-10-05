@@ -234,6 +234,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
             AsOfHlc = stream.AsOfHlc,
             CausalStableFrontier = stream.CausalStableFrontier,
             ExportEpoch = stream.ExportEpoch,
+            CrossTreeHoldHonoured = ExportGate is not null,
             OpenGeneration = stream.OpenGeneration,
             SourceFrontier = stream.OpenFrontier,
         };

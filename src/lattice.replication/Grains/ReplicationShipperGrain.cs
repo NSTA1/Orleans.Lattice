@@ -2806,6 +2806,10 @@ internal sealed partial class ReplicationShipperGrain(
         // drained buffers are shipped verbatim), so opting out restores the
         // byte-identical verbatim drain.
         CoalesceDrainBuffer(options);
+
+        // A cross-tree terminal carries its operation's decision stamps on the
+        // wire (#4684).
+        await StampCrossTreeTerminalsAsync();
     }
 
     /// <summary>

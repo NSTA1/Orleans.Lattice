@@ -33,6 +33,34 @@ internal sealed class CrossTreeBarrierIndexGrain(
     }
 
     /// <inheritdoc />
+    public async Task RecordImportAsync(string originClusterId, CrossTreeImportRecord import)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(import);
+        var had = state.State.Imports.TryGetValue(originClusterId, out var previous);
+        if (had && previous!.ExportEpoch > import.ExportEpoch)
+        {
+            return;
+        }
+
+        state.State.Imports[originClusterId] = import;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            if (had) state.State.Imports[originClusterId] = previous!;
+            else state.State.Imports.Remove(originClusterId);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<CrossTreeImportRecord?> GetImportAsync(string originClusterId) =>
+        Task.FromResult(state.State.Imports.TryGetValue(originClusterId, out var import) ? import : null);
+
+    /// <inheritdoc />
     public async Task RemoveAsync(string barrierKey)
     {
         ArgumentException.ThrowIfNullOrEmpty(barrierKey);

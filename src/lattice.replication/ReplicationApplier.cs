@@ -1206,7 +1206,7 @@ internal sealed partial class ReplicationApplier(
     /// <see cref="WalRecord.Key"/> for back-compat with pre-Option A WAL
     /// records authored before the typed slot was introduced.
     /// </summary>
-    private Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
+    private async Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var committed = entry.Op == MutationKind.TxCommit;
@@ -1260,9 +1260,19 @@ internal sealed partial class ReplicationApplier(
                 }
             }
             crossTreeWaitSet = waitSet;
+
+            // The decision stamps reach the barrier before the terminal does, so
+            // the barrier compares its trees' imports with them from the moment
+            // the terminal opens it (#4684).
+            if (entry.CrossTreeDecisionStamps is { Count: > 0 } stamps)
+            {
+                await grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(
+                        LatticeCrossTreeReceiverGrain.ComputeKey(entry.OriginClusterId!, crossTreeOperationId))
+                    .RecordDecisionStampsAsync(stamps);
+            }
         }
 
-        return apply.ApplyTxTerminalAsync(
+        await apply.ApplyTxTerminalAsync(
             entry.TransactionId,
             committed,
             shardIndex,

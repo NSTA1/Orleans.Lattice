@@ -221,6 +221,16 @@ public readonly record struct SnapshotEntry
     [Id(14)] internal ImmutableArray<string> CrossTreeParticipants { get; init; }
 
     /// <summary>
+    /// The decision stamps of the cross-tree write
+    /// <see cref="CrossTreeOperationId"/> (issue #4684): per participating tree,
+    /// that tree's export epoch read at the source after the decision was
+    /// durable, or <see langword="null"/> when the row names no operation or the
+    /// operation was decided before stamping. The receiver's barrier compares a
+    /// participant's stamp with the export it imported the participant from.
+    /// </summary>
+    [Id(15)] internal ImmutableDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
+
+    /// <summary>
     /// Compares two entries by value, with <see cref="Value"/> and
     /// <see cref="Delta"/> compared by content. The compiler-generated
     /// record-struct equality compares each <see cref="byte"/> array with
@@ -248,7 +258,31 @@ public readonly record struct SnapshotEntry
         && (CrossTreeParticipants.IsDefaultOrEmpty
             ? other.CrossTreeParticipants.IsDefaultOrEmpty
             : !other.CrossTreeParticipants.IsDefaultOrEmpty
-                && CrossTreeParticipants.AsSpan().SequenceEqual(other.CrossTreeParticipants.AsSpan()));
+                && CrossTreeParticipants.AsSpan().SequenceEqual(other.CrossTreeParticipants.AsSpan()))
+        && StampsEqual(CrossTreeDecisionStamps, other.CrossTreeDecisionStamps);
+
+    private static bool StampsEqual(ImmutableDictionary<string, long>? left, ImmutableDictionary<string, long>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var (tree, stamp) in left)
+        {
+            if (!right.TryGetValue(tree, out var other) || other != stamp)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc />
     public override int GetHashCode()

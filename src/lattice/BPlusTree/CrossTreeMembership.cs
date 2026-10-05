@@ -20,4 +20,13 @@ internal sealed record CrossTreeMembership
 
     /// <summary>Every tree the cross-tree write touched, ordinal-sorted and de-duplicated.</summary>
     [Id(1)] public required ImmutableArray<string> Participants { get; init; }
+
+    /// <summary>
+    /// The operation's decision stamps (issue #4684): per participating tree,
+    /// that tree's snapshot export epoch read after the decision was durable and
+    /// before any participant finalized, or <see langword="null"/> for an
+    /// operation decided by a silo that predates stamping. Carried on the
+    /// export's rows and the shipped terminals of the sub-saga.
+    /// </summary>
+    [Id(2)] public ImmutableDictionary<string, long>? DecisionStamps { get; init; }
 }

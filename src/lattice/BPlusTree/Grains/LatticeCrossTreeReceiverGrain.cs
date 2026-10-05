@@ -138,12 +138,20 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // replicated here when the wait set froze (issue #4692) - is
             // recorded so the returned finalize set materializes it with the
             // operation's verdict, which every participant's terminal shares.
-            if (!state.State.Arrived.ContainsKey(terminal.TreeId))
+            if (!state.State.Arrived.TryGetValue(terminal.TreeId, out var recorded))
             {
                 // The same premise as the undecided join: one verdict crosses the
                 // tree boundary only between trees that agree on cluster identity.
                 ThrowIfWaitSetClusterIdsDisagree(
                     CanonicalStringSet.SortedDistinct(state.State.WaitSet.Append(terminal.TreeId)));
+                state.State.Arrived[terminal.TreeId] = terminal;
+                await state.WriteStateAsync();
+            }
+            else if (recorded.TransactionId == Guid.Empty && terminal.TransactionId != Guid.Empty)
+            {
+                // An arrival an import recorded (#4684) carries no transaction id
+                // and finalizes nothing; a real terminal of the tree replaces it,
+                // so its pending bucket is finalized with the verdict.
                 state.State.Arrived[terminal.TreeId] = terminal;
                 await state.WriteStateAsync();
             }
@@ -208,6 +216,10 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         // Record (or idempotently overwrite) this tree's terminal.
         state.State.Arrived[terminal.TreeId] = terminal;
 
+        // A tree whose latest import settled its part of the operation without
+        // naming it arrives with this verdict (#4684).
+        await FillImportedArrivalsAsync();
+
         // The barrier completes when every wait-set tree has arrived, and the
         // global verdict is commit iff every arrived terminal voted commit. Both
         // rules are the shared, dependency-free CrossTreeReceiverBarrier core,
@@ -270,6 +282,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             GrainContext.GrainId.Key, treeId);
 
         state.State.WaitSet = state.State.WaitSet.Where(t => !string.Equals(t, treeId, StringComparison.Ordinal)).ToList();
+        await FillImportedArrivalsAsync();
         if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
         {
             state.State.Decided = true;
@@ -291,41 +304,47 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     }
 
     /// <inheritdoc />
-    public async Task<CrossTreeReceiverDecision> RecordImportedArrivalAsync(string treeId)
+    public async Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps)
     {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        ArgumentNullException.ThrowIfNull(stamps);
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
-            GrainContext.ActivationServices, treeId, LatticeOperation.Replication);
+            GrainContext.ActivationServices, state.State.WaitSet.FirstOrDefault() ?? string.Empty, LatticeOperation.Replication);
 
-        if (state.State.WaitSet.Count == 0 || state.State.Arrived.Count == 0)
+        if (state.State.DecisionStamps is null && stamps.Count > 0)
         {
-            return CrossTreeReceiverDecision.InFlight;
+            // Persisted even before the barrier opens: the terminal or decision
+            // row that carried the stamps opens it next, and a barrier that lost
+            // them would take the operation for one decided before stamping.
+            state.State.DecisionStamps = new Dictionary<string, long>(stamps, StringComparer.Ordinal);
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.DecisionStamps = null;
+                throw;
+            }
         }
+
+        return await ReevaluateAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task<CrossTreeReceiverDecision> ReevaluateAsync()
+    {
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, state.State.WaitSet.FirstOrDefault() ?? string.Empty, LatticeOperation.Replication);
 
         if (state.State.Decided)
         {
             return _decisionAwaitingPersist ? CrossTreeReceiverDecision.InFlight : BuildDecision();
         }
 
-        if (!state.State.WaitSet.Contains(treeId) || state.State.Arrived.ContainsKey(treeId))
+        if (state.State.WaitSet.Count == 0 || !await FillImportedArrivalsAsync())
         {
             return CrossTreeReceiverDecision.InFlight;
         }
-
-        // One cross-tree operation has one verdict, which every arrived
-        // terminal carries. No transaction id: the import settled the tree's
-        // rows itself, so the decision has nothing to finalize on it.
-        state.State.Arrived[treeId] = new CrossTreeReceiverTerminal
-        {
-            OriginClusterId = state.State.OriginClusterId,
-            OperationId = state.State.OperationId,
-            TreeId = treeId,
-            TransactionId = Guid.Empty,
-            Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived),
-            WaitSet = state.State.WaitSet,
-            ObservedSourceShards = [],
-            TerminalHlc = HybridLogicalClock.Zero,
-        };
 
         if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
         {
@@ -345,6 +364,79 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         await SlideTtlAsync();
         await UnindexAsync();
         return BuildDecision();
+    }
+
+    /// <summary>
+    /// Records, in memory, the arrival of every wait-set tree that has not
+    /// arrived and whose latest import from the origin settled its part of the
+    /// operation (issue #4684): the import's export opened after the
+    /// operation's decision and named the operation on no row. The tree takes
+    /// the verdict the arrived trees carry and no transaction id, so the
+    /// decision finalizes nothing on it. A barrier with no arrival has no
+    /// verdict to give. Returns whether anything was recorded; the caller
+    /// persists.
+    /// </summary>
+    private async Task<bool> FillImportedArrivalsAsync()
+    {
+        if (state.State.Arrived.Count == 0
+            || string.IsNullOrEmpty(state.State.OriginClusterId)
+            || GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return false;
+        }
+
+        var filled = false;
+        foreach (var tree in state.State.WaitSet)
+        {
+            if (state.State.Arrived.ContainsKey(tree))
+            {
+                continue;
+            }
+
+            var import = await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).GetImportAsync(state.State.OriginClusterId);
+            if (import is null
+                || import.NamedOperations.Contains(state.State.OperationId)
+                || !ImportOpenedAfterDecision(tree, import.ExportEpoch))
+            {
+                continue;
+            }
+
+            state.State.Arrived[tree] = new CrossTreeReceiverTerminal
+            {
+                OriginClusterId = state.State.OriginClusterId,
+                OperationId = state.State.OperationId,
+                TreeId = tree,
+                TransactionId = Guid.Empty,
+                Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived),
+                WaitSet = state.State.WaitSet,
+                ObservedSourceShards = [],
+                TerminalHlc = HybridLogicalClock.Zero,
+            };
+            filled = true;
+            Logger.LogInformation(
+                "Cross-tree receiver {Key}: tree '{TreeId}' was imported from an export that opened after the operation's "
+                + "decision and named it nowhere, so its sub-saga was purged at the origin; it arrives with its siblings' verdict.",
+                GrainContext.GrainId.Key, tree);
+        }
+
+        return filled;
+    }
+
+    /// <summary>
+    /// Whether an export of <paramref name="tree"/> numbered
+    /// <paramref name="exportEpoch"/> opened after the operation's decision:
+    /// its epoch is greater than the tree's decision stamp. An operation with no
+    /// recorded stamps was decided by a silo that predates stamping, which the
+    /// origin serves no export alongside, so every import qualifies.
+    /// </summary>
+    private bool ImportOpenedAfterDecision(string tree, long exportEpoch)
+    {
+        if (state.State.DecisionStamps is null)
+        {
+            return true;
+        }
+
+        return state.State.DecisionStamps.TryGetValue(tree, out var stamp) && exportEpoch > stamp;
     }
 
     /// <inheritdoc />

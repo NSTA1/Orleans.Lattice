@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -519,6 +520,32 @@ internal sealed partial class TxRegistryGrain(
             Participants = [.. CanonicalStringSet.SortedDistinct(participants)],
         };
         await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships.Remove(txid));
+    }
+
+    /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        if (!state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
+        {
+            return;
+        }
+
+        if (membership.DecisionStamps is not null)
+        {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RecordCrossTreeDecisionStampsAsync(txid, stamps);
+            }
+
+            return;
+        }
+
+        state.State.CrossTreeMemberships[txid] = membership with
+        {
+            DecisionStamps = stamps.ToImmutableDictionary(StringComparer.Ordinal),
+        };
+        await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships[txid] = membership);
     }
 
     /// <inheritdoc />

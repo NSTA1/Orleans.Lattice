@@ -360,6 +360,11 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // every peer of every participant tree acknowledged past its terminal.
         builder.Services.AddSingleton<ICrossTreeDecisionHold, ReplicationCrossTreeDecisionHold>();
 
+        // ... and stamps each cross-tree decision with the participants' export
+        // epochs, so a receiver can tell an export opened after it (#4684).
+        // Ships with the hold, under the same capability check.
+        builder.Services.AddSingleton<ICrossTreeDecisionStamper, ReplicationCrossTreeDecisionStamper>();
+
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable

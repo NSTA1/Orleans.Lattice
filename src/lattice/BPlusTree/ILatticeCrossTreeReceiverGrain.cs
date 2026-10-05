@@ -87,18 +87,30 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     Task<CrossTreeReceiverStatus> GetStatusAsync();
 
     /// <summary>
-    /// Records that <paramref name="treeId"/> was imported from a source export
-    /// that settled its part of this operation without naming it (issue
-    /// #4684): the origin had purged the tree's sub-saga, so the export carried
-    /// its outcome as plain rows. The tree arrives with the verdict its
-    /// siblings' terminals already carry - one cross-tree operation has one
-    /// verdict - and no finalize record, since the import left nothing to
-    /// settle. Call it only when the export is known to reflect the tree's
-    /// outcome; the caller owns that precondition. A barrier that has not
-    /// opened, has no arrival to take the verdict from, or does not wait for
-    /// the tree is left unchanged. Returns the barrier's decision.
+    /// Records the operation's decision stamps (issue #4684): per participating
+    /// tree, that tree's snapshot export epoch read at the origin after the
+    /// decision was durable. Every terminal and decision row of the operation
+    /// carries the same stamps; the first recorded stand. Call it before the
+    /// terminal or decision row that carried them is notified. Returns the
+    /// barrier's decision, re-evaluated as <see cref="ReevaluateAsync"/> does.
     /// </summary>
-    Task<CrossTreeReceiverDecision> RecordImportedArrivalAsync(string treeId);
+    Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps);
+
+    /// <summary>
+    /// Re-evaluates the barrier against its trees' latest snapshot imports
+    /// (issue #4684), as it does whenever it opens or records an arrival. A tree
+    /// of the wait set that has not arrived arrives with its siblings' verdict -
+    /// one cross-tree operation has one verdict - when its latest import from
+    /// the origin came from an export that opened after the operation's
+    /// decision (an export epoch greater than the tree's decision stamp; an
+    /// operation decided by a silo that predates stamping counts as decided
+    /// before every export the origin serves) and named the operation on no
+    /// row. Such an export carried the sub-saga's outcome as plain rows,
+    /// because the origin had purged it, so the import left nothing to
+    /// finalize. Called by an import after it records itself. A barrier that
+    /// has not opened is left unchanged. Returns the barrier's decision.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> ReevaluateAsync();
 }
 
 /// <summary>
