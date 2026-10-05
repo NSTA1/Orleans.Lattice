@@ -19,21 +19,36 @@ namespace Orleans.Lattice.Replication.Tests;
 /// producer-to-receiver pump delivers the post-snapshot incremental
 /// WAL stream through the change-feed/applier seam, exactly as the
 /// chaos suite's <c>ChaosDeliveryPump</c> does. After authorship
-/// completes and the bootstrap reaches LiveIncremental, the
-/// bootstrapped peer must observe every authored saga atomically:
-/// all of the saga's keys present, or none of them. A strict-subset
-/// view on any saga is a saga-atomicity violation.
+/// completes and the bootstrap reaches LiveIncremental, every
+/// authored saga must be fully present on the bootstrapped peer, and
+/// no read of a saga's keys may ever observe a strict subset of them.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Sampling happens at convergence only, not mid-drain. The bootstrap
-/// drain applies prepared and committed rows one leaf at a time, so a
-/// polling sample taken between two leaves of the same terminal
-/// commit can legitimately observe a strict subset of a saga's keys
-/// without violating saga atomicity - that subset is a snapshot of
-/// the inter-leaf apply window, not a snapshot of the receiver's
-/// externally observable state. Per-saga atomicity of the apply
-/// mechanism itself is proved separately by
+/// Every sample reads a saga's keys with ONE
+/// <see cref="ILattice.GetManyAsync(List{string}, CancellationToken)"/>,
+/// the read whose contract is atomic visibility across the requested
+/// keys (the <c>RAllOrNothing</c> row of
+/// <c>spec/atomic-commit/RefinementCrossCluster.md</c>). Separate
+/// <see cref="ILattice.GetAsync(string, CancellationToken)"/> calls are
+/// only per-key linearizable: a series of them that spans the
+/// receiver's single flip point legitimately sees the keys read before
+/// it pre-saga and the keys read after it post-saga. The test used to
+/// sample that way while the pump was still delivering terminals, and
+/// failed intermittently on exactly that legitimate interleaving
+/// (issue #4598).
+/// </para>
+/// <para>
+/// The flip check is deterministic: the pump samples a saga right after
+/// it applies each of that saga's source-shard terminals, so every
+/// partial-tally point it delivers is read, and a receiver that let
+/// one shard's keys surface before the last terminal arrived fails the
+/// check at the first such point. The final read requires every saga
+/// fully present - no saga aborts, so an all-absent saga is a lost
+/// commit, not an atomic outcome.
+/// </para>
+/// <para>
+/// Per-saga atomicity of the apply mechanism itself is proved separately by
 /// <c>Prepared_rows_replayed_on_receiver_become_atomically_visible_on_terminal</c>;
 /// concurrent steady-state atomicity under partition cycling is
 /// proved by the chaos suite
@@ -61,6 +76,7 @@ public partial class BootstrapAtomicVisibilityTests
         const string siteB = "cbav-site-b";
         const string tree = "cbav-tree";
         const int sagaCount = 30;
+        const int postLiveSagaCount = 3;
         const int keysPerSaga = 4;
 
         // Site A is the producer. Build it first so its grain client
@@ -106,7 +122,7 @@ public partial class BootstrapAtomicVisibilityTests
                 // Plan every saga's key set up front so the post-drain
                 // check can recover saga membership from the key
                 // namespace.
-                var sagaKeys = new string[sagaCount][];
+                var sagaKeys = new string[sagaCount + postLiveSagaCount][];
                 for (var s = 0; s < sagaCount; s++)
                 {
                     var keys = new string[keysPerSaga];
@@ -115,6 +131,15 @@ public partial class BootstrapAtomicVisibilityTests
                         keys[k] = $"saga{s:D3}-k{k}";
                     }
                     sagaKeys[s] = keys;
+                }
+
+                // The sagas authored once the receiver is live have their
+                // keys on distinct source shards, so each delivers
+                // keysPerSaga separate terminals and the flip check reads
+                // keysPerSaga - 1 partial-tally points of each.
+                for (var s = sagaCount; s < sagaKeys.Length; s++)
+                {
+                    sagaKeys[s] = KeysOnDistinctShards($"saga{s:D3}", keysPerSaga);
                 }
 
                 // Construct the producer-to-receiver delivery pump. The
@@ -137,11 +162,14 @@ public partial class BootstrapAtomicVisibilityTests
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromMinutes(2));
                 var pumpErrors = new System.Collections.Concurrent.ConcurrentQueue<Exception>();
+                var coordForProbe = receiverCluster.Client.GetGrain<ILatticeBootstrapCoordinatorGrain>(tree);
+                var flipProbe = new SagaFlipProbe(receiverLattice, sagaKeys, async () => (await coordForProbe.GetStateAsync()).ToString());
                 var pumpTask = Task.Run(() => RunPumpAsync(
                     producerFeed,
                     receiverApplier,
                     tree,
                     siteB,
+                    flipProbe,
                     pumpErrors,
                     cts.Token));
 
@@ -197,15 +225,36 @@ public partial class BootstrapAtomicVisibilityTests
                 Assert.That(state, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                     $"Bootstrap must reach LiveIncremental within the convergence window when concurrent producer sagas are in flight. Last observed state: {state}.");
 
-                // Steady-state atomic-visibility sample. With the
-                // producer quiesced and the receiver in LiveIncremental,
-                // the producer-to-receiver pump has had a finite tail
-                // to drain; every authored saga must be either fully
-                // visible or fully absent on the receiver. We allow a
-                // convergence window for the pump to deliver the
-                // post-snapshot terminal records that flip prepared
-                // rows to visible.
-                await AssertConvergedAllOrNothingAsync(receiverLattice, sagaKeys, cts.Token);
+                // Sagas authored once the receiver is live reach it only
+                // through the pump, so the pump delivers every one of their
+                // terminals first and the flip check reads each partial
+                // tally deterministically.
+                for (var s = sagaCount; s < sagaKeys.Length; s++)
+                {
+                    await producerLattice.SetManyAtomicAsync(
+                        sagaKeys[s].Select(key => new KeyValuePair<string, byte[]>(key, new byte[] { (byte)s })).ToList(),
+                        cts.Token);
+                }
+
+                // Convergence: with the producer quiesced and the
+                // receiver in LiveIncremental, the pump has a finite
+                // tail to deliver. Every authored saga committed on the
+                // producer, so each must end fully present here, and
+                // every atomic read on the way must be all-or-nothing.
+                await AssertConvergedAllPresentAsync(receiverLattice, sagaKeys, cts.Token);
+
+                Assert.That(
+                    flipProbe.Violations,
+                    Is.Empty,
+                    "An atomic read taken right after a source-shard terminal saw a strict subset of the saga's keys: "
+                    + string.Join("; ", flipProbe.Violations));
+                for (var s = sagaCount; s < sagaKeys.Length; s++)
+                {
+                    Assert.That(
+                        flipProbe.SamplesFor(s),
+                        Is.GreaterThanOrEqualTo(keysPerSaga - 1),
+                        $"PRECONDITION: the flip check read every partial-tally point of post-live saga {s}.");
+                }
 
                 Assert.That(
                     pumpErrors,
@@ -227,6 +276,22 @@ public partial class BootstrapAtomicVisibilityTests
             await producerCluster.DisposeAsync();
             ReceiverSiloConfigurator.Transport = null;
         }
+    }
+
+    private static string[] KeysOnDistinctShards(string prefix, int count)
+    {
+        var keys = new List<string>(count);
+        var shards = new HashSet<int>();
+        for (var i = 0; keys.Count < count; i++)
+        {
+            var key = $"{prefix}-k{i}";
+            if (shards.Add(LatticeSharding.GetShardIndex(key, LatticeConstants.DefaultShardCount)))
+            {
+                keys.Add(key);
+            }
+        }
+
+        return keys.ToArray();
     }
 
     private static IOptionsMonitor<LatticeReplicationOptions> BuildOptionsMonitor(string clusterId)
@@ -255,9 +320,14 @@ public partial class BootstrapAtomicVisibilityTests
         ReplicationApplier receiverApplier,
         string treeName,
         string receiverClusterId,
+        SagaFlipProbe flipProbe,
         System.Collections.Concurrent.ConcurrentQueue<Exception> errors,
         CancellationToken cancellationToken)
     {
+        // Saga index by transaction id, learned from the prepares the pump
+        // delivers. The change feed yields every terminal after its saga's
+        // prepares (issue #4511), so a terminal's saga is always known here.
+        var sagaByTransaction = new Dictionary<Guid, int>();
         // Phase D1c: cursor shape is per-partition WAL offset.
         // Capture the producer's current cursor before the Subscribe
         // call so entries authored during our consume land in the
@@ -272,6 +342,7 @@ public partial class BootstrapAtomicVisibilityTests
                 var nextCursor = await producerFeed
                     .GetCurrentCursorAsync(treeName, cancellationToken)
                     .ConfigureAwait(false);
+                var deferred = false;
                 await foreach (var entry in producerFeed
                     .Subscribe(treeName, cursor, includeLocalOrigin: true, cancellationToken)
                     .ConfigureAwait(false))
@@ -281,10 +352,34 @@ public partial class BootstrapAtomicVisibilityTests
                         continue;
                     }
 
-                    await receiverApplier.ApplyAsync(entry, cancellationToken).ConfigureAwait(false);
+                    if (entry.IsPrepared && SagaFlipProbe.TryParseSaga(entry.Key, out var preparedSaga))
+                    {
+                        sagaByTransaction[entry.TransactionId] = preparedSaga;
+                    }
+
+                    var result = await receiverApplier.ApplyAsync(entry, cancellationToken).ConfigureAwait(false);
+                    if (result.Deferred)
+                    {
+                        // The receiver deferred the entry (a fence, a gate, a
+                        // full dead-letter queue): re-deliver this pass from
+                        // the same cursor, as the real shipper keeps its
+                        // cursor on a not-accepted ack. Applies are idempotent.
+                        deferred = true;
+                        break;
+                    }
+
+                    if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort
+                        && sagaByTransaction.TryGetValue(entry.TransactionId, out var terminalSaga))
+                    {
+                        await flipProbe.SampleAfterTerminalAsync(terminalSaga, entry.ShardIndex, cancellationToken).ConfigureAwait(false);
+                    }
                 }
 
-                cursor = nextCursor;
+                if (!deferred)
+                {
+                    cursor = nextCursor;
+                }
+
                 await Task.Delay(pollInterval, cancellationToken).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -300,76 +395,107 @@ public partial class BootstrapAtomicVisibilityTests
         }
     }
 
-    private static async Task AssertConvergedAllOrNothingAsync(
+    private static async Task AssertConvergedAllPresentAsync(
         ILattice receiverLattice,
         string[][] sagaKeys,
         CancellationToken cancellationToken)
     {
-        // Allow a convergence window so the producer-to-receiver pump
-        // can deliver the post-snapshot terminal records that flip any
-        // outstanding prepared rows. The predicate checked at
-        // convergence is the per-saga all-or-nothing invariant: every
-        // saga is either fully present or fully absent on the
-        // receiver.
+        // Allow a convergence window for the pump to deliver the
+        // post-snapshot terminals. Each saga is read with one atomic
+        // GetManyAsync, so a strict subset is a violation at any moment,
+        // and the window ends only once every saga is fully present.
         var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
-        while (Environment.TickCount64 < deadline)
+        var notPresent = new List<string>();
+        while (true)
         {
-            var anyPartial = false;
+            notPresent.Clear();
             for (var s = 0; s < sagaKeys.Length; s++)
             {
-                var presentCount = await CountPresentAsync(receiverLattice, sagaKeys[s]);
-                if (presentCount != 0 && presentCount != sagaKeys[s].Length)
+                var present = await SagaFlipProbe.ReadPresentAsync(receiverLattice, sagaKeys[s], cancellationToken);
+                Assert.That(
+                    present == 0 || present == sagaKeys[s].Length,
+                    Is.True,
+                    $"Bootstrapped peer served a PARTIAL saga to one atomic read: saga={s}, {present}/{sagaKeys[s].Length} keys visible.");
+                if (present != sagaKeys[s].Length)
                 {
-                    anyPartial = true;
-                    break;
+                    notPresent.Add($"saga={s}");
                 }
             }
-            if (!anyPartial)
+
+            if (notPresent.Count == 0)
             {
-                // Steady-state sample is clean - assert it and return.
-                for (var s = 0; s < sagaKeys.Length; s++)
-                {
-                    var keys = sagaKeys[s];
-                    var presentCount = await CountPresentAsync(receiverLattice, keys);
-                    Assert.That(
-                        presentCount == 0 || presentCount == keys.Length,
-                        Is.True,
-                        $"Bootstrapped peer observed PARTIAL saga visibility for saga={s}: {presentCount}/{keys.Length} keys visible. Atomic visibility was violated.");
-                }
                 return;
             }
+
+            if (Environment.TickCount64 >= deadline)
+            {
+                Assert.Fail(
+                    "Bootstrapped peer never made every committed saga visible within the convergence window. Absent sagas: "
+                    + string.Join(", ", notPresent));
+            }
+
             await Task.Delay(200, cancellationToken);
         }
-
-        // Convergence window exhausted - emit a precise failure
-        // message that names every saga that is still partially
-        // visible.
-        var partials = new List<string>();
-        for (var s = 0; s < sagaKeys.Length; s++)
-        {
-            var presentCount = await CountPresentAsync(receiverLattice, sagaKeys[s]);
-            if (presentCount != 0 && presentCount != sagaKeys[s].Length)
-            {
-                partials.Add($"saga={s} ({presentCount}/{sagaKeys[s].Length})");
-            }
-        }
-        Assert.Fail(
-            "Bootstrapped peer never converged to per-saga all-or-nothing visibility within the convergence window. Partially visible sagas: "
-            + string.Join(", ", partials));
     }
 
-    private static async Task<int> CountPresentAsync(ILattice receiverLattice, string[] keys)
+    /// <summary>
+    /// Reads a saga's keys atomically right after the pump applies one of
+    /// its source-shard terminals, and records any read that sees a strict
+    /// subset of them.
+    /// </summary>
+    private sealed class SagaFlipProbe(ILattice receiverLattice, string[][] sagaKeys, Func<Task<string>> bootstrapState)
     {
-        var presentCount = 0;
-        foreach (var key in keys)
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<int, int> _samples = new();
+
+        public System.Collections.Concurrent.ConcurrentQueue<string> Violations { get; } = new();
+
+        public int SamplesFor(int saga) => _samples.TryGetValue(saga, out var count) ? count : 0;
+
+        public async Task SampleAfterTerminalAsync(int saga, int sourceShard, CancellationToken cancellationToken)
         {
-            var value = await receiverLattice.GetAsync(key);
-            if (value is not null)
+            var keys = sagaKeys[saga];
+            var stateBefore = await bootstrapState();
+            var values = await ReadAsync(receiverLattice, keys, cancellationToken);
+            _samples.AddOrUpdate(saga, 1, static (_, count) => count + 1);
+            if (values.Count != 0 && values.Count != keys.Length)
             {
-                presentCount++;
+                var stateAfter = await bootstrapState();
+                var absent = string.Join(",", keys.Where(k => !values.ContainsKey(k)));
+                Violations.Enqueue($"saga={saga} {values.Count}/{keys.Length} after the terminal of source shard {sourceShard} (absent: {absent}; bootstrap {stateBefore} -> {stateAfter})");
             }
         }
-        return presentCount;
+
+        public static bool TryParseSaga(string? key, out int saga)
+        {
+            saga = -1;
+            return key is { Length: > 7 }
+                && key.StartsWith("saga", StringComparison.Ordinal)
+                && int.TryParse(key.AsSpan(4, 3), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out saga);
+        }
+
+        /// <summary>
+        /// The number of <paramref name="keys"/> one atomic read finds
+        /// present. Retries the refusals a bootstrapping receiver answers
+        /// a read with while its import drains, and an unreachable registry.
+        /// </summary>
+        public static async Task<int> ReadPresentAsync(ILattice lattice, string[] keys, CancellationToken cancellationToken) =>
+            (await ReadAsync(lattice, keys, cancellationToken)).Count;
+
+        private static async Task<Dictionary<string, byte[]>> ReadAsync(ILattice lattice, string[] keys, CancellationToken cancellationToken)
+        {
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    return await lattice.GetManyAsync(keys.ToList(), cancellationToken);
+                }
+                catch (Exception ex) when (attempt < 200
+                    && ex is LatticeTreeBootstrappingException or LatticeTransactionOutcomeUnavailableException)
+                {
+                    await Task.Delay(50, cancellationToken);
+                }
+            }
+        }
     }
 
     private sealed class ProducerSiloConfigurator : ISiloConfigurator

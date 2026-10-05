@@ -1172,6 +1172,53 @@ once the passes are done the export re-reads the decision of every saga
 it shipped as prepared rows, and ships a decision row for each one that
 decided meanwhile.
 
+<a id="export-completion"></a>
+**Completion: sagas that decide while the export reads.** The passes
+read each leaf at its own instant, so a saga can decide between two of
+those reads: one of its keys is read before it prepared there (pre-saga),
+another after its terminal drained there (post-saga). A saga that started
+after snap0 and staged its prepares after the prepared pass read their
+leaves ships no prepared row at all, so no decision row names it either,
+and the receiver would serve it split until the incremental stream
+delivered its last source-shard terminal
+([#4685](https://github.com/NSTA1/Orleans.Lattice/issues/4685)). The
+export therefore:
+
+1. Records a decision-purge hold on the tree
+   ([`IWalPurgeHoldGrain`](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas))
+   before snap0, and releases it once the completion has read the log, so a
+   saga that decides during the export is still recorded at close. A crashed
+   export's hold is released by the tree's next export after 24 hours.
+2. Captures every write-ahead-log partition's readable head (C0) before
+   snap0.
+3. Once the passes and the decision rows are done, takes a second
+   registry snapshot (snap1) and then every partition's head (C1). Every
+   saga decided in snap1 that snap0 did not have decided ships a decision
+   row, and each one that committed also ships every prepare of it the log
+   holds in [C0, C1), as a committed row at the prepare's own stamp. The
+   segment is read page by page, keeping only those sagas' prepares.
+
+Each saga then reaches the receiver whole:
+
+- A saga still undecided at snap1 drained nothing before the passes
+  ended, so its keys shipped pre-saga or as buckets, and the receiver's
+  tally hides it until the stream settles it.
+- A prepare below C0 of a saga that decided during the export was staged
+  before the passes read its key. The passes therefore captured that key as
+  its bucket, which the decision row settles, or as its drained value.
+- A prepare at or above C0 precedes the saga's decision, snap1 and C1, so
+  it ships committed.
+
+Last-writer-wins at the prepare's stamp keeps the committed row above any
+pre-saga value the passes shipped. Over a drained value it is a no-op,
+because the stamp is the same. A typed CRDT prepare ships its delta, and
+CRDT deltas are joins, so a key whose drained state already includes the
+delta counts it once.
+
+The export fails with a retryable `TimeoutException`, and the bootstrap
+retries it whole, when a trim reached into [C0, C1) before the completion
+read it or the tree moved to another physical copy while it was exported.
+
 <a id="re-seed-stale-pending-clear"></a>
 **Re-seed: clearing stale pending buckets.** A sender that took its
 peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-off-the-log))
