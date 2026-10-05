@@ -893,6 +893,21 @@ allowed to "fall off the log" so disk usage stays bounded; that consumer
 detects the gap on its next read and re-bootstraps via the fall-off-log
 path described in [`projection-rebuild.md`](projection-rebuild.md).
 
+The ceiling never overtakes a leaf materialiser. The scan stops at the durable
+materialiser offset floor before any arm is consulted, so the ceiling cannot trim
+past what a leaf has durably checkpointed or snapshotted. A partition named by a
+standing durable block pin admits nothing at all, from the ceiling or from any
+consumer cursor, whether or not the leaf is live (issue #4622). A block pin is a
+`Zero` frontier that the offset floor does not cover: a data-bearing leaf that has
+never checkpointed. Such a leaf replays from the "nothing applied" sentinel on a
+cold activation and could not detect a trimmed prefix. Any other leaf pin the offset
+floor does not cover caps the partition's ceiling at its frontier: that frontier was
+published by an empty release, when the leaf held no row there and had applied
+nothing, so every entry the leaf has since written to the partition is stamped above
+it, even though the pin store's monotone merge keeps the frontier after that write.
+A held or capped partition grows for as long as the hold stands; watch
+`orleans.lattice.wal.gc.leaf_pin_hold_age` (see [Metrics](metrics.md)).
+
 The scan is conservative: the first non-eligible entry per shard stops the
 walk for that shard, as does the first entry above the partition's durable
 materialiser offset floor or at an offset-reading consumer's read position. WAL offsets are dense and append-only but HLC
