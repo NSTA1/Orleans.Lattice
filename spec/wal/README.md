@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 10 | 4 | 18 | 31 | 31 | 111,154 |
+| `WalDurability` | 11 | 4 | 22 | 39 | 36 | 111,154 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
@@ -39,11 +39,12 @@ invariant and both action properties with a budget of two faults instead of one:
 because at two the full configuration takes about ten minutes, past the TLC budget.
 
 Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
-leaf's durable snapshot (`SnapshotVanish`, issue #4634), at two faults so a snapshot can
-vanish and its leaf then stop. Destroyed data is outside the durability properties by
-construction, so it checks the properties that say the loss is never silent -
-`ReadPositionHonest` above all - with the other safety invariants that still apply:
-1,106,104 distinct states.
+leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
+(`LeafRowVanish`, issue #4654), and the operator purge the tree (`PurgeClear`), at two
+faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
+properties by construction, so it checks the properties that say the loss is never
+silent - `ReadPositionHonest` above all, carved out only for a shard whose purge has
+begun - with the other safety invariants that still apply: 1,365,609 distinct states.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the

@@ -1,0 +1,32 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4654: a leaf whose row is
+# gone activates without a new-leaf intent. With its snapshot gone too (the
+# second fault), nothing durable records that it ever held coverage, so it
+# starts cold from the trimmed WAL and reads past an owned write it never
+# holds. This is the pre-fix behaviour, and also a record-based fix that loses
+# its record together with the row. The base fails closed unless a create path
+# passes the intent.
+MODULE: ReadPositionHonestRowlessActivationStartsCold
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a rowless leaf activates cold without a create intent and replays a trimmed WAL
+PERTURBS: Activate
+
+--- FIND
+    /\ row[l] \/ CreateIntent(l)
+--- REPLACE
+\* MUTATION: the new-leaf intent is not required.
+    /\ TRUE
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END
