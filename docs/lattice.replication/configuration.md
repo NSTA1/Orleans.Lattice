@@ -206,11 +206,11 @@ Retry budget before a poison inbound entry is moved to the dead-letter queue. Ra
 
 ### `SagaDeferralTimeout`
 
-Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks its saga records with `reason=poisoned_saga`, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
+Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
 
 ### `DeadLetterQueueCapacity`
 
-Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. See [Dead-Letter Queue](dead-letter-queue.md).
+Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. A full queue never evicts: it refuses further parks and holds the affected replication link back (the link reports Stalled) until parked entries are replayed or discarded, because every parked entry was acknowledged and evicting it would lose the write. See [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure).
 
 ### `CausalBufferMaxEntries`
 

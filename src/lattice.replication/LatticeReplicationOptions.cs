@@ -200,7 +200,11 @@ public class LatticeReplicationOptions
     /// <summary>
     /// Maximum number of <see cref="DeadLetterEntry"/> records the
     /// per-tree dead-letter queue retains. When the queue is full a new
-    /// enqueue evicts the oldest entry (FIFO). Defaults to
+    /// enqueue is refused rather than evicting a parked entry (issue #4603):
+    /// every parked entry was acknowledged without being applied, so the
+    /// caller keeps the refused entry unacknowledged and the affected
+    /// replication link is held back until an operator replays or discards
+    /// parked entries. Defaults to
     /// <see cref="DefaultDeadLetterQueueCapacity"/>. Must be at least
     /// <c>1</c>.
     /// </summary>

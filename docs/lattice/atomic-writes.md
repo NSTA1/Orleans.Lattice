@@ -410,10 +410,44 @@ write and the drain.
 - A split's live shadow-forward and its retroactive sweep carry `P` to the
   destination, which buckets the prepare at `P`.
 - A committed-values backstop the sweep applies carries `P` too.
+- The saga coordinator's own committed-values backstop carries `P`. Before
+  its execute phase ends, the coordinator reads every key's `P` back from
+  the bucket that holds it and persists the stamps with the execute-phase
+  checkpoint, so a coordinator that reactivates after the decision still
+  has them. Each terminal it sends to a shard carries the stamps of that
+  shard's backstop keys, so a leaf that holds no bucket for a key - the
+  sibling a leaf split moved the key's range to, say - applies the saga's
+  value at `P` and never over a write acknowledged after the prepare.
+- An online resize's mirror forwards each prepare to the resized copy
+  carrying `P`, and every other write as the row it stored, at that row's
+  own stamp, so the resized copy never re-stamps a write on its own clock.
+  Its prepared-bucket sweep and the terminals it mirrors carry `P` too, so
+  the resized copy orders every write exactly as the source does.
 - A leaf split hands its new sibling the donor's clock, so the sibling
   stamps later writes above every prepare the donor minted.
 - The write-ahead log records whether a prepare's stamp is original, so
   replay rebuilds the same decision.
+
+The coordinator's read-back has no fallback. It reads every shard a prepare
+can have reached: the touched shards and every shard a split of them leads
+to. Each shard first reads the leaves it recorded the prepares reaching. If
+that misses a key - the shard root reactivated since the prepares, or a
+split moved the bucket - the coordinator asks again exhaustively, and each
+shard reads its whole leaf chain. The buckets and their marks are replayed
+from the write-ahead log, so a bucket is never lost to a reactivation. Every
+entry must be accounted for, marked with its stamp or unmarked, before the
+checkpoint is written. A read that faults or still misses a key fails the
+batch, which the execute loop retries and, once its retries are spent,
+aborts, so a saga never commits without its stamps. The
+`orleans.lattice.atomic_write.prepare_stamp_read_back.slow_path` counter
+records each read-back that leaves the fast path (see
+[Metrics](metrics.md)).
+
+`P` is carried only to a shard of the copy whose clocks minted it, or to a
+resized copy its mirror keeps on the same clock lineage. A terminal the
+coordinator re-resolves to another copy, or redelivers to a resized copy
+after the old one was purged, carries none, and carries no committed-values
+backstop either.
 
 A prepare without that evidence is applied as before, at a fresh dominating
 stamp, with the migrated-row exception that lets a saga beat a pre-saga
@@ -421,11 +455,12 @@ value a split migrates in above the destination's clock. That covers:
 
 - a prepare written by a silo that predates this change, which keeps a
   rolling upgrade safe;
-- a prepare an online resize copies;
-- a committed-values backstop sent directly by the saga coordinator.
+- a CRDT-delta prepare, which folds into the key's current value at the
+  terminal stamp rather than replacing it.
 
-A resize copy stamps its mirrored writes with its own clock, which does not
-order them against `P`.
+Before [#4522](https://github.com/NSTA1/Orleans.Lattice/issues/4522) the
+resize mirror forwarded each write as the operation itself, so the resized
+copy stamped it on its own clock, which does not order it against `P`.
 
 ### A later write the split imports is not dropped over the saga's value
 
@@ -1449,6 +1484,18 @@ another converges to `8` on **both** clusters, exactly as the live
 tag-index flag-membership rows, which use the same per-entry carry: an
 active-active membership add on each cluster converges to the union
 through the atomic (prepared) path, not only the eventual accessor path.
+
+A key whose committed value reaches a leaf as a cross-migration backstop
+(a leaf split moved the key away between the prepare and the terminal, or
+the saga's coordinator re-delivers committed values to a leaf that holds no
+prepared bucket for it) has no delta to fold there. On a tree whose merge
+mode resolves to a CRDT, that leaf **joins** the staged merged state into
+the key's current state through the primitive's state merge and stores the
+result at a stamp above the row, durably, so a mutation acknowledged on the
+key after the stage-time snapshot survives the terminal. The join keeps
+exactly what the delta fold keeps: both are pointwise per replica (or per
+dot), so concurrent writes from different replicas accumulate (issue
+[#4611](https://github.com/NSTA1/Orleans.Lattice/issues/4611)).
 
 Value-only sagas - a plain `Set(key, bytes)` slice with no staged CRDT
 delta - stay on the last-writer-wins prepared path unchanged: the highest

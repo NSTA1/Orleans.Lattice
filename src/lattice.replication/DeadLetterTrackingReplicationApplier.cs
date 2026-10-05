@@ -390,12 +390,18 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             if (entry.IsPrepared
                 && await TryPoisonTimedOutPrepareAsync(entry, key, failure, attempts, cancellationToken).ConfigureAwait(false))
             {
-                await ParkPoisonedSagaRecordAsync(
+                if (!await ParkPoisonedSagaRecordAsync(
                     entry,
                     failure.Message ?? "<no message>",
                     attempts,
                     failure,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    // The queue is full (#4603): the poison stands, but the prepare
+                    // stays unacknowledged until a re-delivery can park it.
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                }
+
                 _failures.TryRemove(key, out _);
                 _firstDeferrals.TryRemove(key, out _);
                 return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
@@ -412,7 +418,23 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // entry against the same tuple gets a fresh budget.
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         var reasonTag = ClassifyFailure(failure);
-        await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            // Surface the stall on the peer-status path rather than as a quiet link.
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+
+            // The dead-letter queue is full (#4603). Parking is the only thing
+            // that keeps an acknowledged entry, so do not acknowledge it: defer
+            // (a not-accepted, cursor-preserving ack) so the sender keeps it and
+            // re-ships, leave the high-water mark alone, and keep the retry count
+            // so the re-delivery tries to park again straight away.
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
 
         // Advance HWM only for point-applied entries; range deletes do
         // not consult the HWM (see ReplicationApplier) so advancing it
@@ -615,7 +637,12 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         return true;
     }
 
-    private async Task ParkPoisonedSagaRecordAsync(
+    /// <summary>
+    /// Parks a record of a receiver-poisoned saga. Returns <see langword="false"/>
+    /// when the dead-letter queue is full (#4603), in which case the caller must
+    /// keep the record unacknowledged.
+    /// </summary>
+    private async Task<bool> ParkPoisonedSagaRecordAsync(
         WalRecord entry,
         string failureReason,
         int retryCount,
@@ -623,13 +650,24 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         CancellationToken cancellationToken)
     {
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-        await dlq.EnqueueAsync(
-            entry,
-            failureReason,
-            retryCount,
-            LatticeReplicationMetrics.ReasonPoisonedSaga,
-            cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dlq.EnqueueAsync(
+                entry,
+                failureReason,
+                retryCount,
+                LatticeReplicationMetrics.ReasonPoisonedSaga,
+                cancellationToken).ConfigureAwait(false);
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+            return false;
+        }
+
         LogPoisonedSaga(entry, failure, "record is part of a receiver-poisoned saga and was parked");
+        return true;
     }
 
     internal static void RecordReceiverSagaPoisoned(string treeId, string originClusterId, string outcome)

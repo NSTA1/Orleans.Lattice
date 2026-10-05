@@ -29,9 +29,41 @@ Parked entries live in a reserved system tree named `_lattice_replog_dlq_{treeId
 
 On activation the grain bulk-loads every parked row into an in-memory cache; subsequent reads (`List` / `Count` / `TryGet`) are served from memory and writes (`Enqueue` / `Discard` / `RemoveReplayed`) are applied to the cache and written through to the system tree. Cache size is bounded by `DeadLetterQueueCapacity` (validator pins to >= 1).
 
-## FIFO eviction
+Enqueue is idempotent by the parked entry's identity (origin, HLC, key, range end, operation and transaction id): a re-shipped copy of an entry that is already parked returns the existing entry id and takes no second slot. The identity map is rebuilt from the stored rows on activation.
 
-When the queue is at capacity, a new enqueue evicts the oldest entry first (FIFO) and emits `dead_letter.removed{reason=evicted}` per evicted row before parking the new one.
+## Capacity and backpressure
+
+The queue never evicts. Every parked entry was acknowledged to its sender without being applied, so evicting one would lose the write for good and leave the receiver diverged with no signal (issue #4603). When the queue already holds `DeadLetterQueueCapacity` entries, an enqueue is **refused**: the queue emits `dead_letter.refused` and throws, and the caller keeps the entry unacknowledged instead of parking it:
+
+| Parking path | When the queue is full |
+|---|---|
+| Retry-budget exhaustion (dead-letter-tracking decorator) | The apply returns `Deferred = true`. The failure count is kept, the high-water mark does not advance, and the sender re-ships the entry. |
+| Merge-mode or tenant-isolation gate rejection, lost dependency | The apply (or the batch run it belongs to) returns `Deferred = true`, so the sender keeps its cursor and re-ships. |
+| Causal-apply buffer overflow | The park fails, so the receiver does not acknowledge and the sender re-ships, as for any other DLQ enqueue failure. |
+| Causal-apply buffer drain (apply failure, lost dependency) | The entry stays parked in the buffer and the drain stops; the next drain retries it. |
+| Sender cannot encode a batch | The shipper does not advance its cursor past the batch and backs off (`dead-letter-refused`); it retries the park on the next pass. |
+
+The replication link that is being held back reports **Stalled** on the peer-status path (`ReplicationPeerStatusRow.DeadLetterFullSeconds` is non-null - `direction="outbound"` on the sender, `direction="inbound"` on the receiver) until a park succeeds again. Free capacity by replaying or discarding parked entries, or raise `DeadLetterQueueCapacity` for the tree. A sender whose `ParkPoisonedRecordAsync` path finds the queue full (a later prepare or terminal of a poisoned saga) still withholds the record from the peer; only the operator's copy is not kept, and the refusal is counted.
+
+### Alarm and operator escape for a stalled link
+
+A full queue is a deliberate stall, not a silent one. Alarm on either signal:
+
+- `orleans.lattice.replication.dead_letter.refused` - any sustained non-zero rate for a tree means parks are being refused and an entry is being held back. A useful rule is `sum by (tree) (rate(orleans_lattice_replication_dead_letter_refused_total[5m])) > 0` for 5 minutes. The series is emitted only on a refusal, so it is absent rather than zero on a healthy tree.
+- the replication link health reported through peer status - a link held back by a full queue classifies as **Stalled**, and its `ReplicationPeerStatusRow.DeadLetterFullSeconds` is how long it has been held.
+
+The escape is to make room in the tree's queue; nothing has to be restarted, and the held-back entries are re-shipped and parked (or applied) on the next attempt once a slot is free:
+
+1. **Triage.** `ListAsync(treeId)` and group the parked entries by `FailureReason` and the `dead_letter.enqueued` reason. Fix the cause the reasons point at (merge-mode or tenant configuration, schema, a missing dependency).
+2. **Replay** every entry that can now apply with `ReplayAsync(treeId, entryId)`. A non-deferred replay removes the entry and frees its slot.
+3. **Discard** (the per-entry purge - there is no bulk purge) with `DiscardAsync(treeId, entryId)` each entry you have validated should never apply. A discard of a foreign-origin entry records it as a lost write, so its dependents are dead-lettered with `reason=dependency_lost` rather than applied; budget for those when you purge.
+4. **Or raise `DeadLetterQueueCapacity`** for the tree. The queue reads the capacity on every enqueue, so a raised limit is honoured by the next park once the options change is visible to the silo.
+
+The link leaves Stalled - `DeadLetterFullSeconds` returns to null and `dead_letter.refused` stops rising - as soon as a park succeeds again.
+
+## Lost writes and their dependents
+
+Discarding a parked entry whose origin is another cluster gives that write up: it was acknowledged and will never be applied here. Before the row is removed, the queue records a durable **lost mark** for the write's identity `(origin, HLC)` on the tree's high-water-mark grain; if that write fails, the discard fails and the entry stays parked. A later entry that names a lost write as a causal dependency is never released - neither by the applier nor by the causal-apply buffer drain - and is dead-lettered with `reason=dependency_lost` (apply outcome `rejected-dependency-lost`) instead, so an operator sees exactly which writes were affected. Lost marks are never pruned; their population is bounded by operator discards. Discarding a local-origin entry (one this cluster's sender parked because it could not encode it) records no lost mark, because the receiver's dependency check never names the local cluster.
 
 ## Configuration
 
@@ -48,7 +80,7 @@ siloBuilder.AddLatticeReplication(opts =>
 |---|---|---|
 | `MaxApplyRetries` | `5` | Consecutive failed apply attempts on the same `(treeId, originClusterId, timestamp, key, op)` tuple before parking. |
 | `SagaDeferralTimeout` | `15 minutes` | Wall-clock bound from first receiver deferral of a saga prepare to receiver-side poison. Terminals are never poisoned by timeout. |
-| `DeadLetterQueueCapacity` | `1000` | Maximum parked entries per tree before FIFO eviction kicks in. |
+| `DeadLetterQueueCapacity` | `1000` | Maximum parked entries per tree. A full queue refuses further parks and holds the affected replication link back (see [Capacity and backpressure](#capacity-and-backpressure)); it never evicts. |
 
 ## Inspection seam - `ILatticeReplicationDeadLetters`
 
@@ -58,7 +90,7 @@ Resolve the seam from DI and call per-tree:
 |---|---|---|
 | `ListAsync(treeId, ct)` | `IReadOnlyList<DeadLetterEntry>` | Ascending entry-id order. Pure read. |
 | `CountAsync(treeId, ct)` | `int` | Cached count, served from memory. |
-| `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Emits `reason=discarded`. |
+| `DiscardAsync(treeId, entryId, ct)` | `bool` | `true` when removed; `false` when the id was unknown. Records a lost mark for a foreign-origin entry first (see [Lost writes and their dependents](#lost-writes-and-their-dependents)). Emits `reason=discarded`. |
 | `ReplayAsync(treeId, entryId, ct)` | `ApplyResult?` | `null` when the id is unknown. Routes through the canonical applier (bypasses the decorator's failure tracker). On any non-throwing, non-deferred return - including a result the canonical applier filtered or diverted (`Applied = false`) - the entry is removed with `reason=replayed`. A result deferred by a coordinated restore's receive fence (`Deferred = true`) or a thrown exception leaves the entry parked. |
 
 ```csharp verify
@@ -82,7 +114,7 @@ if (parked.Count > 0)
 
 ## High-water-mark interaction
 
-Parking an entry that exhausted its retry budget advances the tree's per-origin HWM (the entry for the parked entry's `OriginClusterId`) to at least the parked entry's HLC for every operation except `DeleteRange` and the saga terminal records (`TxCommit` / `TxAbort`); the other park paths - a gate rejection, a causal-apply-buffer eviction or drain failure, and a sender-side encode failure - leave the high-water mark unchanged. The advance does not make a later re-delivery a no-op: the canonical applier does not drop a point write at or below the per-origin HWM, and it no longer has any snapshot-pinned floor threshold, so a re-delivered copy of the parked entry enters the apply pipeline and, if it fails again, re-enters the failure tracker. The transport does not normally re-deliver it: parking returns a non-deferred `Applied=false`, so the receive path acknowledges the batch and the sender advances past the entry.
+Parking an entry that exhausted its retry budget advances the tree's per-origin HWM (the entry for the parked entry's `OriginClusterId`) to at least the parked entry's HLC for every operation except `DeleteRange` and the saga terminal records (`TxCommit` / `TxAbort`); the other park paths - a gate rejection, a lost dependency, a causal-apply-buffer eviction or drain failure, and a sender-side encode failure - leave the high-water mark unchanged. The advance does not make a later re-delivery a no-op: the canonical applier does not drop a point write at or below the per-origin HWM, and it no longer has any snapshot-pinned floor threshold, so a re-delivered copy of the parked entry enters the apply pipeline and, if it fails again, re-enters the failure tracker. The transport does not normally re-deliver it: parking returns a non-deferred `Applied=false`, so the receive path acknowledges the batch and the sender advances past the entry.
 
 `DeleteRange` entries skip HWM advance because the canonical applier does not consult the HWM for range deletes (range applies are naturally idempotent at the leaf layer). `TxCommit` / `TxAbort` skip it too: a saga terminal's HLC is a saga linearization point, not a per-origin frontier, and terminals are deduplicated through the per-tree transaction registry instead. The entry is still parked.
 
@@ -109,12 +141,13 @@ A throwing replay leaves the entry parked. The operator can re-attempt or `Disca
 
 ## Metrics
 
-Counters on the `orleans.lattice.replication` meter, both tagged with `tree`, `reason`, and `tenant`:
+Counters on the `orleans.lattice.replication` meter, each tagged with `tree`, `reason`, and `tenant`:
 
 | Instrument | Tags | Meaning |
 |---|---|---|
-| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `tenant`, `reason in { schema, unknown, hlc_skew, mode_mismatch, foreign_tenant, tenant_offline, tenant_suspended, poisoned_saga, oversized }` | Replog entry parked. `schema` / `unknown`: the dead-letter-tracking decorator (and the causal-buffer drain) classify a terminal apply exception - `ArgumentException` and `InvalidOperationException` are `schema` (malformed entry, missing field, unrecognised `LatticeMergeMode`, CAS-budget exhaustion), every other exception type is `unknown`; the sender also parks a batch it cannot encode as `schema`. `hlc_skew`: a blocked entry evicted from a full causal-apply buffer (see [Bootstrap under concurrent load](#bootstrap-under-concurrent-load)). `mode_mismatch`: the entry's wire merge mode disagrees with the receiver's resolved mode for the tree. `foreign_tenant` / `tenant_offline` / `tenant_suspended`: the tenant-isolation gate refused the write (unknown tenant / tenant not resident in this region / tenant not active). `poisoned_saga`: the sender withheld a later prepare or a terminal of a saga whose prepare it parked as `schema`, so the peer never commits the saga torn; the peer serves the saga as never written until it is re-bootstrapped. `oversized` is reserved and has no emitter today. An entry with an empty tree id cannot be parked per tree: it is dropped and still counted as `schema` with an empty `tree` tag. |
-| `orleans.lattice.replication.dead_letter.removed` | `tree`, `tenant`, `reason in { discarded, replayed, evicted }` | Entry removed. `discarded` = explicit operator call; `replayed` = removed after `ReplayAsync` completed; `evicted` = FIFO capacity eviction during a later enqueue. |
+| `orleans.lattice.replication.dead_letter.enqueued` | `tree`, `tenant`, `reason in { schema, unknown, hlc_skew, mode_mismatch, foreign_tenant, tenant_offline, tenant_suspended, poisoned_saga, dependency_lost, oversized }` | Replog entry parked. `schema` / `unknown`: the dead-letter-tracking decorator (and the causal-buffer drain) classify a terminal apply exception - `ArgumentException` and `InvalidOperationException` are `schema` (malformed entry, missing field, unrecognised `LatticeMergeMode`, CAS-budget exhaustion), every other exception type is `unknown`; the sender also parks a batch it cannot encode as `schema`. `hlc_skew`: a blocked entry evicted from a full causal-apply buffer (see [Bootstrap under concurrent load](#bootstrap-under-concurrent-load)). `mode_mismatch`: the entry's wire merge mode disagrees with the receiver's resolved mode for the tree. `foreign_tenant` / `tenant_offline` / `tenant_suspended`: the tenant-isolation gate refused the write (unknown tenant / tenant not resident in this region / tenant not active). `poisoned_saga`: the sender withheld a later prepare or a terminal of a saga whose prepare it parked as `schema`, so the peer never commits the saga torn; the peer serves the saga as never written until it is re-bootstrapped. `dependency_lost`: the entry depends on a write an operator discarded from this queue (see [Lost writes and their dependents](#lost-writes-and-their-dependents)). `oversized` is reserved and has no emitter today. An entry with an empty tree id cannot be parked per tree: it is dropped and still counted as `schema` with an empty `tree` tag. |
+| `orleans.lattice.replication.dead_letter.removed` | `tree`, `tenant`, `reason in { discarded, replayed }` | Entry removed. `discarded` = explicit operator call; `replayed` = removed after `ReplayAsync` completed. The `evicted` reason is no longer emitted: the queue refuses rather than evicts. |
+| `orleans.lattice.replication.dead_letter.refused` | `tree`, `tenant`, `reason` (the reason the entry would have been parked under) | An enqueue was refused because the queue was full; the entry was kept unacknowledged (see [Capacity and backpressure](#capacity-and-backpressure)). A sustained non-zero rate means a replication link is stalled until parked entries are replayed or discarded. |
 | `orleans.lattice.replication.apply.saga_poisoned` | `tree`, `tenant`, `origin`, `outcome in { timeout, operator, refused_decided, refused_full }` | Receiver-side saga poison outcomes. `timeout` / `operator` record successful poison and a required full re-seed from the origin. `refused_decided` means the receiver registry already recorded a terminal decision. `refused_full` means the bounded poison set is full and deferral remains fail-closed. |
 
 ## Persistence and rehydration
@@ -147,6 +180,6 @@ The window during which the third and fourth rows are reachable is bounded: it l
    - `ApplyResult.Applied = true` - the entry's deps are now satisfied, the apply landed, and the entry is removed from the DLQ with `reason=replayed`.
    - `ApplyResult.Applied = false` - the canonical applier did not install the entry on this attempt, and the entry is still removed with `reason=replayed`. Eviction released the entry's shadow-forward dedupe reservation, so its original delivery cannot suppress the replay; the usual cause is a dependency that is still missing, in which case the entry was re-parked in the causal-apply buffer. The transport does not normally re-deliver an evicted entry (its original delivery was acknowledged when it was parked), but a copy that does arrive again - for example in a batch re-shipped after a lost acknowledgement - is applied or parked in its own right and then holds the identity, so the replay is suppressed as its duplicate. See [Replay semantics](#replay-semantics) for the other `Applied = false` outcomes. Verify the key's state rather than treating this outcome as confirmation.
    - `ApplyResult.Deferred = true` - a coordinated restore holds the tree's inbound receive fence, so nothing was applied and the entry stays parked. Replay it again once the restore completes.
-4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. Replication continues regardless - the dead-letter store never blocks the apply stream.
+4. **Discard only after validation.** If `ReplayAsync` throws repeatedly (e.g. the entry references a tree configuration that no longer exists), fall back to `DiscardAsync`. A discard records the write as lost, so any later entry that depends on it is dead-lettered with `reason=dependency_lost` rather than applied. Replication continues past parked entries while the queue has room; a full queue holds the link back until entries are replayed or discarded.
 
 A persistent rate of `reason=hlc_skew` long after every bootstrap completes signals a structural problem (sustained authoring load above the receiver's apply throughput, transport reordering breaking per-origin FIFO, an undersized `CausalBufferMaxEntries` for the tree's fan-in). Treat it as the cue to raise `CausalBufferMaxEntries` / `CausalBufferMaxBytes` for the affected tree, or to investigate the producer-side write rate.

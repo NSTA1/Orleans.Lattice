@@ -58,6 +58,10 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.DeadLetterEntry"/>.</summary>
     internal const string DeadLetterEntry = "olr.dl";
+    /// <summary>Alias for <see cref="Replication.ReplicationDeadLetterQueueFullException"/>.</summary>
+    internal const string ReplicationDeadLetterQueueFullException = "olr.qf";
+    /// <summary>Alias for <see cref="Replication.CausalDependencyVerdict"/>.</summary>
+    internal const string CausalDependencyVerdict = "olr.dv";
 
     /// <summary>Alias for the per-tree dead-letter queue grain interface.</summary>
     internal const string IReplicationDeadLetterGrain = "olr.gd";

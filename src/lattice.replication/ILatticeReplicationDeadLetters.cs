@@ -25,7 +25,12 @@ public interface ILatticeReplicationDeadLetters
     /// Removes the parked entry with id <paramref name="entryId"/> from
     /// <paramref name="treeId"/>'s queue without attempting to apply
     /// it. Returns <c>true</c> when an entry was removed; <c>false</c>
-    /// when no entry with that id existed.
+    /// when no entry with that id existed. Discarding an entry authored by
+    /// another cluster first records that write as lost, so any later entry
+    /// that depends on it is dead-lettered with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> rather than
+    /// applied out of causal order; if that record cannot be written the entry
+    /// stays parked and the call throws.
     /// </summary>
     Task<bool> DiscardAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
 

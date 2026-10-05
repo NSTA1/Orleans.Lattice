@@ -428,6 +428,38 @@ public class ReceiverSagaDeferralIntegrationTests
         });
     }
 
+    [Test]
+    public async Task Poisoned_prepare_stays_unacknowledged_while_the_dead_letter_queue_is_full()
+    {
+        const string tree = FullQueueTree;
+        var (keyA, keyB) = KeysOnDistinctShards("poison-full");
+        var txid = Guid.NewGuid();
+        var prepareB = Prepare(tree, keyB, 2, txid, index: 1, ticks: 10_001);
+
+        // A plain write fills the one-entry queue.
+        _failing.Fail = r => r.Key == "filler" || (r.IsPrepared && r.Key == keyB);
+        Assert.That(await DeliverAsync(PointSet(tree, "filler", 1, ticks: 10_000)), Is.True);
+        Assert.That(await _deadLetters.CountAsync(tree), Is.EqualTo(1), "PRECONDITION: the queue is full");
+
+        Assert.That(await DeliverAsync(Prepare(tree, keyA, 1, txid, index: 0, ticks: 10_000)), Is.True);
+        Assert.That(await DeliverAsync(prepareB), Is.False);
+        await WaitPastSagaDeferralTimeoutAsync();
+
+        var refused = await _receiver.ApplyBatchAsync(new[] { prepareB });
+        Assert.Multiple(async () =>
+        {
+            Assert.That(refused.Deferred, Is.True,
+                "a poisoned prepare the full queue cannot park must be deferred, not acknowledged (#4603): parking is what keeps it");
+            Assert.That(await GetPoisonedAsync(tree), Does.Contain(txid), "the poison itself stands");
+        });
+
+        // Freeing capacity lets the next re-delivery park it and resume the link.
+        var filler = (await _deadLetters.ListAsync(tree)).Single();
+        Assert.That(await _deadLetters.DiscardAsync(tree, filler.EntryId), Is.True);
+        Assert.That(await PushAsync(prepareB), Is.True);
+        Assert.That((await _deadLetters.ListAsync(tree)).Select(e => e.Entry.TransactionId), Does.Contain(txid));
+    }
+
     /// <summary>The canonical applier, failing every record <see cref="Fail"/> selects.</summary>
     private sealed class FailingApplier(IReplicationApplier inner) : IReplicationApplier
     {
@@ -470,9 +502,12 @@ public class ReceiverSagaDeferralIntegrationTests
                 opts.SagaDeferralTimeout = TimeSpan.FromMilliseconds(300);
                 opts.AutoBootstrapOnFallOffLog = false;
             });
+            siloBuilder.Services.Configure<LatticeReplicationOptions>(FullQueueTree, o => o.DeadLetterQueueCapacity = 1);
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }
     }
+
+    private const string FullQueueTree = "rsd-poison-dlq-full";
 
     private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
