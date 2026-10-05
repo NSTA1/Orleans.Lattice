@@ -433,7 +433,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
@@ -471,7 +471,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
@@ -800,7 +800,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         // Guards the NO-RECORD path (issue #2165). This test's own comment
         // states the rationale precisely - "a resumed replay has to re-read
@@ -1367,11 +1367,15 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var state = NewFlushCeilingState();
 
+        // One snapshot store across both attempts: a snapshot attempt 1 keeps is
+        // still there for attempt 2, as in production. A fresh store would model
+        // a vanished snapshot over a trimmed WAL, which fails closed (issue #4634).
+        var store = new InMemorySnapshotStore();
+
         // Attempt 1: absorb the prepare (offset 2) and the terminal (offset 3)
         // on a non-drain-eligible partition, then tear down.
         using (var cts = new CancellationTokenSource())
         {
-            var store = new InMemorySnapshotStore();
             var grain = BuildFlushCeilingLeaf(
                 state,
                 [
@@ -1407,7 +1411,6 @@ public partial class BPlusLeafGrainTests
         // Attempt 2: run to completion. The recorded prepare and terminal are
         // reconstructed from state (they are BELOW the checkpoint, so the WAL
         // is never re-read for them) and the saga's write must still commit.
-        var finalStore = new InMemorySnapshotStore();
         var resumed = BuildFlushCeilingLeaf(
             state,
             [
@@ -1420,7 +1423,7 @@ public partial class BPlusLeafGrainTests
                     head: 21, sliceSize: 20, tail: 0, onRead: null,
                     [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
             ],
-            finalStore.Stub,
+            store.Stub,
             reclassifyEveryN: 1,
             maxDurableUnresolvedReplayWork: 1024);
 

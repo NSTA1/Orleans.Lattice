@@ -36,7 +36,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("saga-coordinator", SagaId));
 
-        channel ??= Substitute.For<ISagaControlChannel>();
+        channel ??= FinalizingChannel();
 
         var reminders = reminderRegistry ?? Substitute.For<IReminderRegistry>();
         if (reminderRegistry is null)
@@ -63,6 +63,30 @@ public partial class CrossClusterSagaCoordinatorGrainTests
         Detail = detail ?? string.Empty,
     };
 
+    /// <summary>
+    /// A substitute channel whose participants answer a commit or an abort the
+    /// way a real participant that applied it does - with the matching terminal
+    /// phase - since the coordinator counts any other answer as a refusal (issue
+    /// #4637). A test's own stubs, set afterwards, override these defaults.
+    /// </summary>
+    private static ISagaControlChannel FinalizingChannel()
+    {
+        var channel = Substitute.For<ISagaControlChannel>();
+        channel.CommitAsync(Arg.Any<string>(), Arg.Any<SagaControlRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Applied(SagaPhase.Committed)));
+        channel.AbortAsync(Arg.Any<string>(), Arg.Any<SagaControlRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Applied(SagaPhase.Aborted)));
+        return channel;
+    }
+
+    private static SagaControlResponse Applied(SagaPhase phase) => new()
+    {
+        SagaId = SagaId,
+        Phase = phase,
+        Vote = SagaVote.None,
+        Detail = string.Empty,
+    };
+
     private static void StubPrepare(ISagaControlChannel channel, string clusterId, SagaVote vote) =>
         channel.PrepareAsync(clusterId, Arg.Any<SagaControlRequest>()).Returns(Task.FromResult(Vote(vote)));
 
@@ -72,7 +96,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task RunAsync_all_commit_commits_and_finalizes_with_commit()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         StubPrepare(channel, "site-b", SagaVote.Commit);
         var (grain, state, _, _) = CreateGrain(channel: channel);
@@ -89,7 +113,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task RunAsync_one_abort_aborts_and_compensates_only_prepared_participants()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         StubPrepare(channel, "site-b", SagaVote.Abort);
         var (grain, state, _, _) = CreateGrain(channel: channel);
@@ -136,7 +160,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task RunAsync_resubmit_same_arguments_returns_memoized_without_reprepare()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var (grain, _, _, _) = CreateGrain(channel: channel);
 
@@ -150,7 +174,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task RunAsync_resubmit_different_participants_throws()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         var state = new FakePersistentState<CrossClusterSagaCoordinatorState>();
         var (grain, _, _, _) = CreateGrain(state, channel);
@@ -200,7 +224,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task Keepalive_reminder_resumes_prepare_after_transport_fault()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         // First prepare dispatch faults; the coordinator stays Preparing.
         channel.PrepareAsync("site-a", Arg.Any<SagaControlRequest>())
             .Returns(Task.FromException<SagaControlResponse>(new TimeoutException("transport")));
@@ -221,7 +245,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
     [Test]
     public async Task Keepalive_reminder_resumes_finalize_after_crash_between_decision_and_finalize()
     {
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         StubPrepare(channel, "site-b", SagaVote.Commit);
         // Finalize fan-out faults on the first participant, parking the
@@ -235,7 +259,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
             "a crash mid-finalize must leave the durable Committed decision in place");
 
         // Recovery: clear the fault; the keepalive reminder drives finalize to completion.
-        channel.CommitAsync("site-a", Arg.Any<SagaControlRequest>()).Returns(Task.FromResult(Vote(SagaVote.None)));
+        channel.CommitAsync("site-a", Arg.Any<SagaControlRequest>()).Returns(Task.FromResult(Applied(SagaPhase.Committed)));
         await grain.ReceiveReminder(KeepaliveReminder, default);
 
         Assert.That(state.State.Phase, Is.EqualTo(CrossClusterSagaPhase.Completed));
@@ -247,7 +271,7 @@ public partial class CrossClusterSagaCoordinatorGrainTests
         // Simulate a coordinator crash mid-saga: a fresh activation over the
         // same durable state (Phase = Preparing) reaches a terminal decision
         // when the keepalive reminder fires on the new activation.
-        var channel = Substitute.For<ISagaControlChannel>();
+        var channel = FinalizingChannel();
         StubPrepare(channel, "site-a", SagaVote.Commit);
         StubPrepare(channel, "site-b", SagaVote.Commit);
 

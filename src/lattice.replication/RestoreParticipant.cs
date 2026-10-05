@@ -27,10 +27,11 @@ namespace Orleans.Lattice.Replication;
 ///   global gate), preserving cross-cluster atomic visibility.</description></item>
 ///   <item><description><b>Abort</b> reverts the alias to the pre-restore physical
 ///   tree, reliably garbage collects the shadow so no storage leaks, then lifts
-///   the fence. Idempotent and safe when called by the participant grain's
-///   fence-expiry auto-compensation after a coordinator loss - for a single-tree
-///   restore. That compensation's request carries no set id, so a backup-set
-///   restore's timed-out abort takes the single-tree path, which knows nothing of
+///   the fence. Idempotent and safe when called by the participant grain after it
+///   learns an abort from the coordinator on fence expiry; that request carries
+///   the persisted set id, so a backup-set restore takes the set path. Only a
+///   participant state persisted before the set id was recorded rebuilds a
+///   request without it, which takes the single-tree path, which knows nothing of
 ///   the set's members: it lifts the fence but leaves the member shadows in
 ///   place.</description></item>
 /// </list>
@@ -369,9 +370,10 @@ internal sealed class RestoreParticipant(
         // Nothing was ever prepared for a tree this cluster does not replicate, so
         // there is nothing to compensate; reverting an alias on an unenrolled tree
         // would itself be the write the prepare gate exists to refuse. One case
-        // does reach here with prepared state: a backup-set restore's fence-expiry
-        // auto-compensation, whose rebuilt request has no set id and names the set
-        // id as its target, so its member shadows are left in place.
+        // does reach here with prepared state: a backup-set restore whose
+        // participant state predates the persisted set id, so the abort it learns
+        // on fence expiry is rebuilt with no set id and names the set id as its
+        // target, and its member shadows are left in place.
         if (!IsHostedTarget(request))
         {
             RecordAbort(LatticeReplicationMetrics.SagaReasonNotReplicated);
@@ -383,8 +385,8 @@ internal sealed class RestoreParticipant(
         // when this cluster never committed - the alias is already there), then
         // reliably garbage collect the shadow so no storage leaks, then lift the
         // fence. All three steps are idempotent, so this is safe when invoked by
-        // the participant grain's fence-expiry auto-compensation after a
-        // coordinator loss, and safe when the participant never prepared.
+        // the participant grain for an abort it learned from the coordinator on
+        // fence expiry, and safe when the participant never prepared.
         var restoreRequest = BuildRestoreRequest(request);
 
         if (_built.TryGetValue(request.SagaId, out var result))
@@ -611,9 +613,10 @@ internal sealed class RestoreParticipant(
     /// <summary>
     /// Group-atomic abort for a set: reverts and garbage collects EVERY member tree
     /// (never some), then lifts the shared fence. Idempotent and safe when the cache
-    /// was lost. The participant grain's fence-expiry auto-compensation does not
-    /// reach this path: its rebuilt request carries no set id, so it takes the
-    /// single-tree path in <see cref="AbortAsync"/> instead.
+    /// was lost. An abort the participant grain learns on fence expiry reaches
+    /// this path through the persisted set id; only a participant state persisted
+    /// before the set id was recorded rebuilds a request without it, which takes
+    /// the single-tree path in <see cref="AbortAsync"/> instead.
     /// </summary>
     private async Task AbortSetAsync(
         SagaControlRequest request,

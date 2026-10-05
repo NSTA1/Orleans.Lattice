@@ -80,4 +80,27 @@ internal interface ICrossClusterSagaCoordinatorGrain : IGrainWithStringKey
     /// was never started). Used by tests and idempotent re-attach.
     /// </summary>
     Task<bool> IsCompleteAsync();
+
+    /// <summary>
+    /// The saga's durable decision, answered to a prepared participant whose
+    /// cutover-fence timer expired (issue #4637), so it commits or compensates
+    /// on the coordinator's decision and never on its timer alone.
+    /// <see cref="CrossClusterSagaDecision.Committed"/> or
+    /// <see cref="CrossClusterSagaDecision.Aborted"/> once decided;
+    /// <see cref="CrossClusterSagaDecision.InFlight"/> while the coordinator is
+    /// still collecting votes, which it bounds with its own prepare deadline and
+    /// records as an abort past it. A coordinator that never started this saga
+    /// (or no longer holds it) answers <see cref="CrossClusterSagaDecision.Aborted"/>:
+    /// it prepared nobody, and a later run re-prepares every participant, which
+    /// the compensated one refuses.
+    /// <para>
+    /// Read-only and interleaved, so a participant's query is answered even while
+    /// a long prepare pass holds the coordinator. A <paramref name="participantClusterId"/>
+    /// that is not one of the saga's recorded participants is refused with
+    /// <see cref="UnauthorizedAccessException"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="participantClusterId">The authenticated cluster asking.</param>
+    [AlwaysInterleave]
+    Task<CrossClusterSagaDecision> ResolveDecisionForParticipantAsync(string participantClusterId);
 }

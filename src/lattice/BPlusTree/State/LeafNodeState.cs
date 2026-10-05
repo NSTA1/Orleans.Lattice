@@ -449,6 +449,25 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(25)] public List<DiscardedSagaPrepare>? DiscardedSagaPrepares { get; set; }
 
     /// <summary>
+    /// One-way record, per WAL partition, that this leaf's snapshot store has
+    /// kept a snapshot covering that partition (issue #4634). <see langword="null"/>
+    /// or <see langword="false"/> means none ever has.
+    /// <para>
+    /// Under coverage-gated trim the WAL GC removes a prefix precisely because a
+    /// snapshot covers it, so an absent snapshot on a cold start is only proof
+    /// that the leaf never had one when this record says so. A partition's entry
+    /// is set the first time a snapshot covering it is kept or loaded, and is
+    /// made durable by the durable pin flush before it publishes any pin, so the
+    /// WAL GC is never licensed to trim behind a snapshot this record does not
+    /// name. It lives in the leaf's own row, not a sidecar, so losing it means
+    /// losing the checkpoint the cold-start check keys on too. It costs at most
+    /// one extra state write per partition per leaf lifetime, and is cleared
+    /// only by an operator rebuild that accepts the loss, or with the leaf.
+    /// </para>
+    /// </summary>
+    [Id(26)] public bool[]? SnapshotCoveredPartitions { get; set; }
+
+    /// <summary>
     /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
     /// so the next activation can reserve hydration budget accurately from its
     /// very first moment instead of re-learning the size by overshooting
