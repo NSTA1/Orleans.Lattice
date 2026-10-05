@@ -2997,6 +2997,15 @@ internal sealed partial class BPlusLeafGrain
         // question it was written to answer: did THIS replay warm the cache.
         var replaySeededAtEntry = !string.IsNullOrEmpty(state.State.TreeId);
 
+        // A leaf with no state row and no tree id is either one whose row was never
+        // written or one whose row was lost (issue #4654). The second has nothing to
+        // replay from and would come up empty, reporting every key it held absent,
+        // so its replay fails closed instead.
+        if (!replaySeededAtEntry && await DetectLostStateRowAsync(cancellationToken) is { } lostRow)
+        {
+            throw lostRow;
+        }
+
         // Step 0 - try to rehydrate the in-memory entry cache from a
         // persisted leaf snapshot. The snapshot is the safety net for
         // WAL retention fall-off: if a previous maintenance tick wrote

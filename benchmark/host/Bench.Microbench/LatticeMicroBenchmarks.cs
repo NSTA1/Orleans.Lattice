@@ -742,6 +742,9 @@ public class LatticeMicroBenchmarks
         // keeps that write on the bench's synchronous path.
         _grainFactory.RouteByGuid<ILeafTerminalWitnessGrain>(GetOrCreateTerminalWitness);
 
+        // Issue #4654: a leaf records, once, that its state row was written. The
+        // bench's leaves never lose their rows, so a shared no-op record serves.
+        _grainFactory.RouteByGuid<ILeafRowRecordGrain>(static _ => BenchLeafRowRecordGrain.Instance);
         // Cross-tree atomic-write coordinator route: a real
         // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
         // IReminderRegistry as the per-tree sub-sagas (keepalive +
@@ -4713,4 +4716,25 @@ internal sealed class BenchLeafTerminalWitnessGrain : ILeafTerminalWitnessGrain
         _witnesses = null;
         return Task.CompletedTask;
     }
+}
+
+/// <summary>
+/// Row-record stub for the microbench (issue #4654): the bench's leaves never lose
+/// their state rows, so recording is a no-op and nothing is ever reported recorded.
+/// </summary>
+internal sealed class BenchLeafRowRecordGrain : ILeafRowRecordGrain
+{
+    /// <summary>The shared instance returned for every leaf.</summary>
+    public static readonly BenchLeafRowRecordGrain Instance = new();
+
+    private static readonly Task<LeafRowRecordState?> NotRecorded = Task.FromResult<LeafRowRecordState?>(null);
+
+    /// <inheritdoc />
+    public Task<LeafRowRecordState?> GetAsync() => NotRecorded;
+
+    /// <inheritdoc />
+    public Task RecordAsync(string? treeId) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task ClearAsync() => Task.CompletedTask;
 }
