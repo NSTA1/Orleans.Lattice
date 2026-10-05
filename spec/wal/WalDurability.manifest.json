@@ -5,12 +5,13 @@
   "counts": {
     "invariants": 9,
     "properties": 4,
-    "actions": 14,
-    "mutations": 22,
-    "behaviourRows": 26,
+    "actions": 15,
+    "mutations": 26,
+    "behaviourRows": 27,
     "distinctStates": 91389
   },
   "variants": {
-    "TwoFaults": { "distinctStates": 445516 }
+    "TwoFaults": { "distinctStates": 445516 },
+    "SnapshotLoss": { "distinctStates": 754876 }
   }
 }

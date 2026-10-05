@@ -1,0 +1,29 @@
+# Pairs with ReadPositionHonest. The activation ignores the leaf row's record of
+# held snapshot coverage and starts cold over a vanished snapshot. The base fails
+# such an activation closed (issue #4634).
+MODULE: ReadPositionHonestVanishedSnapshotStartsCold
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation ignores the record and starts cold over a vanished snapshot
+PERTURBS: Activate
+
+--- FIND
+    /\ ~stale[l]
+    /\ ~SnapshotVanished(l)
+--- REPLACE
+\* MUTATION: the record is not consulted.
+    /\ ~stale[l]
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the snapshot vanishes and its leaf stops: two faults.
+MaxFaults == 2
+--- END

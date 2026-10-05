@@ -248,4 +248,15 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(20)]
     public SourceFrontierShipperState Frontier { get; set; } = new();
+
+    /// <summary>
+    /// <see langword="true"/> once a silo that predates the decision-purge hold
+    /// was seen while the re-seed marker was set (issue #4664). The first tick
+    /// that sees every silo honour the hold raises the marker to the tree's
+    /// current export epoch and clears this, so an export drained while an older
+    /// registry could purge a decision never settles the re-seed. A state
+    /// written before this slot decodes to <see langword="false"/>.
+    /// </summary>
+    [Id(21)]
+    public bool ReseedSpansPreHoldSilo { get; set; }
 }

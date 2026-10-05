@@ -126,6 +126,11 @@ public partial class CrossClusterAtomicVisibilityTests
         });
 
         supported = true;
+        await PumpAsync(shipper, ticks: 1);
+
+        // Only an export opened after every silo honours the hold settles the
+        // re-seed (#4664).
+        echo = 2;
         feeds[1].Append(new WalRecord
         {
             TreeId = tree,
@@ -137,7 +142,81 @@ public partial class CrossClusterAtomicVisibilityTests
         });
         await PumpAsync(shipper, ticks: 3);
 
-        Assert.That(shipper.ReseedRequired, Is.False, "once every silo honours the hold the re-seed completes");
+        Assert.That(shipper.ReseedRequired, Is.False, "once every silo honours the hold a later export completes the re-seed");
+    }
+
+    [Test]
+    public async Task A_reseed_deferred_for_a_pre_hold_silo_does_not_settle_on_an_export_drained_before_the_upgrade()
+    {
+        // #4664: while a silo predated the purge hold, its registry could purge
+        // a decision the export drained in that window still needed. The echo
+        // of that export must not rewind once the upgrade completes; only an
+        // export opened after every silo honours the hold settles the re-seed.
+        const string tree = "ccv-reseed-preguard-window";
+        var (feeds, walEncoder, txid, ticks) = TrimmedSagaFeeds(tree);
+        long? echo = null;
+        long exportEpoch = 0;
+        var shipped = new List<WalRecord>();
+        var transport = RecordingTransport(walEncoder, shipped, () => echo);
+        var registry = ReplayRegistry(Guid.NewGuid(), Guid.NewGuid(), txid);
+        var state = new FakePersistentState<ReplicationShipperState>();
+        var supported = false;
+        var epochGrain = Substitute.For<IReplicationExportEpochGrain>();
+        epochGrain.GetAsync().Returns(_ => Task.FromResult(exportEpoch));
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state,
+            configureFactory: factory =>
+            {
+                factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry);
+                factory.GetGrain<IReplicationExportEpochGrain>(tree).Returns(epochGrain);
+            });
+        shipper.PurgeHoldSupportForTesting = () => supported;
+        var plain = 0;
+        void AppendPlain() => feeds[1].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = $"plain-{plain}",
+            Value = new byte[] { (byte)plain },
+            Timestamp = Hlc(ticks, 20 + plain++),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+
+        await PumpAsync(shipper, ticks: 2);
+        Assert.That(shipper.ReseedRequired, Is.True, "precondition: the trim took the peer off the log at epoch 0");
+
+        // The peer drains export 1 while a silo still predates the hold.
+        exportEpoch = 1;
+        echo = 1;
+        AppendPlain();
+        await PumpAsync(shipper, ticks: 3);
+        Assert.That(shipper.ReseedRequired, Is.True, "precondition: the old silo keeps the peer off the log");
+
+        // The upgrade completes; the peer keeps echoing the export it drained.
+        supported = true;
+        AppendPlain();
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.True,
+                "an export drained while a silo predated the purge hold must not settle the re-seed");
+            Assert.That(state.State.ReseedRequiredEpoch, Is.GreaterThanOrEqualTo(1L),
+                "the marker is raised to the export epoch current when every silo first honours the hold");
+            Assert.That(shipped.Any(r => r.TransactionId == txid), Is.False, "no saga record ships meanwhile");
+        });
+
+        // A fresh export, opened after every silo honours the hold, settles it.
+        exportEpoch = 2;
+        echo = 2;
+        AppendPlain();
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "an export opened after the upgrade settles the re-seed");
+            Assert.That(shipped.Count(r => r.IsPrepared && r.TransactionId == txid), Is.EqualTo(1),
+                "and the retained saga record is re-shipped");
+        });
     }
 
     [Test]

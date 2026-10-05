@@ -735,12 +735,10 @@ public interface ILattice : IGrainWithStringKey
     /// <para>
     /// The tree ID is preserved - it becomes an alias to the new physical tree.
     /// The snapshot runs online: the tree stays available for reads and writes
-    /// throughout, with writes accepted during the copy shadow-forwarded to the
-    /// new physical tree - except typed CRDT delta applies and bulk appends,
-    /// which are not forwarded (see <see cref="SnapshotAsync"/>), so one that
-    /// reaches a shard after the copy has read past the key it writes is not
-    /// reflected in the resized tree. After the alias swap, the tree serves the
-    /// new sizing.
+    /// throughout, with writes accepted during the copy - typed CRDT delta
+    /// applies and bulk appends included - shadow-forwarded to the new physical
+    /// tree (see <see cref="SnapshotAsync"/>). After the alias swap, the tree
+    /// serves the new sizing.
     /// Cache invalidation is automatic: different physical trees produce different
     /// leaf grain IDs, which create fresh cache grain instances.
     /// </para>
@@ -815,9 +813,10 @@ public interface ILattice : IGrainWithStringKey
     /// (<see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>,
     /// <see cref="ApplyCrdtDeltaManyAsync(List{KeyValuePair{string, byte[]}}, LatticeMergeMode, CancellationToken)"/>
     /// and the typed CRDT accessors built on them) and bulk appends
-    /// (<see cref="BulkAppendChunkAsync"/>) are not forwarded, so one that
-    /// reaches a source shard after the copy has read past the key it writes is
-    /// not reflected on the destination.
+    /// (<see cref="BulkAppendChunkAsync"/>) are forwarded as the rows they
+    /// stored, and where a CRDT row meets one the destination holds of its own
+    /// the destination joins the two states rather than keeping the higher
+    /// timestamp.
     /// </para>
     /// <para>
     /// In both modes the destination is registered with the source's shard map
