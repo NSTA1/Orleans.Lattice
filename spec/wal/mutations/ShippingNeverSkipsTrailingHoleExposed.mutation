@@ -1,0 +1,26 @@
+# Pairs with ShippingNeverSkips. The watermark exposes a trailing settled hole
+# (nothing stored above it): a reader passes it, the shard crashes, and the
+# recovered allocator - one past the highest stored offset - reissues that very
+# offset below the reader, whose next write is then skipped. It needs two faults
+# (the abandon and the crash), so the mutation raises the budget to two. The
+# base never exposes an offset at or above the one a recovering allocator would
+# hand out.
+MODULE: ShippingNeverSkipsTrailingHoleExposed
+TARGET: ShippingNeverSkips
+CLASS: Invariant
+SUMMARY: a trailing hole is exposed, and a recovered allocator reissues it below the reader that passed it
+PERTURBS: ReadStep
+
+--- FIND
+    /\ ReadFrom(l) < Watermark
+--- REPLACE
+\* MUTATION: the recovered allocator's next offset does not bound the horizon.
+    /\ ReadFrom(l) < Min({next} \cup inflight \cup orphans)
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the defect needs two faults.
+MaxFaults == 2
+--- END

@@ -1,0 +1,29 @@
+# Pairs with ReclamationEventuallyAdvances. An abandoned call is never retired
+# from the registry, whether it lands or not, so it bounds the watermark for
+# ever: no reader passes it, no checkpoint advances over it, and the WAL is never
+# reclaimed. The base retires the window once its provider call settles.
+MODULE: ReclamationEventuallyAdvancesAbandonedCallNeverSettles
+TARGET: ReclamationEventuallyAdvances
+CLASS: Temporal
+SUMMARY: an abandoned call is never retired, so it holds the watermark for ever
+PERTURBS: LateLand, SettleHole
+
+--- FIND
+    /\ o \in orphans
+    /\ orphans' = orphans \ {o}
+    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
+--- REPLACE
+\* MUTATION: a landed call stays in the registry.
+    /\ o \in orphans
+    /\ orphans' = orphans
+    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
+--- END
+
+--- FIND
+    /\ orphans' = orphans \ {o}
+    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+--- REPLACE
+\* MUTATION: a settled call stays in the registry.
+    /\ orphans' = orphans
+    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+--- END
