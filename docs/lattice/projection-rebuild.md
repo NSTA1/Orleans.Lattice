@@ -997,6 +997,10 @@ projection-state slots** that the materialiser owns:
 - In-memory pending-saga, pending-tx-offset, recently-terminal, and
   backstopped-terminal dedup buffers are dropped, together with the
   destination-side shadow markers.
+- The persisted record of the keys each saga's terminal settled on the
+  leaf is kept: it is a durable fact about the leaf, not activation
+  memory, and it lets the leaf recognise a shadow marker that arrives
+  after its terminal (see [Shard Splitting](shard-splitting.md#convergence-guarantees)).
 - The leaf grain is deactivated. The next activation re-materialises
   the projection through the standard activation-time path, which
   under every `ProjectionRebuildPolicy` value first attempts to
