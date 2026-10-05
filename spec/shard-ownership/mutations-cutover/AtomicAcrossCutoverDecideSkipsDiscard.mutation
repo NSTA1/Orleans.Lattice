@@ -1,4 +1,4 @@
-# Pairs with AtomicAcrossCutover. REPRODUCES PRODUCTION (#4689): the saga records
+# Pairs with AtomicAcrossCutover. Reproduces production before #4689 was fixed: the saga recorded
 # its commit decision without discarding the prepares it left on the copy it
 # re-bound away from, so the previous copy keeps an orphan bucket of a committed
 # saga, which a stale reader before the redirect is armed, or any reader after a

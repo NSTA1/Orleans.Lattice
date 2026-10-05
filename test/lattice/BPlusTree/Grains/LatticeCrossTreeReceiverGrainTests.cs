@@ -278,6 +278,82 @@ public partial class LatticeCrossTreeReceiverGrainTests
     }
 
     [Test]
+    public async Task NotifyParticipantAbsentAsync_decides_on_the_remaining_trees_once_they_have_all_arrived()
+    {
+        // Issue #4692: 'inventory' stopped being replicated here before its
+        // terminal arrived, so it never will.
+        var (grain, state) = CreateGrain();
+        await grain.NotifyTerminalAsync(Terminal("orders", committed: true, new[] { "orders", "inventory" }));
+
+        var decision = await grain.NotifyParticipantAbsentAsync("inventory");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Decided, Is.True, "the barrier must not wait for ever for a tree that will never arrive");
+            Assert.That(decision.Committed, Is.True);
+            Assert.That(decision.TreesToFinalize.Select(t => t.TreeId), Is.EqualTo(new[] { "orders" }));
+            Assert.That(state.State.WaitSet, Is.EqualTo(new[] { "orders" }));
+        });
+    }
+
+    [Test]
+    public async Task NotifyParticipantAbsentAsync_keeps_waiting_for_the_other_trees()
+    {
+        var (grain, state) = CreateGrain();
+        var waitSet = new[] { "orders", "inventory", "ledger" };
+        await grain.NotifyTerminalAsync(Terminal("orders", committed: true, waitSet));
+
+        var absent = await grain.NotifyParticipantAbsentAsync("inventory");
+        var completed = await grain.NotifyTerminalAsync(Terminal("ledger", committed: false, waitSet));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(absent.Decided, Is.False);
+            Assert.That(completed.Decided, Is.True);
+            Assert.That(completed.Committed, Is.False, "the usual rule decides: commit iff every remaining arrival committed");
+            Assert.That(state.State.WaitSet, Is.EqualTo(new[] { "ledger", "orders" }));
+        });
+    }
+
+    [Test]
+    public async Task NotifyParticipantAbsentAsync_leaves_an_arrived_tree_an_unknown_tree_and_a_decided_barrier_alone()
+    {
+        var (grain, state) = CreateGrain();
+        var waitSet = new[] { "orders", "inventory" };
+        await grain.NotifyTerminalAsync(Terminal("orders", committed: true, waitSet));
+
+        var arrived = await grain.NotifyParticipantAbsentAsync("orders");
+        var unknown = await grain.NotifyParticipantAbsentAsync("ledger");
+        await grain.NotifyTerminalAsync(Terminal("inventory", committed: true, waitSet));
+        var writes = state.WriteCount;
+        var decided = await grain.NotifyParticipantAbsentAsync("inventory");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(arrived.Decided, Is.False, "an arrived tree is never removed");
+            Assert.That(unknown.Decided, Is.False);
+            Assert.That(decided.Decided, Is.True);
+            Assert.That(decided.TreesToFinalize, Has.Count.EqualTo(2), "a decided barrier is unchanged");
+            Assert.That(state.State.WaitSet, Is.EqualTo(new[] { "inventory", "orders" }));
+            Assert.That(state.WriteCount, Is.EqualTo(writes));
+        });
+    }
+
+    [Test]
+    public async Task NotifyParticipantAbsentAsync_on_a_barrier_that_never_opened_persists_nothing()
+    {
+        var (grain, state) = CreateGrain();
+
+        var decision = await grain.NotifyParticipantAbsentAsync("orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Decided, Is.False);
+            Assert.That(state.WriteCount, Is.Zero, "the tree and operation are peer-supplied, so an unopened barrier keeps no state");
+        });
+    }
+
+    [Test]
     public async Task NotifyTerminalAsync_is_idempotent_on_redelivery_after_decided()
     {
         var (grain, state) = CreateGrain();

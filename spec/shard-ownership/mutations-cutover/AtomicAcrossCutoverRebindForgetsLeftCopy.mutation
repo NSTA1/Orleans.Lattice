@@ -1,6 +1,6 @@
 # Pairs with AtomicAcrossCutover. A refused dispatch re-binds without recording
 # the copy it leaves, so nothing discards the prepares already taken there: the
-# shape of production's TryRebindToResolvedCopyAsync today (#4689).
+# shape of production's TryRebindToResolvedCopyAsync before #4689 was fixed.
 MODULE: AtomicAcrossCutoverRebindForgetsLeftCopy
 TARGET: AtomicAcrossCutover
 CLASS: Invariant

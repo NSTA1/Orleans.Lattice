@@ -1,5 +1,5 @@
 # Pairs with CommittedBatchOnBoundCopy. The pre-decision re-bind does not record
-# the copy it leaves (production's RebindAcrossAliasSwapAsync, #4689), so the
+# the copy it leaves (production's RebindAcrossAliasSwapAsync before #4689 was fixed), so the
 # whole batch stays prepared on the previous copy after the commit.
 MODULE: CommittedBatchOnBoundCopyRebindBeforeDecisionForgets
 TARGET: CommittedBatchOnBoundCopy

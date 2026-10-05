@@ -106,7 +106,7 @@ Coverage of one half must not be read as coverage of the other. Not covered:
   the shard-ownership specification;
 - an atomic batch in flight across a local cutover and its revert, which the
   shard-ownership specification's `ShardOwnershipCutover` module checks, and
-  which found #4689 (open);
+  which found #4689 (fixed);
 - the receiver side of cross-cluster atomic batches, which depends on #4480.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in

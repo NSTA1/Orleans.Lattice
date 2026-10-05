@@ -255,8 +255,8 @@ not read as coverage of another:
   revert move the alias against a bound saga, and the companion module
   `ShardOwnershipCutover` checks them
   ([`RefinementCutover.md`](RefinementCutover.md)). There the copy the saga
-  leaves mirrors nowhere, so the saga re-binds and must discard what it left
-  behind (#4689, open). An explicit `SetTreeAliasAsync` and schema remediation
+  leaves mirrors nowhere, so the saga re-binds and discards what it left behind
+  before it decides (#4689, fixed). An explicit `SetTreeAliasAsync` and schema remediation
   also move the alias (#4357 fixed all three), with no shadow to revert to, and
   are not modelled. With them goes the split's abandon path for those moves. The
   abandon an undo of a resize reaches is modelled (`SplitAbandon`, #4478), and

@@ -237,6 +237,7 @@ internal sealed partial class ReplicationApplier(
                         + "the tree is not enrolled for replication on this receiver.",
                         entry.TreeId, entry.OriginClusterId);
                     await RecordNotEnrolledLostAsync(entry.OriginClusterId, [entry.Timestamp], cancellationToken);
+                    await NotifyCrossTreeParticipantAbsentAsync(entry, cancellationToken);
                     outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
 
