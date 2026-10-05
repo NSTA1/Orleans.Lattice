@@ -154,6 +154,97 @@ public sealed class VanishedSnapshotColdStartIntegrationTests
     }
 
     /// <summary>
+    /// The trim does not have to happen before the cold start. A kept snapshot's
+    /// durable pin cannot be lowered once the snapshot vanishes, so the WAL GC
+    /// stays entitled to trim the prefix it covered for as long as the cold
+    /// rebuild runs. Here the tail still reads <c>0</c> when the leaf activates,
+    /// and a GC pass runs just before the rebuild's first slice read (found by the
+    /// WAL spec's <c>SnapshotLoss</c> variant, depth 18). A cold start that trusts
+    /// the untrimmed tail comes up without the prefix; the leaf must fail closed
+    /// whatever the tail reads.
+    /// </summary>
+    [Test]
+    public async Task A_cold_start_over_a_vanished_snapshot_fails_closed_even_when_the_tail_is_untrimmed_at_activation()
+    {
+        var (tree, shard, treeId) = await CreateSingleLeafTreeAsync("vanished-untrimmed");
+        for (var i = 0; i < 20; i++)
+        {
+            await tree.SetAsync($"k-{i:D2}", Bytes($"v-{i}"));
+        }
+
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        var leafKey = leafId!.Value.GetGuidKey();
+        var leaf = _cluster.Client.GetGrain<IBPlusLeafGrain>(leafKey);
+        await CoverWithSnapshotAsync(tree, leaf, treeId);
+
+        var tail = await _cluster.Client.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/0").GetTailOffsetAsync(CancellationToken.None);
+        Assert.That(tail, Is.Zero, "precondition: nothing is trimmed before the cold start");
+
+        await leaf.ForceDeactivateAsync();
+        await Task.Delay(200);
+        await _cluster.Client.GetGrain<ILeafSnapshotStorageGrain>(leafKey).ClearAsync(CancellationToken.None);
+
+        MidRebuildTrim.Arm(treeId);
+        byte[]? read = null;
+        Exception? failure = null;
+        try
+        {
+            read = await tree.GetAsync("k-00");
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+        finally
+        {
+            MidRebuildTrim.Disarm();
+        }
+
+        TestContext.Out.WriteLine($"mid-rebuild trim={MidRebuildTrim.Trimmed}; read={(read is null ? "null" : Encoding.UTF8.GetString(read))}; "
+            + $"failure={failure?.GetType().Name}: {failure?.Message}");
+        Assert.That(read is not null || failure is not null, Is.True,
+            $"k-00 was acknowledged; the GC trimmed {MidRebuildTrim.Trimmed} entries under the vanished snapshot's pin while "
+            + "the cold rebuild ran, so the leaf must fail closed rather than come up without them");
+        if (read is not null)
+        {
+            Assert.That(read, Is.EqualTo(Bytes("v-0")));
+        }
+    }
+
+    /// <summary>
+    /// Runs one WAL GC pass for the armed tree immediately before the first
+    /// replay slice read a leaf sends, i.e. while its cold rebuild is under way.
+    /// </summary>
+    private sealed class MidRebuildTrim(IServiceProvider services) : IOutgoingGrainCallFilter
+    {
+        private static string? _armedTree;
+
+        public static long Trimmed { get; private set; }
+
+        public static void Arm(string treeId)
+        {
+            Trimmed = 0;
+            Volatile.Write(ref _armedTree, treeId);
+        }
+
+        public static void Disarm() => Volatile.Write(ref _armedTree, null);
+
+        public async Task Invoke(IOutgoingGrainCallContext context)
+        {
+            if (context.InterfaceMethod?.Name == nameof(ILeafReplayCoordinatorGrain.ReadSliceAsync)
+                && Volatile.Read(ref _armedTree) is { } armed
+                && context.TargetId.Key.ToString()!.StartsWith(armed + "/", StringComparison.Ordinal)
+                && Interlocked.CompareExchange(ref _armedTree, null, armed) == armed)
+            {
+                var report = await services.GetRequiredService<ILatticeWalGc>().RunOnceAsync(armed)
+                    .WaitAsync(TimeSpan.FromSeconds(20));
+                Trimmed = report.EntriesTrimmed;
+            }
+
+            await context.Invoke();
+        }
+    }
+    /// <summary>
     /// The control: a leaf whose snapshot is still there rehydrates from it and
     /// serves every key, trim or no trim.
     /// </summary>
@@ -192,6 +283,7 @@ public sealed class VanishedSnapshotColdStartIntegrationTests
                 // and no unwritten partition holds a blocking pin.
                 o.WalPartitions = 1;
             });
+            siloBuilder.Services.AddSingleton<IOutgoingGrainCallFilter, MidRebuildTrim>();
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.Services.AddSingleton<SiloServiceProviderCaptureForWalTests>();
             siloBuilder.Services.AddHostedService(sp => sp.GetRequiredService<SiloServiceProviderCaptureForWalTests>());

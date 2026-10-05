@@ -1094,15 +1094,15 @@ costs at most one extra state write per partition per leaf.
 
 If the snapshot later vanishes - lost storage, or a row deleted
 outside the lattice - the leaf's next cold start finds no snapshot,
-reads the record, and checks each partition it names. When the WAL has
-been trimmed under it (the partition's tail is past offset `0`), the
-snapshot may have been the only durable copy of that prefix, and the
-replay **fails closed** exactly as for an unreadable snapshot: data
-operations fail with `LeafSnapshotUnavailableException` and nothing is
-replayed. A WAL tail that cannot be read fails closed too. A leaf whose
-WAL was never trimmed under the snapshot rebuilds from the WAL as
-before, losing nothing, and a leaf that never kept a snapshot is not
-affected.
+and finds the record set. The snapshot may have been the only durable
+copy of the prefix it covered, so the replay **fails closed** exactly
+as for an unreadable snapshot: data operations fail with
+`LeafSnapshotUnavailableException` and nothing is replayed. Whether the
+WAL tail still starts at offset `0` is not consulted, for the same
+reason as above: the leaf's durable WAL pin was resolved against the
+vanished snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a cold rebuild would be running. A
+leaf that never kept a snapshot is not affected.
 
 The remedy is the same: restore the snapshot or the tree from a
 backup, or call `ILattice.RebuildLeafProjectionAsync` for the leaf's

@@ -76,55 +76,38 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// For a leaf whose snapshot store holds no snapshot: the fault to fail the
-    /// cold start with when a kept snapshot covered a partition whose WAL has
-    /// since been trimmed (its tail is past offset 0), or <see langword="null"/>
-    /// when no snapshot was ever kept or the WAL still holds everything a cold
-    /// rebuild needs. A tail that cannot be read fails closed.
+    /// cold start with when a snapshot covering any partition was ever kept, or
+    /// <see langword="null"/> when none was.
     /// <para>
-    /// The tail is the lowest offset the partition still stores. A permanent
-    /// hole at offset 0 that was never trimmed (issue #4621) reads as a trim
-    /// here, which fails closed rather than open.
+    /// The WAL tail is deliberately not consulted. A kept snapshot's durable pin
+    /// cannot be lowered once the snapshot is gone, so the WAL GC stays entitled
+    /// to trim the prefix the snapshot covered for as long as a cold rebuild runs:
+    /// an untrimmed tail at activation proves nothing about the slices the rebuild
+    /// has yet to read. This is the rule issue #4450 applies to a snapshot that
+    /// fails to load, found here by the WAL specification's <c>SnapshotLoss</c>
+    /// variant (a trim between the tail check and the rebuild's first read).
     /// </para>
     /// </summary>
-    private async Task<Exception?> DetectLostKeptSnapshotAsync(CancellationToken cancellationToken)
+    private Exception? DetectLostKeptSnapshot()
     {
-        var treeId = state.State.TreeId;
-        if (string.IsNullOrEmpty(treeId) || state.State.SnapshotCoveredPartitions is not { } flags)
+        if (state.State.SnapshotCoveredPartitions is not { } flags)
             return null;
 
         for (var partition = 0; partition < flags.Length; partition++)
         {
-            if (!flags[partition])
-                continue;
-
-            long tail;
-            try
-            {
-                tail = await grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
-                    .GetTailOffsetAsync(cancellationToken);
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            if (flags[partition])
             {
                 return new InvalidOperationException(
-                    $"Leaf {context.GrainId} of tree '{treeId}' has no snapshot, but its store once kept one covering "
-                    + $"WAL partition {partition}, and the partition's tail could not be read to tell whether the "
-                    + "prefix it covered survives (issue #4634).",
-                    ex);
-            }
-
-            if (tail > 0)
-            {
-                return new InvalidOperationException(
-                    $"Leaf {context.GrainId} of tree '{treeId}' has no snapshot, but its store once kept one covering "
-                    + $"WAL partition {partition}, and the WAL has been trimmed to offset {tail} under it. The snapshot "
-                    + "may have been the only durable copy of that prefix, so a cold rebuild from the surviving WAL "
-                    + "could lose it (issue #4634). Restore the snapshot, or accept the loss with a projection rebuild.");
+                    $"Leaf {context.GrainId} of tree '{state.State.TreeId}' has no snapshot, but its store once kept "
+                    + $"one covering WAL partition {partition}. The snapshot may have been the only durable copy of the "
+                    + "prefix it covered, and the WAL GC stays entitled to trim that prefix under it, so a cold rebuild "
+                    + "from the WAL could lose it (issue #4634). Restore the snapshot, or accept the loss with a "
+                    + "projection rebuild.");
             }
         }
 
         return null;
     }
-
     /// <summary>
     /// Drops the kept-snapshot record, for an operator rebuild that has accepted
     /// the loss of what the snapshot held. The rebuild's own state write makes

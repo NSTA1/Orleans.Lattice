@@ -122,7 +122,7 @@ public partial class BPlusLeafGrainTests
             Assert.That(fault, Is.InstanceOf<LeafSnapshotUnavailableException>(),
                 "The only durable copy of [0, 5] was the snapshot that vanished, so the replay must fail closed "
                 + $"rather than come up from the surviving suffix. It came up holding: [{string.Join(", ", grain.EntriesForTest.Keys)}].");
-            Assert.That(fault?.InnerException?.Message, Does.Contain("#4634").And.Contain("trimmed to offset 6"),
+            Assert.That(fault?.InnerException?.Message, Does.Contain("#4634").And.Contain("partition 0"),
                 "The cause must name the lost snapshot and the trim under it.");
             Assert.That(grain.EntriesForTest, Is.Empty, "Nothing may be replayed into the cache from the suffix.");
             Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L),
@@ -143,15 +143,17 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Vanished_snapshot_over_an_untrimmed_wal_comes_up_cold_with_every_entry()
+    public async Task Vanished_snapshot_over_an_untrimmed_wal_still_fails_the_replay_closed()
     {
-        // The snapshot was kept but the WAL was never trimmed under it, so the
-        // cold rebuild has everything it needs and nothing is lost.
-        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
+        // The WAL is not trimmed when the leaf activates, but the vanished
+        // snapshot's durable pin cannot be lowered, so the WAL GC may trim the
+        // prefix while the cold rebuild runs. The tail at activation proves
+        // nothing, and is not consulted (the WAL spec's SnapshotLoss variant).
+        var (grain, _, _, coordinator) = CreateVanishedSnapshotLeaf(
             [true], persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
-        Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
-        Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(Enumerable.Range(0, 8).Select(i => $"k{i}")));
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
+        Assert.That(grain.EntriesForTest, Is.Empty);
     }
 
     [Test]
@@ -168,32 +170,24 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Absent_snapshot_with_a_kept_record_only_for_another_partition_is_judged_on_that_partition()
+    public async Task Absent_snapshot_with_a_kept_record_for_any_partition_fails_the_replay_closed()
     {
-        // Partition 0 never had a snapshot kept; only partition 1 did, and its
-        // tail is 0, so nothing this leaf needed was trimmed behind a snapshot.
+        // Partition 0 never had a snapshot kept, but partition 1 did: its pin may
+        // still license a trim of partition 1 under the cold rebuild.
         var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
             [false, true], persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
-        Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
     }
 
     [Test]
-    public async Task Absent_snapshot_whose_wal_tail_cannot_be_read_fails_the_replay_closed()
+    public async Task Absent_snapshot_with_an_all_clear_record_comes_up_cold()
     {
-        var (grain, _, _, coordinator) = CreateVanishedSnapshotLeaf(
-            [true], persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
-        coordinator.GetTailOffsetAsync(Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromException<long>(new TimeoutException("wal unreachable")));
+        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
+            [false, false], persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
-        var fault = await ActivateCapturingFaultAsync(grain);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(fault, Is.InstanceOf<LeafSnapshotUnavailableException>(),
-                "A leaf that cannot tell whether the prefix survives must not guess.");
-            Assert.That(grain.EntriesForTest, Is.Empty);
-        });
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
+        Assert.That(grain.EntriesForTest, Has.Count.EqualTo(8));
     }
 
     [Test]

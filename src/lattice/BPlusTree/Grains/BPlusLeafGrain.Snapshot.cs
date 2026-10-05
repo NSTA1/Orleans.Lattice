@@ -3805,8 +3805,8 @@ internal sealed partial class BPlusLeafGrain
             // WAL GC to trim, a cold rebuild from the surviving suffix would come
             // up without that prefix and report its keys absent. That is a lost
             // snapshot, and it fails the replay closed exactly as a failed load
-            // does (issue #4450).
-            if (await DetectLostKeptSnapshotAsync(cancellationToken) is { } lost)
+            // does (issue #4450), whatever the WAL tail reads.
+            if (DetectLostKeptSnapshot() is { } lost)
             {
                 _snapshotLoadFailedThisAttempt = true;
                 _snapshotLoadFaultThisAttempt = lost;
