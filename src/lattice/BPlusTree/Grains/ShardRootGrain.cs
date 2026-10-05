@@ -2926,8 +2926,14 @@ internal sealed partial class ShardRootGrain(
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(shardKey);
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
-        await leafGrain.SetTreeIdAsync(TreeId);
-        await leafGrain.SetShardIndexAsync(MyShardIndex);
+
+        // This shard is creating its root leaf, so the leaf's first row write
+        // carries a create intent naming it (issue #4654).
+        using (LatticeNewLeafIntentContext.BeginScope(leafGrain.GetGrainId()))
+        {
+            await leafGrain.SetTreeIdAsync(TreeId);
+            await leafGrain.SetShardIndexAsync(MyShardIndex);
+        }
         var prevRootNodeId = state.State.RootNodeId;
         var prevRootIsLeaf = state.State.RootIsLeaf;
         var prevIsPurged = state.State.IsPurged;
