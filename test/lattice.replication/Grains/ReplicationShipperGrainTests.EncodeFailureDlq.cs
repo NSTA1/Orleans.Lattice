@@ -11,8 +11,9 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// or <see cref="System.InvalidOperationException"/> (modelled here with a merge
 /// mode resolver that throws), the offending batch is parked on the per-tree
 /// dead-letter queue and the cursor advances strictly past it so a poison batch
-/// never stalls the stream. Also covers the best-effort DLQ enqueue swallow: a
-/// deterministically-failing DLQ still lets the cursor advance.
+/// never stalls the stream. A batch that cannot be parked - the queue is full,
+/// or the enqueue fails - is never advanced past (#4603): the cursor stays put and
+/// the next tick re-parks it, because advancing would lose it for the peer.
 /// </summary>
 public partial class ReplicationShipperGrainTests
 {
@@ -71,7 +72,7 @@ public partial class ReplicationShipperGrainTests
     }
 
     [Test]
-    public async Task RouteBatchToDeadLetterAsync_enqueue_throw_is_swallowed_and_cursor_still_advances()
+    public async Task RouteBatchToDeadLetterAsync_enqueue_failure_holds_the_cursor_so_the_batch_is_not_lost()
     {
         var opts = new LatticeReplicationOptions
         {
@@ -91,9 +92,36 @@ public partial class ReplicationShipperGrainTests
         await dlq.Received(1).EnqueueAsync(
             Arg.Any<WalRecord>(), Arg.Any<string>(), Arg.Any<int>(),
             Arg.Any<string>(), Arg.Any<CancellationToken>());
-        Assert.That(state.State.Cursor,
-            Is.EqualTo(new HybridLogicalClock { WallClockTicks = 1, Counter = 0 }),
-            "a deterministically-failing DLQ enqueue must be swallowed so the cursor still advances");
+        Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero),
+            "an entry that could not be parked must not be advanced past (#4603)");
+    }
+
+    [Test]
+    public async Task RouteBatchToDeadLetterAsync_full_queue_holds_the_cursor_and_reports_the_link_stalled()
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = LocalCluster,
+            ShipCursorWriteInterval = 1,
+            ReplogPartitions = 1,
+            WireVersionNegotiationEnabled = false,
+        };
+        var (factory, _) = FactoryWithDeadLetters(
+            Task.FromException<long>(new ReplicationDeadLetterQueueFullException(Tree, 1)));
+        var peerStats = new ReplicationPeerStats();
+        var (grain, state, feed, _, _, _, _) =
+            Create(opts, grainFactory: factory, modeResolver: ThrowingModeResolver(), peerStats: peerStats);
+        feed.Append(MakeEntry("enc1", ticks: 1));
+
+        await grain.PumpForTestingAsync(CancellationToken.None);
+
+        var row = peerStats.ReadStatusPage(new ReplicationPeerStatusReadRequest { TreeId = Tree, Limit = 10 })
+            .Single(r => r.Direction == ReplicationContactDirection.Outbound);
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Cursor, Is.EqualTo(HybridLogicalClock.Zero), "a full dead-letter queue holds the cursor");
+            Assert.That(row.DeadLetterFullSeconds, Is.Not.Null, "the link reports as stalled, not quiet");
+        });
     }
 
     [Test]

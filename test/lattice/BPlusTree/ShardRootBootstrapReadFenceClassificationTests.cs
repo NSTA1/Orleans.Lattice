@@ -81,6 +81,9 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
         nameof(IShardRootGrain.GetLeftmostLeafIdAsync),
         nameof(IShardRootGrain.GetMigrationTargetShardIndexAsync),
         nameof(IShardRootGrain.GetMirrorDestinationAsync),
+        // A saga coordinator's read-back of its prepare stamps (#4522): part of
+        // the write, which the fence does not refuse, and exposes no stored value.
+        nameof(IShardRootGrain.GetOriginalPrepareStampsAsync),
         // The leaf clocks a range delete stamps above (#4568): part of the
         // delete, which is a write, and exposes no stored value.
         nameof(IShardRootGrain.GetRangeClockBoundedAsync),

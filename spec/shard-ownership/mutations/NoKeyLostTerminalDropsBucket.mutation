@@ -9,7 +9,7 @@ PERTURBS: SagaTerminal
 
 --- FIND
        IN /\ row' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
-                        IF <<x, y>> \in hit THEN TermRow(x, y, k) ELSE row[x][y][k]]]]
+                        IF <<x, y>> \in hit THEN apply(x, y, k) ELSE row[x][y][k]]]]
 --- REPLACE
 \* MUTATION: nothing is drained into the projection.
        IN /\ row' = row

@@ -53,6 +53,14 @@ internal static class ReplicationLinkHealthClassifier
             return ReplicationLinkHealth.Stalled;
         }
 
+        // A full dead-letter queue keeps the link's next unparkable entry
+        // unacknowledged, so the link makes no progress until an operator drains
+        // the queue (#4603).
+        if (row.DeadLetterFullSeconds is not null)
+        {
+            return ReplicationLinkHealth.Stalled;
+        }
+
         return worst == ReplicationLinkHealth.Healthy && !contacted
             ? ReplicationLinkHealth.Unknown
             : worst;
