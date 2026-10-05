@@ -118,7 +118,7 @@ public partial class BPlusLeafGrainTests
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync",
         // Replication and delta seams.
         "GetDeltaSinceAsync", "GetDeltaSinceCursorAsync", "GetDeltaSinceForSlotsAsync",
-        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync",
+        "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetOriginalPrepareStampsAsync",
         "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",

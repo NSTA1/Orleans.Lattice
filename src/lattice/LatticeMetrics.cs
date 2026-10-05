@@ -1412,6 +1412,42 @@ public static class LatticeMetrics
             description: "Terminal transitions of SetManyAtomicAsync sagas, tagged by outcome.");
 
     /// <summary>
+    /// Counter incremented when an <c>AtomicWriteGrain</c> saga's read-back of its
+    /// keys' original prepare stamps (issue #4522) leaves its fast path. The read
+    /// must account for every entry before the execute phase ends, so the
+    /// committed-values backstop can apply each key at its own stamp. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagReason"/> =
+    /// <see cref="PrepareStampReadBackExhaustive"/> (the first pass missed a key,
+    /// so every shard was asked to read its whole leaf chain - expected after a
+    /// shard root reactivated or a split moved a bucket),
+    /// <see cref="PrepareStampReadBackFailed"/> (a read faulted) or
+    /// <see cref="PrepareStampReadBackIncomplete"/> (a key was still not found).
+    /// The last two fail the batch, which is retried and, once its retries are
+    /// spent, aborted: the saga never commits without its stamps.
+    /// </summary>
+    public static readonly Counter<long> AtomicWritePrepareStampReadBackSlowPath =
+        Meter.CreateCounter<long>("orleans.lattice.atomic_write.prepare_stamp_read_back.slow_path", unit: "{read}",
+            description: "Atomic-write saga read-backs of original prepare stamps that left the fast path, tagged by tree and reason (exhaustive, read_failed, incomplete).");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// the first pass missed a key, so every shard read its whole leaf chain.
+    /// </summary>
+    public const string PrepareStampReadBackExhaustive = "exhaustive";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// a read faulted; the batch is retried.
+    /// </summary>
+    public const string PrepareStampReadBackFailed = "read_failed";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// a key was still not found after the exhaustive pass; the batch is retried.
+    /// </summary>
+    public const string PrepareStampReadBackIncomplete = "incomplete";
+
+    /// <summary>
     /// Histogram of end-to-end <c>SetManyAtomicAsync</c> saga durations,
     /// recorded once per terminal transition of an <c>AtomicWriteGrain</c>
     /// saga next to <see cref="AtomicWriteCompleted"/>. The duration is
