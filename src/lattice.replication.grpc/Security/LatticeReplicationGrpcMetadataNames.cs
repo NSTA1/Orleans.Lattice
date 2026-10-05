@@ -36,4 +36,12 @@ internal static class LatticeReplicationGrpcMetadataNames
     /// receiver off the log and waits for it to re-seed.
     /// </summary>
     public const string ReseedAfterEpochHeader = "x-lattice-replication-reseed-after";
+
+    /// <summary>
+    /// Header that carries the sender's applied low watermark for the batch's
+    /// tree at the receiver (issue #4586) on a push. Read only after the
+    /// caller's origin is authenticated, parsed strictly and bounded; a
+    /// missing or malformed value means the batch vouches for nothing.
+    /// </summary>
+    public const string SourceFrontierHeader = "x-lattice-replication-source-frontier";
 }
