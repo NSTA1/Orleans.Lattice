@@ -199,6 +199,11 @@
           "name": "Deferred",
           "type": "bool",
           "required": true
+        },
+        {
+          "name": "SourceLineageRefused",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.replication/ApplyResult.cs#ApplyResult"
@@ -377,6 +382,16 @@
           "name": "EnqueuedAtTicks",
           "type": "long",
           "required": true
+        },
+        {
+          "name": "SourceLineageClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SourceLineage",
+          "type": "Guid?",
+          "required": false
         }
       ],
       "source": "src/lattice.replication/DeadLetterEntry.cs#DeadLetterEntry"

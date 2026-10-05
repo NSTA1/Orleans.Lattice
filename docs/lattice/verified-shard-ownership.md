@@ -11,7 +11,7 @@ stays bound to the physical copy it prepared on. Ownership is what keeps all of
 that consistent: at every moment each key has exactly one place that answers for
 it, and no move loses or resurrects a value.
 
-This document describes the formal coverage of that ownership protocol: two TLA+
+This document describes the formal coverage of that ownership protocol: four TLA+
 modules checked by TLC, the pure cores production is routed through, and the
 Coyote models that check those cores. It is an assurance document; the runtime
 behaviour it protects is documented in the pages linked above.
@@ -31,10 +31,12 @@ reader is most likely to over-read are these.
   report a decision, retiring its row), a late forwarded prepare and a leaf
   reactivation do to a saga bound across a split and a resize. A behaviour that
   needs a retention event together with a stale writer, a saga re-bind, a
-  reshard, a refused flip or an undo before a flip is checked by **neither**
-  module's CI gate. Their composition was checked once, all properties of both
-  modules included, and is clean in this instance; it costs about ten minutes
-  of TLC, which is why it is not a gate
+  reshard, a refused flip, an undo before a flip, a write
+  stamp that disagrees with real time or a migrated row is checked by **neither**
+  module's CI gate. Their composition is clean in this instance: every action
+  of both, `ShardOwnership`'s write stamps and migrated rows, and all their
+  properties. It costs about nineteen minutes of TLC, which is why it is not
+  a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
   A third module, `ShardOwnershipCrdt`, checks that the same moves join a
   CRDT-mode key's copies rather than overwrite them.

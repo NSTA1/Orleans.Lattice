@@ -100,8 +100,17 @@ refinement note's rows:
   window cannot see - a saga undecided at a full base and committed before any of
   its terminals reaches the WAL - which the fix closes by recording each capture's
   undecided sagas in its cut.
+- **#4686** (`BackupIncremental`, fixed by #4690): an increment on a legacy base
+  captured before the #4589 fix recorded its undecided sagas could restore a
+  batch committed in its decision snapshot as absent, because the base carried
+  no undecided set the increment could look the saga up in. The module checks
+  the fix: `LatticeBackupCaptureService.PredatesUndecidedSagaRecording`
+  recognises such a base and falls back to a full backup rather than layering an
+  increment on it. `LatticeBackupIncrementalSagaConsistencyTests.An_increment_on_a_legacy_base_that_recorded_no_undecided_sagas_falls_back_to_a_full_backup_holding_the_batch_whole`
+  reproduces production before the fix, and its code analogue turns the fix's
+  regression test red.
 
-All four fixes have landed, so the reproducing mutations now stand as
+All five fixes have landed, so the reproducing mutations now stand as
 regression checks: each must keep firing, and each has a code analogue that turns
 the fix's regression tests red.
 ## Saga abstraction

@@ -143,6 +143,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
     internal const string ReceiverSagaPoisonRecord = "olr.yr";
 
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonClassification"/>.</summary>
+    internal const string ReceiverSagaPoisonClassification = "olr.yq";
+
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
 
@@ -333,4 +336,8 @@ public static class ReplicationTypeAliases
 
     // A receiver's record of the source lineage it last drained (#4673).
     internal const string ReplicationDrainedLineage = "olr.dn";
+
+    // The source lineage a sender stamped on an entry, carried with it into the
+    // causal-apply buffer and the dead-letter queue (#4707).
+    internal const string ReplicationSourceLineageStamp = "olr.ls";
 }

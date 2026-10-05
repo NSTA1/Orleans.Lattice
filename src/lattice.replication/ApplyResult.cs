@@ -58,4 +58,16 @@ public readonly record struct ApplyResult
     /// its cursor-advancing semantics unchanged.
     /// </summary>
     [Id(2)] public bool Deferred { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the entry / run was NOT applied because the sender
+    /// stamped it with a source lineage this tree no longer holds (issues #4673
+    /// and #4707): it was read before a source restore, purge and recreate, or
+    /// alias move, and arrived after this tree drained the new lineage. Unlike a
+    /// <see cref="Deferred"/> result it must not simply be re-shipped: the
+    /// receive path answers with a not-accepted ack that tells the sender to
+    /// re-resolve its source binding. A dead-letter replay that is refused this
+    /// way leaves the entry parked. Defaults to <c>false</c>.
+    /// </summary>
+    [Id(3)] public bool SourceLineageRefused { get; init; }
 }
