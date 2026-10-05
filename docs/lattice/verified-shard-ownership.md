@@ -41,9 +41,8 @@ reader is most likely to over-read are these.
 - **A shadow-cutover restore has its own module.** `ShardOwnershipCutover`
   checks an atomic write bound to the previous copy across a shadow-cutover
   restore and its revert. That move is not a resize, so the copy the write leaves
-  mirrors nowhere. The write re-binds, and it must discard the prepares it left
-  on the previous copy before it decides. Production does not do that yet
-  (#4689, open).
+  mirrors nowhere. The write re-binds, and it discards the prepares it left on
+  the previous copy before it decides (#4689, fixed).
 - **Other alias moves are not modelled.** An explicit alias change and schema
   remediation move the alias too, and neither is covered here.
 - **Shard consolidation is not modelled.** The reshard here only grows.
@@ -99,8 +98,8 @@ terminal's backstop, a split or a resize (#4611, #4613, #4618, all fixed), and,
 found by the review of this coverage, a router that cached the old copy reading
 empty and losing writes once that copy is purged (#4503, fixed). The cutover
 module found one more: an atomic write that re-binds across a shadow-cutover
-restore leaves its prepares on the previous copy, and a revert serves them torn
-(#4689, open). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+restore left its prepares on the previous copy, and a revert served them torn
+(#4689, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

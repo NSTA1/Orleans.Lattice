@@ -58,4 +58,23 @@ public partial class BPlusLeafGrainTests
                 "once the durable checkpoint covers the discarded prepare, the per-leaf marker is pruned");
         });
     }
+
+    [Test]
+    public async Task DiscardPendingTransactionAsync_refuses_a_routed_prepare_of_the_discarded_saga_that_arrives_later()
+    {
+        // Issue #4689: a saga discards its prepares on a copy it re-bound away
+        // from before it decides. A routed prepare of that saga still on the wire
+        // must not recreate the bucket after the discard, or the copy would hold
+        // part of a committed batch for a revert to serve.
+        var grain = CreateGrain(new FakePersistentState<LeafNodeState>());
+        await grain.SetTreeIdAsync("discard-tree");
+        var txid = Guid.NewGuid();
+        await PreparePendingSetAsync(grain, txid, "k1", Encoding.UTF8.GetBytes("v1"));
+
+        await grain.DiscardPendingTransactionAsync(txid);
+        await PreparePendingSetAsync(grain, txid, "k2", Encoding.UTF8.GetBytes("v2"));
+
+        Assert.That(await grain.GetPendingKeysAsync(), Is.Empty,
+            "a prepare of a saga this leaf discarded is refused, as a prepare behind a terminal is");
+    }
 }

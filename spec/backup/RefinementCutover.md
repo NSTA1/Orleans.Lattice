@@ -81,8 +81,8 @@ Each item below is checked elsewhere, or argued here; none is an unchecked claim
   the saga's re-bind, the discard of the prepares the saga leaves on the previous
   copy, and the redirect's admission of the saga's direct calls, and checks
   `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy` and `SagaSettles`. It found
-  #4689: a re-bound saga's prepares stay on the previous copy, and a revert serves
-  them torn. The chaos test
+  #4689, now fixed: a re-bound saga's prepares stayed on the previous copy, and a
+  revert served them torn. The chaos test
   `ShadowCutoverAtomicVisibilityChaosTests.Cutovers_and_a_revert_of_a_resharded_tree_never_tear_an_atomic_batch`
   is load coverage only. It does not reach that race.
 - **The ownership guard.** A refusal by `ITreeOwnershipGuard` is a failure

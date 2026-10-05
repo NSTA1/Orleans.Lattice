@@ -403,4 +403,16 @@ internal sealed class AtomicWriteState
     /// against it.
     /// </summary>
     [Id(26)] public string? OriginalPrepareStampsPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The physical copies the saga re-bound away from, each with the shards it
+    /// had touched there (issue #4689). A copy an alias moved off that mirrors
+    /// nowhere - the copy a shadow-cutover restore retains - keeps the prepares
+    /// the saga took on it, and a revert would serve them beside the other keys'
+    /// pre-saga values. The saga discards its prepares on every copy recorded
+    /// here before it records its decision. A copy the saga re-binds back onto
+    /// leaves the record. <see langword="null"/> when the saga never re-bound, or
+    /// once the discards are done.
+    /// </summary>
+    [Id(27)] public Dictionary<string, List<int>>? AbandonedCopyShards { get; set; }
 }
