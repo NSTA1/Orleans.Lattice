@@ -26,8 +26,9 @@ The decisions the module checks run in production through pure cores:
 cursor filter), `ReplicationReceiveDedup` (the receiver's cycle-break and
 the monotone high-water mark) and `CausalApplyBuffer.RequiredDependencies`
 (the foreign writes an entry names, which
-`ReplicationHighWaterMarkGrain.CheckDependenciesAsync` checks against the
-high-water vector and the lost marks). The Coyote models in
+`ReplicationHighWaterMarkGrain.CheckDependenciesAsync` decides by exact
+identity, then by the origin frontier's `CausalFrontierCore.Decide` - never by
+the high-water vector, #4586). The Coyote models in
 `test/lattice.replication/Coyote/` execute the same cores.
 
 ## Variable mapping
@@ -38,7 +39,7 @@ high-water vector and the lost marks). The Coyote models in
 | `wal[x]` | A cluster's write-ahead log | The per-tree WAL a shipper drains. It holds local writes and, because the WAL is the sole durability boundary, every write the cluster applied from a peer with its authoring origin preserved (`LatticeGrain.ReplicationApply` stamps it through `LatticeOriginContext`). One sequence per cluster stands for production's several key-hashed partitions; see [abstraction gaps](#deliberate-abstraction-gaps). |
 | `cursor[e]` | A shipper's acknowledged position | The durable per-partition sequence cursor `ReplicationShipperState.PartitionCursors`, advanced in `ReplicationShipperGrain.AdvanceCursorAsync`. The scalar HLC cursor `ReplicationShipperState.Cursor` is not a skip criterion outside the legacy-migration tick (`ReplicationShipEligibility.IsBelowLegacyScalarCursor`), so the model has no variable for it. A re-bootstrap after the source trimmed its log moves the source-to-target cursor to the trim point (`Bootstrap`). |
 | `val[x][k]` | A replica's state for a key | The set of writes merged into the replica. Each merge mode is a join-homomorphism from that set (`ValueAt`): last-writer-wins is the maximum under (HLC, origin rank), as `LwwValue` merges; the grow-only counter takes each origin's highest contribution, as `GCounter.MergeFrom` does pointwise. A delete is a last-writer-wins write with its tombstone flag set (`del`), merged by its HLC like any other, as a tombstone `LwwValue` is. |
-| `hwm[x][o]` | Per-origin high-water vector | `ReplicationHighWaterMarkState.Vector`, advanced by `ReplicationHighWaterMarkGrain.TryAdvanceAsync` through `ReplicationReceiveDedup.AdvancesHighWaterMark`. It is the local vector `ReplicationHighWaterMarkGrain.CheckDependenciesAsync` compares each dependency `CausalApplyBuffer.RequiredDependencies` names against, and never a drop threshold (#1060). |
+| `hwm[x][o]` | Per-origin high-water vector | `ReplicationHighWaterMarkState.Vector`, advanced by `ReplicationHighWaterMarkGrain.TryAdvanceAsync` through `ReplicationReceiveDedup.AdvancesHighWaterMark`. It is neither a drop threshold (#1060) nor the dependency check: `ReplicationHighWaterMarkGrain.CheckDependenciesAsync` decides each dependency `CausalApplyBuffer.RequiredDependencies` names by the exact applied identity (`ReplicationHighWaterMarkGrain.AdvanceAppliedAsync`) or the origin's `ReplicationOriginFrontierGrain` (#4586). |
 | `pinned[x][o]` | Snapshot-pinned drop floor | `ReplicationHighWaterMarkState.PinnedFloor`. Since #4476 (the fix for #4463) production installs no floor and the applier never reads one; the slot is kept for rolling upgrades. The model keeps the variable, always zero, so `BootstrapHandoffLosesNothingPinnedFloor` can still express the removed design. |
 | `cache[x]` | Shadow-forward identity cache | `RecentApplyCache`, keyed by (origin, HLC, key, op), one per tree in the applier's memory. The model's cache is unbounded; eviction is covered by the idempotent merge every identity-cache miss falls through to. |
 | `parking[x]` | Entries between the dependency check and the buffer insert | The window inside `ReplicationApplier.ApplyAsync` between the `GetVectorAsync` read that finds a dependency unmet and the completion of `ReplicationApplier.ParkAsync`. |
