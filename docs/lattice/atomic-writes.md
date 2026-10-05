@@ -1650,7 +1650,9 @@ barrier on the present subset rather than blocking forever on a tree that
 will never arrive. The set is fixed when the first terminal freezes it: a
 later terminal computed under a changed replication configuration does not
 change it, and a tree whose terminal arrives after it became replicated
-joins it (issue #4692). The receiver thus preserves cross-tree atomic
+joins it (issue #4692). A participant that stops being replicated here
+before its terminal arrives is removed from an undecided barrier, which then
+decides on the trees that remain. The receiver thus preserves cross-tree atomic
 visibility across exactly the trees it hosts, whatever subset of the
 batch that is.
 
