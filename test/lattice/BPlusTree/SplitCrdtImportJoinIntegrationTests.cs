@@ -19,11 +19,11 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// final drain: the saga's prepare and terminal arrive through the replication
 /// apply path, the split through its coordinator.
 /// <para>
-/// The terminal-first cases lose the non-atomic write without the fix whatever
-/// the split coordinator's background drain does. In the write-first cases the
-/// loss depends on that drain: if its first pass imports the source's row into
-/// the destination between the write and the terminal, the destination's fold
-/// already carries the write.
+/// The split coordinator's timer-driven background drain is held for each
+/// test tree, so the final drain is the only import: otherwise a background
+/// pass landing between a write-first case's write and its terminal would carry
+/// the write into the destination before its fold, and the case would pass
+/// without the fix.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -98,25 +98,34 @@ public sealed class SplitCrdtImportJoinIntegrationTests
             delta: sagaDelta, mode: mode);
 
         var split = _cluster.Client.GetGrain<ITreeShardSplitGrain>($"{tree}/{SourceShard}");
-        await split.SplitAsync(SourceShard);
-
-        async Task TerminalAsync() =>
-            await apply.ApplyTxTerminalAsync(txid, committed: true, SourceShard, Hlc(5_100), Origin);
-        async Task NonAtomicAsync() =>
-            await lattice.ApplyCrdtDeltaAsync(key, mode, nonAtomicDelta);
-
-        if (terminalFirst)
+        TreeShardSplitGrain.HoldBackgroundDrainForTest(tree);
+        try
         {
-            await TerminalAsync();
-            await NonAtomicAsync();
+            await split.SplitAsync(SourceShard);
+
+            async Task TerminalAsync() =>
+                await apply.ApplyTxTerminalAsync(txid, committed: true, SourceShard, Hlc(5_100), Origin);
+            async Task NonAtomicAsync() =>
+                await lattice.ApplyCrdtDeltaAsync(key, mode, nonAtomicDelta);
+
+            if (terminalFirst)
+            {
+                await TerminalAsync();
+                await NonAtomicAsync();
+            }
+            else
+            {
+                await NonAtomicAsync();
+                await TerminalAsync();
+            }
+
+            await split.RunSplitPassAsync();
         }
-        else
+        finally
         {
-            await NonAtomicAsync();
-            await TerminalAsync();
+            TreeShardSplitGrain.ReleaseBackgroundDrainForTest(tree);
         }
 
-        await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True, "precondition: the split completed");
         var map = await _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).GetShardMapAsync(tree);
         Assert.That(map!.Resolve(key), Is.Not.EqualTo(SourceShard), "precondition: the split moved the key");
