@@ -30,8 +30,8 @@ public partial class DeadLetterTrackingReplicationApplierTests
         var inner = Substitute.For<IReplicationApplier>();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(Substitute.For<IReplicationDeadLetterGrain>());
-        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>())
-            .Returns(Substitute.For<IReplicationHighWaterMarkGrain>());
+        var hwm = HighWaterMarkTestGrains.Substitute();
+        grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         var options = new LatticeReplicationOptions
         {
             ClusterId = "site-a",
