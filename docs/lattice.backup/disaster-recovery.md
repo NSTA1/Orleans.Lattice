@@ -185,6 +185,18 @@ Key properties:
   naming the peers - because a coordinated restore would abort on it. See
   [Un-restorable backups: a sink that is not shared](#un-restorable-backups-a-sink-that-is-not-shared).
 
+### Replacing a replicated tree outside a coordinated restore
+
+Use a coordinated restore for a replicated tree. A restore, revert or alias rebind
+that replaces a replicated tree's contents on one cluster alone leaves its peers
+holding the writes it discarded, so they may diverge from it. It also releases, on a
+peer, any write that depended on a discarded write without that write
+([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)): no other cluster can
+deliver the discarded write, so the dependent is shown rather than held for ever.
+Each such replacement is logged as a warning and counted by
+`orleans.lattice.replication.source_restore.uncoordinated`, tagged with the tree. A
+coordinated restore converges every cluster.
+
 ### Un-restorable backups: a sink that is not shared
 
 A coordinated restore of a replicated tree is all-or-nothing across every cluster,

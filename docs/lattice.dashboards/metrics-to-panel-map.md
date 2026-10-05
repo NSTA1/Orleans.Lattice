@@ -451,6 +451,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | counter (`{lift}`) | `tree`, `tenant` | Bootstrap read fence force-lifted - issue #4526 |
 | `orleans.lattice.replication.bootstrap.reconcile` | counter (`{pass}`) | `tree`, `origin`, `outcome`, `tenant` | Bootstrap delete reconcile (rate by outcome) |
 | `orleans.lattice.replication.causal.frontier_origins` | up-down counter (`{origin}`) | `tree`, `origin`, `mode`, `tenant` | Causal frontier origins by mode - issue #4586 |
+| `orleans.lattice.replication.source_restore.uncoordinated` | counter (`{restamp}`) | `tree`, `tenant` | Uncoordinated source restores - issue #4586 |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | counter (`{event}`) | `tree`, `origin`, `tenant` | Fall-off-log suppressed events (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.triggered` | counter (`{fallback}`) | `tree`, `peer`, `tenant` | Bootstrap fallback triggered (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.entries` | counter (`{entry}`) | `tree`, `peer`, `tenant` | Bootstrap fallback entries re-shipped (rate) |
