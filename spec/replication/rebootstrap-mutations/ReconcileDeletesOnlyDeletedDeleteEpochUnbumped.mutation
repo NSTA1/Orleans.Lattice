@@ -1,0 +1,17 @@
+# Pairs with ReconcileDeletesOnlyDeleted. Checking the deleted flag at export open and
+# close misses a soft delete and recovery between them, during which the scan
+# passed the key. The delete epoch is what makes that visible.
+MODULE: ReconcileDeletesOnlyDeletedDeleteEpochUnbumped
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: a soft delete does not advance the delete epoch, so a delete and recovery inside an export goes unseen
+PERTURBS: SoftDelete
+
+--- FIND
+    /\ deleted' = TRUE
+    /\ delDone' = TRUE
+--- REPLACE
+\* MUTATION: the delete epoch does not advance.
+    /\ deleted' = TRUE
+    /\ delDone' = delDone
+--- END

@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A pass is owed because it was
+# unstable, and an unstable pass may have carried nothing (a soft-deleted tree) or
+# passed a key (a reshard). A retry that only reconciles never applies that key's
+# retained tombstone, which it now finds carried, so r keeps the deleted value.
+MODULE: EventualConvergenceRetryPassSkipsRows
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the retry pass reconciles without re-applying rows, so a row the first pass missed is never applied
+PERTURBS: ExportRow
+
+--- FIND
+            /\ reg' = [reg EXCEPT ![r] = Merge(@, reg[s])]
+            /\ clk' = [clk EXCEPT ![r] = Max2(@, reg[s].h)]
+--- REPLACE
+\* MUTATION: the retry pass does not apply its rows.
+            /\ reg' = IF ex.phase = "reconcile" THEN reg ELSE [reg EXCEPT ![r] = Merge(@, reg[s])]
+            /\ clk' = IF ex.phase = "reconcile" THEN clk ELSE [clk EXCEPT ![r] = Max2(@, reg[s].h)]
+--- END

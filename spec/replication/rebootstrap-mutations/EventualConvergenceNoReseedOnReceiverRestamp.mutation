@@ -1,0 +1,19 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A receiver restore re-stamps r's lineage;
+# a sender that does not treat the new lineage as a gap never re-delivers what the
+# restore removed (#4586).
+MODULE: EventualConvergenceNoReseedOnReceiverRestamp
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a receiver restore requests no re-seed, so the receiver never regains what the restore removed
+PERTURBS: RestoreR
+
+--- FIND
+    /\ restoredR' = TRUE
+    /\ fellOff' = TRUE
+    /\ booted' = FALSE
+--- REPLACE
+    /\ restoredR' = TRUE
+\* MUTATION: no forced gap on the new receiver lineage.
+    /\ fellOff' = fellOff
+    /\ booted' = booted
+--- END

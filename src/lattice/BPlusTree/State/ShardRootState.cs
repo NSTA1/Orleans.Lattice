@@ -380,6 +380,17 @@ internal sealed class ShardRootState
     /// persisted before the field existed deserializes to <c>false</c>.
     /// </summary>
     [Id(24)] public bool BootstrapReadFenced { get; set; }
+
+    /// <summary>
+    /// Whether a purge (or retirement) of this shard has begun clearing the leaves
+    /// it routes to (issue #4654). Made durable before the first leaf is cleared,
+    /// so a purge that dies part-way leaves it set. A leaf with no state row cannot
+    /// otherwise be told apart from one whose row was lost, so recovery re-creates
+    /// the shard's rowless leaves empty only when this is set - when the operator
+    /// had chosen to discard their data - and clears it once it has. State
+    /// persisted before the field existed deserializes to <c>false</c>.
+    /// </summary>
+    [Id(25)] public bool LeafClearsBegun { get; set; }
 }
 
 /// <summary>

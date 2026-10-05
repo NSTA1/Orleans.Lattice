@@ -3177,8 +3177,10 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of durable writes to the leaf-materialiser pin store, emitted by
     /// <c>WalMaterialiserPinGrain</c> on every <c>WriteStateAsync</c>. Tagged
-    /// with <see cref="TagOutcome"/> = <c>birth</c> (a synchronous through-write
-    /// seeded by a new leaf's block pin) or <c>coalesced</c> (a debounced flush
+    /// with <see cref="TagOutcome"/> = <c>birth</c> (a synchronous through-write:
+    /// a new leaf's block pin seed, or an override hold a leaf raises before
+    /// appending a write stamped below its clock, issue #4641) or <c>coalesced</c>
+    /// (a debounced flush
     /// draining one or more advancing reports). The pre-#1030 shape wrote once
     /// per advancing report through a single per-tree grain; coalescing collapses
     /// a report burst to one write per shard per flush window, so a sustained

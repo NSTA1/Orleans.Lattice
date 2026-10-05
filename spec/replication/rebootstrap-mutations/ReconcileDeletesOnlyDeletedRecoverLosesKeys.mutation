@@ -1,0 +1,18 @@
+# Pairs with ReconcileDeletesOnlyDeleted. Recovery is assumed to bring back every key
+# written before the soft delete. A recovery that loses a key without re-stamping the
+# lineage token leaves an absence the gates cannot tell from a delete.
+MODULE: ReconcileDeletesOnlyDeletedRecoverLosesKeys
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: recovery loses keys without re-stamping the lineage, so their absence is reconciled as a delete
+PERTURBS: Recover
+
+--- FIND
+    /\ deleted' = FALSE
+    /\ UNCHANGED <<authored, wal, cursor, reg, clk,
+--- REPLACE
+\* MUTATION: recovery loses the key.
+    /\ deleted' = FALSE
+    /\ reg' = [reg EXCEPT ![s] = Absent]
+    /\ UNCHANGED <<authored, wal, cursor, clk,
+--- END

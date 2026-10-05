@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces current production (#4549):
+# #4647 reconciles only source-origin entries, so r's own value that s applied and
+# then deleted, behind a detach, survives the re-seed after s reaped the delete.
+MODULE: EventualConvergenceForeignRowNotReconciled
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the reconcile covers only entries the source authored, so a receiver-local value whose delete the source reaped survives
+PERTURBS: EndExport
+
+--- FIND
+           ok == okSrc \/ okFor
+--- REPLACE
+\* MUTATION: no reconcile for an entry of another origin.
+           ok == okSrc
+--- END

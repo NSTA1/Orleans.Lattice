@@ -199,6 +199,31 @@ internal sealed class ReplicationOriginFrontierGrain(
         _aggregateDirty ? PersistAggregateAsync() : Task.CompletedTask;
 
     /// <inheritdoc />
+    public Task<HybridLogicalClock?> GetMinHeldForTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        HybridLogicalClock? lowest = null;
+        foreach (var source in (ReadOnlySpan<string>)[BufferSource(treeId), DeadLetterSource(treeId), ExportSource(treeId)])
+        {
+            if (!state.State.HeldBySource.TryGetValue(source, out var held))
+            {
+                continue;
+            }
+
+            foreach (var identity in held)
+            {
+                if (lowest is not { } current || identity < current)
+                {
+                    lowest = identity;
+                }
+            }
+        }
+
+        return Task.FromResult(lowest);
+    }
+
+    /// <inheritdoc />
     public async Task SetHeldAsync(string source, IReadOnlyCollection<HybridLogicalClock> held, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(source);

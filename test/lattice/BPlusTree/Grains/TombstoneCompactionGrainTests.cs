@@ -22,10 +22,15 @@ public partial class TombstoneCompactionGrainTests
                      IGrainFactory grainFactory,
                      IOptionsMonitor<LatticeOptions> optionsMonitor) CreateGrain(
         LatticeOptions? options = null,
-        FakePersistentState<TombstoneCompactionState>? existingState = null)
+        FakePersistentState<TombstoneCompactionState>? existingState = null,
+        IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("compaction", TreeId));
+        if (activationServices is not null)
+        {
+            context.ActivationServices.Returns(activationServices);
+        }
         var grainFactory = Substitute.For<IGrainFactory>();
         var reminderRegistry = Substitute.For<IReminderRegistry>();
 

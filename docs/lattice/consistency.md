@@ -374,7 +374,10 @@ clocks (not client clocks). Two concurrent writes resolve by HLC: the
 write with the later wall-clock tick wins. In pathological drift
 scenarios the tombstone-grace window
 (`LatticeOptions.TombstoneGracePeriod`, default 24 h) gives a lagging
-replica time to converge before physical reclamation.
+replica time to converge before physical reclamation. On a replicated
+tree that window is not trusted on its own: a tombstone is reaped only
+once replication has delivered every write it beats (see
+[Tombstone reap gate](../lattice.replication/replication-drivers.md#tombstone-reap-gate)).
 
 ### Cancellation
 

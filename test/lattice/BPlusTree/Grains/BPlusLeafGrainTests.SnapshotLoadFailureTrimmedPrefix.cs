@@ -66,10 +66,13 @@ public partial class BPlusLeafGrainTests
         ILeafSnapshotStorageGrain snapshot,
         ILeafReplayCoordinatorGrain coordinator,
         Guid leafKey,
-        ILeafCursorReporter? reporter = null)
+        ILeafCursorReporter? reporter = null,
+        ILeafRowRecordGrain? rowRecord = null)
     {
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshot);
+        if (rowRecord is not null)
+            grainFactory.GetGrain<ILeafRowRecordGrain>(Arg.Any<Guid>()).Returns(rowRecord);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coordinator);
 
         var services = new ServiceCollection();

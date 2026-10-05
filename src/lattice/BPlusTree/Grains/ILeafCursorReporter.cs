@@ -229,4 +229,28 @@ internal interface ILeafCursorReporter
         string treeName,
         IReadOnlyList<MaterialiserPinReport> reports,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Durably raises an override hold (issue #4641) for every consumer in
+    /// <paramref name="consumerIds"/> on <paramref name="treeName"/>, grouping
+    /// them by their routed pin shard, and <b>awaits</b> every write. A leaf
+    /// calls this before it appends a write stamped below its own clock, and a
+    /// shard root before it appends a carried-stamp saga terminal on behalf of
+    /// the leaves it touched.
+    /// <para>
+    /// Unlike the seed and flush paths this does <b>not</b> swallow failures: a
+    /// hold that is not durable protects nothing, so the caller must not append
+    /// and the write fails instead. Implementations with no durable backing (no
+    /// grain factory, pre-WAL hosts) have no WAL GC to protect against and treat
+    /// this as a no-op.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">Logical tree id the consumers belong to.</param>
+    /// <param name="consumerIds">The consumers to hold; each must not be <see langword="null"/> or whitespace.</param>
+    /// <param name="cancellationToken">Cancellation token observed before the durable writes.</param>
+    /// <returns>A task that completes once every hold is durable.</returns>
+    Task RaiseOverrideHoldsAsync(
+        string treeName,
+        IReadOnlyList<string> consumerIds,
+        CancellationToken cancellationToken);
 }
