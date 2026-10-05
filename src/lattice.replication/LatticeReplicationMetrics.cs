@@ -1071,6 +1071,52 @@ public static class LatticeReplicationMetrics
         Meter.CreateCounter<long>("orleans.lattice.replication.source_restore.uncoordinated", unit: "{restamp}",
             description: "Replacements of a replicated tree's contents outside a coordinated restore, tagged by tree.");
 
+    // --- Tombstone reap gate (issue #4615) -----------------------------------------
+
+    /// <summary>
+    /// Counter of tombstone reap ceilings the replication reap gate computed,
+    /// one per compaction batch of a replicated tree, tagged by
+    /// <see cref="TagTree"/> and by <see cref="TagReason"/>: the constraint that
+    /// set the ceiling. <see cref="ReapBoundDegradedOrigin"/> and
+    /// <see cref="ReapBoundPeerFrontier"/> on a zero ceiling mean the batch reaped
+    /// nothing at all; otherwise tombstones at or above the ceiling were kept.
+    /// A tree whose ceilings stay bound by one reason accumulates tombstones;
+    /// see the reap gate in the replication drivers documentation.
+    /// </summary>
+    public static readonly Counter<long> TombstoneReapBound =
+        Meter.CreateCounter<long>("orleans.lattice.replication.tombstone_reap.bound", unit: "{ceiling}",
+            description: "Tombstone reap ceilings computed for replicated trees, tagged by the constraint that bound each one.");
+
+    /// <summary>Canonical name of the <see cref="TombstoneReapBound"/> counter.</summary>
+    public const string TombstoneReapBoundName = "orleans.lattice.replication.tombstone_reap.bound";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: an
+    /// origin of the tree has no exact applied low watermark here (the tree is
+    /// degraded, the origin pending, or its re-seed outstanding), so nothing is
+    /// reaped.
+    /// </summary>
+    public const string ReapBoundDegradedOrigin = "degraded_origin";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: an
+    /// origin's applied low watermark set the ceiling.
+    /// </summary>
+    public const string ReapBoundOriginFrontier = "origin_frontier";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: a write
+    /// of an origin parked, dead-lettered or missing from the installed export
+    /// set the ceiling.
+    /// </summary>
+    public const string ReapBoundHeldEntry = "held_entry";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: a
+    /// peer's shipper reap watermark set the ceiling, or the peer has none.
+    /// </summary>
+    public const string ReapBoundPeerFrontier = "peer_frontier";
+
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
     /// <summary>

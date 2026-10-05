@@ -94,4 +94,15 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     /// it, the peer must be re-seeded. Idempotent.
     /// </summary>
     Task DetachFromLogAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The tombstone reap watermark toward the peer (issue #4615): every write
+    /// this cluster stamped strictly below it to the tree, within the shipper's
+    /// key filter, was acknowledged by the peer under its current lineage, so a
+    /// tombstone stamped below it was applied there. Computed with the
+    /// watermark the shipper ships, but never shipped and not frozen by a key
+    /// filter. <see cref="HybridLogicalClock.Zero"/> while the shipper vouches
+    /// for nothing.
+    /// </summary>
+    Task<HybridLogicalClock> GetReapLowWatermarkAsync();
 }

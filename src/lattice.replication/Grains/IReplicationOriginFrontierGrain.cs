@@ -87,4 +87,15 @@ internal interface IReplicationOriginFrontierGrain : IGrainWithStringKey
     /// listing left behind by a crash cannot block a dependent forever.
     /// </summary>
     Task<CausalDependencyVerdict[]> CheckAsync(IReadOnlyList<HybridLogicalClock> required, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The lowest of this origin's writes to <paramref name="treeId"/> that are
+    /// still on their way to being applied there (issue #4615): held by the
+    /// tree's causal-apply buffer or dead-letter queue, or missing from the last
+    /// export the tree installed. <see langword="null"/> when none is. Writes
+    /// marked lost are never counted: they will never be applied, so they hold
+    /// nothing back. A tombstone the tree stamps at or above it must not be
+    /// reaped.
+    /// </summary>
+    Task<HybridLogicalClock?> GetMinHeldForTreeAsync(string treeId, CancellationToken cancellationToken = default);
 }

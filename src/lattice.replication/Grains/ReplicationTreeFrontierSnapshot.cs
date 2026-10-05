@@ -22,4 +22,13 @@ internal sealed record ReplicationTreeFrontierSnapshot
     /// </summary>
     [Id(2)] public IReadOnlyDictionary<string, HybridLogicalClock> LowWatermarks { get; init; } =
         new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every origin that has pushed to the tree, with or without a valid
+    /// watermark (issue #4615): an origin listed here and missing from
+    /// <see cref="LowWatermarks"/> is pending or awaits a re-seed, so writes of
+    /// it may still be in flight. Empty in degraded mode, and from a silo that
+    /// predates the member.
+    /// </summary>
+    [Id(3)] public IReadOnlyCollection<string> KnownOrigins { get; init; } = Array.Empty<string>();
 }

@@ -350,6 +350,11 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // IReplicationTopology singleton before AddLatticeReplication.
         builder.Services.TryAddSingleton<IReplicationTopology, OptionsReplicationTopology>();
 
+        // Issue #4615: a replicated tree reaps a tombstone only below the
+        // replication frontier, so a late older write cannot resurrect its key.
+        // Replaces the core's ungated default.
+        builder.Services.AddSingleton<ITombstoneReapGate, ReplicationTombstoneReapGate>();
+
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable

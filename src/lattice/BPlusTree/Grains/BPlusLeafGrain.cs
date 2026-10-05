@@ -3092,7 +3092,24 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod)
+    /// <summary>
+    /// Whether an entry stamped <paramref name="timestamp"/> may be reaped under
+    /// <paramref name="reapCeiling"/> (issue #4615): an ungated pass reaps on the
+    /// grace period alone; a gated one also needs the stamp strictly below the
+    /// ceiling, below which no write the entry beats can still arrive. An entry
+    /// the ceiling keeps counts as still inside the grace window, so the leaf
+    /// does not stamp its compaction version and a later pass re-scans it.
+    /// </summary>
+    private static bool BelowReapCeiling(HybridLogicalClock timestamp, HybridLogicalClock? reapCeiling) =>
+        reapCeiling is not { } ceiling || timestamp.CompareTo(ceiling) < 0;
+
+    public Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling: null);
+
+    public Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling);
+
+    private async Task<LeafCompactionResult> CompactTombstonesCoreAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling)
     {
         // Clock starts here, not at the scan loop. The replay barrier below is
         // part of the time this call holds the leaf, and on a cold activation it
@@ -3244,7 +3261,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (lww.IsTombstone)
                 {
-                    if (lww.Timestamp.WallClockTicks <= cutoff)
+                    if (lww.Timestamp.WallClockTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, false));
                     }
@@ -3263,7 +3280,7 @@ internal sealed partial class BPlusLeafGrain(
                 // whose clock is behind could re-send the pre-expiry LwwValue).
                 if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
                 {
-                    if (lww.ExpiresAtTicks <= cutoff)
+                    if (lww.ExpiresAtTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, true));
                     }

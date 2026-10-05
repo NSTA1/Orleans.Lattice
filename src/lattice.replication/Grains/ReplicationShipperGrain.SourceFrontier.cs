@@ -74,8 +74,15 @@ internal sealed partial class ReplicationShipperGrain
     private HybridLogicalClock _originLowWatermark;
     private long _originGeneration;
 
+    // The reap-only watermark (issue #4615), and the key filter it was vouched under.
+    private HybridLogicalClock _reapLowWatermark = HybridLogicalClock.Zero;
+    private (Func<string, bool>? Filter, string[]? Prefixes)? _reapFilterScope;
+
     /// <summary>The frontier the next batch to the peer carries; test seam.</summary>
     internal ReplicationSourceFrontier? CurrentSourceFrontierForTesting => _currentFrontier;
+
+    /// <inheritdoc />
+    public Task<HybridLogicalClock> GetReapLowWatermarkAsync() => Task.FromResult(_reapLowWatermark);
 
     /// <summary>
     /// The saga records of one shipped batch, captured when it is drained so its
@@ -329,7 +336,9 @@ internal sealed partial class ReplicationShipperGrain
         try
         {
             await ApplyReceiverLineageAsync();
+            NoteReapFilterScope(options);
             var tree = ComputeTreeLowWatermark(options);
+            _reapLowWatermark = ComputeTreeLowWatermark(options, forReap: true);
             await ReportSourceFrontierAsync(tree);
             _currentFrontier = tree == HybridLogicalClock.Zero || state.State.Frontier.Lineage is not { } lineage || lineage == Guid.Empty
                 ? null
@@ -344,6 +353,7 @@ internal sealed partial class ReplicationShipperGrain
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             _currentFrontier = null;
+            _reapLowWatermark = HybridLogicalClock.Zero;
             Logger.LogWarning(ex, "{Context}: refreshing the applied low watermark failed; none is shipped this tick.", LogContext);
         }
     }
@@ -431,7 +441,7 @@ internal sealed partial class ReplicationShipperGrain
     }
 
     /// <summary>The tree's watermark toward the peer, or zero when it vouches for nothing.</summary>
-    private HybridLogicalClock ComputeTreeLowWatermark(LatticeReplicationOptions options)
+    private HybridLogicalClock ComputeTreeLowWatermark(LatticeReplicationOptions options, bool forReap = false)
     {
         var frontier = state.State.Frontier;
         if (_latestAckLineageUnreported
@@ -440,8 +450,7 @@ internal sealed partial class ReplicationShipperGrain
             || frontier.LineageReseedPending
             || ReseedRequired
             || state.State.ReplayFilterHorizon is not null
-            || options.KeyFilter is not null
-            || options.KeyPrefixes is { Count: > 0 }
+            || (!forReap && (options.KeyFilter is not null || options.KeyPrefixes is { Count: > 0 }))
             || !IsClockFloorGateOpen()
             || _partitionCount == 0
             || _floorPairs.Length < _partitionCount)
@@ -513,6 +522,38 @@ internal sealed partial class ReplicationShipperGrain
         ClockFloorGateOpenForTesting is { } overridden
             ? overridden()
             : Context.ActivationServices?.GetService<IWalClockFloorGate>()?.IsOpen ?? false;
+
+    /// <summary>
+    /// The reap-only watermark ignores the key filter: it claims only that every
+    /// in-scope write this cluster stamped below it was acknowledged by the
+    /// peer, which is all the tombstone reap gate needs, since the peer never
+    /// holds an out-of-scope key. It is never shipped. A change to the filter -
+    /// a widening above all - would let a key that was out of scope ride on a
+    /// watermark vouched under the old scope, so any change discards the floors
+    /// and the watermark is zero until the cursor re-covers one read under the
+    /// new scope.
+    /// </summary>
+    private void NoteReapFilterScope(LatticeReplicationOptions options)
+    {
+        var prefixes = options.KeyPrefixes is { Count: > 0 } configured
+            ? configured.Order(StringComparer.Ordinal).ToArray()
+            : null;
+        if (_reapFilterScope is { } scope
+            && ReferenceEquals(scope.Filter, options.KeyFilter)
+            && (scope.Prefixes is null ? prefixes is null : prefixes is not null && scope.Prefixes.AsSpan().SequenceEqual(prefixes)))
+        {
+            return;
+        }
+
+        if (_reapFilterScope is not null)
+        {
+            DiscardClockFloors();
+            Logger.LogInformation(
+                "{Context}: the key filter changed; the tombstone reap watermark restarts under the new scope.", LogContext);
+        }
+
+        _reapFilterScope = (options.KeyFilter, prefixes);
+    }
 
     /// <summary>
     /// Reports the tree's watermark and lineage to the peer's aggregate when it
