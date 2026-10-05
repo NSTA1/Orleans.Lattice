@@ -216,6 +216,8 @@ public partial class BootstrapCausalHandoffTests
                 return Task.FromResult((long)parked.Count);
             });
 
+        CausalDependencyTestDouble.Wire(hwm, localVc);
+
         var resolved = options ?? new LatticeReplicationOptions { ClusterId = LocalCluster };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(resolved);
