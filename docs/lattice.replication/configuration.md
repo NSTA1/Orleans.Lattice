@@ -207,7 +207,7 @@ Retry budget before a poison inbound entry is moved to the dead-letter queue. Ra
 
 ### `SagaDeferralTimeout`
 
-Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
+Wall-clock bound for a receiver-side deferred saga record. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. A deferred `TxCommit` or `TxAbort` terminal gets the same bound (#4692): its saga is poisoned and re-seeded the same way, and the terminal itself is withheld, never parked.
 
 ### `DeadLetterQueueCapacity`
 

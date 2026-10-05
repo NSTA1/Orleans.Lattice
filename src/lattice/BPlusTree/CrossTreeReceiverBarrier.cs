@@ -75,8 +75,10 @@ internal static class CrossTreeReceiverBarrier
 
     /// <summary>
     /// Reports whether a later terminal's wait set is the same set (ignoring
-    /// order and duplicates) as the frozen one, so configuration drift between
-    /// two terminals of one operation can neither shrink nor grow the barrier.
+    /// order and duplicates) as the frozen one. A mismatch is configuration
+    /// drift between two terminals of one operation; the receiver logs it and
+    /// keeps the frozen set, so drift can neither shrink nor grow the barrier
+    /// (issue #4692).
     /// The frozen set is already de-duplicated, so equality holds iff every
     /// frozen tree is in <paramref name="incoming"/> and every incoming tree is
     /// frozen. Both sets are tiny, so linear scans beat allocating a set.

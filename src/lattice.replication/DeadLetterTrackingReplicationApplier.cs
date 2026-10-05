@@ -387,9 +387,23 @@ internal sealed class DeadLetterTrackingReplicationApplier(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId ?? string.Empty),
                 LatticeTenantLabel.ForTree(entry.TreeId));
 
-            if (entry.IsPrepared
-                && await TryPoisonTimedOutPrepareAsync(entry, key, failure, attempts, cancellationToken).ConfigureAwait(false))
+            if (await TryPoisonTimedOutSagaRecordAsync(entry, key, failure, attempts, cancellationToken).ConfigureAwait(false))
             {
+                if (!entry.IsPrepared)
+                {
+                    // Issue #4692: a terminal that keeps failing - a malformed
+                    // record, a decision conflict, a cross-tree barrier it cannot
+                    // join - gets the bound a prepare has. Its saga is poisoned and
+                    // a re-seed settles it from the export; the terminal itself is
+                    // withheld, never parked: parking would acknowledge it, and the
+                    // terminal of a saga still in flight at the export would then
+                    // never arrive. Every later copy is withheld by the poison
+                    // filter until the re-seed retires the poison.
+                    _failures.TryRemove(key, out _);
+                    _firstDeferrals.TryRemove(key, out _);
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                }
+
                 if (!await ParkPoisonedSagaRecordAsync(
                     entry,
                     failure.Message ?? "<no message>",
@@ -559,7 +573,16 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         return (unpoisoned, withheld);
     }
 
-    private async Task<bool> TryPoisonTimedOutPrepareAsync(
+    /// <summary>
+    /// Poisons the saga of a prepare or terminal that has kept failing past
+    /// <see cref="LatticeReplicationOptions.SagaDeferralTimeout"/>, and starts a
+    /// re-seed (or marks one owed). Returns whether the saga is poisoned. A
+    /// prepare is refused once the receiver registry has decided its saga (its
+    /// terminal can still apply); a terminal is not, because a terminal that
+    /// keeps failing against a decided registry - a recorded opposite decision -
+    /// is exactly the wedge the bound exists for (issue #4692).
+    /// </summary>
+    private async Task<bool> TryPoisonTimedOutSagaRecordAsync(
         WalRecord entry,
         RetryKey key,
         Exception failure,
@@ -588,9 +611,12 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             return false;
         }
 
-        var status = await TxRegistryRouting.GetRegistry(grainFactory, entry.TreeId, entry.TransactionId)
-            .GetRecordedStatusAsync(entry.TransactionId)
-            .ConfigureAwait(false);
+        var isPrepare = entry.IsPrepared;
+        var status = isPrepare
+            ? await TxRegistryRouting.GetRegistry(grainFactory, entry.TreeId, entry.TransactionId)
+                .GetRecordedStatusAsync(entry.TransactionId)
+                .ConfigureAwait(false)
+            : TxStatus.InFlight;
         if (status != TxStatus.InFlight)
         {
             RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedDecided);
@@ -608,15 +634,21 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         }
 
         var poisoned = await poison
-            .PoisonAsync(origin, entry.TransactionId, "Deferred prepare exceeded the receiver saga deferral timeout.")
+            .PoisonAsync(
+                origin,
+                entry.TransactionId,
+                isPrepare
+                    ? "Deferred prepare exceeded the receiver saga deferral timeout."
+                    : "Deferred terminal exceeded the receiver saga deferral timeout.")
             .ConfigureAwait(false);
         if (!poisoned)
         {
             RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedFull);
             logger.LogError(
                 failure,
-                "Receiver refused to poison saga prepare for transaction {TransactionId} (tree '{TreeId}', origin {Origin}, key '{Key}') "
+                "Receiver refused to poison saga {Op} for transaction {TransactionId} (tree '{TreeId}', origin {Origin}, key '{Key}') "
                 + "after {Attempts} attempts because the receiver poison set is full; the record remains deferred.",
+                entry.Op,
                 entry.TransactionId,
                 entry.TreeId,
                 origin,
@@ -625,8 +657,18 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             return false;
         }
 
-        RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTimeout);
-        LogPoisonedSaga(entry, failure, "deferred prepare exceeded the receiver saga deferral timeout");
+        RecordReceiverSagaPoisoned(
+            entry.TreeId,
+            origin,
+            isPrepare
+                ? LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTimeout
+                : LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTerminalTimeout);
+        LogPoisonedSaga(
+            entry,
+            failure,
+            isPrepare
+                ? "deferred prepare exceeded the receiver saga deferral timeout"
+                : "deferred terminal exceeded the receiver saga deferral timeout; it is withheld until the re-seed settles the saga");
         _ = ReceiverSagaPoisonReseed.TryStartOrMarkOwedAsync(
             grainFactory,
             options,

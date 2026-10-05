@@ -132,6 +132,16 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         // the persist so the verdict only escapes once durable.
         if (state.State.Decided && !_decisionAwaitingPersist)
         {
+            // A tree that joined after the barrier decided - it was not
+            // replicated here when the wait set froze (issue #4692) - is
+            // recorded so the returned finalize set materializes it with the
+            // operation's verdict, which every participant's terminal shares.
+            if (!state.State.Arrived.ContainsKey(terminal.TreeId))
+            {
+                state.State.Arrived[terminal.TreeId] = terminal;
+                await state.WriteStateAsync();
+            }
+
             return BuildDecision();
         }
 
@@ -148,8 +158,8 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // rests on the same premise: the trees must agree on cluster
             // identity. Checked at the freeze because that is the only moment
             // the receiver holds the whole participant set and has not yet
-            // recorded anything. Placed with the wait-set-drift check below, on
-            // the same reasoning that put that one here.
+            // recorded anything. A tree that joins the wait set later is checked
+            // when it joins.
             ThrowIfWaitSetClusterIdsDisagree(frozen);
 
             state.State.WaitSet = frozen;
@@ -157,27 +167,30 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             state.State.OperationId = terminal.OperationId;
             state.State.StartedAtTicks = DateTime.UtcNow.Ticks;
         }
-        else
+        else if (!CrossTreeReceiverBarrier.WaitSetMatches(state.State.WaitSet, terminal.WaitSet))
         {
-            // Later terminal: the wait set must be identical to the frozen one.
-            // Config drift on the receiver between two terminals of the same
-            // operation cannot be allowed to shrink or grow the barrier.
-            if (!CrossTreeReceiverBarrier.WaitSetMatches(state.State.WaitSet, terminal.WaitSet))
-            {
-                throw new InvalidOperationException(
-                    $"Cross-tree receiver '{GrainContext.GrainId.Key}' received a terminal for tree " +
-                    $"'{terminal.TreeId}' whose wait set differs from the frozen wait set; the replicated " +
-                    "participant set must be stable across every terminal of a cross-tree operation.");
-            }
+            // Later terminal whose wait set differs (issue #4692). The sender
+            // computes each terminal's wait set from the receiver's live
+            // replicated-tree configuration, so a configuration change between
+            // two terminals of one operation is ordinary, and rejecting the
+            // terminal would fail it on every retry. The frozen wait set is
+            // authoritative and is never recomputed: the differing set is
+            // ignored, and only the arriving tree itself may join it, below.
+            Logger.LogWarning(
+                "Cross-tree receiver {Key}: the terminal for tree '{TreeId}' carries a wait set that differs from the "
+                + "frozen one; the receiver's replicated trees changed mid-operation, so the frozen wait set stands.",
+                GrainContext.GrainId.Key, terminal.TreeId);
         }
 
         if (!state.State.WaitSet.Contains(terminal.TreeId))
         {
-            // A terminal whose own tree is not in the wait set can never help
-            // complete the barrier and signals a protocol violation.
-            throw new InvalidOperationException(
-                $"Cross-tree receiver '{GrainContext.GrainId.Key}' received a terminal for tree " +
-                $"'{terminal.TreeId}' that is absent from the frozen wait set.");
+            // A tree that was not replicated here when the wait set froze has
+            // since been, and its terminal arrived (issue #4692). It joins the
+            // wait set: it is arriving now, so it adds nothing to wait for, and
+            // only its own arrival - never a recomputed set - grows the barrier.
+            var grown = CanonicalStringSet.SortedDistinct(state.State.WaitSet.Append(terminal.TreeId));
+            ThrowIfWaitSetClusterIdsDisagree(grown);
+            state.State.WaitSet = grown;
         }
 
         // Record (or idempotently overwrite) this tree's terminal.
