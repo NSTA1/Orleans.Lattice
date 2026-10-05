@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class WalGcShipperOffsetFloorTests
+public partial class WalGcShipperOffsetFloorTests
 {
     private const string LocalClusterId = "site-a";
     private const string PeerClusterId = "site-b";
@@ -42,6 +42,8 @@ public class WalGcShipperOffsetFloorTests
     public async Task OneTimeSetUp()
     {
         GatedRecordingTransport.Reset();
+        _savedPurgeHoldCheckInterval = ReplicationShipperGrain.PurgeHoldCheckInterval;
+        ReplicationShipperGrain.PurgeHoldCheckInterval = TimeSpan.FromMilliseconds(500);
         var builder = new TestClusterBuilder(initialSilosCount: 2);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
@@ -58,6 +60,7 @@ public class WalGcShipperOffsetFloorTests
         }
 
         GatedRecordingTransport.Reset();
+        ReplicationShipperGrain.PurgeHoldCheckInterval = _savedPurgeHoldCheckInterval;
     }
 
     [Test]
@@ -292,6 +295,7 @@ public class WalGcShipperOffsetFloorTests
             siloBuilder.UseInMemoryReminderService();
             // The test drives the GC pass itself.
             siloBuilder.ConfigureLattice(o => o.WalGcInterval = TimeSpan.Zero);
+            siloBuilder.ConfigureLattice(RetentionTree, o => o.WalRetention = RetentionWindow);
             siloBuilder.AddLatticeReplication(o =>
             {
                 o.ClusterId = LocalClusterId;
@@ -317,6 +321,7 @@ public class WalGcShipperOffsetFloorTests
     {
         private static readonly ConcurrentDictionary<(string Tree, string Key), HybridLogicalClock> Delivered = new();
         private static readonly ConcurrentDictionary<string, bool> Refused = new(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, long> ReseedRequests = new(StringComparer.Ordinal);
 
         public static volatile bool Accepting = true;
 
@@ -324,6 +329,7 @@ public class WalGcShipperOffsetFloorTests
         {
             Delivered.Clear();
             Refused.Clear();
+            ReseedRequests.Clear();
             Accepting = true;
         }
 
@@ -332,11 +338,22 @@ public class WalGcShipperOffsetFloorTests
 
         public static bool Shipped(string tree, string key) => Delivered.ContainsKey((tree, key));
 
+        /// <summary>Whether a push for <paramref name="tree"/> asked for a re-seed.</summary>
+        public static bool ReseedRequested(string tree) => ReseedRequests.ContainsKey(tree);
+
+        /// <summary>The highest re-seed epoch a push for <paramref name="tree"/> asked past, or -1.</summary>
+        public static long ReseedEpoch(string tree) => ReseedRequests.TryGetValue(tree, out var epoch) ? epoch : -1;
+
         public static HybridLogicalClock ShippedStamp(string tree, string key)
             => Delivered.TryGetValue((tree, key), out var stamp) ? stamp : HybridLogicalClock.Zero;
 
         public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         {
+            if (batch.ReseedAfterEpoch is { } requested)
+            {
+                ReseedRequests.AddOrUpdate(batch.TreeName, requested, (_, seen) => Math.Max(seen, requested));
+            }
+
             if (!Accepting || Refused.ContainsKey(batch.TreeName))
             {
                 return Task.FromResult(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });

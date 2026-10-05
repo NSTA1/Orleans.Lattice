@@ -83,6 +83,7 @@ public partial class ShardRootGrainSplitShadowForwardTests
         var hlc = new HybridLogicalClock { WallClockTicks = DateTimeOffset.UtcNow.UtcTicks, Counter = 0 };
         leaf.GetRawEntryAsync(Arg.Any<string>())
             .Returns(Task.FromResult<LwwEntry?>(new LwwEntry("k", LwwValue<byte[]>.Create([1, 2], hlc))));
+        StubLocalPrepareLookup(leaf);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
         var cache = Substitute.For<ILeafCacheGrain>();
@@ -113,6 +114,29 @@ public partial class ShardRootGrainSplitShadowForwardTests
             State = state,
             Factory = factory,
         };
+    }
+
+    /// <summary>
+    /// Makes the stub source leaf answer the shard root's pending-mutation lookup
+    /// the way a real leaf does right after a local prepare: with an unmarked
+    /// snapshot of the key it just prepared under the ambient saga (issue #4545:
+    /// a forward whose local prepare cannot be found fails instead of going out
+    /// unstamped). A test that stubs the lookup itself overrides this.
+    /// </summary>
+    private static void StubLocalPrepareLookup(IBPlusLeafGrain leaf)
+    {
+        string? lastKey = null;
+        leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())).Do(c => lastKey = c.ArgAt<string>(0));
+        leaf.When(l => l.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<long>())).Do(c => lastKey = c.ArgAt<string>(0));
+        leaf.When(l => l.DeleteAsync(Arg.Any<string>())).Do(c => lastKey = c.ArgAt<string>(0));
+        leaf.When(l => l.DeleteTrackedAsync(Arg.Any<string>())).Do(c => lastKey = c.ArgAt<string>(0));
+        leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(_ =>
+            lastKey is null || LatticeTransactionContext.Current == Guid.Empty
+                ? new List<PendingMutationSnapshot>()
+                : new List<PendingMutationSnapshot>
+                {
+                    new() { TransactionId = LatticeTransactionContext.Current, Key = lastKey, StampIsOriginal = false },
+                });
     }
 
     private static ShardSplitInProgress NewSplit(ShardSplitPhase phase = ShardSplitPhase.BeginShadowWrite)

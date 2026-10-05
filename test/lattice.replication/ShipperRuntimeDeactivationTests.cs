@@ -18,6 +18,10 @@ public sealed class ShipperRuntimeDeactivationTests
     private const string Local = "deactivation-source";
     private const string Peer = "deactivation-peer";
     private const string DeactivateRequest = "shipper-test-deactivate";
+
+    // A fresh local write must be stamped at or above the WAL partition's clock
+    // floor (#4586), so entries are stamped from now and identified by index.
+    private static readonly long StampBase = DateTime.UtcNow.Ticks;
     private TestCluster _cluster = null!;
     private Probe _probe = null!;
 
@@ -80,7 +84,7 @@ public sealed class ShipperRuntimeDeactivationTests
         Value = [1],
         Op = MutationKind.Set,
         OriginClusterId = Local,
-        Timestamp = new HybridLogicalClock { WallClockTicks = index },
+        Timestamp = new HybridLogicalClock { WallClockTicks = StampBase + index },
     };
 
     private sealed class Probe(IWalRecordEncoder encoder) : IIncomingGrainCallFilter, IReplicationTransport
@@ -115,7 +119,7 @@ public sealed class ShipperRuntimeDeactivationTests
         {
             foreach (var entry in batch.EncodedEnvelope!.Value.EncodedEntries.Span)
             {
-                Sent.Enqueue(encoder.Decode(entry).Timestamp.WallClockTicks);
+                Sent.Enqueue(encoder.Decode(entry).Timestamp.WallClockTicks - StampBase);
             }
             return Task.FromResult(new ReplicationAck { Accepted = true });
         }

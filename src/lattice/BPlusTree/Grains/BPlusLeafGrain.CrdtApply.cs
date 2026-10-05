@@ -213,7 +213,17 @@ internal sealed partial class BPlusLeafGrain
     public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         await AwaitReplayBarrierAsync();
-        return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+        try
+        {
+            return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+        }
+        catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+        {
+            // Issue #4586: unreachable - the filter merges the leaf clock past
+            // the floor and lets the refusal propagate. The typed fold has
+            // already touched the cached shadow, so the commit is not re-run here.
+            throw;
+        }
     }
 
     /// <summary>
@@ -656,7 +666,16 @@ internal sealed partial class BPlusLeafGrain
                 // interleave at any await inside the fill loop above and
                 // would share such a field. The list is per-call state, so it
                 // is safe; it is only the copy that was unnecessary.
-                await writer.AppendManyAsync(walEntries);
+                try
+                {
+                    await writer.AppendManyAsync(walEntries);
+                }
+                catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+                {
+                    // Issue #4586: unreachable - the filter merges the leaf clock
+                    // past the floor so the caller's retry is admitted.
+                    throw;
+                }
             }
         }
 

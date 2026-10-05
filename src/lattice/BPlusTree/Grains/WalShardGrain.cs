@@ -57,7 +57,9 @@ internal sealed partial class WalShardGrain(
     LatticeOptionsResolver optionsResolver,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
-    IWalRecordEncoder encoder) : IWalShardGrain, IGrainBase
+    IWalRecordEncoder encoder,
+    [PersistentState("wal-floor", LatticeOptions.StorageProviderName)] IPersistentState<WalShardFloorState> floorState,
+    IWalClockFloorGate floorGate) : IWalShardGrain, IWalClockFloorCapable, IGrainBase
 {
     /// <summary>
     /// Upper bound on the number of <see cref="WalRecord"/> entries accepted by a
@@ -438,6 +440,7 @@ internal sealed partial class WalShardGrain(
         var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
         _highestStored = highest;
+        InitializeClockFloor();
         // Construct the per-activation drain cancellation source up-front
         // so every FlushAsync (including the very first one) can link
         // its per-flush deadline to a stable token. A deactivation that
@@ -831,6 +834,7 @@ internal sealed partial class WalShardGrain(
         bool kickFlush = false;
         int queueDepth = 0;
         bool fenced = false;
+        HybridLogicalClock refusedBelow = default;
         lock (_stateGate)
         {
             // Re-check the move fence under the gate: a quiesce may have raised
@@ -842,6 +846,13 @@ internal sealed partial class WalShardGrain(
             if (!WalMoveFenceCore.IsAppendAdmitted(_moveFenced))
             {
                 fenced = true;
+            }
+            else if (!WalClockFloorCore.IsAdmitted(in entry, _floor, _localClusterId))
+            {
+                // Issue #4586: the floor check and the offset assignment are one
+                // atomic step under the gate, exactly as a floor publication
+                // pairs the floor with the next offset under it.
+                refusedBelow = _floor;
             }
             else
             {
@@ -887,6 +898,11 @@ internal sealed partial class WalShardGrain(
             ReturnSegment(segment);
             throw new LatticeWalQuiescingException(
                 $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+        }
+        if (refusedBelow != HybridLogicalClock.Zero)
+        {
+            ReturnSegment(segment);
+            throw RefuseBelowFloor(entry.Timestamp, refusedBelow, 1);
         }
         LatticeMetrics.WalAppendQueueDepth.Record(
             queueDepth,
@@ -1009,6 +1025,7 @@ internal sealed partial class WalShardGrain(
         // offsets remain dense and ascending across the whole batch.
         var offsets = new long[count];
         var acks = new TaskCompletionSource<long>[count];
+        var admittedAgainst = new HybridLogicalClock { WallClockTicks = -1 };
         for (var i = 0; i < count; i++)
         {
             var size = sizes[i];
@@ -1067,6 +1084,7 @@ internal sealed partial class WalShardGrain(
 
             bool kickFlush = false;
             bool fenced = false;
+            HybridLogicalClock refusedBelow = default;
             lock (_stateGate)
             {
                 // Re-check the move fence under the gate (a quiesce may have
@@ -1075,8 +1093,19 @@ internal sealed partial class WalShardGrain(
                 {
                     fenced = true;
                 }
+                else if (_floor != admittedAgainst && !IsBatchRemainderAdmitted(entries, i))
+                {
+                    // Issue #4586: the remainder of the batch is checked against
+                    // the floor in force when its next offset is assigned, and
+                    // again whenever a floor published during a cutover await
+                    // has moved it, so a mid-batch publication still binds every
+                    // later offset. Checking the whole remainder at once means a
+                    // refusal before the first entry splits nothing.
+                    refusedBelow = _floor;
+                }
                 else
                 {
+                    admittedAgainst = _floor;
                     var offset = WalOffsetAllocationCore.Assign(ref _nextOffset);
                     offsets[i] = offset;
                     _pendingSegments.Add(segments[i]);
@@ -1132,6 +1161,18 @@ internal sealed partial class WalShardGrain(
                 }
                 throw new LatticeWalQuiescingException(
                     $"WAL shard {_treeId}/{_shardIndex} is quiesced for a placement move; retry shortly.");
+            }
+            if (refusedBelow != HybridLogicalClock.Zero)
+            {
+                // Refused below the clock floor: as for the fence, entries
+                // already enqueued at indexes < i settle on their own TCSs. That
+                // only happens when a floor was published during this batch's
+                // cutover await and a later entry is older than the floor lag.
+                for (var j = i; j < count; j++)
+                {
+                    ReturnSegment(segments[j]);
+                }
+                throw RefuseBelowFloor(FirstRefusedStamp(entries, i), refusedBelow, count - i);
             }
             if (kickFlush)
             {
@@ -1544,6 +1585,12 @@ internal sealed partial class WalShardGrain(
 
         EnsureInitialized();
 
+        // Issue #4586: pair the partition's clock floor with the next offset
+        // before reading, advancing the floor first when the capability gate is
+        // open and it has fallen half a lag behind. Synchronous unless the floor
+        // is being advanced, so the idle fast path below stays allocation-free.
+        var publication = await PublishClockFloorAsync(cancellationToken).ConfigureAwait(true);
+
         // Idle fast-path: a shipper read at or beyond the durable, gap-free
         // prefix returns nothing without a storage round-trip. The bound is
         // DurableContiguousTailOffset() rather than the raw _nextOffset
@@ -1562,6 +1609,8 @@ internal sealed partial class WalShardGrain(
             {
                 Entries = Array.Empty<WalShardShippingEntry>(),
                 NextSequence = fromSequence,
+                ClockFloor = publication.Floor,
+                ClockFloorOffset = publication.Offset,
             };
         }
 
@@ -1608,6 +1657,8 @@ internal sealed partial class WalShardGrain(
         {
             Entries = collected,
             NextSequence = nextShippingSequence,
+            ClockFloor = publication.Floor,
+            ClockFloorOffset = publication.Offset,
         };
     }
 
@@ -2779,6 +2830,7 @@ internal sealed partial class WalShardGrain(
         var highest = await provider.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(true);
         _nextOffset = WalOffsetAllocationCore.RecoveredNextOffset(highest);
         _highestStored = highest;
+        InitializeClockFloor();
         // Mirror OnActivateAsync's drain-CTS construction so unit tests
         // see the same activation contract production grains use; the
         // drain-budget tests rely on the CTS being available so every

@@ -464,22 +464,39 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   coordinator therefore installs a per-key marker naming the shadowing
   saga, and *T*'s read gate resolves it against the registry: a saga the
   registry reports as in-flight or aborted is safe (the pre-saga value is
-  the correct answer), and so is any saga whose backstop terminal has
-  already landed on *T*. Otherwise the read raises
+  the correct answer), and so is a saga whose terminal has already settled
+  that key on the leaf - drained its prepared bucket there or installed
+  its committed value as a backstop. Otherwise the read raises
   `StaleShardRoutingException` and the deadline-bounded retry loop
-  re-fans once the backstop lands. A marker can also sit on a leaf the
-  terminal will never reach again: an install delayed past a terminal the
-  leaf then forgot on reactivation, or a marker a later leaf split carries
-  onto a new sibling with its key. The marker therefore carries the saga's
-  original prepare stamp whenever the prepare is a marked last-writer-wins
-  write, and the gate also serves a migrated row stamped at or above it:
-  such a row is the saga's own value or a later write, so serving it never
-  tears the batch. A row below that stamp is the pre-saga value and stays
-  gated, and a marker without a marked stamp (a CRDT delta, a resize copy,
-  or an install from an older silo) keeps the gate described above. A leaf
-  also never installs, or carries across its own split, a marker for a
-  saga whose terminal it has already applied (issue
-  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)). A saga
+  re-fans once the backstop lands. The check is per key, not per saga: a
+  saga's terminal can reach a leaf for one of its keys while its value
+  for another key is still on its way, and that other key must stay
+  gated.
+
+  A marker can also arrive after the terminal that would clear it: a
+  delayed shadow forward or sweep replay, possibly after the leaf has
+  reactivated or after a leaf split has moved the key to a new sibling
+  that never sees the terminal. Two rules keep such a marker from hiding
+  the key (issue
+  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)):
+
+  - The marker carries the saga's original prepare stamp whenever the
+    prepare is a marked last-writer-wins write, and the gate serves a
+    migrated row stamped at or above it: such a row is the saga's own
+    value or a later write, so serving it never tears the batch. A row
+    below that stamp is the pre-saga value and stays gated.
+  - For every key a terminal settled without such a stamp - a CRDT fold,
+    an unmarked prepare, a backstop that carried no stamp - and every key
+    an abort discarded, the leaf keeps a durable record per saga and key,
+    in a sidecar row of its own rather than in its state row. The record
+    is written before any state write that could move the leaf's
+    projection checkpoint past the terminal (the write-ahead log holds it
+    until then), carried to a split sibling for the keys that move, and
+    dropped only once the registry no longer reports the saga. A leaf
+    does not install, carry across its own split, or gate on a marker for
+    a key that record names.
+
+  A saga
   whose decision has aged out of
   `TxDecisionRetention` reads as `Indeterminate` and takes the same
   conservative arm as a committed one - serving the migrated pre-saga

@@ -64,6 +64,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+### Breaking
+
+- **Replication - An idempotency key expires on a replicated tree.** A replicated tree's WAL partitions now keep a durable clock floor that trails the wall clock by the new `LatticeOptions.ReplicationClockFloorLag` (60 seconds by default), and refuse a fresh write stamped below it, so replication can tell when every write below a stamp has arrived. An ordinary write is re-stamped transparently and a range delete re-issues its stamp, but a write under a `LatticeIdempotencyKey` older than the floor now fails with `LatticeIdempotencyKeyExpiredException` and is not applied. Mint keys when the operation starts and keep retries inside the lag. Trees that are not replicated are unaffected. ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)) (`Orleans.Lattice`)
+
 ### Changed
 
 - **Performance - OrMap answers liveness without counting.** `IsEmpty`, `Count`, `ContainsKey` and `Keys` all consumed `LiveEntryCount` only as `> 0`. A new any-query exits on the first live entry and probes before indexing: 96-98% faster, and 2104 bytes removed per wide-tombstone read. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
@@ -305,7 +309,11 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Explorer - A schema predicate's text constant reads unambiguously.** A rule shown as an expression now escapes backslashes and control characters as well as quotes, so `C:\new` no longer reads as a line break and a value holding a line break stays on one line. ([#4487](https://github.com/NSTA1/Orleans.Lattice/issues/4487)) (`Orleans.Lattice.Explorer.UI`)
 
-- **Explorer - WAL reclamation shows only the current tree's verdict.** On the WAL page, a late answer or fault for the tree shown before no longer replaces the current tree's floor holder with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - The WAL page shows only the current tree's readings.** A late answer or fault for the tree shown before no longer replaces the current tree's floor holder, placement audit, move plan or move grant with its own, or with an error or not-served note. ([#4488](https://github.com/NSTA1/Orleans.Lattice/issues/4488), [#4512](https://github.com/NSTA1/Orleans.Lattice/issues/4512)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Operation progress shows only the operation followed.** A late status read for an operation the page no longer follows cannot replace the current one's progress, so an earlier operation that finished no longer re-enables what a running one disables. ([#4513](https://github.com/NSTA1/Orleans.Lattice/issues/4513)) (`Orleans.Lattice.Explorer.UI`)
+
+- **Explorer - Access rule and group pages show only their own address.** A late load for the rule or group shown before no longer replaces the current one or declares it not found, so Edit, Delete and member changes act on what the page shows. ([#4514](https://github.com/NSTA1/Orleans.Lattice/issues/4514)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Shard - An empty-tree reshard fences the slots it moves.** The empty-tree fast path published the new shard map without fencing the old owners, so a router on the old map could strand a write on a shard that no longer owned the slot. It now fences them first, as the full path does. ([#4066](https://github.com/NSTA1/Orleans.Lattice/issues/4066)) (`Orleans.Lattice`)
 

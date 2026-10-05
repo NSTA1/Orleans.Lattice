@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Explorer.UI.Areas.Access;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access;
 
@@ -168,6 +169,59 @@ public sealed class AccessRulePageTests : AccessTestContext
             cut.FindAll("a").Single(link => link.TextContent == "Explain for this subject").GetAttribute("href"),
             Is.EqualTo("access/explain?subject=ops&kind=group&tree=orders")));
     }
+
+    // The page stays mounted while its address moves to another rule (#4514), and a rule
+    // named without a tree is searched for across the whole store, so the previous rule's
+    // search can finish after the current rule's read. Its rule must not then replace the
+    // current one, or Edit and Delete would act on it.
+    [Test]
+    public async Task A_late_search_for_the_previous_rule_does_not_replace_the_current_rule()
+    {
+        Admin.WithRule(Rule("ledger-read", tree: "ledger")).WithRule(Rule("orders-read"));
+        var search = Admin.Hold(nameof(FakeAuthAdmin.ListRulesAsync));
+        var cut = RenderAt<AccessRulePage>("access/rules/ledger-read");
+        Navigation.NavigateTo("access/rules/orders-read?tree=orders");
+        cut.Render();
+        cut.WaitUntil(() => Assert.That(Definitions(cut)["Scope"], Is.EqualTo("orders")));
+
+        search.SetResult();
+
+        Assert.That(await EverShows(() => Definitions(cut).GetValueOrDefault("Scope") == "ledger"), Is.False, "the previous rule is never shown");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("h1").TextContent, Is.EqualTo("orders-read"));
+            Assert.That(Definitions(cut)["Scope"], Is.EqualTo("orders"));
+        });
+
+        AccessForms.Button(cut, "Delete rule").Click();
+        cut.WaitUntil(() => Assert.That(cut.Find("form.lt-confirm .lt-confirm__name").TextContent, Is.EqualTo("orders-read"), "Delete names the rule the page shows"));
+    }
+
+    [Test]
+    public async Task A_late_search_that_finds_nothing_does_not_declare_the_current_rule_not_found()
+    {
+        var notFound = 0;
+        Navigation.OnNotFound += (_, _) => Interlocked.Increment(ref notFound);
+        Admin.WithRule(Rule("orders-read"));
+        var search = Admin.Hold(nameof(FakeAuthAdmin.ListRulesAsync));
+        var cut = RenderAt<AccessRulePage>("access/rules/missing");
+        Navigation.NavigateTo("access/rules/orders-read?tree=orders");
+        cut.Render();
+        cut.WaitUntil(() => Assert.That(Definitions(cut)["Scope"], Is.EqualTo("orders")));
+
+        search.SetResult();
+
+        Assert.That(await EverShows(() => Volatile.Read(ref notFound) > 0), Is.False, "the current rule is never declared not found");
+        Assert.That(Definitions(cut)["Scope"], Is.EqualTo("orders"));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="stale"/> holds within a second of the previous rule's search
+    /// answering. That search resumes on a later turn of the renderer, which no single barrier
+    /// orders against, so its effect is looked for over a window: one that lands shows within
+    /// tens of milliseconds.
+    /// </summary>
+    private static Task<bool> EverShows(Func<bool> stale) => TestPoll.TryUntilAsync(stale, TimeSpan.FromSeconds(1));
 
     private static Dictionary<string, string> Definitions(IRenderedComponent<AccessRulePage> cut) =>
         cut.FindAll(".lt-dl__row").ToDictionary(

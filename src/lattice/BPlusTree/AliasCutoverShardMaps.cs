@@ -302,6 +302,15 @@ internal static class AliasCutoverShardMaps
         // addressed by whatever map the logical entry holds: carry the target's.
         var target = await registry.GetEntryAsync(targetPhysicalTreeId);
         var targetMap = EffectiveMap(target);
+
+        // Re-stamp the lineage before the swap (#4537): a crash in between leaves
+        // only a spurious re-stamp over the old contents, which is conservative,
+        // never the new contents under the old lineage.
+        if (await registry.GetEntryAsync(logicalTreeId) is { } moving)
+        {
+            await registry.UpdateAsync(logicalTreeId, moving with { Lineage = Guid.NewGuid() });
+        }
+
         var before = await registry.SwapAliasAsync(
             logicalTreeId,
             targetPhysicalTreeId,

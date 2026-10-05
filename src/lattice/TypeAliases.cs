@@ -769,6 +769,18 @@ internal static class TypeAliases
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
 
+    /// <summary>
+    /// Alias for one leaf's durable record of the keys a saga's terminal settled
+    /// on it (issue #4545).
+    /// </summary>
+    internal const string AppliedTerminalWitness = "ol.atw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar grain interface (issue #4545).</summary>
+    internal const string ILeafTerminalWitnessGrain = "ol.gtw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar state (issue #4545).</summary>
+    internal const string LeafTerminalWitnessState = "ol.ltw";
+
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 
@@ -827,6 +839,22 @@ internal static class TypeAliases
     /// silo hosts when its WAL providers persist the trim watermark (issue #4621).
     /// </summary>
     internal const string IWalTrimWatermarkSupportGrain = "ol.wtw";
+
+    // Producer clock floor (issue #4586). A replicated tree's WAL partition
+    // refuses a fresh local write stamped below its durable, published floor,
+    // so a shipper's low watermark is downward-closed.
+
+    /// <summary>Alias for the public idempotency-key-expired refusal.</summary>
+    internal const string LatticeIdempotencyKeyExpired = "ol.ike";
+
+    /// <summary>Alias for the WAL partition's below-floor refusal.</summary>
+    internal const string WalStampBelowFloorException = "ol.wsf";
+
+    /// <summary>Alias for a WAL partition's durable clock-floor state.</summary>
+    internal const string WalShardFloorState = "ol.wfs";
+
+    /// <summary>Alias for the clock-floor capability marker grain interface.</summary>
+    internal const string IWalClockFloorCapable = "ol.wfc";
 
     // Restored-copy receive fence (issue #4593)
 

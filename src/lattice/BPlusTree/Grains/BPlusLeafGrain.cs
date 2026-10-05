@@ -1187,7 +1187,20 @@ internal sealed partial class BPlusLeafGrain(
             RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
-        return SplitResult.Combine(recovered, await CommitSetAsync(key, value, expiresAtTicks));
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        SplitResult? committed;
+        try
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+
+        return SplitResult.Combine(recovered, committed);
     }
 
     /// <summary>
@@ -1873,7 +1886,17 @@ internal sealed partial class BPlusLeafGrain(
             // parameter is a single ~24 B allocation per call, dwarfed
             // by the per-call WalRecord[count] array allocation the
             // pool path replaces.
-            await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            try
+            {
+                await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            }
+            catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+            {
+                // Issue #4586: unreachable - the filter merges the leaf clock
+                // past the floor so the caller's retry is admitted. A batch is
+                // not re-run here: another partition may already hold part of it.
+                throw;
+            }
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2121,6 +2144,27 @@ internal sealed partial class BPlusLeafGrain(
             return new LeafDeleteResult { Split = recovered };
         }
 
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        try
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+    }
+
+    /// <summary>
+    /// Commit path for a single-key <see cref="MutationKind.Delete"/> once
+    /// <see cref="DeleteCoreAsync"/> has resolved routing: stamp, append, apply,
+    /// publish. Re-runnable until its WAL append succeeds, because nothing
+    /// before the append changes durable or visible state.
+    /// </summary>
+    private async Task<LeafDeleteResult> CommitDeleteAsync(string key, bool tracked, bool isPrepared, SplitResult? recovered)
+    {
         if (await IsLatePrepareForTerminalTransactionAsync())
         {
             return new LeafDeleteResult { Split = recovered };
@@ -2984,6 +3028,15 @@ internal sealed partial class BPlusLeafGrain(
             if (init.DonorClock.CompareTo(state.State.Clock) > 0)
             {
                 state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, init.DonorClock);
+                changed = true;
+            }
+
+            // The donor's applied-terminal witnesses for the keys this sibling
+            // receives (issue #4545). A union, like the clock, so it needs no
+            // revert if the persist below fails: a witness for a key that has no
+            // row here yet claims nothing a later row from the donor contradicts.
+            if (AdoptTerminalWitnesses(init.TerminalWitnesses))
+            {
                 changed = true;
             }
 
@@ -4565,6 +4618,10 @@ internal sealed partial class BPlusLeafGrain(
             // - and re-running this method on a leaf whose state is already
             // cleared is idempotent and resumes the snapshot clear where it left off.
             await ClearSnapshotStorageAsync();
+
+            // The applied-terminal witness sidecar is keyed by the leaf too
+            // (issue #4545), and goes with it on the same terms.
+            await ClearTerminalWitnessSidecarAsync();
         }
         finally
         {

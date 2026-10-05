@@ -1071,6 +1071,16 @@ internal sealed partial class BPlusLeafGrain
         }
 
         RemovePendingTxOffsetsForTransaction(transactionId);
+        // Durable, per-key record of what this terminal settled here without a
+        // marked prepare stamp (issue #4545). A marked last-writer-wins key is
+        // stored at its stamp P, so any stamped marker for it is released by the
+        // read gate's self-check; every other key needs the witness. Recorded
+        // before the classification is forgotten. Keys re-routed to the leaf
+        // that declares them were removed from the bucket above.
+        RecordTerminalWitness(
+            transactionId,
+            bucket.Keys,
+            key => preserveTimestamps || !IsMarkedLwwPrepare(transactionId, key, deltaBucket));
         ForgetPrepareStampClassification(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
         RecordTerminalLanded(transactionId);
@@ -1192,7 +1202,8 @@ internal sealed partial class BPlusLeafGrain
         if (transactionId == Guid.Empty)
             return;
 
-        var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
+        Dictionary<string, LwwValue<byte[]>>? abortedBucket = null;
+        var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId, out abortedBucket);
         ForgetPrepareStampClassification(transactionId);
         // Drop the parallel CRDT-delta side-map entry for this saga so an
         // aborted prepared CRDT write leaks no folded contribution; the
@@ -1202,6 +1213,10 @@ internal sealed partial class BPlusLeafGrain
         _pendingTxBatches?.Remove(transactionId);
         RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+        // The discarded keys keep (abort) or already carry (a late orphan behind a
+        // landed terminal) the value the decision implies (issue #4545).
+        if (abortedBucket is not null)
+            RecordTerminalWitness(transactionId, abortedBucket.Keys);
 
 #if LATTICE_DIAG
         // DIAG: abort entry.
@@ -2933,7 +2948,14 @@ internal sealed partial class BPlusLeafGrain
                 _backstoppedTerminals[transactionId] = perTxBackstopped;
             }
             foreach (var kvp in missingKeys)
+            {
                 perTxBackstopped.Add(kvp.Key);
+                // A backstop that carried the prepare's stamp P installed the key
+                // at P, which the read gate's self-check recognises; only a
+                // backstop without one needs the witness (issue #4545).
+                if (missingStamps is null || !missingStamps.ContainsKey(kvp.Key))
+                    RecordTerminalWitness(transactionId, kvp.Key);
+            }
         }
 
         // Mark the saga's pending-flip dedup. _backstoppedTerminals is
@@ -3015,20 +3037,21 @@ internal sealed partial class BPlusLeafGrain
         if (keys.Count == 0)
             return;
 
-        // A marker installed after this leaf already applied the saga's terminal
+        // A marker for a key this leaf's terminal for the saga already settled
         // guards nothing here, and it would no longer be cleared: the terminal
         // that clears it has come and gone. Left in place it is copied by the
         // next leaf split onto a sibling that never sees the terminal, where it
-        // gates the key until the decision ages out (issue #4545).
-        if (_recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId))
-            return;
-
+        // gates the key until the decision ages out (issue #4545). The witness
+        // is per key and durable, so this holds across a reactivation and on a
+        // sibling that inherited it; a key of the same saga whose committed
+        // value has not reached this leaf yet is still marked.
         var carriesStamps = LatticeOriginalPrepareStampContext.HasStamps;
-        _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var key in keys)
         {
-            if (string.IsNullOrEmpty(key))
+            if (string.IsNullOrEmpty(key) || IsTerminalWitnessed(transactionId, key))
                 continue;
+            _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
             if (!_shadowedSagas.TryGetValue(key, out var sagas))
             {
                 sagas = new HashSet<Guid>();
@@ -3188,17 +3211,20 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async ValueTask<bool> IsShadowedReadSafeAsync(string key, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var txid in sagas)
         {
             var status = await ResolvePendingStatusAsync(txid);
             // Per-saga safety is the shared, dependency-free
             // ShadowedMigrationReadGuard rule (see #1591): a committed saga is safe
-            // only once its terminal has landed here (_recentlyTerminal is the
-            // single source of truth for that), or once the row is known to
-            // incorporate its marked prepare (#4545); otherwise the migrated
-            // pre-saga value would tear atomic visibility against a backstopped
-            // sibling.
-            var terminalApplied = _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
+            // only once its terminal has settled this key here (the durable,
+            // per-key witness, issue #4545), or once the row is known to
+            // incorporate its marked prepare; otherwise the migrated pre-saga
+            // value would tear atomic visibility against a backstopped sibling.
+            // Per key, not per saga: the saga's terminal may have reached this
+            // leaf for another key while this key's committed value is still on
+            // its way.
+            var terminalApplied = IsTerminalWitnessed(txid, key);
             var incorporated = ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare(
                 rowStamp, ShadowMarkerStamp(key, txid));
             if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied, incorporated))

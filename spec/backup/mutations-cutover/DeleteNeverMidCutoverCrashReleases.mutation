@@ -8,10 +8,10 @@ SUMMARY: a failed restore releases the alias reservation
 PERTURBS: Crash
 
 --- FIND
-    /\ rp' = "failed"
+    /\ rp' = IF rp \in {"built", "swapped"} THEN "failed" ELSE "revertFailed"
     /\ UNCHANGED <<alias, map, route, redir, reserved, deleted>>
 --- REPLACE
-    /\ rp' = "failed"
+    /\ rp' = IF rp \in {"built", "swapped"} THEN "failed" ELSE "revertFailed"
     \* MUTATION: the reservation is released on failure.
     /\ reserved' = FALSE
     /\ UNCHANGED <<alias, map, route, redir, deleted>>

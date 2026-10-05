@@ -15,7 +15,7 @@ extracted production cores, and - just as importantly - what is not.
 | Incremental backups | Restoring an incremental backup chain never yields part of an atomic batch, or the writes of a batch that did not commit; an increment taken after a batch commits restores it whole; and an increment falls back to a full backup only for a batch it could not otherwise hold whole. | `BackupIncremental` |
 | Provenance | A manifest never names an empty origin, never drops a real one, and a backup chain's HLC frontier covers every write it captured and never regresses. | `BackupProvenance` |
 | Coordinated restore | A restore of a replicated tree is all-or-nothing across regions; no pre-restore write ever reaches a restored copy; a restore never installs another tenant's records; replication resumed after a restore converges. | `BackupRestore` |
-| Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore that crashes part-way still completes on retry. | `BackupCutover` |
+| Local cutover and revert | A reader never pairs one physical copy with another copy's shard map; once a restore returns every reader sees the restored copy, and once a revert returns none does, however stale its routing; a tree is never deleted while its copies are in motion; a restore, or a revert, that crashes part-way still completes on retry. | `BackupCutover` |
 
 Every property is paired with a deliberate defect (a mutation) that must make
 TLC report it, and every protocol step of each specification is perturbed by at
@@ -24,8 +24,8 @@ build. TLC runs these checks on every pull request.
 
 ## Defects the specifications found
 
-The specifications check the **intended** design. Three of the guarantees above
-were found not to hold in production:
+The specifications check the **intended** design. These guarantees were found
+not to hold in production:
 
 - **A backup could hold an atomic batch torn (#4485, fixed).** A capture read
   each shard at its own moment and served a write still pending at that moment
@@ -51,6 +51,20 @@ were found not to hold in production:
   and an undecided one is left for the next increment. A batch that straddles a
   full backup's frontier makes the increment fall back to a full backup.
 
+- **A capture could hold a committed batch with one key absent (#4619, fixed).**
+  A decision whose tombstone had expired but was still stored was read at the
+  gate as undecided and hidden, so a shard holding the batch's terminal kept
+  its key while a shard still pending dropped the other. The specification
+  checks the fixed design, which captures such a decision at its recorded
+  verdict.
+- **A coordinated restore could end with one cluster restored and another not
+  (#4637, open).** A participant's fence timer compensates on its own once it
+  outlives its window, even after the restore's coordinator decided to commit,
+  so the restore can finish mixed. The specification models the timer and
+  checks the intended design, in which a participant compensates only before
+  the decision; the gap is listed in the restore refinement note until the fix
+  lands.
+
 ## Which parts run in production code
 
 The checks reach production through four extracted cores, each executed by the
@@ -75,10 +89,6 @@ refinement note, not executed by the model itself.
 
 Coverage of one half must not be read as coverage of the other. Not covered:
 
-- the participant fence timer: a coordinated restore whose commit reaches a
-  cluster more than five minutes after it prepared leaves that cluster
-  compensated, which the documented all-or-nothing guarantee already scopes
-  out;
 - a replication batch delayed in flight across a whole restore cutover;
 - reader-level atomicity across the members of a backup set while their aliases
   are swapped, which is not claimed anywhere;
@@ -87,5 +97,5 @@ Coverage of one half must not be read as coverage of the other. Not covered:
   the shard-ownership specification;
 - the receiver side of cross-cluster atomic batches, which depends on #4480.
 
-Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists its
-abstraction gaps in full.
+Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in
+full what lies outside its scope, and any gap open against production.

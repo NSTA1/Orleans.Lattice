@@ -2405,6 +2405,14 @@ public static class LatticeMetrics
     public const string WalGcBlockedConsumersName = "orleans.lattice.wal.gc.blocked_consumers";
 
     /// <summary>
+    /// Name of the per-partition unusable-pin hold-age gauge, registered by
+    /// <c>WalGcLeafPinHoldCensus</c> (issue #4622): seconds a partition has
+    /// been held by a leaf's durable materialiser pin (unusable, or uncovered and capping the retention ceiling below a configured window), as of the latest pass.
+    /// Zero-primed per partition; 0 means not held; -1 means unknown.
+    /// </summary>
+    public const string WalGcLeafPinHoldAgeName = "orleans.lattice.wal.gc.leaf_pin_hold_age";
+
+    /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
     /// with <b>no durable materialiser offset floor</b> despite the durability
     /// hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) - either
@@ -10061,6 +10069,22 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalAppendAdmissionTimeouts =
         Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_timeouts", unit: "{timeout}",
             description: "Count of WalCommitLogWriter append dispatches whose per-partition admission wait exceeded WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Counter of freshly authored local writes a WAL partition refused because
+    /// their HLC stamp was below the partition's clock floor (issue #4586),
+    /// tagged by <c>tree</c>, <c>shard</c> and <c>tenant</c>. A replicated
+    /// tree's partition publishes a floor that trails the wall clock by
+    /// <see cref="LatticeOptions.ReplicationClockFloorLag"/>, so a refusal means
+    /// a stamp was older than that lag when it reached the partition: clock skew
+    /// between silos, a write held up in the pipeline for longer than the lag, or
+    /// a caller-supplied idempotency key used after it expired. A refused
+    /// single-key write is re-stamped and retried; a sustained non-zero rate
+    /// calls for checking silo clock synchronisation and the lag.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFloorRefusals =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append.floor_refusals", unit: "{entry}",
+            description: "Freshly authored local writes a WAL partition refused because their stamp was below the partition's clock floor.");
 
     /// <summary>
     /// Histogram of wall-clock ms spent waiting for a per-partition
