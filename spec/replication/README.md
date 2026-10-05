@@ -160,6 +160,9 @@ lands as the check that reintroducing it is caught:
   WAL, so a source trim past the receiver's cursor requested no re-bootstrap
   (`EventualConvergenceTrimNeverRebootstraps`, and
   `EventualConvergenceFallOffUndetected` in the re-bootstrap companion).
+- #4614, fixed by #4651 - a batch the shipper could not encode was
+  dead-lettered on the sender and skipped, and nothing re-seeded the peer
+  (`EventualConvergenceShipDeadLetterNeverReseeds`).
 - #4604 - the snapshot drain ignored a deferred apply, so a row the applier
   deferred (a coordinated restore's receive fence, an in-flight duplicate) was
   dropped and the handoff pinned past it
@@ -170,9 +173,6 @@ fixes.
 
 ## Open production gaps
 
-- #4614 - a batch the shipper cannot encode is dead-lettered on the sender
-  and skipped, and nothing re-seeds the peer
-  (`EventualConvergenceShipDeadLetterNeverReseeds`).
 - #4615 - a tombstone is reaped on the wall clock alone, so a write it beats
   that arrives later resurrects the key (`EventualConvergenceReapInsideGrace`,
   in the re-bootstrap companion).
