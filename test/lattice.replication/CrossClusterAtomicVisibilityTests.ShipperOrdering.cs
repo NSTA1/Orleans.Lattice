@@ -82,7 +82,10 @@ public partial class CrossClusterAtomicVisibilityTests
         ReplicationShipperGrainTests.StubReplogShardGrain[] feeds,
         ReplicationShipperGrainTests.StubWalRecordEncoder walEncoder,
         IReplicationTransport transport,
-        ReplicationPeerStats? peerStats = null)
+        ReplicationPeerStats? peerStats = null,
+        Action<IGrainFactory>? configureFactory = null,
+        FakePersistentState<ReplicationShipperState>? state = null,
+        Action<LatticeReplicationOptions>? configureOptions = null)
     {
         var options = new LatticeReplicationOptions
         {
@@ -92,6 +95,7 @@ public partial class CrossClusterAtomicVisibilityTests
             ShipBatchSize = 16,
             WireVersionNegotiationEnabled = false,
         };
+        configureOptions?.Invoke(options);
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(options);
         monitor.Get(Arg.Any<string>()).Returns(options);
@@ -102,12 +106,14 @@ public partial class CrossClusterAtomicVisibilityTests
             factory.GetGrain<IWalShardGrain>($"{tree}/{p}").Returns(feeds[p]);
         }
 
+        configureFactory?.Invoke(factory);
+
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shipper", $"{tree}/{TwoSiteClusterFixture.SiteBClusterId}"));
         var shipper = new ReplicationShipperGrain(
             context, Substitute.For<IReminderRegistry>(), NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, Substitute.For<IReplicationBatchEncoder>(), walEncoder,
-            Substitute.For<IWalCursorRegistry>(), factory, new FakePersistentState<ReplicationShipperState>(),
+            Substitute.For<IWalCursorRegistry>(), factory, state ?? new FakePersistentState<ReplicationShipperState>(),
             peerStats ?? new ReplicationPeerStats(), Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), new NoOpReplicationDigestProbeTransport());
         shipper.InitializeForTesting(tree, TwoSiteClusterFixture.SiteBClusterId);

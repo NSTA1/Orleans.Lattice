@@ -1,4 +1,5 @@
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Tests.Grains;
 
@@ -116,7 +117,12 @@ public partial class CrossClusterAtomicVisibilityTests
             });
 
         var stats = new ReplicationPeerStats();
-        var shipper = CreateShipper(tree, feeds, walEncoder, transport, stats);
+
+        // The saga is still in flight: its participants are registered, so the
+        // re-seed's replay filter ships it (#4533).
+        var registry = ReplayRegistry(Guid.NewGuid(), Guid.NewGuid(), txid);
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, stats, configureFactory: factory =>
+            factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry));
         await PumpAsync(shipper, ticks: 2);
 
         Assert.Multiple(() =>

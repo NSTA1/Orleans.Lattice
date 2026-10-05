@@ -164,6 +164,10 @@ internal sealed class LatticeSnapshotProvider(
         var snap0 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
             .StableSnapshotAsync(_grainFactory, treeName)
             .ConfigureAwait(false);
+        if (AfterRegistrySnapshotForTesting is { } afterSnapshot)
+        {
+            await afterSnapshot().ConfigureAwait(false);
+        }
 
         // The prepared-row pass runs BEFORE the committed-projection
         // pass. Order matters because a source-side terminal that
@@ -195,8 +199,9 @@ internal sealed class LatticeSnapshotProvider(
         // HLC stamped on the pending bucket, so the post-saga value
         // is the steady-state result either way.
         var recordedResolved = new HashSet<Guid>();
+        var preparedSagas = new HashSet<Guid>();
         await foreach (var prepared in EnumeratePreparedAsync(
-                treeName, snap0, recordedResolved, asOfHlc, cancellationToken)
+                treeName, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return prepared;
@@ -293,8 +298,11 @@ internal sealed class LatticeSnapshotProvider(
         // drain it. An aged-out row with no resident bucket is resolved to its
         // recorded verdict here, exactly as the prepared pass resolves one
         // over a bucket (#4481). A row the source has already purged cannot
-        // be exported, so a pre-cut prepare of that saga can still strand on
-        // the receiver; that residual is the source's to close.
+        // be exported; a re-seed's receiver decides such a saga's stale
+        // pending buckets aborted (#4533), so a saga the source still knows
+        // but cannot settle (an unresolved Indeterminate row) ships as a
+        // value-less row naming it, which keeps the receiver from treating it
+        // as purged. A receiver that predates it skips a row with no value.
         foreach (var (txid, decided) in snap0?.ToList() ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -324,8 +332,55 @@ internal sealed class LatticeSnapshotProvider(
                     SettledDecision = status == TxStatus.Committed,
                 };
             }
+            else
+            {
+                yield return new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                };
+            }
+        }
+
+        // Late decisions (#4627). A saga snap0 had in flight can decide and
+        // drain some of its keys while the passes run: those keys reach the
+        // committed pass as plain values, the rest ship as prepared rows. Were
+        // its terminal then trimmed (a forced gap), nothing would ever settle
+        // the prepared rows on the receiver, which would serve the saga split.
+        // So every saga shipped as prepared rows is re-read once the passes are
+        // done, and a decision recorded meanwhile ships as a decision row too.
+        foreach (var txid in preparedSagas)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snap0 is not null && snap0.TryGetValue(txid, out var known) && known is TxStatus.Committed or TxStatus.Aborted)
+            {
+                continue;
+            }
+
+            var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                .GetRegistry(_grainFactory, treeName, txid)
+                .GetRecordedStatusAsync(txid)
+                .ConfigureAwait(false);
+            if (recorded is TxStatus.Committed or TxStatus.Aborted)
+            {
+                yield return new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = recorded == TxStatus.Committed,
+                };
+            }
         }
     }
+
+    /// <summary>
+    /// Test seam: runs after the export's registry snapshot (snap0) is taken
+    /// and before any pass reads the tree, so a test can decide a saga
+    /// mid-export (#4627).
+    /// </summary>
+    internal Func<Task>? AfterRegistrySnapshotForTesting { get; set; }
 
     /// <summary>
     /// Walks every shard's leaf chain on the source tree and emits a
@@ -422,6 +477,7 @@ internal sealed class LatticeSnapshotProvider(
         string treeName,
         Dictionary<Guid, TxStatus> snap0,
         HashSet<Guid> recordedResolved,
+        HashSet<Guid> preparedSagas,
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -592,6 +648,7 @@ internal sealed class LatticeSnapshotProvider(
                         continue;
                     }
 
+                    preparedSagas.Add(m.TransactionId);
                     yield return new SnapshotEntry
                     {
                         Key = m.Key,

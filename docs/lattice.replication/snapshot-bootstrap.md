@@ -1015,10 +1015,68 @@ recorded verdict behind an aged-out row):
 A receiver that predates the decision slot sees a row with no value
 that is neither prepared nor a tombstone, which its drain skips.
 
-One residual remains: a saga whose decision the source has already
-purged cannot be exported. A pre-cut prepare of such a saga, retained
-in the source's log past its decision retention with its terminal's
-partition trimmed, can still strand on a bootstrapped receiver (#4508).
+A saga whose decision the source has already purged cannot be
+exported. The source never re-ships such a saga: its shipper's
+[replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
+withholds it whole (#4533). A pending bucket the receiver staged for it
+before a re-seed is cleared by that re-seed's drain (below). A saga the
+source still knows but cannot settle (an `Indeterminate` row with no
+recorded verdict) ships as a value-less row that names it with no
+`SettledDecision`, so the receiver does not take it for a purged one;
+a receiver that predates it skips the row like any other value-less row.
+
+**Late decisions.** A saga snap0 had in flight can decide while the
+passes run and drain some of its keys before they are read: those keys
+reach the committed pass as plain values, while the rest still ship as
+prepared rows. Were its terminal then trimmed, nothing would settle the
+prepared rows on the receiver, which would serve the saga split
+([#4627](https://github.com/NSTA1/Orleans.Lattice/issues/4627)). So
+once the passes are done the export re-reads the decision of every saga
+it shipped as prepared rows, and ships a decision row for each one that
+decided meanwhile.
+
+<a id="re-seed-stale-pending-clear"></a>
+**Re-seed: clearing stale pending buckets.** A sender that took its
+peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-off-the-log))
+asks for a re-seed past an export epoch. The receiver records the
+request on its bootstrap coordinator before it starts (or joins) the
+bootstrap, and records it even with `AutoBootstrapOnFallOffLog` off,
+so an operator's bootstrap serves it. While the request is recorded
+the sender withholds every saga record, so a drain whose export
+postdates the request knows every pending bucket it holds from that
+sender was staged before the re-seed or re-staged by the export.
+After the drain has applied the export, still behind the read fence,
+it walks the tree's pending buckets from that sender and settles each
+one durably, through a terminal mark on the shards that hold it:
+
+- A saga the export carried as a prepared row (in flight at the cut)
+  or as a value-less row (known but unsettled) is left staged for the
+  terminal that follows the re-seed. A saga undecided at the cut is
+  therefore never cleared, and commits after the re-seed.
+- A saga the export carried as a decision row (including one that also
+  shipped as prepared rows and decided while the export ran), or that
+  this receiver's registry has decided, is drained by that decision: the
+  source may already have trimmed its terminal, which no rewind can
+  re-ship.
+- Any other saga was decided and purged by the source. Its bucket is
+  discarded with an abort mark that records no outcome in the
+  receiver's registry, because the source may have committed it: its
+  committed values, if any, arrived as committed rows.
+
+The drain then consumes the request.
+
+Two rules keep the window closed:
+
+- **Stragglers are refused.** Until the drain has consumed the
+  request, the receiver refuses, with a not-accepted ack, any pushed
+  batch that carries a saga record from that sender. The sender is
+  withholding saga records then, so such a batch was pushed before its
+  marker and could otherwise stage a purged saga's prepare after the
+  clear. The sender re-ships the batch's plain records.
+- **No echo without the clear.** A bootstrap that completes while a
+  request it did not consume is outstanding (one recorded after its
+  drain finished) does not record its export epoch for the echo, so
+  the sender keeps withholding until a drain has cleared.
 
 **Visibility while the drain runs.** The drain installs committed rows
 one at a time, so the import is made atomic for readers by the
