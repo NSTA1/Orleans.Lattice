@@ -193,7 +193,10 @@ public partial class TreeDeletionIntegrationTests
         // leaf is unconditionally the first node ShardRootGrain.PurgeAsync
         // clears, and ClearGrainStateAsync is exactly the call it makes, so this
         // is the state a PurgeTreeAsync that blew the grain-call timeout leaves
-        // behind: node state gone, shard root untouched, no purge flags set.
+        // behind: node state gone, shard root untouched, no purge flags set on
+        // the deletion grain - but the shard recorded that it began clearing its
+        // leaves before the first clear (issue #4654).
+        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
         await leaf.ClearGrainStateAsync();
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
 
@@ -245,6 +248,7 @@ public partial class TreeDeletionIntegrationTests
         var sibling = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(siblingId!.Value);
 
         await router.DeleteTreeAsync();
+        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
         await leaf.ClearGrainStateAsync();
         await sibling.ClearGrainStateAsync();
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
@@ -256,6 +260,38 @@ public partial class TreeDeletionIntegrationTests
         Assert.That(await sibling.GetTreeIdAsync(), Is.EqualTo(treeName));
         await router.OrFlag("k00").EnableAsync("replica-1");
         Assert.That(await router.OrFlag("k00").IsEnabledAsync(), Is.True);
+    }
+
+    /// <summary>
+    /// Issue #4654. Recovery re-creates a routed leaf with no state row only when a
+    /// purge of its shard began clearing leaves. Without that record the leaf
+    /// cannot be told apart from one whose row was lost while the tree was
+    /// deleted, so it is not re-created empty: its key range fails closed rather
+    /// than report the key it held absent.
+    /// </summary>
+    [Test]
+    public async Task RecoverTree_does_not_re_create_a_rowless_leaf_no_purge_cleared()
+    {
+        var treeName = $"rec-lost-row-{Guid.NewGuid():N}";
+        var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeName, new TreeRegistryEntry { ShardCount = 1 });
+        var router = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeName}/0");
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
+
+        await router.DeleteTreeAsync();
+
+        // No purge began: the leaf's row (and record) simply went missing.
+        await leaf.ClearGrainStateAsync();
+
+        await router.RecoverTreeAsync();
+
+        Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "recovery must not re-create the leaf empty");
+        var read = Assert.CatchAsync(async () => await router.GetAsync("a"));
+        Assert.That(read, Is.InstanceOf<ILatticeLeafUnavailable>(), $"the key range fails closed; got {read}");
     }
 
     [Test]

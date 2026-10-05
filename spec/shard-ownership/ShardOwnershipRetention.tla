@@ -57,6 +57,7 @@ VARIABLES
     dec,        \* the registry's recorded decision for the saga
     masked,     \* the registry declines to report the saga's row (TxStatus.Indeterminate)
     forgotten,  \* the saga's row has left the registry (it reads InFlight)
+    wit,        \* the split destination's leaf holding k2 durably witnesses that the saga's terminal settled k2 there
     vis,        \* ghost: vis[k] is the highest value a fresh reader has been served for k
     late,       \* a delayed shadow-forwarded prepare of k2 en route to the split destination
     wDone,      \* the later plain write of k2 has happened
@@ -65,14 +66,14 @@ VARIABLES
     ackOn       \* ghost: ackOn[c][k] is the highest value acknowledged that copy c must hold
 
 vars == <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy,
-          rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late,
+          rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late,
           wDone, reacted, lk, ackOn, vis>>
 
 \* Every variable but the ghost vis, which the step relation sets alongside each
 \* action (see VisStep). Fairness is stated over these, since an action alone
 \* leaves vis' undetermined.
 svars == <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy,
-           rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late,
+           rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late,
            wDone, reacted, lk, ackOn>>
 
 -----------------------------------------------------------------------------
@@ -143,7 +144,7 @@ Surfaced(c, s, k) == pend[c][s][k] \in {"old", "new"} /\ RegistryView = "committ
 LeafGated(c, s, k) ==
     /\ c = spCopy /\ s = s2 /\ k = k2
     /\ RegistryView \in {"committed", "indeterminate"}
-    /\ lk /\ ~term[c][s]
+    /\ lk /\ ~term[c][s] /\ ~wit
     /\ row[c][s][k] < SagaV
 
 ValueAt(c, s, k) ==
@@ -188,6 +189,22 @@ CopyMap(c) == IF c = alias THEN rmap ELSE IF c = R THEN rmapR ELSE rmapOld
 \* the hops run out.
 RTarget(s, k) == IF SplitRejects(R, s, k) THEN s2 ELSE s
 
+\* The saga's participant row in the registry (TxRegistryGrain). The coordinator
+\* holds it from before its first prepare dispatch until ForgetAsync
+\* (AtomicWriteGrain.EnsureParticipantRowAsync, #4632), and a forwarded prepare's
+\* registration only joins it (TxRegistryGrain's join-only registration).
+PRow == sg # "idle" /\ ~forgotten
+
+\* A forwarded prepare of a locally authored saga is refused, before it is
+\* bucketed, when the registry reports the saga undecided and holds no
+\* participant row for it: the saga was forgotten and its row pruned (#4632).
+GuardRefuses == RegistryView = "inflight" /\ ~PRow
+
+\* Where that refusal applies to k2: the split destination, and the copy its
+\* resize mirror forwards into.
+RefusedAt(k) == IF GuardRefuses /\ k = k2
+                THEN {<<spCopy, s2>>} \cup (IF ResizeMirrors(spCopy, s2) THEN {<<R, RTarget(s2, k2)>>} ELSE {})
+                ELSE {}
 Landing(c, s, k) ==
     LET local == {<<c, s>>} \cup (IF SplitMirrors(c, s, k) THEN {<<c, s2>>} ELSE {})
         mirrored == {<<R, RTarget(x[2], k)>> : x \in {y \in local : ResizeMirrors(y[1], y[2])}}
@@ -210,7 +227,7 @@ BoundMirrors == bound = T /\ alias = R /\ ResizeMirrors(T, s1)
 
 \* The copy the terminal broadcast addresses: the bound copy, or once a purge
 \* has cleared it, the copy it mirrored into, which the tree resolves to by
-\* then (intended design; production fails the broadcast, #4475).
+\* then (#4475, fixed by #4531 and #4581).
 TermCopy == IF Gone(bound) THEN alias ELSE bound
 
 \* The shards of that copy the broadcast must visit: the owners of the batch's
@@ -265,6 +282,7 @@ Init ==
     /\ dec = "none"
     /\ masked = FALSE
     /\ forgotten = FALSE
+    /\ wit = FALSE
     /\ late = "none"
     /\ wDone = FALSE
     /\ reacted = FALSE
@@ -288,7 +306,7 @@ SplitBegin ==
     /\ ~Fenced(alias, s1)
     /\ sp' = "shadow"
     /\ spCopy' = alias
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* Retroactive sweep of prepares that predate the window: a bucket whose saga
 \* the registry reports decided is resolved at the destination (with the
@@ -304,16 +322,17 @@ SplitSweep ==
            view == IF RegistryView = "indeterminate" THEN dec ELSE RegistryView
            dests == {<<c, s2>>} \cup (IF ResizeMirrors(c, s2) THEN {<<R, s2>>} ELSE {})
        IN IF b = "none"
-          THEN UNCHANGED <<row, pend, term, lk>>
+          THEN UNCHANGED <<row, pend, term, lk, wit>>
           ELSE IF view \in {"committed", "aborted"}
                THEN /\ row' = IF view = "committed"
                               THEN [row EXCEPT ![c][s2][k2] = Max(@, SagaV)]
                               ELSE row
                     /\ term' = [term EXCEPT ![c][s2] = TRUE]
+                    /\ wit' = TRUE
                     /\ UNCHANGED pend
                ELSE /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
-                                   IF <<x, s>> \in dests /\ k = k2 THEN b ELSE pend[x][s][k]]]]
-                    /\ UNCHANGED <<row, term, lk>>
+                                   IF <<x, s>> \in dests \ RefusedAt(k2) /\ k = k2 THEN b ELSE pend[x][s][k]]]]
+                    /\ UNCHANGED <<row, term, lk, wit>>
     /\ sp' = "swept"
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
 
@@ -323,7 +342,7 @@ SplitFreeze ==
     /\ alias = spCopy
     /\ ~Fenced(spCopy, s1)
     /\ sp' = "frozen"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* Final authoritative drain, then the fenced ReassignSlotsAsync: the map moves
 \* k2 to s2 only while the tree still resolves to the bound copy
@@ -340,7 +359,7 @@ SplitCommit ==
     /\ rmapR' = IF spCopy = R THEN s2 ELSE rmapR
     /\ published' = published \cup {<<alias, s2>>}
     /\ sp' = "done"
-    /\ UNCHANGED <<alias, rmapOld, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmapOld, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* An undo moved the alias off the copy the split is bound to before the split
 \* committed: ShardMapCommitFence refuses the commit and the split is abandoned
@@ -350,7 +369,7 @@ SplitAbandon ==
     /\ sp \in {"shadow", "swept", "frozen"}
     /\ alias # spCopy
     /\ sp' = "done"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 -----------------------------------------------------------------------------
 (* Online resize T -> R (TreeResizeGrain + TreeSnapshotGrain).              *)
 
@@ -363,11 +382,11 @@ ResizeBegin ==
     /\ rmapR' = rmap
     /\ rmapOld' = rmap
     /\ ackOn' = [ackOn EXCEPT ![R] = ackOn[T]]
-    /\ UNCHANGED <<alias, rmap, published, row, pend, term, sp, spCopy, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, lk>>
+    /\ UNCHANGED <<alias, rmap, published, row, pend, term, sp, spCopy, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, lk>>
 
 \* The online snapshot copies T's committed entries index-for-index, keeping an
-\* entry only on the shard the copy's map routes it to. The intended design also
-\* carries T's prepared buckets; production copies committed entries only.
+\* entry only on the shard the copy's map routes it to, and carries T's prepared
+\* buckets at their stamps (#4455, fixed by #4506; #4522, fixed by #4629).
 SnapCopy ==
     /\ rz = "snap"
     /\ row' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
@@ -377,14 +396,14 @@ SnapCopy ==
                  IF x = R /\ s \in rzShards /\ pend[R][s][k] = "none"
                  THEN pend[T][s][k] ELSE pend[x][s][k]]]]
     /\ rz' = "copied"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, term, sp, spCopy, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, term, sp, spCopy, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* EnterRejectingAsync on one of T's shards, before the alias flip (#4362).
 ResizeFence(s) ==
     /\ rz = "copied"
     /\ s \in rzShards \ fence
     /\ fence' = fence \cup {s}
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* The single-write SwapAliasAsync (#4357), only once every shard is fenced.
 ResizeFlip ==
@@ -394,7 +413,7 @@ ResizeFlip ==
     /\ rmap' = rmapR
     /\ published' = published \cup {<<R, rmapR>>}
     /\ rz' = "swapped"
-    /\ UNCHANGED <<rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* RejectOldShardsAsync then CleanupOldTreeAsync: T is soft-deleted and stays
 \* fenced; a saga bound to it is still admitted.
@@ -402,7 +421,7 @@ ResizeRetire ==
     /\ rz = "swapped"
     /\ fence' = rzShards
     /\ rz' = "retired"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* The purge after SoftDeleteDuration clears T's shard rows. A router may still
 \* hold a pair naming T: nothing bounds a routing activation's lifetime below
@@ -414,7 +433,7 @@ ResizePurge ==
     /\ pend' = [pend EXCEPT ![T] = [s \in Shards |-> [k \in Keys |-> "none"]]]
     /\ term' = [term EXCEPT ![T] = [s \in Shards |-> FALSE]]
     /\ fence' = {}
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* Undo after the flip, first step: ArmRedirectsAsync arms the resized copy's
 \* shards to redirect routers that still address it (#4357). The undo arms R
@@ -425,7 +444,7 @@ UndoArm ==
     /\ alias = R
     /\ redir' = TRUE
     /\ rz' = "undoing"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, fence, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, fence, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* One registry write moves the alias and the old map back (#4357).
 UndoSwap ==
@@ -434,7 +453,7 @@ UndoSwap ==
     /\ alias' = T
     /\ rmap' = rmapOld
     /\ published' = published \cup {<<T, rmapOld>>}
-    /\ UNCHANGED <<rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* Recover T and ClearShadowForwardAsync on its shards: the fence lifts and T
 \* serves again under the alias that now names it.
@@ -443,7 +462,7 @@ UndoClear ==
     /\ alias = T
     /\ fence' = {}
     /\ rz' = "undone"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rzShards, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 -----------------------------------------------------------------------------
 (* The atomic-write saga (AtomicWriteGrain), writing SagaV to k1 and k2.    *)
@@ -452,7 +471,7 @@ SagaStart ==
     /\ sg = "idle"
     /\ sg' = "exec"
     /\ bound' = alias
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* One key's prepared write, dispatched through a routing activation holding
 \* pair p. The routing tier re-reads the registry when its cached copy is not
@@ -472,12 +491,12 @@ SagaPrepare(k, p) ==
           /\ ~Gone(c)
           /\ Landable(c, s, k)
           /\ pend' = [x \in Copies |-> [y \in Shards |-> [j \in Keys |->
-                         IF j = k /\ <<x, y>> \in Landing(c, s, k)
+                         IF j = k /\ <<x, y>> \in Landing(c, s, k) /\ (<<x, y>> = <<c, s>> \/ <<x, y>> \notin RefusedAt(k))
                          THEN IF wDone THEN "new" ELSE "old"
                          ELSE pend[x][y][j]]]]
           /\ late' = IF SplitMirrors(c, s, k) /\ late = "none" THEN "inflight" ELSE late
     /\ prepped' = prepped \cup {k}
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, told, dec, masked, forgotten, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, told, dec, masked, forgotten, wit, wDone, reacted, ackOn, lk>>
 
 \* Record the commit decision: the tree still resolves to the bound copy, or
 \* the bound copy mirrors into the one it resolves to (#4369).
@@ -487,16 +506,15 @@ SagaDecide ==
     /\ alias = bound \/ BoundMirrors
     /\ dec' = "committed"
     /\ sg' = "decided"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* One shard of the terminal broadcast to the bound copy, mirrored to R when
 \* that shard forwards. A direct terminal passes a resize fence (#4369).
-\* The intended design modelled here delivers a terminal a purged old copy
-\* refuses to the copy it mirrored into, at the same shard (the split interlock
-\* keeps the layouts equal), where production fails the broadcast (#4475); and
-\* it counts one a resized copy an undo discarded refuses as delivered, since
-\* that copy's batch is discarded with it, where production re-sends it to the
-\* old copy (#4474).
+\* A terminal a purged old copy refuses is delivered to the copy it mirrored
+\* into, at the same shard (the split interlock keeps the layouts equal) (#4475,
+\* fixed by #4531 and #4581); one a resized copy an undo discarded refuses counts
+\* as delivered, since that copy's batch is discarded with it (#4474, fixed by
+\* #4516).
 SagaTerminal(s) ==
     /\ sg = "decided"
     /\ s \in TermTargets \ told
@@ -513,6 +531,7 @@ SagaTerminal(s) ==
           /\ term' = [x \in Copies |-> [y \in Shards |->
                         IF <<x, y>> \in hit THEN TRUE ELSE term[x][y]]]
           /\ lk' = IF <<spCopy, s2>> \in hit THEN FALSE ELSE lk
+          /\ wit' = (wit \/ <<spCopy, s2>> \in hit)
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, dec, masked, forgotten, late, wDone, reacted, ackOn>>
 
 \* The broadcast has visited every target: the saga completes, and a committed
@@ -523,7 +542,7 @@ SagaComplete ==
     /\ sg' = "done"
     /\ ackOn' = [c \in Copies |-> [k \in Keys |->
                     IF dec = "committed" /\ c \in AckCopies(bound) THEN Max(ackOn[c][k], SagaV) ELSE ackOn[c][k]]]
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, lk>>
 
 -----------------------------------------------------------------------------
 (* Environment                                                              *)
@@ -532,18 +551,20 @@ SagaComplete ==
 \* destination. The leaf refuses it when its activation remembers applying the
 \* saga's terminal, or when the registry answers anything but InFlight for the
 \* saga (#4445): an Indeterminate answer is resolved to the recorded decision
-\* the registry holds behind its mask.
+\* the registry holds behind its mask. It also refuses one the registry reports
+\* undecided when the saga's participant row is gone: the saga was forgotten
+\* (#4632).
 DeliverLate ==
     /\ late = "inflight"
     /\ late' = "delivered"
-    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
-    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy)
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] /\ ~wit THEN TRUE ELSE lk
+    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy) \/ GuardRefuses
        THEN UNCHANGED pend
        ELSE pend' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
                         IF k = k2 /\ <<x, y>> \in Landing(spCopy, s2, k2)
                         THEN IF wDone THEN "new" ELSE "old"
                         ELSE pend[x][y][k]]]]
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, wDone, reacted, ackOn>>
 
 \* A later plain write of k2, through a routing activation holding pair p.
 \* A leaf split moves k2 from the split destination's leaf to a fresh sibling
@@ -560,7 +581,7 @@ LeafSplit ==
     /\ lk' = (lk /\ ~term[spCopy][s2])
     /\ term' = [term EXCEPT ![spCopy][s2] = FALSE]
     /\ <<lk', term'>> # <<lk, term>>
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn>>
 LaterWrite(p) ==
     /\ ~wDone
     /\ dec # "none"
@@ -574,7 +595,7 @@ LaterWrite(p) ==
           /\ ackOn' = [x \in Copies |-> [k \in Keys |->
                           IF k = k2 /\ x \in AckCopies(c) THEN Max(ackOn[x][k], LaterV) ELSE ackOn[x][k]]]
     /\ wDone' = TRUE
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, reacted, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, reacted, lk>>
 
 \* The saga records an abort: a prepare failed past its retries, or the caller
 \* went away. Any point of the execute phase may end this way, so the action is
@@ -583,7 +604,7 @@ SagaAbort ==
     /\ sg = "exec"
     /\ dec' = "aborted"
     /\ sg' = "decided"
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, masked, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, bound, prepped, told, masked, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* The registry stops reporting the saga's row, or starts again. Production
 \* answers TxStatus.Indeterminate for a stored row once the tombstone retention
@@ -595,7 +616,7 @@ RegistryMask ==
     /\ dec # "none"
     /\ ~forgotten
     /\ masked' = ~masked
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, forgotten, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, forgotten, wit, late, wDone, reacted, ackOn, lk>>
 
 \* The saga's row leaves the registry: ForgetAsync, the PruneExpired purge
 \* behind it, or the zero-retention branch. Each follows the saga's terminal
@@ -605,7 +626,7 @@ RegistryForget ==
     /\ ~forgotten
     /\ forgotten' = TRUE
     /\ masked' = FALSE
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, late, wDone, reacted, ackOn, lk>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, term, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, late, wDone, reacted, ackOn, lk, wit>>
 
 \* A leaf activation is replaced: its memory of applied terminals and its shadow
 \* markers are lost; its prepared buckets are rebuilt from the log.
@@ -619,7 +640,7 @@ Reactivate(c, s) ==
     /\ pend' = [pend EXCEPT ![c][s] = [k \in Keys |-> IF @[k] = "mark" THEN "none" ELSE @[k]]]
     /\ reacted' = TRUE
     /\ lk' = IF c = spCopy /\ s = s2 THEN FALSE ELSE lk
-    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, ackOn>>
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, ackOn>>
 
 \* Nothing is in flight: every operation that started has finished. An operation
 \* that never started is not owed, so a state with no enabled step is a deadlock
@@ -713,6 +734,7 @@ TypeOK ==
     /\ dec \in {"none", "committed", "aborted"}
     /\ masked \in BOOLEAN
     /\ forgotten \in BOOLEAN
+    /\ wit \in BOOLEAN
     /\ late \in {"none", "inflight", "delivered"}
     /\ wDone \in BOOLEAN
     /\ reacted \in BOOLEAN
@@ -770,4 +792,8 @@ LiveBucket == \E c \in Copies, s \in Shards, k \in Keys : Live(c) /\ pend[c][s][
 NoStrandedBucket ==
     (dec # "none" /\ LiveBucket) ~> (~LiveBucket \/ forgotten)
 
+\* No live copy keeps a prepared bucket of a saga whose registry row is retired:
+\* nothing could ever consume it (#4619, fixed by #4632's forgotten-saga
+\* refusal).
+NoLiveBucketAfterForget == forgotten => ~LiveBucket
 =============================================================================

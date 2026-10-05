@@ -4642,6 +4642,11 @@ internal sealed partial class BPlusLeafGrain(
             // The applied-terminal witness sidecar is keyed by the leaf too
             // (issue #4545), and goes with it on the same terms.
             await ClearTerminalWitnessSidecarAsync();
+
+            // The row record goes last of all (issue #4654): until it is deleted, a
+            // rowless activation of this leaf fails closed, so an interrupted clear
+            // never leaves a leaf that reads as empty while its snapshot survives.
+            await ClearRowRecordAsync();
         }
         finally
         {

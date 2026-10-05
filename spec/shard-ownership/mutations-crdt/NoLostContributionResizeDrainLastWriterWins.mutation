@@ -1,0 +1,26 @@
+# Pairs with NoLostContribution. Reproduces production before #4618 was fixed
+# (#4665): the resize's snapshot drain merges the source's row into the
+# resized copy last-writer-wins, not as a join, so a resized copy whose own
+# terminal fold already holds the saga's contribution keeps one copy and loses
+# a non-atomic write only the source held.
+MODULE: NoLostContributionResizeDrainLastWriterWins
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the resize's snapshot drain merges last-writer-wins, losing a contribution only the source held
+PERTURBS: Copy
+
+--- FIND
+    /\ Import
+    /\ pend' = [pend EXCEPT !["dst"] = @ \/ (pend["src"] /\ sg = "prepared")]
+--- REPLACE
+\* MUTATION: a resize's snapshot drain merges last-writer-wins.
+    /\ IF kind = "resize"
+       THEN IF stamp["src"] > stamp["dst"]
+            THEN /\ row' = [row EXCEPT !["dst"] = row["src"]]
+                 /\ stamp' = [stamp EXCEPT !["dst"] = stamp["src"]]
+                 /\ clk' = [clk EXCEPT !["dst"] = Max(@, stamp["src"])]
+                 /\ migd' = migd
+            ELSE UNCHANGED <<row, stamp, clk, migd>>
+       ELSE Import
+    /\ pend' = [pend EXCEPT !["dst"] = @ \/ (pend["src"] /\ sg = "prepared")]
+--- END

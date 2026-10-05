@@ -1,5 +1,5 @@
 # Pairs with NoKeyLost. Reproduces the resize path after #4566 (#4522's first
-# fix), which #4522's second fix closes: the resize mirror forwards a prepare
+# fix) and before its resize fix (#4629): the resize mirror forwards a prepare
 # as a plain write that R re-mints at its own clock, so a saga bound to T that
 # prepares after the flip leaves buckets on R stamped below P and R's leaf
 # clocks never see P. Once R splits, a later write on the split destination is

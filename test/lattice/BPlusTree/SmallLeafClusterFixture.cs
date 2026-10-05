@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
@@ -71,6 +72,10 @@ public sealed class SmallLeafClusterFixture
                 o.LeafRetirementRetryDeadline = ShortRetirementDeadline;
             });
             siloBuilder.UseInMemoryReminderService();
+
+            // Lets a test stage durable shard state directly (issue #4654).
+            siloBuilder.Services.AddSingleton<Orleans.Lattice.Tests.Wal.SiloServiceProviderCaptureForWalTests>();
+            siloBuilder.Services.AddHostedService(sp => sp.GetRequiredService<Orleans.Lattice.Tests.Wal.SiloServiceProviderCaptureForWalTests>());
         }
     }
 }
