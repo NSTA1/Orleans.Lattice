@@ -328,6 +328,59 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task A_witness_over_its_budget_evicts_the_oldest_sagas_and_their_keys_keep_the_gate()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        grain.TerminalWitnessBudgetOverride = 200;
+        var sagas = Enumerable.Range(0, 6).Select(_ => Guid.NewGuid()).ToArray();
+        for (var i = 0; i < sagas.Length; i++)
+        {
+            await grain.ApplyTxTerminalAsync(sagas[i], committed: true, new Dictionary<string, byte[]> { [$"key-{i}"] = [1] });
+            await Task.Delay(2);
+        }
+
+        grain.MaterialiseTerminalWitnessForPersist();
+
+        var persistedBytes = state.State.AppliedTerminalWitnesses!.Sum(w => 32 + w.Keys.Sum(k => 8 + 2L * k.Length));
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.TerminalWitnessEvictions, Is.GreaterThan(0));
+            Assert.That(persistedBytes, Is.LessThanOrEqualTo(200), "every state write stays within the budget");
+            Assert.That(grain.IsTerminalWitnessed(sagas[^1], "key-5"), Is.True, "the newest witness is kept");
+            Assert.That(grain.IsTerminalWitnessed(sagas[0], "key-0"), Is.False, "the oldest witness is evicted");
+        });
+
+        // Fail closed: the evicted key is gated again, as before the witness existed.
+        SeedMigratedRowAt(grain, "key-0", [1], new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 });
+        await grain.MarkSagaShadowAsync(sagas[0], ["key-0"]);
+        Assert.That(async () => await ReadUnderAsync(grain, "key-0", sagas[0], TxStatus.Committed),
+            Throws.InstanceOf<StaleShardRoutingException>());
+    }
+
+    [Test]
+    public async Task A_witness_over_its_budget_is_pruned_without_waiting_for_the_interval()
+    {
+        var forgotten = Guid.NewGuid();
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+            .Returns(Task.FromResult(new Dictionary<Guid, TxStatus> { [forgotten] = TxStatus.InFlight }));
+        var grain = CreateGrain(state, configureGrainFactory: f =>
+            f.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry));
+        grain.TerminalWitnessPruneIntervalOverride = TimeSpan.FromHours(1);
+        grain.TerminalWitnessBudgetOverride = 40;
+
+        await grain.ApplyTxTerminalAsync(forgotten, committed: true, new Dictionary<string, byte[]> { ["a-long-key"] = [1] });
+        await grain.PruneTerminalWitnessAsync();
+
+        Assert.That(grain.IsTerminalWitnessed(forgotten, "a-long-key"), Is.False,
+            "an over-budget witness asks the registry at once, even about a witness younger than the interval");
+        Assert.That(grain.TerminalWitnessEvictions, Is.Zero, "the prune freed the space, so nothing was evicted");
+    }
+
+    [Test]
     public async Task The_witness_is_pruned_only_once_the_registry_reads_its_saga_as_absent()
     {
         var forgotten = Guid.NewGuid();

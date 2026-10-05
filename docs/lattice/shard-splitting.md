@@ -475,7 +475,12 @@ Automatic over-split healing, which folds shards back together once a tree's loa
     by replay after that checkpoint, carried to a split sibling for the
     keys that move, and dropped once the registry no longer reports the
     saga. A leaf does not install, carry across its own split, or gate on
-    a marker for a key that record names.
+    a marker for a key that record names. The record is held to a fixed
+    byte budget per leaf: past it, the leaf asks the registry about every
+    entry at once, and only if that cannot free enough does it evict the
+    oldest sagas' entries, with a warning. An evicted key falls back to the
+    gate above, so a late marker for it makes reads decline until the
+    registry retires the saga - never serve a torn batch.
   - The marker also carries the saga's original prepare stamp whenever
     the prepare is a marked last-writer-wins write, and the gate serves a
     migrated row stamped at or above it: such a row is the saga's own
