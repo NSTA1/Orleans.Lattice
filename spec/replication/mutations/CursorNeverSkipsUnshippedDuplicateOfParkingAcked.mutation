@@ -1,4 +1,4 @@
-# Pairs with CursorNeverSkipsUnshipped. Reproduces current production. A
+# Pairs with CursorNeverSkipsUnshipped. Reproduces production before #4477 (#4465). A
 # duplicate of an entry whose first delivery is still between its dependency
 # check and its buffer insert finds the identity reservation that delivery
 # took, is classified as a duplicate and acknowledged, and the ack moves the

@@ -104,18 +104,22 @@ public sealed class ShadowMarkerLeafSplitIntegrationTests
         var migratedValue = Bytes("post-saga");
 
         // 1. A committed saga whose prepare and terminal land on the leaf that
-        //    will hold the migrated key: the leaf records the terminal.
+        //    will hold the migrated key: the leaf records the terminal, which
+        //    also backstops the saga's committed value for the migrated key.
         var txid = Guid.NewGuid();
         await PrepareAsync(shard, txid, preparedKey, Bytes("prepared"));
         await TxRegistryRouting.GetRegistry(_cluster.Client, treeId, txid).MarkCommittedAsync(txid);
-        await shard.AppendTxTerminalAsync(txid, committed: true);
+        await shard.AppendTxTerminalAsync(
+            txid, committed: true, new Dictionary<string, byte[]> { [migratedKey] = migratedValue });
 
-        // 2. A split drain migrates the saga's committed value for the migrated
-        //    key onto the same leaf, as a migrated row.
+        // 2. The split source's own post-saga row for the migrated key arrives
+        //    as a migration import, above the backstop, so the row is migrated.
         await shard.MergeManyAsync(
             new Dictionary<string, LwwValue<byte[]>>
             {
-                [migratedKey] = LwwValue<byte[]>.Create(migratedValue, HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+                [migratedKey] = LwwValue<byte[]>.Create(
+                    migratedValue,
+                    new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddSeconds(1).Ticks, Counter = 0 }),
             },
             isCrossShardMigration: true);
 

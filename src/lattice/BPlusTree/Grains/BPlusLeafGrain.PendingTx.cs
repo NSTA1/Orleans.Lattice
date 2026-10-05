@@ -284,9 +284,9 @@ internal sealed partial class BPlusLeafGrain
             return false;
 
         TxStatus status;
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
         try
         {
-            var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
             status = await registry.GetStatusAsync(txid);
             if (status == TxStatus.Indeterminate)
                 status = await registry.GetRecordedStatusAsync(txid);
@@ -308,7 +308,65 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // The terminal may have landed while the registry call was in flight.
-        return status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid);
+        if (status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid))
+            return true;
+
+        return await IsForwardedPrepareForForgottenTransactionAsync(registry, txid, treeId);
+    }
+
+    /// <summary>
+    /// Whether the saga of a forwarded prepare whose registry reports it undecided
+    /// was in fact forgotten and its decision pruned (issue #4632). A forward
+    /// abandoned at its deadline can still be delivered after its saga committed,
+    /// completed and was forgotten, onto a leaf that no longer remembers the
+    /// terminal; bucketed, nothing would ever settle it, every later split or
+    /// resize would carry it, and it would pin the leaf's WAL prefix.
+    /// <para>
+    /// The registry's participant row tells the two apart for a saga this cluster
+    /// authored. Its coordinator holds the row in the registry the forwarded
+    /// marker names - its own tree - from before its first prepare dispatch until
+    /// <see cref="ITxRegistryGrain.ForgetAsync"/>, which runs after the decision,
+    /// and a forwarded registration only joins an existing row
+    /// (<see cref="ITxRegistryGrain.RegisterParticipantAsync"/>). Every forward is
+    /// sent after its source prepare, so an undecided saga with no row was
+    /// forgotten. The status is read first: a forget between the two reads leaves
+    /// the saga decided either way.
+    /// </para>
+    /// <para>
+    /// A replicated prepare (one carrying its author's
+    /// <see cref="LatticeOriginContext"/>) belongs to a saga this cluster never
+    /// forgets and whose row may be held by another registry, so it is bucketed
+    /// as before. Fails open on a registry fault.
+    /// </para>
+    /// </summary>
+    private async ValueTask<bool> IsForwardedPrepareForForgottenTransactionAsync(
+        ITxRegistryGrain registry, Guid txid, string treeId)
+    {
+        if (LatticeOriginContext.Current is not null)
+            return false;
+
+        IReadOnlyList<int> participants;
+        try
+        {
+            participants = await registry.GetParticipantsAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Could not read the participants of saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
+                    + "prepare; bucketing it.",
+                    txid,
+                    treeId);
+            }
+
+            return false;
+        }
+
+        return participants.Count == 0 || IsRecentlyTerminal(txid);
     }
 
     /// <summary>
@@ -1013,6 +1071,16 @@ internal sealed partial class BPlusLeafGrain
         }
 
         RemovePendingTxOffsetsForTransaction(transactionId);
+        // Durable, per-key record of what this terminal settled here without a
+        // marked prepare stamp (issue #4545). A marked last-writer-wins key is
+        // stored at its stamp P, so any stamped marker for it is released by the
+        // read gate's self-check; every other key needs the witness. Recorded
+        // before the classification is forgotten. Keys re-routed to the leaf
+        // that declares them were removed from the bucket above.
+        RecordTerminalWitness(
+            transactionId,
+            bucket.Keys,
+            key => preserveTimestamps || !IsMarkedLwwPrepare(transactionId, key, deltaBucket));
         ForgetPrepareStampClassification(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
         RecordTerminalLanded(transactionId);
@@ -1134,7 +1202,8 @@ internal sealed partial class BPlusLeafGrain
         if (transactionId == Guid.Empty)
             return;
 
-        var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId);
+        Dictionary<string, LwwValue<byte[]>>? abortedBucket = null;
+        var hadPending = _pendingTx is not null && _pendingTx.Remove(transactionId, out abortedBucket);
         ForgetPrepareStampClassification(transactionId);
         // Drop the parallel CRDT-delta side-map entry for this saga so an
         // aborted prepared CRDT write leaks no folded contribution; the
@@ -1144,6 +1213,10 @@ internal sealed partial class BPlusLeafGrain
         _pendingTxBatches?.Remove(transactionId);
         RemovePendingTxOffsetsForTransaction(transactionId);
         (_recentlyTerminal ??= new HashSet<Guid>()).Add(transactionId);
+        // The discarded keys keep (abort) or already carry (a late orphan behind a
+        // landed terminal) the value the decision implies (issue #4545).
+        if (abortedBucket is not null)
+            RecordTerminalWitness(transactionId, abortedBucket.Keys);
 
 #if LATTICE_DIAG
         // DIAG: abort entry.
@@ -2875,7 +2948,14 @@ internal sealed partial class BPlusLeafGrain
                 _backstoppedTerminals[transactionId] = perTxBackstopped;
             }
             foreach (var kvp in missingKeys)
+            {
                 perTxBackstopped.Add(kvp.Key);
+                // A backstop that carried the prepare's stamp P installed the key
+                // at P, which the read gate's self-check recognises; only a
+                // backstop without one needs the witness (issue #4545).
+                if (missingStamps is null || !missingStamps.ContainsKey(kvp.Key))
+                    RecordTerminalWitness(transactionId, kvp.Key);
+            }
         }
 
         // Mark the saga's pending-flip dedup. _backstoppedTerminals is
@@ -2957,20 +3037,21 @@ internal sealed partial class BPlusLeafGrain
         if (keys.Count == 0)
             return;
 
-        // A marker installed after this leaf already applied the saga's terminal
+        // A marker for a key this leaf's terminal for the saga already settled
         // guards nothing here, and it would no longer be cleared: the terminal
         // that clears it has come and gone. Left in place it is copied by the
         // next leaf split onto a sibling that never sees the terminal, where it
-        // gates the key until the decision ages out (issue #4545).
-        if (_recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId))
-            return;
-
+        // gates the key until the decision ages out (issue #4545). The witness
+        // is per key and durable, so this holds across a reactivation and on a
+        // sibling that inherited it; a key of the same saga whose committed
+        // value has not reached this leaf yet is still marked.
         var carriesStamps = LatticeOriginalPrepareStampContext.HasStamps;
-        _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var key in keys)
         {
-            if (string.IsNullOrEmpty(key))
+            if (string.IsNullOrEmpty(key) || IsTerminalWitnessed(transactionId, key))
                 continue;
+            _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
             if (!_shadowedSagas.TryGetValue(key, out var sagas))
             {
                 sagas = new HashSet<Guid>();
@@ -3130,17 +3211,20 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async ValueTask<bool> IsShadowedReadSafeAsync(string key, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
+        await EnsureTerminalWitnessHydratedAsync();
         foreach (var txid in sagas)
         {
             var status = await ResolvePendingStatusAsync(txid);
             // Per-saga safety is the shared, dependency-free
             // ShadowedMigrationReadGuard rule (see #1591): a committed saga is safe
-            // only once its terminal has landed here (_recentlyTerminal is the
-            // single source of truth for that), or once the row is known to
-            // incorporate its marked prepare (#4545); otherwise the migrated
-            // pre-saga value would tear atomic visibility against a backstopped
-            // sibling.
-            var terminalApplied = _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
+            // only once its terminal has settled this key here (the durable,
+            // per-key witness, issue #4545), or once the row is known to
+            // incorporate its marked prepare; otherwise the migrated pre-saga
+            // value would tear atomic visibility against a backstopped sibling.
+            // Per key, not per saga: the saga's terminal may have reached this
+            // leaf for another key while this key's committed value is still on
+            // its way.
+            var terminalApplied = IsTerminalWitnessed(txid, key);
             var incorporated = ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare(
                 rowStamp, ShadowMarkerStamp(key, txid));
             if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied, incorporated))

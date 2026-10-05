@@ -183,4 +183,49 @@ public partial class ShardRootGrainSplitShadowForwardTests
         Assert.That(capture.CarriedStamp, Is.False,
             "a delta folds at its terminal's stamp, so a row at or above P does not show the delta was applied");
     }
+
+    /// <summary>
+    /// Issue #4545: when the local prepare this forward follows is not on the
+    /// leaf the key routes to - a leaf split moved the key after the prepare
+    /// landed, leaving the bucket on the donor - its marking is unknown. Sending
+    /// the prepare and its marker unstamped could pair an unstamped marker with
+    /// a marked bucket the split sweep delivers for the same key, which the
+    /// destination could never release after the terminal. The forward fails
+    /// with stale routing instead, so the caller prepares again on the right
+    /// leaf, and nothing reaches the destination.
+    /// </summary>
+    [Test]
+    public async Task A_prepared_shadow_forward_whose_local_prepare_cannot_be_found_fails_and_sends_nothing(
+        [Values] bool delete)
+    {
+        var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
+        h.Leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(new List<PendingMutationSnapshot>());
+        var txid = Guid.NewGuid();
+
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                Assert.That(
+                    async () =>
+                    {
+                        if (delete)
+                            await h.Grain.DeleteAsync("k");
+                        else
+                            await h.Grain.SetAsync("k", [1, 2]);
+                    },
+                    Throws.InstanceOf<StaleShardRoutingException>());
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        await h.ShadowTarget.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.ShadowTarget.DidNotReceive().DeleteAsync(Arg.Any<string>());
+        await h.ShadowTarget.DidNotReceive().MarkSagaShadowAsync(Arg.Any<Guid>(), Arg.Any<IReadOnlyList<string>>());
+    }
 }

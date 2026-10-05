@@ -280,15 +280,20 @@ release the workflows pin (see [CI decision](../README.md#ci-decision)).
 ## The cross-cluster module
 
 `AtomicCommitCrossCluster` (issue #4436, epic #4430) instances `AtomicCommit`
-for the origin and drives its saga `t1`, over `k1` and `k2`, unchanged. What it
+for the origin and drives its saga `t1`, over `k1` and `k2`, through
+`AtomicCommit`'s prepare, decide, broadcast and forget steps; the orphan and
+registry-mask steps never run for it (an abstraction gap of the note). What it
 adds starts at the origin's WAL: every prepare and every per-source-shard
 terminal becomes a replication record, delivered to a receiver by a transport
 that may reorder, lose a delivery (the record is shipped again) and lose an ack
-(the record is delivered again). The receiver stages prepares, tallies terminals
+(the record is delivered again), but is assumed never to lose a record outright,
+which production violates (#4591, #4534; #4579 until #4595). The receiver stages prepares, tallies terminals
 per source shard (including the legacy path for a terminal with no count),
 hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
-through a snapshot bootstrap. Each behaviour fixes one shape: a single-tree saga
+through a snapshot bootstrap, after which the origin re-ships whatever its WAL
+retains from before the cut and the receiver settles it against the exported
+decisions. Each behaviour fixes one shape: a single-tree saga
 over two source shards, or a cross-tree saga over two trees.
 
 Its properties are all claims about the receiver: `RAllOrNothing`,
@@ -297,18 +302,23 @@ invariants, and `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
 `RNoStrandedPrepare` as temporal properties under a fair transport. The base
 holds with deadlock checking on; the state graph's depth is 18.
 
-The module models the protocol's intended design, and three places where
-production departs from it were filed as defects when the module was written,
-each kept as a standing mutation in
-[`RefinementCrossCluster.md`](RefinementCrossCluster.md): a terminal that
-overtakes its shard's prepare (#4480, now fixed by the shipper's terminal hold,
-whose detectors the note cites), a bootstrap over a stranded origin prepare
-(#4481), and pre-cut saga records re-shipped after a bootstrap (#4482); the
-last two remain gap rows. A fourth, filed later, is the residual of #4482's
-intended txid dedupe: a re-shipped prepare whose saga's decision the origin
-has already purged (#4508).
-The snapshot read paths' handling of an undiallable delegation (#4448) is
-reproduced on the receiver the same way.
+The module models the protocol's intended design. Every place where
+production departed from it was filed as a defect and is now fixed, and each
+fix is kept as a regression-check mutation whose detectors
+[`RefinementCrossCluster.md`](RefinementCrossCluster.md) cites: a terminal
+that overtakes its shard's prepare (#4480, fixed by the shipper's terminal
+hold), the snapshot read paths' handling of an undiallable delegation (#4448,
+fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
+#4501), pre-cut saga records re-shipped after a bootstrap (#4482, fixed by
+#4510's settle), and a decision purged while its saga's prepare could still be
+re-shipped (#4508, fixed by #4553). The base models the fixed design. What
+remains outside it is a transport that loses a record, which production still
+does where the receiver acknowledges a saga record it dead-lettered (#4591) and
+where the WAL TTL trims an entry the shipper has not read (#4534; withheld
+until the peer re-seeds since #4577, safe but not live);
+`RAllOrNothingPrepareAckedUnapplied` reproduces it and the note records it as an
+abstraction gap. A prepare the shipper dead-letters poisons its saga instead
+(#4494, fixed by #4570), which is safe but not live.
 
 The extracted cores it maps to are `TerminalArrivalTally` (now including the
 ungated test) and `CrossTreeReceiverBarrier`, both executed by the production
@@ -327,4 +337,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 22 | 20 | 8,727 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 23 | 20 | 14,843 |

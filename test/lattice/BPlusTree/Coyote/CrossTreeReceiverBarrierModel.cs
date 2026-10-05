@@ -28,8 +28,8 @@ internal enum CrossTreeBarrierGuard
 
     /// <summary>
     /// A delegation whose barrier cannot be dialled reads InFlight rather than
-    /// Indeterminate, as the snapshot read paths answer it (issue #4448;
-    /// <c>RAllOrNothingSnapshotReadsUnresolvableAsInFlight</c>).
+    /// Indeterminate, as the snapshot read paths answered it before #4461 (issue
+    /// #4448; <c>RAllOrNothingSnapshotReadsUnresolvableAsInFlight</c>).
     /// </summary>
     UndialledDelegationReadsInFlight,
 }
@@ -129,6 +129,11 @@ internal sealed class CrossTreeReceiverBarrierModel(
             for (var t = 0; t < _trees; t++)
             {
                 var tree = t;
+
+                // Scope pin: a tree's prepare is always offered before its terminal,
+                // each exactly once - no duplicate and no redelivery. Per-tree
+                // ordering, duplicates and redelivery are the tally model's scope
+                // and the shipper's terminal hold's; this model's is the hand-off.
                 if (prepareOutstanding[tree])
                 {
                     steps.Add(() =>
@@ -182,6 +187,9 @@ internal sealed class CrossTreeReceiverBarrierModel(
                             OperationId = "op",
                             TreeId = treeIds[tree],
                             TransactionId = txid,
+                            // Scope pin: every tree carries the same outcome, so
+                            // CommitsAll over a mixed arrival set is not explored
+                            // here; CrossTreeReceiverBarrierTests pins it.
                             Committed = committed,
                             WaitSet = waitSet,
                             ObservedSourceShards = [0],
