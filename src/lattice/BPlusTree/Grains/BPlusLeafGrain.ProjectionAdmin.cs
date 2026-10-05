@@ -152,6 +152,12 @@ internal sealed partial class BPlusLeafGrain
         // deactivates. A fresh activation holds no markers, so dropping them
         // is what actually makes the rebuild indistinguishable from one, which
         // is the property the comment above claims.
+        //
+        // The applied-terminal witness (issue #4545) is NOT dropped: it is a
+        // durable record of terminals this leaf settled, not activation memory,
+        // and the replay from the reset checkpoint only re-adds what it already
+        // holds. Keeping it is what lets a marker for a settled key be told
+        // apart from a live one after the rebuild, as after any reactivation.
         _shadowedSagas = null;
         _shadowMarkerStamps = null;
 

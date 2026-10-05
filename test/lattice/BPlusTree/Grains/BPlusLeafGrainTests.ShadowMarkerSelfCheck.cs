@@ -152,10 +152,10 @@ public partial class BPlusLeafGrainTests
         Assert.That(ShadowMarksOn(sibling), Is.Empty, "the terminal cleared the marker, so a split has nothing to carry");
     }
 
-    // ---- Rule 1: no marker installed after its terminal
+    // ---- Rule 1: no marker for a key the saga's terminal already settled here
 
     [Test]
-    public async Task A_marker_installed_after_its_terminal_is_not_installed_and_a_split_does_not_carry_it()
+    public async Task A_marker_installed_after_its_terminal_settled_the_key_is_not_installed_and_a_split_does_not_carry_it()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var sibling = CreateSplitSiblingStub();
@@ -164,15 +164,387 @@ public partial class BPlusLeafGrainTests
         await grain.SetAsync("z", Encoding.UTF8.GetBytes("2"));
         var txid = Guid.NewGuid();
 
-        await grain.ApplyTxTerminalAsync(txid, committed: true);
+        await grain.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
         await grain.MarkSagaShadowAsync(txid, ["z"]);
 
         ArmInterruptedSplit(state, sibling, splitKey: "m");
         await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
 
         Assert.That(ShadowMarksOn(sibling), Is.Empty,
-            "a marker the leaf received after the saga's terminal guards nothing; a split must not carry it "
-            + "onto a sibling the terminal will never reach");
+            "a marker the leaf received after the saga's terminal settled the key guards nothing; a split must not "
+            + "carry it onto a sibling the terminal will never reach");
+    }
+
+    /// <summary>
+    /// The terminal for a saga reaches this leaf for one key while its committed
+    /// value for another key is still on its way (a second delivery, forwarded
+    /// from another shard). A marker for that other key must still be installed,
+    /// gate its pre-saga row, and be carried across a split.
+    /// </summary>
+    [Test]
+    public async Task A_marker_for_a_key_the_saga_terminal_did_not_settle_here_is_installed_gates_and_is_carried()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var sibling = CreateSplitSiblingStub();
+        var grain = CreateGrain(state, siblingStub: sibling);
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("1"));
+        var txid = Guid.NewGuid();
+
+        await grain.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
+        SeedMigratedRowAt(grain, "y", [0], new HybridLogicalClock { WallClockTicks = 4_000_000, Counter = 0 });
+        await grain.MarkSagaShadowAsync(txid, ["y", "z"]);
+
+        Assert.That(async () => await ReadUnderAsync(grain, "y", txid, TxStatus.Committed),
+            Throws.InstanceOf<StaleShardRoutingException>(),
+            "y's committed value has not reached this leaf; serving its pre-saga row tears the batch against z");
+
+        ArmInterruptedSplit(state, sibling, splitKey: "m");
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        var marks = ShadowMarksOn(sibling);
+        Assert.That(marks, Has.Count.EqualTo(1));
+        Assert.That(marks[0].Keys, Is.EquivalentTo(new[] { "y" }), "only the key the terminal did not settle is carried");
+    }
+
+    // ---- The durable witness, in its sidecar
+
+    private static (BPlusLeafGrain Grain, FakeLeafTerminalWitnessGrain Sidecar) CreateGuidKeyedGrain(
+        FakePersistentState<LeafNodeState> state,
+        FakeLeafTerminalWitnessGrain? sidecar = null,
+        ITxRegistryGrain? registry = null)
+    {
+        sidecar ??= new FakeLeafTerminalWitnessGrain();
+        var grain = CreateGrain(
+            state,
+            replicaId: Guid.NewGuid().ToString("N"),
+            configureGrainFactory: f =>
+            {
+                f.GetGrain<ILeafTerminalWitnessGrain>(Arg.Any<Guid>(), Arg.Any<string?>()).Returns(sidecar);
+                if (registry is not null)
+                    f.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry);
+            });
+        return (grain, sidecar);
+    }
+
+    /// <summary>
+    /// The witness is written to the leaf's sidecar row before the next state
+    /// write, so a fresh activation - which has no memory of the terminal and
+    /// replays nothing - still refuses a delayed marker for a key the terminal
+    /// settled, and serves the key.
+    /// </summary>
+    [Test]
+    public async Task The_applied_terminal_witness_survives_a_reactivation_through_its_sidecar()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var (first, sidecar) = CreateGuidKeyedGrain(state);
+        var txid = Guid.NewGuid();
+        await first.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
+        Assert.That(first.HasPendingTerminalWitness, Is.True);
+
+        await first.FlushTerminalWitnessAsync();
+
+        Assert.That(sidecar.Holds(txid, "z"), Is.True);
+        Assert.That(first.HasPendingTerminalWitness, Is.False);
+
+        var (reactivated, _) = CreateGuidKeyedGrain(state, sidecar);
+        SeedMigratedRowAt(reactivated, "z", [9], new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 });
+        await reactivated.MarkSagaShadowAsync(txid, ["z"]);
+        Assert.That(reactivated.IsTerminalWitnessed(txid, "z"), Is.True);
+        Assert.That(reactivated.IsTerminalWitnessed(txid, "y"), Is.False);
+        Assert.That(await ReadUnderAsync(reactivated, "z", txid, TxStatus.Committed), Is.EqualTo(new byte[] { 9 }));
+    }
+
+    /// <summary>
+    /// The witness never rides the leaf's own state row, and a failed sidecar
+    /// write keeps every change pending for the next attempt: nothing is lost.
+    /// </summary>
+    [Test]
+    public async Task A_failed_sidecar_write_keeps_the_witness_pending_and_never_touches_the_leaf_state()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var (grain, sidecar) = CreateGuidKeyedGrain(state);
+        var txid = Guid.NewGuid();
+        await grain.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
+
+        sidecar.FailWrites = true;
+        Assert.That(async () => await grain.FlushTerminalWitnessAsync(), Throws.InstanceOf<TimeoutException>());
+        Assert.That(grain.HasPendingTerminalWitness, Is.True, "the failed write is retried, not dropped");
+
+        sidecar.FailWrites = false;
+        await grain.FlushTerminalWitnessAsync();
+        Assert.That(sidecar.Holds(txid, "z"), Is.True);
+    }
+
+    [Test]
+    public async Task A_drained_unmarked_bucket_and_a_discarded_abort_are_witnessed_per_key()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        var committed = Guid.NewGuid();
+        var aborted = Guid.NewGuid();
+        await PreparedSetForSplitAsync(grain, committed, "a", [1]);
+        await PreparedSetForSplitAsync(grain, aborted, "b", [2]);
+
+        await grain.ApplyTxTerminalAsync(committed, committed: true);
+        await grain.ApplyTxTerminalAsync(aborted, committed: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.IsTerminalWitnessed(committed, "a"), Is.True);
+            Assert.That(grain.IsTerminalWitnessed(committed, "b"), Is.False);
+            Assert.That(grain.IsTerminalWitnessed(aborted, "b"), Is.True);
+        });
+    }
+
+    /// <summary>
+    /// A key the terminal settled at the prepare's marked stamp P holds a row at
+    /// or above P, which the read gate's self-check recognises, so it needs no
+    /// witness: the witness is scoped to keys settled without a stamp.
+    /// </summary>
+    [Test]
+    public async Task A_key_settled_at_its_marked_prepare_stamp_is_not_witnessed()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        state.State.ShardIndex = 0;
+        var grain = CreateGrain(state);
+        var txid = Guid.NewGuid();
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                LatticeOriginalPrepareStampContext.StampPreparedRoute("test-tree/0");
+                try
+                {
+                    await grain.SetAsync("a", [1]);
+                }
+                finally
+                {
+                    Orleans.Runtime.RequestContext.Remove(LatticeEventConstants.PreparedRouteRequestContextKey);
+                }
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        using (LatticeOriginalPrepareStampContext.With(new Dictionary<string, HybridLogicalClock> { ["c"] = MarkedPrepare }))
+        {
+            await grain.ApplyTxTerminalAsync(
+                txid, committed: true, new Dictionary<string, byte[]> { ["c"] = [3], ["d"] = [4] });
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.IsTerminalWitnessed(txid, "a"), Is.False, "a marked bucket drained at its stamp");
+            Assert.That(grain.IsTerminalWitnessed(txid, "c"), Is.False, "a backstop that carried the stamp");
+            Assert.That(grain.IsTerminalWitnessed(txid, "d"), Is.True, "a backstop without a stamp");
+        });
+    }
+
+    [Test]
+    public void A_replayed_terminal_backstop_is_witnessed_and_an_ordinary_write_is_not()
+    {
+        var grain = CreateGrain(new FakePersistentState<LeafNodeState>());
+        var txid = Guid.NewGuid();
+        var stamp = new HybridLogicalClock { WallClockTicks = 7_000_000, Counter = 0 };
+
+        ((ILeafProjection)grain).Apply(new LatticeMutation
+        {
+            Kind = MutationKind.Set, Key = "z", Value = [1], Timestamp = stamp, TransactionId = txid, IsBackstop = true,
+        });
+        ((ILeafProjection)grain).Apply(new LatticeMutation
+        {
+            Kind = MutationKind.Set, Key = "y", Value = [2], Timestamp = stamp, TransactionId = txid,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(grain.IsTerminalWitnessed(txid, "z"), Is.True, "a replayed backstop settled its key");
+            Assert.That(grain.IsTerminalWitnessed(txid, "y"), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_leaf_split_carries_the_witnesses_of_the_moved_keys_to_the_sibling()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var sibling = CreateSplitSiblingStub();
+        SiblingInitialization? init = null;
+        sibling.When(s => s.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()))
+            .Do(c => init = c.Arg<SiblingInitialization>());
+        var grain = CreateGrain(state, siblingStub: sibling);
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("1"));
+        var txid = Guid.NewGuid();
+        await grain.ApplyTxTerminalAsync(
+            txid, committed: true, new Dictionary<string, byte[]> { ["c"] = [1], ["z"] = [2] });
+
+        ArmInterruptedSplit(state, sibling, splitKey: "m");
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        Assert.That(init, Is.Not.Null);
+        Assert.That(init!.Value.TerminalWitnesses, Has.Length.EqualTo(1));
+        Assert.That(init.Value.TerminalWitnesses![0].TransactionId, Is.EqualTo(txid));
+        Assert.That(init.Value.TerminalWitnesses![0].Keys, Is.EquivalentTo(new[] { "z" }),
+            "only the witness for a key that moves rides to the sibling");
+    }
+
+    [Test]
+    public async Task A_split_sibling_adopts_its_donors_witnesses_durably_in_its_birth_write()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var (sibling, sidecar) = CreateGuidKeyedGrain(state);
+        var txid = Guid.NewGuid();
+
+        await sibling.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = "test-tree",
+            LowKeyInclusive = "m",
+            TerminalWitnesses = [new AppliedTerminalWitness(txid, ["z"], DateTime.UtcNow.Ticks)],
+        });
+
+        Assert.That(sidecar.Holds(txid, "z"), Is.True, "the adoption is durable before the sibling receives a row");
+
+        await sibling.MarkSagaShadowAsync(txid, ["z"]);
+        SeedMigratedRowAt(sibling, "z", [2], new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 });
+        Assert.That(await ReadUnderAsync(sibling, "z", txid, TxStatus.Committed), Is.EqualTo(new byte[] { 2 }),
+            "a delayed marker routed to the sibling for a key the donor's terminal settled does not gate it");
+    }
+
+    /// <summary>
+    /// The window the shard-ownership model raised: the leaf mutation surface is
+    /// [AlwaysInterleave], so a terminal for a moved key can land on the donor
+    /// after the sibling adopted the birth witnesses but while the donor still
+    /// declares the moved range. The donor settles the key and records the
+    /// witness locally. The witness must still reach the sibling, durably,
+    /// before the donor's narrowed span can persist - otherwise a reactivated
+    /// sibling installs a late unstamped marker and gates the key.
+    /// </summary>
+    [Test]
+    public async Task A_terminal_landing_on_the_donor_during_the_split_transfer_still_reaches_the_siblings_witness()
+    {
+        var siblingState = new FakePersistentState<LeafNodeState>();
+        var (realSibling, siblingSidecar) = CreateGuidKeyedGrain(siblingState);
+        var sibling = CreateSplitSiblingStub();
+        sibling.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
+            .Returns(c => realSibling.InitializeSiblingAsync(c.Arg<SiblingInitialization>()));
+
+        var donorState = new FakePersistentState<LeafNodeState>();
+        var donor = CreateGrain(donorState, siblingStub: sibling);
+        await donor.SetAsync("m", Encoding.UTF8.GetBytes("1"));
+        await donor.SetAsync("z", Encoding.UTF8.GetBytes("2"));
+        var txid = Guid.NewGuid();
+
+        var interleaved = false;
+        async Task<SplitResult?> InterleaveTerminalAsync()
+        {
+            if (!interleaved)
+            {
+                interleaved = true;
+                await donor.ApplyTxTerminalAsync(txid, committed: true, new Dictionary<string, byte[]> { ["z"] = [9] });
+            }
+
+            return null;
+        }
+
+        sibling.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()).Returns(_ => InterleaveTerminalAsync());
+
+        ArmInterruptedSplit(donorState, sibling, splitKey: "m");
+        await donor.SetAsync("b", Encoding.UTF8.GetBytes("3"));
+
+        Assert.That(interleaved, Is.True, "precondition: the terminal interleaved with the transfer");
+        Assert.That(donor.IsTerminalWitnessed(txid, "z"), Is.True, "precondition: the donor settled the moved key");
+        Assert.That(siblingSidecar.Holds(txid, "z"), Is.True,
+            "the witness for a key the donor settled during the transfer reaches the sibling's sidecar");
+
+        var (reactivated, _) = CreateGuidKeyedGrain(siblingState, siblingSidecar);
+        SeedMigratedRowAt(reactivated, "z", [9], new HybridLogicalClock { WallClockTicks = 9_000_000, Counter = 0 });
+        await reactivated.MarkSagaShadowAsync(txid, ["z"]);
+        Assert.That(await ReadUnderAsync(reactivated, "z", txid, TxStatus.Committed), Is.EqualTo(new byte[] { 9 }),
+            "a late unstamped marker on the reactivated sibling must not gate the key");
+    }
+
+    [Test]
+    public async Task The_witness_is_pruned_only_once_the_registry_reads_its_saga_as_absent()
+    {
+        var forgotten = Guid.NewGuid();
+        var retained = Guid.NewGuid();
+        var recent = Guid.NewGuid();
+        var old = DateTime.UtcNow.AddHours(-1).Ticks;
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        var sidecar = new FakeLeafTerminalWitnessGrain();
+        await sidecar.ApplyAsync(
+        [
+            new AppliedTerminalWitness(forgotten, ["a"], old),
+            new AppliedTerminalWitness(retained, ["b"], old),
+            new AppliedTerminalWitness(recent, ["c"], DateTime.UtcNow.Ticks),
+        ], null);
+        IReadOnlyList<Guid>? asked = null;
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>()).Returns(c =>
+        {
+            asked = c.Arg<IReadOnlyList<Guid>>().ToList();
+            return Task.FromResult(new Dictionary<Guid, TxStatus>
+            {
+                [forgotten] = TxStatus.InFlight,
+                [retained] = TxStatus.Indeterminate,
+            });
+        });
+        var (grain, _) = CreateGuidKeyedGrain(state, sidecar, registry);
+        grain.TerminalWitnessPruneIntervalOverride = TimeSpan.FromMinutes(1);
+        await grain.EnsureTerminalWitnessHydratedAsync();
+
+        await grain.PruneTerminalWitnessAsync();
+        await grain.FlushTerminalWitnessAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asked, Is.EquivalentTo(new[] { forgotten, retained }), "a witness younger than the interval is not asked about");
+            Assert.That(grain.IsTerminalWitnessed(forgotten, "a"), Is.False);
+            Assert.That(grain.IsTerminalWitnessed(retained, "b"), Is.True, "an undetermined decision keeps the witness");
+            Assert.That(grain.IsTerminalWitnessed(recent, "c"), Is.True);
+            Assert.That(sidecar.Witnesses!.Select(w => w.TransactionId), Is.EquivalentTo(new[] { retained, recent }),
+                "the prune reaches the sidecar");
+        });
+    }
+
+    [Test]
+    public async Task A_registry_fault_keeps_every_witness()
+    {
+        var txid = Guid.NewGuid();
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        var sidecar = new FakeLeafTerminalWitnessGrain();
+        await sidecar.ApplyAsync([new AppliedTerminalWitness(txid, ["a"], DateTime.UtcNow.AddHours(-1).Ticks)], null);
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.GetStatusManyAsync(Arg.Any<IReadOnlyList<Guid>>())
+            .Returns(Task.FromException<Dictionary<Guid, TxStatus>>(new TimeoutException("registry down")));
+        var (grain, _) = CreateGuidKeyedGrain(state, sidecar, registry);
+        grain.TerminalWitnessPruneIntervalOverride = TimeSpan.FromMinutes(1);
+        await grain.EnsureTerminalWitnessHydratedAsync();
+
+        await grain.PruneTerminalWitnessAsync();
+
+        Assert.That(grain.IsTerminalWitnessed(txid, "a"), Is.True);
+    }
+
+    [Test]
+    public async Task A_leaf_that_never_recorded_a_witness_does_not_load_its_sidecar_to_prune()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        state.State.TreeId = "test-tree";
+        var sidecar = Substitute.For<ILeafTerminalWitnessGrain>();
+        var grain = CreateGrain(
+            state,
+            replicaId: Guid.NewGuid().ToString("N"),
+            configureGrainFactory: f => f.GetGrain<ILeafTerminalWitnessGrain>(Arg.Any<Guid>(), Arg.Any<string?>()).Returns(sidecar));
+
+        await grain.PruneTerminalWitnessAsync();
+
+        await sidecar.DidNotReceive().LoadAsync();
     }
 
     // ---- Rule 2 and the transfer carrying P

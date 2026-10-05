@@ -25,7 +25,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = new ReplicationHighWaterMarkGrain(new FakePersistentState<ReplicationHighWaterMarkState>());
+        var hwm = HighWaterMarkTestGrains.Real();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
         var applier = new ReplicationApplier(factory, Monitor(), replicationContext: new AnyTreeLwwContext());

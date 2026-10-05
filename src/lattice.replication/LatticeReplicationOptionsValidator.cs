@@ -111,6 +111,14 @@ internal sealed class LatticeReplicationOptionsValidator : IValidateOptions<Latt
                 + "very entry the apply pipeline is trying to park.");
         }
 
+        if (options.CausalAppliedIdentityCapacity is < 1 or > 1_048_576)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeReplicationOptions)}.{nameof(LatticeReplicationOptions.CausalAppliedIdentityCapacity)} "
+                + $"must be between 1 and 1048576 ({scope}). It bounds the applied write identities a receiver "
+                + "remembers per tree and origin to release causal dependents at once.");
+        }
+
         if (options.CausalBufferMaxEntries < 1)
         {
             return ValidateOptionsResult.Fail(

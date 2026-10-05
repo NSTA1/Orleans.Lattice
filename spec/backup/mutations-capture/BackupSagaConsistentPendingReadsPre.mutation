@@ -12,7 +12,9 @@ CLASS: Invariant
 SUMMARY: a still-pending bucket is served pre-saga regardless of the decision (#4485)
 
 --- FIND
-         THEN (IF d0[TreeOf[sh]][t] = "committed" THEN "post" ELSE "pre")
+         THEN (CASE d0[TreeOf[sh]][t] = "committed" -> "post"
+                 [] d0[TreeOf[sh]][t] = "indeterminate" -> "absent"
+                 [] OTHER -> "pre")
 --- REPLACE
          \* MUTATION: the decision snapshot is never consulted.
          THEN "pre"

@@ -49,7 +49,7 @@ public partial class ReplicationApplierTests
 
         var apply = Substitute.For<IReplicationApplyGrain>();
         var apply2 = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationApplyGrain>(SecondTree).Returns(apply2);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);

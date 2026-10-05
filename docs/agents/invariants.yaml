@@ -1126,7 +1126,7 @@ invariants:
       - "src/lattice.membership/LatticeMembershipMetrics.cs"
   - id: replication-causal-dependency-gate
     name: "Replication causal dependency gate"
-    description: "A receiver parks a causal-plus entry until the local vector clock dominates every non-exempt dependency in the entry frontier."
+    description: "A receiver parks a causal-plus entry until every non-exempt dependency in the entry frontier is met: the exact named write was applied to the tree, or the origin's shipped low watermark passes it and the write is not held unapplied. A per-origin maximum HLC is never treated as meeting a dependency."
     scope:
       packages:
         - "Orleans.Lattice.Replication"
@@ -1136,6 +1136,7 @@ invariants:
         - "VersionVector"
     violation_modes:
       - "An entry is applied before a causal dependency from another origin is present locally."
+      - "A dependency is treated as met because the origin's per-origin maximum HLC is above it, although the named write never arrived (#4586)."
       - "The entry's own-origin diagonal or receiver self-component is not exempted and the buffer deadlocks."
       - "A bounded buffer eviction is silent instead of dead-lettered before durable removal."
     detection_signals:

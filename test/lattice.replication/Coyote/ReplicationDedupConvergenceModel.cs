@@ -109,7 +109,7 @@ public sealed class ReplicationDedupConvergenceModel : ICoyoteModel
         }
 
         var leaf = new LeafApplyGrain();
-        var hwmGrain = new ReplicationHighWaterMarkGrain(new FakePersistentState<ReplicationHighWaterMarkState>());
+        var hwmGrain = HighWaterMarkTestGrains.Real(treeId: Tree);
         var applier = CreateApplier(leaf, hwmGrain);
         var acked = new HashSet<WalRecord>();
 

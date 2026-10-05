@@ -8,11 +8,9 @@ SUMMARY: a retry waits for a reservation that its own failed attempt holds
 PERTURBS: Retry
 
 --- FIND
-    /\ rp = "failed"
-    /\ rp' = IF alias = "shadow" THEN "swapped" ELSE "built"
+    /\ rp \in {"failed", "revertFailed"}
 --- REPLACE
-    /\ rp = "failed"
+    /\ rp \in {"failed", "revertFailed"}
     \* MUTATION: the retry needs a free reservation.
     /\ ~reserved
-    /\ rp' = IF alias = "shadow" THEN "swapped" ELSE "built"
 --- END

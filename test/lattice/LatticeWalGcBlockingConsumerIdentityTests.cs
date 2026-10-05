@@ -199,6 +199,8 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
         // the block is even evaluated: the in-memory cursor is fresher and
         // already folded into the floor. Naming it would send an operator after
         // a leaf that is behaving correctly, which is worse than naming nothing.
+        // Its partition is still held, though: the pin says nothing it applied is
+        // durable yet (issue #4622).
         var provider = await SeededProviderAsync();
         var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, BlockingLeafConsumer, Hlc(30));
@@ -215,8 +217,8 @@ public sealed class LatticeWalGcBlockingConsumerIdentityTests
         {
             Assert.That(report.BlockingConsumerId, Is.Null,
                 "A present consumer's stale durable pin is skipped and must not be reported as blocking.");
-            Assert.That(report.EntriesTrimmed, Is.EqualTo(3),
-                "Steady-state trimming for a present consumer stays byte-for-byte unchanged.");
+            Assert.That(report.EntriesTrimmed, Is.Zero,
+                "A present consumer whose durable pin is still the block pin holds its partition (issue #4622).");
         });
     }
 
