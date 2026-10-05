@@ -110,9 +110,9 @@ SplitRejects(c, s, k) == c = spCopy /\ s = s1 /\ k = k2 /\ sp \in SplitFrozen
 
 Fenced(c, s) == c = T /\ s \in fence
 Redirected(c) == c = R /\ redir
-\* The old copy after the purge. The intended design refuses a routed operation
-\* there, so the caller refreshes its pair; production answers a read as the
-\* empty tree and accepts a write (#4503).
+\* The old copy after the purge. A routed operation there is refused, so the
+\* caller refreshes its pair: the purge leaves a tombstone that refuses a router
+\* whose logical tree resolves elsewhere (#4503, fixed by #4528).
 Gone(c) == c = T /\ rz = "purged"
 
 \* Whether copy c can still become, or still is, the tree's copy.
@@ -157,8 +157,20 @@ ValueAt(c, s, k) ==
     THEN IF pend[c][s][k] = "new" THEN BVal(c) ELSE LWW(row[c][s][k], BVal(c))
     ELSE row[c][s][k]
 
+ValueAtRow(c, s, k, r) ==
+    IF Surfaced(c, s, k)
+    THEN IF pend[c][s][k] = "new" THEN BVal(c) ELSE LWW(r, BVal(c))
+    ELSE r
+
+
 ReadVia(p, k) == Rank(ValueAt(p[1], MapOf(p[2], k), k))
-OwnerValue(k) == Rank(ValueAt(alias, MapOf(rmap, k), k))
+\* A read the split source refuses during the freeze is retried once the map has
+\* moved, so the reader sees the destination after the final drain. The chase
+\* can land a mirrored write there before the map moves.
+OwnerValue(k) ==
+    Rank(IF SplitRejects(alias, MapOf(rmap, k), k)
+         THEN ValueAtRow(alias, s2, k, LWW(row[alias][s2][k], row[alias][MapOf(rmap, k)][k]))
+         ELSE ValueAt(alias, MapOf(rmap, k), k))
 
 \* The map that lays out copy c's shards.
 CopyMap(c) == IF c = alias THEN rmap ELSE IF c = R THEN rmapR ELSE rmapOld
@@ -166,9 +178,17 @@ CopyMap(c) == IF c = alias THEN rmap ELSE IF c = R THEN rmapR ELSE rmapOld
 \* Every location a mutation accepted at (c, s) for key k lands on.
 \* A resize mirror reaches R's shard through that shard's own write path, so a
 \* split window open on R forwards it on in turn.
+\* Where a mutation the old copy mirrors from its shard s reaches R: R's shard at
+\* the same index, or, when that shard refuses the key because R's own split
+\* moved its slot, the shard the refusal names (ShardRootGrain.ForwardShadowAsync
+\* chasing ShadowForwardRefusal, #4478). One hop suffices in this instance;
+\* production bounds the chase and fails the forward, and so the write, once
+\* the hops run out.
+RTarget(s, k) == IF SplitRejects(R, s, k) THEN s2 ELSE s
+
 Landing(c, s, k) ==
     LET local == {<<c, s>>} \cup (IF SplitMirrors(c, s, k) THEN {<<c, s2>>} ELSE {})
-        mirrored == {<<R, x[2]>> : x \in {y \in local : ResizeMirrors(y[1], y[2])}}
+        mirrored == {<<R, RTarget(x[2], k)>> : x \in {y \in local : ResizeMirrors(y[1], y[2])}}
         chained == IF \E y \in mirrored : SplitMirrors(R, y[2], k) THEN {<<R, s2>>} ELSE {}
     IN local \cup mirrored \cup chained
 
@@ -212,6 +232,14 @@ TermRow(c, s, k) ==
     ELSE IF MapOf(CopyMap(c), k) = s THEN LWW(row[c][s][k], SagaV)
     ELSE row[c][s][k]
 
+\* The shards a terminal the old copy mirrors from its shard s also reaches on
+\* R: the split destination while a split of R that moved that shard's slot is
+\* open or committed (TerminalFanOutResolver's split-forward closure, #4478).
+TermClosure(s) == IF spCopy = R /\ sp # "idle" /\ s = s1 THEN {<<R, s2>>} ELSE {}
+
+\* A closure shard gets the terminal without committed values: it consumes a
+\* bucket it holds and installs nothing else.
+TermRowBare(c, s, k) == IF pend[c][s][k] \in {"old", "new"} THEN TermRow(c, s, k) ELSE row[c][s][k]
 -----------------------------------------------------------------------------
 Init ==
     /\ alias = T
@@ -253,7 +281,7 @@ Init ==
 
 SplitBegin ==
     /\ sp = "idle"
-    /\ rs = "migrating" \/ rz \in {"idle", "purged", "undone"}
+    /\ rs = "migrating" \/ rz \in {"idle", "retired", "purged", "undone"}
     /\ rmap = s1
     /\ ~Fenced(alias, s1)
     /\ sp' = "shadow"
@@ -312,10 +340,20 @@ SplitCommit ==
                         THEN TRUE ELSE mig[x][s][k]]]]
     /\ alias = spCopy
     /\ rmap' = s2
+    /\ rmapR' = IF spCopy = R THEN s2 ELSE rmapR
     /\ published' = published \cup {<<alias, s2>>}
     /\ sp' = "done"
-    /\ UNCHANGED <<alias, rmapR, rmapOld, pend, term, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
+    /\ UNCHANGED <<alias, rmapOld, pend, term, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
 
+\* An undo moved the alias off the copy the split is bound to before the split
+\* committed: ShardMapCommitFence refuses the commit and the split is abandoned
+\* (TreeShardSplitGrain.AbandonRetargetedSplitAsync). Reachable since a split
+\* may run on the resized copy while its resize can still be undone (#4478).
+SplitAbandon ==
+    /\ sp \in {"shadow", "swept", "frozen"}
+    /\ alias # spCopy
+    /\ sp' = "done"
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, ackOn>>
 -----------------------------------------------------------------------------
 (* Online reshard (TreeReshardGrain): drives splits until the map names the *)
 (* target shard count. Interlocked with resize in both directions.          *)
@@ -529,15 +567,17 @@ SagaTerminal(s) ==
     /\ told' = told \cup {s}
     /\ LET target == TermCopy
            hit == IF bound = R /\ ~Live(R) THEN {}
-                  ELSE {<<target, s>>} \cup (IF ResizeMirrors(target, s) THEN {<<R, s>>} ELSE {})
+                  ELSE {<<target, s>>} \cup (IF ResizeMirrors(target, s) THEN {<<R, s>>} \cup TermClosure(s) ELSE {})
+           bare == IF ResizeMirrors(target, s) THEN TermClosure(s) \ {<<R, s>>} ELSE {}
+           apply(x, y, k) == IF <<x, y>> \in bare THEN TermRowBare(x, y, k) ELSE TermRow(x, y, k)
        IN /\ row' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
-                        IF <<x, y>> \in hit THEN TermRow(x, y, k) ELSE row[x][y][k]]]]
+                        IF <<x, y>> \in hit THEN apply(x, y, k) ELSE row[x][y][k]]]]
           /\ pend' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
                         IF <<x, y>> \in hit THEN "none" ELSE pend[x][y][k]]]]
           /\ term' = [x \in Copies |-> [y \in Shards |->
                         IF <<x, y>> \in hit THEN TRUE ELSE term[x][y]]]
           /\ mig' = [x \in Copies |-> [y \in Shards |-> [k \in Keys |->
-                        IF <<x, y>> \in hit /\ TermRow(x, y, k) # row[x][y][k] THEN FALSE ELSE mig[x][y][k]]]]
+                        IF <<x, y>> \in hit /\ apply(x, y, k) # row[x][y][k] THEN FALSE ELSE mig[x][y][k]]]]
     /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, sg, bound, prepped, dec, wDone, ackOn>>
 
 \* The broadcast has visited every target: the saga completes, and a committed
@@ -601,6 +641,7 @@ Next ==
     \/ SplitSweep
     \/ SplitFreeze
     \/ SplitCommit
+    \/ SplitAbandon
     \/ ReshardStart
     \/ ReshardFinish
     \/ ResizeBegin
@@ -639,7 +680,7 @@ VisStep ==
 
 Spec ==
     /\ Init /\ [][Next /\ VisStep]_vars
-    /\ WF_svars(SplitSweep) /\ WF_svars(SplitFreeze) /\ WF_svars(SplitCommit)
+    /\ WF_svars(SplitSweep) /\ WF_svars(SplitFreeze) /\ WF_svars(SplitCommit) /\ WF_svars(SplitAbandon)
     /\ WF_svars(rs = "migrating" /\ SplitBegin) /\ WF_svars(ReshardFinish)
     /\ WF_svars(SnapCopy) /\ WF_svars(\E s \in Shards : ResizeFence(s)) /\ WF_svars(ResizeFlip)
     /\ WF_svars(ResizeRetire) /\ WF_svars(ResizePurge) /\ WF_svars(UndoSwap) /\ WF_svars(UndoClear)

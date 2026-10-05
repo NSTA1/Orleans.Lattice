@@ -74,12 +74,14 @@ filed and kept as a standing mutation: a split in flight across a resize
 (#4452, fixed), an undo that let both copies serve (#4453, fixed), a mid-dispatch
 re-bind that ignores the bound copy's mirror (#4454, fixed), an online snapshot that
 drops prepared buckets (#4455, fixed), a split sweep that treats an undeterminable
-registry answer as in flight (#4473), a saga that never completes once the
-copy it is bound to is discarded by an undo (#4474) or, as an old copy, purged
-(#4475), saga values installed at a stamp that overwrites a later write (#4522), a
+registry answer as in flight (#4473, fixed), a saga that never completes once the
+copy it is bound to is discarded by an undo (#4474, fixed) or, as an old copy,
+purged (#4475, fixed), saga values installed at a stamp that overwrites a later
+write (#4522, the drain fixed), a
 migration import dropped over a destination row the saga already resolved
-(#4564), and, found by the review of this coverage, a router that cached the
-old copy reading empty and losing writes once that copy is purged (#4503). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+(#4564, fixed), a shadow marker a leaf split strands on a sibling that never sees the
+terminal (#4545), and, found by the review of this coverage, a router that cached the
+old copy reading empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

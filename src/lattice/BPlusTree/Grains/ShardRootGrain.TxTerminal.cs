@@ -380,15 +380,23 @@ internal sealed partial class ShardRootGrain
                 committedValues,
                 cancellationToken);
 
-            var shadowForward = ForwardShadowAsync(
-                (transactionId, committed, committedValues, cancellationToken),
-                static (target, state) => (Task)target.AppendTxTerminalAsync(
-                    state.transactionId, state.committed, state.committedValues, state.cancellationToken),
-                // Once the resize has swapped, the terminal also reaches every
-                // shard of the resized copy a split of it has moved this shard's
-                // slots to, so a bucket mirrored there is resolved; those shards
-                // get no committed-values backstop (issue #4478).
-                closureState: static state => (state.transactionId, state.committed, null, state.cancellationToken));
+            // The saga's original prepare stamps are minted on this copy's clock
+            // lineage, and the resize mirror re-mints a mirrored prepare on the
+            // destination copy, so they are never carried there: the
+            // destination's backstop keeps its dominating stamp (issue #4522).
+            Task shadowForward;
+            using (LatticeOriginalPrepareStampContext.With(null))
+            {
+                shadowForward = ForwardShadowAsync(
+                    (transactionId, committed, committedValues, cancellationToken),
+                    static (target, state) => (Task)target.AppendTxTerminalAsync(
+                        state.transactionId, state.committed, state.committedValues, state.cancellationToken),
+                    // Once the resize has swapped, the terminal also reaches every
+                    // shard of the resized copy a split of it has moved this shard's
+                    // slots to, so a bucket mirrored there is resolved; those shards
+                    // get no committed-values backstop (issue #4478).
+                    closureState: static state => (state.transactionId, state.committed, null, state.cancellationToken));
+            }
 
             await Task.WhenAll(leafFanOut, shadowForward);
         }

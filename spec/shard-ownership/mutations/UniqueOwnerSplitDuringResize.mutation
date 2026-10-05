@@ -17,18 +17,9 @@ PERTURBS: SplitBegin
 --- FIND
 SplitBegin ==
     /\ sp = "idle"
-    /\ rs = "migrating" \/ rz \in {"idle", "purged", "undone"}
+    /\ rs = "migrating" \/ rz \in {"idle", "retired", "purged", "undone"}
 --- REPLACE
 SplitBegin ==
     /\ sp = "idle"
 \* MUTATION: no interlock with an in-flight resize.
---- END
-
---- FIND
-    /\ sg \in {"idle", "done"}
-    /\ sp \in {"idle", "done"}
---- REPLACE
-    /\ sg \in {"idle", "done"}
-\* MUTATION: a split the flip stranded counts as finished (AbandonRetargetedSplitAsync).
-    /\ sp \in {"idle", "done"} \/ alias # spCopy
 --- END

@@ -197,6 +197,63 @@ internal sealed partial class ShardRootGrain
         }
     }
 
+    /// <inheritdoc />
+    public async Task<Dictionary<string, HybridLogicalClock?>> GetOriginalPrepareStampsAsync(Guid transactionId, bool exhaustive)
+    {
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+        var stamps = new Dictionary<string, HybridLogicalClock?>(StringComparer.Ordinal);
+        if (transactionId == Guid.Empty)
+            return stamps;
+
+        // The fast pass reads the leaves this activation recorded the saga's
+        // prepares reaching. A leaf split leaves the donor's bucket in place
+        // (its stranded keys stay there until the terminal), and the donor is
+        // the leaf recorded here, so the record reaches every bucket - unless
+        // this activation is newer than some of the prepares. The exhaustive
+        // pass reads every leaf of the chain instead: the buckets and their
+        // marks are replayed from the write-ahead log, so nothing is missed.
+        IReadOnlyCollection<IBPlusLeafGrain> leaves;
+        if (exhaustive)
+        {
+            leaves = await CollectChainLeavesAsync(CancellationToken.None);
+        }
+        else if (_affectedLeavesByTx is not null && _affectedLeavesByTx.TryGetValue(transactionId, out var recorded))
+        {
+            var recordedLeaves = new List<IBPlusLeafGrain>(recorded.Count);
+            foreach (var leafId in recorded)
+                recordedLeaves.Add(grainFactory.GetGrain<IBPlusLeafGrain>(leafId));
+            leaves = recordedLeaves;
+        }
+        else
+        {
+            return stamps;
+        }
+
+        var reads = new Task<Dictionary<string, HybridLogicalClock?>?>[leaves.Count];
+        var i = 0;
+        foreach (var leaf in leaves)
+            reads[i++] = leaf.GetOriginalPrepareStampsAsync(transactionId);
+        await Task.WhenAll(reads);
+
+        foreach (var read in reads)
+        {
+            if (read.Result is not { } leafStamps) continue;
+            foreach (var (key, stamp) in leafStamps)
+                stamps[key] = MergeOriginalStamp(stamps.TryGetValue(key, out var existing) ? existing : null, stamp);
+        }
+
+        return stamps;
+    }
+
+    /// <summary>
+    /// Merges two answers for one key - a stranded donor bucket and its
+    /// sibling's, say. Both carry the same original stamp; keep the higher on
+    /// the off chance they differ, as the drain's merge would. A marked answer
+    /// wins over an unmarked one.
+    /// </summary>
+    internal static HybridLogicalClock? MergeOriginalStamp(HybridLogicalClock? a, HybridLogicalClock? b) =>
+        a is not { } x ? b : b is not { } y ? x : (y.CompareTo(x) > 0 ? y : x);
+
     /// <summary>
     /// Removes and returns the affected-leaves set for
     /// <paramref name="transactionId"/>, or <see langword="null"/>
