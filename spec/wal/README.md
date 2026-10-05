@@ -126,6 +126,23 @@ snapshot that failed to load and cannot be lowered, so the GC may trim under it
 while the cold rebuild runs. `ReadPositionHonestLoadFailureColdStartsOverIntactWal`
 keeps that standing.
 
+The models found six more while the review's follow-ups were closed out, each
+reproduced before its fix and each fixed:
+
+| Issue | Defect | Check |
+|-------|--------|-------|
+| #4621 | A flush abandoned at its deadline can land after readers have passed its offset, below their cursors. **Fixed by #4659**: the watermark is held below every abandoned call until it settles, and a provider trim watermark tells a hole from a trim. | `LogPrefixAppliedWatermarkIgnoresAbandoned`, `ShippingNeverSkipsTrailingHoleExposed` |
+| #4634 | A cold start over a vanished snapshot replays a WAL trimmed under it. **Fixed by #4653**: the leaf row records held coverage and the activation fails closed. | `ReadPositionHonestVanishedSnapshotStartsCold`, `ReadPositionHonestVanishedSnapshotTailZeroShortcut` |
+| #4654 | A leaf whose state row vanishes comes up empty. **Fixed by #4671**: a rowless leaf serves data only under a create intent. | `ReadPositionHonestRowlessActivationStartsCold`, `ReadPositionHonestSelfHealPassesIntent` |
+| #4622 | A retention TTL yields only to a `Zero` pin, so it trims a write made after an empty release. **Fixed by #4646**: the TTL ceiling is capped at the lowest frontier of a partition's uncovered pins. | `WalPartitionReleaseCoyoteTests.A_ttl_that_yields_only_to_zero_pins_trims_a_write_made_after_an_empty_release` |
+| #4669 | A cold leaf's checkpoint flush tail releases a partition its replay has not read. **Fixed by #4677**: no empty release before the replay barrier latches. | `WalPartitionReleaseCoyoteTests.An_empty_release_published_before_the_partition_is_replayed_trims_an_unread_write` |
+| #4641 | A write stamped below an empty release's frontier is trimmed by every stamp-based GC arm. **Fixed by #4679**: a durable override hold the GC reads as a block until coverage lands. | `WalPartitionReleaseCoyoteTests.Skipping_the_override_hold_lets_the_gc_trim_an_override_stamped_write_issue_4641` |
+
+The last three rows of that table depend on HLC stamps and on several partitions,
+which `WalDurability.tla` abstracts away; `WalPartitionReleaseModel`, a Coyote
+model over the production pin and trim cores, checks them (see the refinement note's
+abstraction gaps).
+
 When a fix lands, its gap row is removed and its detectors are re-proven red against
 the reproducing mutation.
 
@@ -138,9 +155,9 @@ move protocol with one shard crash and one coordinator crash, for one move and, 
 another's lapsed fence). It does NOT
 cover:
 
-- multi-partition checkpoint arrays;
+- multi-partition checkpoint arrays, HLC stamps and retention TTLs in TLC; these are
+  checked by `WalPartitionReleaseModel` instead;
 - splits, resharding and saga state;
-- retention TTLs, which trim past the floor by design;
 - interleavings inside a grain turn's awaits;
 - replication consumers, beyond their effect on the trim floor;
 - liveness under two faults, or any property under three.
