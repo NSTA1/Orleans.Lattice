@@ -650,6 +650,24 @@ or by a later commit or abort decision carrying a *conflicting* outcome
 (a repeat of the same outcome is recognised as idempotent and leaves the
 tombstone in place, so it can never resurrect a decision the tree already
 retired).
+A prepare forwarded shard to shard (a split's hot-path shadow-forward, an
+online resize's mirror, or a split sweep's replay) can still be delivered
+after its saga has completed, been forgotten and had its decision pruned: a
+forward abandoned at `ShardForwardTimeout` keeps running. The registry then
+holds no row for the saga and can only answer in flight, and a destination
+leaf that no longer remembers the terminal would bucket a prepare that
+nothing ever settles, which every later split or resize carries and which
+pins the leaf's write-ahead log prefix. The saga's participant row tells the
+two cases apart
+([#4632](https://github.com/NSTA1/Orleans.Lattice/issues/4632)). The saga
+holds the row in its tree's registry from before its first prepare dispatch
+(the execute phase re-asserts it, and a registry fault fails the step) until
+`ForgetAsync`, and a forwarded prepare's participant registration only joins
+an existing row, never recreating it. So a destination leaf refuses a
+forwarded prepare whose saga the registry reports undecided and holds no row
+for, before it writes anything. A prepare applied by replication carries its
+author cluster's origin and belongs to a saga this cluster never forgets, so
+it is bucketed as before.
 On a host with replication enabled, every tree's expired tombstone is
 also held until the write-ahead log can no longer retain a prepare of its
 saga ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) -

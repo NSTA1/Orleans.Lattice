@@ -1119,6 +1119,7 @@ internal sealed partial class AtomicWriteGrain(
             {
                 var registry = RegistryFor(treeId, state.State.TransactionId);
                 await registry.RegisterParticipantsAsync(state.State.TransactionId, touchedSorted);
+                _participantRowShards = touchedSorted;
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG saga-prepare-bulk-register-exit] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count}");
 #endif
@@ -1191,6 +1192,49 @@ internal sealed partial class AtomicWriteGrain(
     /// </summary>
     private ITxRegistryGrain RegistryFor(string treeId, Guid txid) =>
         TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
+
+    /// <summary>
+    /// The shard set this activation last durably registered as the saga's
+    /// participant row, so <see cref="EnsureParticipantRowAsync"/> skips the
+    /// registry round trip in the common case where the prepare phase's bulk
+    /// registration already landed it.
+    /// </summary>
+    private IReadOnlyList<int>? _participantRowShards;
+
+    /// <summary>
+    /// Makes the saga's participant row in its own tree's registry a precondition
+    /// of every prepare dispatch (issue #4632). The row is what tells a
+    /// forwarded prepare of a live saga from one delivered after the saga was
+    /// forgotten and its decision pruned: only <see cref="ITxRegistryGrain.ForgetAsync"/>
+    /// removes it, and a forwarded registration never recreates it, so the
+    /// destination leaf refuses a forwarded prepare whose saga the registry
+    /// reports undecided and holds no row for. A live saga must therefore never
+    /// be without one, or its own forwarded prepares would be refused. The prepare
+    /// phase's bulk registration is best-effort, and a reminder-driven re-entry
+    /// resumes in the execute phase without it, so the execute phase re-asserts
+    /// the row before dispatching - a no-op write when every shard is already
+    /// recorded - and a registry fault fails the step.
+    /// </summary>
+    private async Task EnsureParticipantRowAsync()
+    {
+        var txid = state.State.TransactionId;
+        var shards = state.State.TouchedShards;
+        if (txid == Guid.Empty
+            || state.State.NextIndex >= state.State.Entries.Count
+            || ReferenceEquals(_participantRowShards, shards))
+        {
+            return;
+        }
+
+        // An empty touched set (a saga persisted before the set was recorded)
+        // still needs a row; shard 0 stands in, and a terminal routed to a
+        // shard that holds none of the batch's keys is a no-op there.
+        IReadOnlyList<int> row = shards.Count > 0 ? shards : [0];
+        await TxRegistryWriteRetry.RunAsync(
+            (registry: RegistryFor(state.State.TreeId, txid), txid, row),
+            static s => s.registry.RegisterParticipantsAsync(s.txid, s.row));
+        _participantRowShards = shards;
+    }
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
@@ -3181,6 +3225,8 @@ internal sealed partial class AtomicWriteGrain(
         // (and re-box the WalPartitions int) on every saga.
         var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
         LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag);
+
+        await EnsureParticipantRowAsync();
 
         // Phase D1b (c2-ix memo): collapse the D1 per-key
         // Task.WhenAll-of-N-SetAsync fan-out into a single
