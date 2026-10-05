@@ -240,6 +240,7 @@ internal sealed partial class TreeDeletionGrain
         // Its durable completion is the only evidence that permits that absence.
         if (!(await deletion.GetDeletionStatusAsync()).PurgeComplete)
             await ValidateOwnedTargetAsync(physical);
+        await AnnouncePurgeAsync();
         var wasPurging = state.State.LogicalPurgeInProgress;
         state.State.LogicalPurgeInProgress = true;
         try { await PersistAsync(); }

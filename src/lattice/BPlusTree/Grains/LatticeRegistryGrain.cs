@@ -31,7 +31,8 @@ internal sealed class LatticeRegistryGrain(
     TreeAliasObserverDispatcher? aliasObservers = null,
     ILatticeAccessGate? accessGate = null,
     ILatticeMembershipContext? membership = null,
-    ITreeOwnershipGuard? ownershipGuard = null) : ILatticeRegistry
+    ITreeOwnershipGuard? ownershipGuard = null,
+    TreeLineageObserverDispatcher? lineageObservers = null) : ILatticeRegistry
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -99,6 +100,11 @@ internal sealed class LatticeRegistryGrain(
 #endif
 
         var bytes = SerializeEntry(seeded);
+        if (lineageObservers is { HasObservers: true })
+        {
+            await lineageObservers.NotifyChangingAsync(treeId, currentLineage: null, seeded.Lineage);
+        }
+
         await Registry.SetAsync(treeId, bytes);
     }
 
@@ -273,6 +279,14 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(entry);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
+        // Observers of a lineage change are told before it is persisted (#4537),
+        // and a failing observer aborts the write.
+        if (lineageObservers is { HasObservers: true })
+        {
+            var current = (await GetEntryCoreAsync(treeId))?.Lineage;
+            await lineageObservers.NotifyChangingAsync(treeId, current, entry.Lineage);
+        }
+
         await Registry.SetAsync(treeId, SerializeEntry(entry));
     }
 
@@ -281,7 +295,18 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         return RegistryCallCensus.MeasureAsync(
             RegistryCallCensus.Unregister,
-            () => Registry.DeleteAsync(treeId));
+            () => UnregisterCoreAsync(treeId));
+    }
+
+    private async Task UnregisterCoreAsync(string treeId)
+    {
+        if (lineageObservers is { HasObservers: true }
+            && (await GetEntryCoreAsync(treeId))?.Lineage is { } current)
+        {
+            await lineageObservers.NotifyChangingAsync(treeId, current, nextLineage: null);
+        }
+
+        await Registry.DeleteAsync(treeId);
     }
 
     public Task<bool> ExistsAsync(string treeId)
@@ -646,7 +671,10 @@ internal sealed class LatticeRegistryGrain(
         if (existing?.PhysicalTreeId is null) return;
 
         var oldPhysical = existing.PhysicalTreeId;
-        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null };
+
+        // The logical tree now serves its own shards, not the alias target's: new
+        // content lineage, as for an alias set to a different tree (#4537).
+        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null, Lineage = Guid.NewGuid() };
         await UpdateAsync(treeId, updated);
 
         // Removing an alias repoints the logical tree back to itself; the new

@@ -359,14 +359,19 @@ internal sealed class LatticeBackupRestoreService(
             // revert onto a tree whose map differs from the shadow's reads most of
             // its keys as absent, and a reader resolving between a separate map
             // write and alias write would pair one copy with the other's map.
+            //
+            // The lineage is re-stamped before the swap (#4537): a crash in between
+            // leaves only a spurious re-stamp, never the reverted contents under
+            // the cutover's lineage.
+            if (await registry.GetEntryAsync(restore.TargetTreeId).ConfigureAwait(false) is { } revertingEntry)
+            {
+                await registry.UpdateAsync(restore.TargetTreeId, revertingEntry with { Lineage = Guid.NewGuid() })
+                    .ConfigureAwait(false);
+            }
+
             await AliasCutoverShardMaps.RevertAsync(
                 grainFactory, restore.TargetTreeId, restore.ShadowPhysicalTreeId,
                 restore.PreviousPhysicalTreeId, cancellationToken).ConfigureAwait(false);
-            if (await registry.GetEntryAsync(restore.TargetTreeId).ConfigureAwait(false) is { } revertedEntry)
-            {
-                await registry.UpdateAsync(restore.TargetTreeId, revertedEntry with { Lineage = Guid.NewGuid() })
-                    .ConfigureAwait(false);
-            }
 
             if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
                 && !string.Equals(restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId, StringComparison.Ordinal))
@@ -603,13 +608,17 @@ internal sealed class LatticeBackupRestoreService(
             // no reader pairs the shadow with the previous tree's map or the
             // reverse. The map the swap replaced is the previous tree's final
             // layout: a split on it can no longer commit once the alias has moved.
-            var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
-                grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
-            if (await registry.GetEntryAsync(targetTreeId).ConfigureAwait(false) is { } restoredEntry)
+            // The lineage is re-stamped first (#4537): a crash before the swap
+            // leaves only a spurious re-stamp, never the restored contents under
+            // the previous lineage.
+            if (await registry.GetEntryAsync(targetTreeId).ConfigureAwait(false) is { } restoringEntry)
             {
-                await registry.UpdateAsync(targetTreeId, restoredEntry with { Lineage = Guid.NewGuid() })
+                await registry.UpdateAsync(targetTreeId, restoringEntry with { Lineage = Guid.NewGuid() })
                     .ConfigureAwait(false);
             }
+
+            var finalReplacedMap = await AliasCutoverShardMaps.SwapCutoverAsync(
+                grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
             if (armRedirect && retainedRouting is null)
             {
                 retainedRouting = new RoutingInfo(previousPhysicalTreeId!, finalReplacedMap ?? replacedMap!);

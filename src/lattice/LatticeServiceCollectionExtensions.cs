@@ -104,6 +104,7 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<BPlusTree.Grains.TxRegistryReadCoalescer>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<TreeAliasObserverDispatcher>();
+        builder.Services.AddSingleton<TreeLineageObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
 
         // Storage-usage observable-gauge sink. Constructing the singleton

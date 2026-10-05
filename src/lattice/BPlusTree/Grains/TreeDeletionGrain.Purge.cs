@@ -233,6 +233,7 @@ internal sealed partial class TreeDeletionGrain
         if (!target.PurgeComplete)
             await ValidateOwnedTargetAsync(physical);
 
+        await AnnouncePurgeAsync();
         if (!state.State.LogicalPurgeInProgress)
         {
             state.State.LogicalPurgeInProgress = true;

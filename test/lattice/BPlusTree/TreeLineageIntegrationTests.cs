@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.State;
@@ -119,6 +121,29 @@ public sealed class TreeLineageIntegrationTests
     }
 
     [Test]
+    public async Task Removing_an_alias_restamps()
+    {
+        var logical = $"lineage-remove-{Guid.NewGuid():N}";
+        var other = $"{logical}-other";
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = 2 });
+        await Registry.RegisterAsync(other, new TreeRegistryEntry { ShardCount = 2 });
+        await SetAliasAsync(logical, other);
+        var aliased = await LineageAsync(logical);
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Registry.RemoveAliasAsync(logical);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await Registry.ResolveAsync(logical), Is.EqualTo(logical), "PRECONDITION: the tree serves its own shards");
+            Assert.That(await LineageAsync(logical), Is.Not.Null.And.Not.EqualTo(aliased),
+                "the tree now serves different content");
+        });
+    }
+
+    [Test]
     public async Task An_explicit_alias_carry_to_a_different_tree_restamps()
     {
         var logical = $"lineage-carry-{Guid.NewGuid():N}";
@@ -184,12 +209,178 @@ public sealed class TreeLineageIntegrationTests
         });
     }
 
+    [Test]
+    public async Task A_lineage_change_is_announced_before_it_is_persisted()
+    {
+        var logical = $"lineage-announce-{Guid.NewGuid():N}";
+        var other = $"{logical}-other";
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = 2 });
+        await Registry.RegisterAsync(other, new TreeRegistryEntry { ShardCount = 2 });
+        var before = await LineageAsync(logical);
+
+        await SetAliasAsync(logical, other);
+        var after = await LineageAsync(logical);
+
+        var change = RecordingLineageObserver.Changes.Single(c => c.TreeId == logical && c.Next == after);
+        Assert.Multiple(() =>
+        {
+            Assert.That(change.Current, Is.EqualTo(before));
+            Assert.That(change.PersistedAtNotification, Is.EqualTo(before),
+                "the observer must hear of the change while the old lineage is still persisted");
+        });
+    }
+
+    [Test]
+    public async Task Registering_removing_an_alias_and_unregistering_are_all_announced()
+    {
+        var logical = $"lineage-lifecycle-{Guid.NewGuid():N}";
+        var other = $"{logical}-other";
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = 2 });
+        await Registry.RegisterAsync(other, new TreeRegistryEntry { ShardCount = 2 });
+        var registered = await LineageAsync(logical);
+        await SetAliasAsync(logical, other);
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Registry.RemoveAliasAsync(logical);
+        }
+
+        var removed = await LineageAsync(logical);
+        await Registry.UnregisterAsync(logical);
+
+        var changes = RecordingLineageObserver.Changes.Where(c => c.TreeId == logical).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(changes.First().Current, Is.Null, "registration is announced");
+            Assert.That(changes.First().Next, Is.EqualTo(registered));
+            Assert.That(changes.Any(c => c.Next == removed && c.Current != removed), Is.True, "removing the alias is announced");
+            Assert.That(changes.Last().Current, Is.EqualTo(removed), "unregistration is announced");
+            Assert.That(changes.Last().Next, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task An_explicit_alias_carry_announces_the_re_stamp_before_the_alias_moves()
+    {
+        var logical = $"lineage-carry-order-{Guid.NewGuid():N}";
+        var other = $"{logical}-other";
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = 2 });
+        await Registry.RegisterAsync(other, new TreeRegistryEntry { ShardCount = 3 });
+        var before = await LineageAsync(logical);
+
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(Grains, logical, other);
+        }
+
+        var change = RecordingLineageObserver.Changes.Single(c => c.TreeId == logical && c.Current == before);
+        Assert.That(change.ResolvedAtNotification, Is.EqualTo(logical),
+            "the lineage moves before the alias, so the new contents are never served under the old lineage");
+    }
+
+    [Test]
+    public async Task A_failing_lineage_observer_aborts_the_re_stamp()
+    {
+        var logical = $"lineage-refused-{Guid.NewGuid():N}";
+        var other = $"{logical}-other";
+        await Registry.RegisterAsync(logical, new TreeRegistryEntry { ShardCount = 2 });
+        await Registry.RegisterAsync(other, new TreeRegistryEntry { ShardCount = 2 });
+        var before = await LineageAsync(logical);
+
+        RecordingLineageObserver.FailFor.TryAdd(logical, 0);
+        try
+        {
+            Assert.That(async () => await SetAliasAsync(logical, other), Throws.Exception);
+        }
+        finally
+        {
+            RecordingLineageObserver.FailFor.TryRemove(logical, out _);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await LineageAsync(logical), Is.EqualTo(before), "fail closed: the lineage is not changed");
+            Assert.That(await Registry.ResolveAsync(logical), Is.EqualTo(logical), "and neither is the alias written with it");
+        });
+    }
+
+    [Test]
+    public async Task A_purge_is_announced_before_the_contents_are_purged()
+    {
+        var tree = $"lineage-purge-{Guid.NewGuid():N}";
+        var lattice = Grains.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("k", new byte[] { 1 });
+        var lineage = await LineageAsync(tree);
+        await lattice.DeleteTreeAsync();
+
+        await lattice.PurgeTreeAsync();
+
+        var change = RecordingLineageObserver.Changes.First(c => c.TreeId == tree && c.Next is null);
+        Assert.Multiple(async () =>
+        {
+            Assert.That(change.Current, Is.EqualTo(lineage));
+            Assert.That(change.PersistedAtNotification, Is.EqualTo(lineage),
+                "the purge is announced while the tree is still registered, before its row or contents go");
+            Assert.That(await Registry.GetEntryAsync(tree), Is.Null, "PRECONDITION: the purge completed");
+        });
+    }
+
+    [Test]
+    public async Task A_failing_lineage_observer_stops_a_purge_from_starting()
+    {
+        var tree = $"lineage-purge-refused-{Guid.NewGuid():N}";
+        var lattice = Grains.GetGrain<ILattice>(tree);
+        await lattice.SetAsync("k", new byte[] { 7 });
+        var lineage = await LineageAsync(tree);
+        await lattice.DeleteTreeAsync();
+
+        RecordingLineageObserver.FailFor.TryAdd(tree, 0);
+        try
+        {
+            Assert.That(async () => await lattice.PurgeTreeAsync(), Throws.Exception);
+        }
+        finally
+        {
+            RecordingLineageObserver.FailFor.TryRemove(tree, out _);
+        }
+
+        await lattice.RecoverTreeAsync();
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await LineageAsync(tree), Is.EqualTo(lineage), "fail closed: the tree stays registered");
+            Assert.That(await lattice.GetAsync("k"), Is.EqualTo(new byte[] { 7 }), "and its contents were not purged");
+        });
+    }
+
+    internal sealed record LineageChange(string TreeId, Guid? Current, Guid? Next, Guid? PersistedAtNotification, string? ResolvedAtNotification);
+
+    /// <summary>Records every announced lineage change, with what the registry held at that moment.</summary>
+    internal sealed class RecordingLineageObserver(IGrainFactory grainFactory) : ITreeLineageObserver
+    {
+        public static ConcurrentQueue<LineageChange> Changes { get; } = new();
+
+        public static ConcurrentDictionary<string, byte> FailFor { get; } = new();
+
+        public async Task OnLineageChangingAsync(string treeId, Guid? currentLineage, Guid? nextLineage, CancellationToken cancellationToken = default)
+        {
+            if (FailFor.ContainsKey(treeId))
+            {
+                throw new InvalidOperationException($"observer refuses the lineage change of '{treeId}'");
+            }
+
+            var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+            var persisted = (await registry.GetEntryAsync(treeId))?.Lineage;
+            var resolved = currentLineage is null ? null : await registry.ResolveAsync(treeId);
+            Changes.Enqueue(new LineageChange(treeId, currentLineage, nextLineage, persisted, resolved));
+        }
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
+            siloBuilder.Services.AddSingleton<ITreeLineageObserver, RecordingLineageObserver>();
         }
     }
 }
