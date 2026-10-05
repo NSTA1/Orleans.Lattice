@@ -14,7 +14,7 @@ CLASS: Invariant
 SUMMARY: a snapshot that fails to load is treated as absent and the leaf cold-replays a WAL trimmed under that snapshot's coverage
 PERTURBS: ActivateLoadFail
 --- FIND
-    /\ snapCov[l] # NoSnap
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
     /\ UNCHANGED vars
 --- REPLACE
     /\ snapCov[l] # NoSnap
