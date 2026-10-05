@@ -99,6 +99,30 @@ the previous ambient key (or `null`). The scope flows across `await`
 points on the same logical execution context, so chained `SetAsync`
 calls within the scope all share the same key.
 
+### Key lifetime on replicated trees
+
+Each WAL partition of a replicated tree refuses a freshly authored write
+stamped below its [clock floor](wal.md#clock-floor-replicated-trees), which
+trails the wall clock by `LatticeOptions.ReplicationClockFloorLag` (60
+seconds by default) ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). An ordinary write is re-stamped
+transparently. An idempotency key's `Timestamp` is stamped verbatim by
+contract, so a write under a key older than the floor is not applied and
+fails with `LatticeIdempotencyKeyExpiredException`. That exception is a
+deterministic caller error, not a transient fault: retrying under the same
+key fails identically.
+
+A key is usable for at least `ReplicationClockFloorLag` after it is minted.
+
+- Mint it with `Fresh()` when the logical operation starts.
+- Keep the client's clock synchronised with the cluster's.
+- Size the retry policy's total budget below the lag.
+- A key re-derived from an upstream identity much later - for example by a
+  worker that restarts minutes after its first attempt - can expire. When
+  `LatticeIdempotencyKeyExpiredException` is raised, read the key's current
+  state before deciding whether to issue the operation again under a fresh key.
+
+Trees that are not replicated never raise it.
+
 ## Wiring a retry policy
 
 The shipped `BoundedExponentialRetryPolicy` makes up to `MaxAttempts`

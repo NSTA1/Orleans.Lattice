@@ -64,6 +64,10 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+### Breaking
+
+- **Replication - An idempotency key expires on a replicated tree.** A replicated tree's WAL partitions now keep a durable clock floor that trails the wall clock by the new `LatticeOptions.ReplicationClockFloorLag` (60 seconds by default), and refuse a fresh write stamped below it, so replication can tell when every write below a stamp has arrived. An ordinary write is re-stamped transparently and a range delete re-issues its stamp, but a write under a `LatticeIdempotencyKey` older than the floor now fails with `LatticeIdempotencyKeyExpiredException` and is not applied. Mint keys when the operation starts and keep retries inside the lag. Trees that are not replicated are unaffected. ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)) (`Orleans.Lattice`)
+
 ### Changed
 
 - **Performance - OrMap answers liveness without counting.** `IsEmpty`, `Count`, `ContainsKey` and `Keys` all consumed `LiveEntryCount` only as `> 0`. A new any-query exits on the first live entry and probes before indexing: 96-98% faster, and 2104 bytes removed per wide-tombstone read. ([#4443](https://github.com/NSTA1/Orleans.Lattice/pull/4443)) (`Orleans.Lattice`)
