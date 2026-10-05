@@ -148,6 +148,32 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
         await h.TreeFrontier.Received(2).ObserveAsync(Origin, null, Arg.Any<CancellationToken>());
     }
 
+    [TestCase(null)]
+    [TestCase("someone-else")]
+    public async Task Acked_positions_on_a_call_whose_origin_is_not_authenticated_as_the_body_origin_are_never_read(string? stampedOrigin)
+    {
+        // Issue #4684: a peer cannot vouch positions for another origin's
+        // shipper. The push is refused before any header is read.
+        var h = new Harness();
+
+        var refused = Assert.ThrowsAsync<RpcException>(
+            async () => await h.Service().Push(EmptyBox(), new CallContext(stampedOrigin, Frontier.ToText(), Acked.ToText())));
+
+        Assert.That(refused!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+        await h.TreeFrontier.DidNotReceiveWithAnyArgs().ObserveAsync(default!, default, default);
+    }
+
+    [Test]
+    public async Task Oversized_acked_positions_vouch_none_but_keep_the_watermark()
+    {
+        var h = new Harness();
+        var oversized = "1|dHJlZQ==|" + string.Join(',', Enumerable.Repeat("1", ReplicationAckedPositions.MaxPartitions + 1));
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, Frontier.ToText(), oversized));
+
+        await h.TreeFrontier.Received(1).ObserveAsync(Origin, Frontier, Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task A_frontier_from_a_peer_that_is_not_configured_is_ignored()
     {
