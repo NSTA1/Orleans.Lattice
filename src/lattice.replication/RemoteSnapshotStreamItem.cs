@@ -44,4 +44,14 @@ public readonly record struct RemoteSnapshotStreamItem
     /// it.
     /// </summary>
     [Id(2)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// On the trailer, the sibling boundaries the export captured at its end
+    /// (issue #4684): per tree the source replicates, other than the exported
+    /// one. Present only on an export served under the cross-tree hold.
+    /// </summary>
+    [Id(3)] internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; init; }
+
+    /// <summary>Whether this item is the trailer rather than an entry.</summary>
+    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null;
 }

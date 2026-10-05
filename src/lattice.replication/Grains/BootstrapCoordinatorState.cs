@@ -264,4 +264,19 @@ internal sealed class BootstrapCoordinatorState
     /// before this slot decodes to an empty list.
     /// </summary>
     [Id(28)] public List<string> PendingCrossTreeBarriers { get; set; } = [];
+
+    /// <summary>
+    /// The sibling trees replicated here whose boundary, captured at the end of
+    /// the drained export, has not been passed yet (issue #4684): the tree stays
+    /// read-fenced until each sibling's shipper has vouched acknowledged
+    /// positions at or past the captured tails, or this cluster has completed an
+    /// import of the sibling from an export numbered above the captured epoch.
+    /// </summary>
+    [Id(29)] public Dictionary<string, CrossTreeSiblingBoundary> PendingSiblingBoundaries { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>When the pending sibling boundaries were recorded (UTC ticks); drives the automatic re-seed.</summary>
+    [Id(30)] public long SiblingBoundariesSinceUtcTicks { get; set; }
+
+    /// <summary>The pending siblings this coordinator has already asked to re-seed.</summary>
+    [Id(31)] public HashSet<string> SiblingReseedsRequested { get; set; } = new(StringComparer.Ordinal);
 }

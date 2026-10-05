@@ -127,6 +127,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             trailer =>
             {
                 stream!.CloseGeneration = trailer.CloseGeneration;
+                stream.SiblingBoundaries = trailer.SiblingBoundaries;
                 stream.SourceFrontier = trailer.SourceFrontier;
             },
             cancellationToken);
@@ -158,7 +159,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (item.CloseGeneration is not null)
+                if (item.IsTrailer)
                 {
                     setTrailer(item);
                     continue;

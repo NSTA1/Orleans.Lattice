@@ -135,6 +135,20 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
 
     /// <summary>
+    /// Returns the export epoch of the last snapshot from
+    /// <paramref name="sourceClusterId"/> whose drain applied every entry -
+    /// including one whose bootstrap still holds its read fence - or
+    /// <see langword="null"/> when none has (issue #4684). A drain records the
+    /// arrival of every cross-tree sub-saga it settles at its barrier before it
+    /// ends, so a sibling import that waits on this one is served by the drain,
+    /// not by the fence lifting: two imports that wait on each other's
+    /// completion would never complete.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetDrainedExportEpochAsync(string sourceClusterId);
+
+    /// <summary>
     /// Operator override (issue #4526): lifts the read fence a failed bootstrap
     /// left up over a partial import and stops its automatic re-drive, so reads
     /// may observe the partial import until a later bootstrap completes. Refused

@@ -31,4 +31,12 @@ internal sealed record ReplicationTreeFrontierSnapshot
     /// predates the member.
     /// </summary>
     [Id(3)] public IReadOnlyCollection<string> KnownOrigins { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Per origin, the latest acknowledged read positions its shipper vouched in
+    /// the current epoch (issue #4684). Empty in degraded mode, and from a silo
+    /// that predates the member.
+    /// </summary>
+    [Id(4)] public IReadOnlyDictionary<string, ReplicationAckedPositions> AckedPositions { get; init; } =
+        new Dictionary<string, ReplicationAckedPositions>(StringComparer.Ordinal);
 }

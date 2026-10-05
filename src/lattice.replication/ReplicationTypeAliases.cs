@@ -344,6 +344,8 @@ public static class ReplicationTypeAliases
     internal const string CrossTreeHoldSnapshot = "olr.cn";
     internal const string ICrossTreePeerEnrolmentGrain = "olr.pe";
     internal const string CrossTreePeerEnrolmentState = "olr.pn";
+    internal const string ReplicationAckedPositions = "olr.ap";
+    internal const string CrossTreeSiblingBoundary = "olr.sb";
 
     // The source lineage a sender stamped on an entry, carried with it into the
     // causal-apply buffer and the dead-letter queue (#4707).

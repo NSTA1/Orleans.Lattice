@@ -322,6 +322,24 @@ internal sealed partial class ReplicationShipperGrain
         }
     }
 
+    /// <summary>
+    /// The durable read positions shipped beside a vouched watermark (issue
+    /// #4684): the ones the WAL GC reads, capped at held terminals and at a
+    /// re-seed's retained floor, on the bound log. Never shipped without a
+    /// watermark, so never while the peer is off the log or a replay filter is
+    /// set - the states in which a record can be passed without delivery.
+    /// </summary>
+    private ReplicationAckedPositions? AckedPositionsForFrontier()
+    {
+        var log = _walTreeId;
+        if (string.IsNullOrEmpty(log) || state.State.DetachedFromLog)
+        {
+            return null;
+        }
+
+        return new ReplicationAckedPositions { PhysicalTreeId = log, Positions = [.. CurrentPartitionPositions()] };
+    }
+
     /// <summary>A saga the replay filter withholds whole never sends a terminal; it stops clamping.</summary>
     private void ForgetFrontierPrepare(Guid transactionId) =>
         state.State.Frontier.Prepares.Remove(transactionId);
@@ -348,6 +366,7 @@ internal sealed partial class ReplicationShipperGrain
                     TreeLowWatermark = tree,
                     OriginLowWatermark = _originLowWatermark.CompareTo(tree) <= 0 ? _originLowWatermark : tree,
                     OriginGeneration = _originGeneration,
+                    AckedPositions = AckedPositionsForFrontier(),
                 };
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

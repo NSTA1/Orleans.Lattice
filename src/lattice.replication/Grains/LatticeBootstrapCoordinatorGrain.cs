@@ -155,6 +155,22 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<long?> GetDrainedExportEpochAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        long? drained = state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var completed) ? completed : null;
+        if (state.State.InProgress
+            && state.State.Phase == LatticeBootstrapState.IncrementalHandoff
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            && state.State.SnapshotExportEpoch > (drained ?? 0))
+        {
+            drained = state.State.SnapshotExportEpoch;
+        }
+
+        return Task.FromResult(drained);
+    }
+
+    /// <inheritdoc />
     public Task<long?> GetCompletedExportEpochAsync(string sourceClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
@@ -1248,7 +1264,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // barrier above holds it. Lifted before the phase is persisted: a crash
         // in between resumes the drain, which re-arms the fence and re-applies
         // the (idempotent) import.
-        if (state.State.PendingCrossTreeBarriers.Count == 0)
+        // Nor while a sibling tree may still owe this cluster a terminal of an
+        // operation the import settled from bare rows (#4684).
+        RecordSiblingBoundaries(treeName, snapshot);
+        await PruneSiblingBoundariesAsync(sourceClusterId).ConfigureAwait(true);
+
+        if (state.State.PendingCrossTreeBarriers.Count == 0 && state.State.PendingSiblingBoundaries.Count == 0)
         {
             await LiftReadFenceAsync().ConfigureAwait(true);
         }

@@ -60,7 +60,12 @@ public class CrossTreeImportBarrierIntegrationTests
             new StubReplicationContext(SiteAClusterId, LatticeMergeMode.LwwRegister),
             NullLogger<LatticeRemoteSnapshotService>.Instance)
         {
-            ExportGate = new CrossTreeExportGate(_siteA.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services),
+            // These tests cover the barrier, not the sibling boundaries (R1),
+            // which have their own fixture: no sibling holds a fence here.
+            ExportGate = new CrossTreeExportGate(_siteA.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services)
+            {
+                SiblingFilterForTesting = static _ => false,
+            },
         });
 
         var bBuilder = new TestClusterBuilder(initialSilosCount: 1);
