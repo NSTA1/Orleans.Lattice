@@ -231,6 +231,23 @@ public partial class ReplicationShipperGrainTests
         /// </summary>
         public long TrimmedThrough { get; set; }
 
+        /// <summary>
+        /// Models permanent holes: sequences that were allocated but never
+        /// written, such as a flush abandoned at its deadline that never landed
+        /// (issue #4621). A read skips them; they are not a trim.
+        /// </summary>
+        public HashSet<long> Holes { get; } = new();
+
+        /// <summary>
+        /// Whether the feed reports a trusted trim watermark (issue #4621). When
+        /// <see langword="false"/> it reports none, as a provider that keeps no
+        /// watermark or a mixed-version cluster does.
+        /// </summary>
+        public bool ReportsTrimWatermark { get; set; } = true;
+
+        public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ReportsTrimWatermark ? TrimmedThrough - 1 : (long?)null);
+
         public void Append(WalRecord entry) => Entries.Add(entry);
 
         /// <summary>
@@ -273,17 +290,23 @@ public partial class ReplicationShipperGrainTests
                     NextSequence = fromSequence,
                 };
             }
-            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
-            var capacity = endExclusive - (int)fromSequence;
-            var entries = new WalShardShippingEntry[capacity];
-            for (var i = 0; i < capacity; i++)
+            // Like a provider read, a hole is skipped and the page still holds up
+            // to maxEntries stored entries.
+            var entries = new List<WalShardShippingEntry>(Math.Min(maxEntries, Entries.Count));
+            long endExclusive = fromSequence;
+            for (var seq = fromSequence; seq < Entries.Count && entries.Count < maxEntries; seq++)
             {
-                var seq = fromSequence + i;
-                entries[i] = new WalShardShippingEntry
+                endExclusive = seq + 1;
+                if (Holes.Contains(seq))
+                {
+                    continue;
+                }
+
+                entries.Add(new WalShardShippingEntry
                 {
                     Sequence = seq,
                     EncodedPayload = _encoder.EncodeToBytes(Entries[(int)seq]),
-                };
+                });
             }
             return new WalShardShippingPage
             {
@@ -343,11 +366,24 @@ public partial class ReplicationShipperGrainTests
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
+        public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult((long)Entries.Count);
+
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
 
-        public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(Entries.Count == 0 ? -1L : 0L);
+        public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken)
+        {
+            for (var seq = TrimmedThrough; seq < Entries.Count; seq++)
+            {
+                if (!Holes.Contains(seq))
+                {
+                    return Task.FromResult(seq);
+                }
+            }
+
+            return Task.FromResult(-1L);
+        }
 
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);

@@ -695,6 +695,26 @@ internal sealed class FileWalShard : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the durable trim watermark, <c>-1</c> when nothing was trimmed. The
+    /// trim marker is flushed before any entry is dropped and recovery drops every
+    /// entry at or below it, so no live entry ever sits at or below the value
+    /// returned (issue #4621).
+    /// </summary>
+    internal async Task<long> GetTrimWatermarkAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            EnsureLoaded();
+            return _trimWatermark;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>Returns the retained payload byte total across live entries.</summary>
     internal async Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken)
     {

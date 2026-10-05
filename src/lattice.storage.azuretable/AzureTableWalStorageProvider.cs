@@ -1707,8 +1707,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
-        var firstWantedOffset = Math.Max(0L, fromOffsetExclusive + 1L);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var firstWantedOffset = ClampToTrimWatermark(manifestPartitionKey, Math.Max(0L, fromOffsetExclusive + 1L));
 
         // Walk the manifest partition in ascending start-offset order.
         // Each manifest row's RowKey suffix carries the batch's
@@ -1800,8 +1800,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
-        var firstWantedOffset = Math.Max(0L, fromOffsetExclusive + 1L);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var firstWantedOffset = ClampToTrimWatermark(manifestPartitionKey, Math.Max(0L, fromOffsetExclusive + 1L));
 
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
@@ -2088,6 +2088,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+
+        // The watermark is durable before anything is deleted (issue #4621), so a
+        // crash part-way through leaves it above entries that still exist, never
+        // a deleted range below a stale watermark.
+        await RaiseTrimWatermarkAsync(table, manifestPartitionKey, throughOffsetInclusive, cancellationToken).ConfigureAwait(false);
+        if (AfterTrimWatermarkRaisedForTesting is { } afterRaised)
+        {
+            await afterRaised().ConfigureAwait(false);
+        }
 
         // Walk manifest rows in ascending start-offset order. For
         // batches that end at or before throughOffsetInclusive, delete

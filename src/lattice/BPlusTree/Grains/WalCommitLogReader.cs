@@ -189,7 +189,11 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
-        return grain.GetNextSequenceAsync(cancellationToken).AsTask();
+
+        // The readable head, not the allocator's next sequence: a reader resumes
+        // from this value, so it must not pass an offset a write can still land at
+        // (issue #4621).
+        return grain.GetReadableHeadAsync(cancellationToken).AsTask();
     }
 
     /// <inheritdoc />
@@ -207,6 +211,16 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         cancellationToken.ThrowIfCancellationRequested();
         var grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
 
+        // A trusted trim watermark decides exactly (issue #4621): everything at or
+        // below it was trimmed, and a missing sequence above it is a hole that was
+        // never written, which no reader has fallen off.
+        if (await grain.GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(false) is { } trimmedThrough)
+        {
+            return trimmedThrough + 1;
+        }
+
+        // Without one, the oldest readable entry is the tail: a conservative rule
+        // that reads a hole directly above a trim point as part of the trim.
         // Probe for the oldest readable entry by asking for a single
         // entry from sequence 0. If the WAL has been trimmed, the page
         // will yield the first surviving entry whose sequence is > 0.
@@ -215,7 +229,7 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         {
             // Empty (or fully trimmed) WAL - tail collapses to head so
             // a checkpoint at head is not flagged as fallen-off.
-            return await grain.GetNextSequenceAsync(cancellationToken).ConfigureAwait(false);
+            return await grain.GetReadableHeadAsync(cancellationToken).ConfigureAwait(false);
         }
 
         return page.Entries[0].Sequence;

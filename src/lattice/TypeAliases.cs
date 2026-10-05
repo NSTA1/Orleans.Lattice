@@ -822,6 +822,12 @@ internal static class TypeAliases
     /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
     internal const string WalOffsetConsumerRegistryState = "ol.wcs";
 
+    /// <summary>
+    /// Alias for the WAL trim watermark capability marker grain interface, which a
+    /// silo hosts when its WAL providers persist the trim watermark (issue #4621).
+    /// </summary>
+    internal const string IWalTrimWatermarkSupportGrain = "ol.wtw";
+
     // Restored-copy receive fence (issue #4593)
 
     /// <summary>Alias for the per-physical-copy receive fence grain interface.</summary>

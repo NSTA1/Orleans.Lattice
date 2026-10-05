@@ -204,9 +204,11 @@ replication change feed.
 |---|---|
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-partition sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight is returned, so a cursor-advancing reader never skips a prefix hole. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight, or whose abandoned flush may still land, is returned, so a cursor-advancing reader never skips a prefix hole a write can still fill. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
+| `GetReadableHeadAsync(CancellationToken)` | Returns the head a reader may resume from: one past the highest sequence a read would expose. Lower than `GetNextSequenceAsync` while a flush is in flight, while an abandoned flush may still land, or while a trailing hole sits above every stored entry (issue #4621). |
+| `GetTrimWatermarkAsync(CancellationToken)` | Returns the shard's trim watermark when a reader may trust it, otherwise `null`. See [Abandoned flushes, holes and the trim watermark](#abandoned-flushes-holes-and-the-trim-watermark). |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reports the persisted footprint rather than a monotonically-growing offset counter; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
 
@@ -486,6 +488,38 @@ slot drains instead of saturating the chain, and the
 `orleans.lattice.wal.flush.preflight.timeouts` counter attributes each trip to
 the `(tree, shard)`.
 
+### Abandoned flushes, holes and the trim watermark
+
+A flush abandoned at its deadline is still in motion and may land later (issue
+#4621). Until its provider call settles, nothing at or above its window is
+exposed to a reader - by `ReadAsync`, `ReadShippingAsync`, or the readable head
+`GetReadableHeadAsync` that readers resume from - so a late landing is never
+below a reader's position. The record of such windows is process-wide, keyed by
+provider and shard, so a reactivation of the shard in the same process is held
+too. Exposure is also never past the highest offset the shard knows is stored,
+plus one: a recovering allocator resumes there, so a trailing hole stays
+unexposed until something lands above it, and a reissued offset can never land
+below a reader. Once the call settles, its window is final: the entries landed,
+and are read in order, or the slot is a permanent hole, because the allocator is
+already past it. Offsets are therefore not dense.
+
+A hole directly above a trim point looks exactly like a trim to a reader that
+judges by the lowest stored offset. Every provider therefore keeps a **trim
+watermark** (`IWalStorageProvider.GetTrimWatermarkAsync`): the highest offset any
+trim has trimmed through, persisted before the trim deletes anything, never
+returned by a read. An offset at or below it was trimmed; a missing offset above
+it is a hole. The in-memory provider raises it under the same lock as the delete,
+the file provider records it as its trim marker, and the Azure Table provider in a
+per-shard row of the manifest partition. The tail every reader judges fall-off
+by - the leaf's prefix-loss check, the WAL subscriber, the fall-off detector, and
+the replication shipper's forced-gap check - is one past the watermark.
+
+A reader trusts the watermark only when every silo in the cluster manifest hosts
+the build that maintains it: a silo that predates it trims without moving it, and
+its trims would read as holes. Until then, and for a third-party provider that
+keeps no watermark, readers treat every jump in offsets as a trim, which can
+trigger a needless rebuild or re-seed during a rolling upgrade but never skips a
+trim.
 
 ### Batched leaf write path
 
@@ -865,9 +899,11 @@ the GC may trim past it, and the capture then falls back to a full backup. Its
 gap detection, like a view's, is exact by offset and made against what was
 actually read. The shared WAL subscriber probes the tail again whenever a read
 jumps an offset, so a trim that lands after its pre-read check is reported as a
-fall-off rather than read across. A jump the tail has not passed is a slot whose
-flush failed and was never acknowledged, and is read past as before (issue #4621
-tracks such a slot whose write lands after the reader has passed it).
+fall-off rather than read across. A jump the tail has not passed is a hole - a
+slot whose flush failed and was never acknowledged - and is read past. The tail
+is one past the shard's trim watermark, so a hole directly above a trim point is
+not mistaken for the trim (see [Abandoned flushes, holes and the trim
+watermark](#abandoned-flushes-holes-and-the-trim-watermark)).
 
 The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to

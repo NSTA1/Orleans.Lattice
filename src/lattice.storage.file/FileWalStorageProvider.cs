@@ -419,6 +419,20 @@ public sealed class FileWalStorageProvider : IWalStorageProvider, IDisposable
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// The file provider persists a trim marker before it drops anything, and
+    /// recovery drops every entry at or below the highest marker, so it reports
+    /// that marker exactly.
+    /// </remarks>
+    public async Task<long?> GetTrimWatermarkAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        ThrowIfDisposed();
+        return await GetShard(treeId, shardIndex).GetTrimWatermarkAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <inheritdoc />
     public Task<long> GetRetainedByteSizeAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(treeId);
