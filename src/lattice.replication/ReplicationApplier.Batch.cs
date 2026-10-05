@@ -615,8 +615,10 @@ internal sealed partial class ReplicationApplier
     ///   <item><description>Range-delete entries apply
     ///   through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
-    ///   <item><description>Point entries have no HLC drop threshold:
-    ///   neither the incrementally advanced per-origin diagonal (per-origin
+    ///   <item><description>Point entries have no HLC drop threshold but
+    ///   the bootstrap drop floor (#4549), which is the source's
+    ///   downward-closed per-origin applied low watermark: neither the
+    ///   incrementally advanced per-origin diagonal (per-origin
     ///   HLC is non-monotonic in WAL-append order - #1060) nor a
     ///   snapshot-pinned floor (no single HLC is downward-closed over what a
     ///   snapshot holds - #4463). Exact duplicates are absorbed by the
@@ -1060,7 +1062,8 @@ internal sealed partial class ReplicationApplier
                 // when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. There is no HLC drop threshold
-                // ahead of it (#1060, #4463).
+                // ahead of it but the bootstrap drop floor (#1060, #4463,
+                // #4549).
                 if (!dedupeCache.TryAdd(entry, out var duplicateInFlight))
                 {
                     // IN-FLIGHT DUPLICATE (#4465): see ApplyAsync. A

@@ -8,8 +8,8 @@ SUMMARY: the source keeps its watermark across a lineage re-stamp, so a value th
 PERTURBS: Restore
 
 --- FIND
-    /\ lostR' = cursor[<<r, s>>]
+    /\ lost' = [o \in Others |-> cursor[<<o, s>>]]
 --- REPLACE
 \* MUTATION: the watermark is not reset by the re-stamp.
-    /\ lostR' = lostR
+    /\ lost' = lost
 --- END

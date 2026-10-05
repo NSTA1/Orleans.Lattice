@@ -485,9 +485,12 @@ internal sealed partial class ReplicationApplier(
                 ReplicationFloorAdmission.Stamp(admission.FloorEpoch);
             }
 
-            // There is NO per-origin HLC drop threshold for point writes -
-            // neither the incrementally-advanced diagonal nor a
-            // snapshot-pinned floor.
+            // Apart from the bootstrap drop floor above, there is NO per-origin
+            // HLC drop threshold for point writes - neither the
+            // incrementally-advanced diagonal nor a snapshot-pinned floor. The
+            // drop floor is sound where these are not because it is the
+            // source's per-origin applied low watermark, which is downward-
+            // closed (#4586), and is final only once its import closed stable.
             //
             // The source HLC is stamped per leaf (BPlusLeafGrain's own
             // clock) and WAL/replog partitions are keyed by
