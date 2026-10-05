@@ -216,4 +216,15 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(11)]
     public bool DetachedFromLog { get; set; }
+
+    /// <summary>
+    /// What the shipper needs to vouch for the peer's applied low watermark
+    /// (issue #4586 part 2b): the receiver lineage it last saw, the shipped
+    /// prepares whose terminals the peer has not acknowledged yet, and the
+    /// records it passed without delivering. Legacy state decodes to an empty
+    /// value, under which the shipper vouches for nothing until it has seen
+    /// the receiver's lineage. Slots 11 to 19 are reserved for other work.
+    /// </summary>
+    [Id(20)]
+    public SourceFrontierShipperState Frontier { get; set; } = new();
 }

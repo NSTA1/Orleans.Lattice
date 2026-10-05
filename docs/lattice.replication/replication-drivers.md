@@ -809,6 +809,30 @@ A withheld saga must still converge on the peer, so the shipper withholds one on
 
 A rebind that meets no purged saga, which is the normal case, costs nothing beyond one registry read per saga in the replayed region. Every saga record in every released build's write-ahead log was appended after a durable participant registration, because both shipped together in lattice 4.0.0, so the predicate holds across rolling upgrades.
 
+### Applied low watermark: what the shipper vouches for
+
+Beside every batch, and on an idle link's liveness probe, the shipper ships `ReplicationBatch.SourceFrontier` ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). Every write this cluster authored to the tree and stamped strictly below its `TreeLowWatermark` was acknowledged by the peer, and is visible there, in the peer's lineage of the tree that the frontier names. `OriginLowWatermark` is the same claim over every tree this cluster replicates to the peer.
+
+- **Per partition.** A shipping read returns the partition's clock floor paired with the offset it was in force at: every fresh local write at or after that offset is stamped at or above the floor. Once the durable cursor has passed that offset, the floor is covered. The durable cursor moves only on acknowledgements and is capped at held saga terminals.
+- **Per tree.** The watermark is the minimum covered floor over the tree's partitions. A partition with no covered floor means the tree has no watermark.
+- **Clamps.** The watermark never passes:
+  - the earliest acknowledged prepare of a saga whose terminals the peer has not all acknowledged (`ReplicationShipperState.Frontier`), because a prepared write stays invisible on the peer until its terminal lands;
+  - a local record the cursor passed without delivering it (a dead-lettered batch), until a re-seed from a later export carries it;
+  - a prepare it could not track, because more than 4096 shipped sagas awaited their terminals.
+- **No watermark at all** while any of these holds:
+  - the peer is off the log, or a replay filter is set;
+  - the latest acknowledgement did not report the peer's lineage, or the peer reports `Guid.Empty`, meaning it tracks no lineage;
+  - the cluster's clock floor gate is closed;
+  - the tree is key-filtered, since a filtered write never reaches the peer.
+- **Lineage.** Every acknowledgement reports the peer's lineage of the tree (`ReplicationAck.ReceiverLineage`). The receiver re-mints it whenever the tree's contents may lose writes: a restore, revert, alias swap, purge or recreate.
+  - A move to a different non-empty lineage is a [forced gap](#forced-gap-a-peer-taken-off-the-log): the peer's new contents may lack writes already shipped, so the shipper re-seeds the peer and vouches again only after the rewind's replay filter clears. This covers a move from none seen or from an empty lineage too, once anything was acknowledged.
+  - A peer's lineage re-seeds run one tree at a time (`IReplicationSourceFrontierAggregateGrain`), so a rollout does not re-seed every tree at once.
+- **Across trees.** The per-peer aggregate grain keeps each tree's latest watermark. The origin watermark is their minimum, or zero while any replicated tree has no fresh one.
+  - It carries a generation that rises on every activation, every lineage change and every tree joining.
+  - The receiver ignores an aggregate from an older generation than one it has seen.
+
+A rebind discards the floors of the retired log. A replay filter a rebind begins clears once every partition has passed its horizon. A partition never consumed counts as being at offset 0, so it no longer holds the filter open ([#4656](https://github.com/NSTA1/Orleans.Lattice/issues/4656)).
+
 ### Deferred cursor persistence
 
 Cursor advances are amortised across `ShipCursorWriteInterval`

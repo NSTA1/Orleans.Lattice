@@ -221,6 +221,8 @@ internal sealed partial class ReplicationShipperGrain
         // snapshot carries any saga it withholds (#4533).
         await BeginReplayFilterAsync(_partitionCount, carried: true);
         state.State.ReseedRequiredSinceUtcTicks = 0;
+        // The re-seed settled what the applied low watermark was clamped on (#4586).
+        await OnReseedRewoundForFrontierAsync(echoed);
         await state.WriteStateAsync();
         ReportReseedState();
 

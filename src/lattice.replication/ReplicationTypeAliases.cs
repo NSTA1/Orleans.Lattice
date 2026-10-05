@@ -318,4 +318,9 @@ public static class ReplicationTypeAliases
     internal const string ReplicationTreeOriginFrontier = "olr.to";
     internal const string ReplicationTreeFrontierSnapshot = "olr.tn";
 
+    // The sender's per-peer aggregate of its trees' applied low watermarks (#4586 part 2b).
+    internal const string IReplicationSourceFrontierAggregateGrain = "olr.fa";
+    internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
+    internal const string SourceFrontierShipperState = "olr.fw";
+    internal const string SourceFrontierPrepare = "olr.fx";
 }
