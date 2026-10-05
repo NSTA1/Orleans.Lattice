@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 9 | 4 | 14 | 22 | 26 | 91,389 |
+| `WalDurability` | 9 | 4 | 15 | 26 | 27 | 91,389 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
@@ -37,6 +37,13 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
 invariant and both action properties with a budget of two faults instead of one:
 445,516 distinct states to depth 32. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
+
+Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
+leaf's durable snapshot (`SnapshotVanish`, issue #4634), at two faults so a snapshot can
+vanish and its leaf then stop. Destroyed data is outside the durability properties by
+construction, so it checks the properties that say the loss is never silent -
+`ReadPositionHonest` above all - with the other safety invariants that still apply:
+754,876 distinct states to depth 32, about forty seconds on two workers.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the

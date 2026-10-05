@@ -21,7 +21,7 @@ PERTURBS: Capture, ActivateLoadFail
     /\ rp[l] >= 0
 --- END
 --- FIND
-    /\ snapCov[l] # NoSnap
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
     /\ UNCHANGED vars
 --- REPLACE
     /\ snapCov[l] # NoSnap
