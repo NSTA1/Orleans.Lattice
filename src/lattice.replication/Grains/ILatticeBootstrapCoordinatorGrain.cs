@@ -49,6 +49,13 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Re-enters the normal full bootstrap path when a prior delete reconcile
+    /// skipped on an unstable source generation and recorded durable owed work.
+    /// No-op when no owed retry exists for <paramref name="sourceClusterId"/>.
+    /// </summary>
+    Task RetryOwedReconcileAsync(string sourceClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Drives the bootstrap state machine through
     /// <see cref="LatticeBootstrapState.RequestingSnapshot"/> →
     /// <see cref="LatticeBootstrapState.ApplyingSnapshot"/> →

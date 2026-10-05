@@ -46,6 +46,10 @@ public sealed class DerivedTreeEntriesTests
         nameof(TreeRegistryEntry.ReplacedShardMap),
         nameof(TreeRegistryEntry.ReplacedNextShardIndex),
         nameof(TreeRegistryEntry.AliasCutoverTarget),
+        // Content identity, not configuration (#4537): a derived copy gets its own
+        // lineage, and carrying one tree's onto another would claim the copy holds
+        // that tree's contents.
+        nameof(TreeRegistryEntry.Lineage),
     ];
 
     private static TreeRegistryEntry WithEveryOverride() => new()

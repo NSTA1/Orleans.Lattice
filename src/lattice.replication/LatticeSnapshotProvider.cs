@@ -142,8 +142,63 @@ internal sealed class LatticeSnapshotProvider(
             .AdvanceAsync()
             .ConfigureAwait(false);
 
-        var entries = EnumerateAsync(treeName, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, asOfHlc, frontier, entries) { ExportEpoch = epoch };
+
+        var openGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+        SnapshotStream? stream = null;
+        var entries = EnumerateWithCloseGenerationAsync();
+        stream = new SnapshotStream(treeName, asOfHlc, frontier, entries)
+        {
+            OpenGeneration = openGeneration,
+            ExportEpoch = epoch,
+        };
+        return stream;
+
+        async IAsyncEnumerable<SnapshotEntry> EnumerateWithCloseGenerationAsync(
+            [EnumeratorCancellation] CancellationToken iteratorCancellationToken = default)
+        {
+            var linked = iteratorCancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, iteratorCancellationToken)
+                : null;
+            var effectiveCancellationToken = linked?.Token ?? cancellationToken;
+            try
+            {
+                await foreach (var entry in EnumerateAsync(treeName, asOfHlc, effectiveCancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    yield return entry;
+                }
+
+                stream!.CloseGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+            }
+            finally
+            {
+                linked?.Dispose();
+            }
+        }
+    }
+
+    private async Task<SnapshotSourceGeneration> CaptureSourceGenerationAsync(string treeName)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(false);
+        if (entry is null)
+        {
+            return new SnapshotSourceGeneration();
+        }
+
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false);
+        var deletion = await _grainFactory.GetGrain<ITreeDeletionGrain>(treeName)
+            .GetDeletionStatusAsync()
+            .ConfigureAwait(false);
+        return new SnapshotSourceGeneration
+        {
+            PhysicalTreeId = physicalTreeId,
+            ShardMapVersion = shardMap?.Version ?? 0L,
+            Lineage = entry.Lineage,
+            DeleteEpoch = deletion.DeletionEpoch,
+            IsDeleted = deletion.IsDeleted || deletion.PurgeInProgress || deletion.PurgeComplete,
+        };
     }
 
     private async IAsyncEnumerable<SnapshotEntry> EnumerateAsync(
@@ -674,4 +729,3 @@ internal sealed class LatticeSnapshotProvider(
         }
     }
 }
-
