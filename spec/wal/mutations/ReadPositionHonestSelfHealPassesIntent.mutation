@@ -1,0 +1,32 @@
+# Pairs with ReadPositionHonest. The #1744 write-path self-heal passes the
+# new-leaf intent for a leaf with no row and no snapshot, taking "nothing
+# durable" as proof that the leaf was never created. The row and the snapshot
+# can both be lost after the GC trimmed under the snapshot, so the self-healed
+# leaf starts cold from the trimmed WAL. The base never passes the intent from
+# the self-heal. Production analogue: #4671's R2b, red on
+# The_write_path_self_heal_does_not_re_create_a_leaf_whose_row_was_lost.
+MODULE: ReadPositionHonestSelfHealPassesIntent
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the write-path self-heal re-creates a leaf with no row and no snapshot
+PERTURBS: Activate
+
+--- FIND
+    /\ row[l] \/ CreateIntent(l)
+--- REPLACE
+\* MUTATION: the self-heal takes "no row and no snapshot" as never created.
+    /\ row[l] \/ snapCov[l] = NoSnap
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END
