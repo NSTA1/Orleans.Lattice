@@ -290,6 +290,19 @@ adds nothing to wait for) after the same cluster-identity check the freeze
 makes; once the barrier has decided, it is finalized with the decided
 verdict.
 
+A participant that stops being replicated here before its own terminal
+arrives would otherwise be waited for for ever: its terminal is dropped at
+the enrollment gate. That drop - and only that one, the gate's
+not-replicated arm - tells the barrier the tree is absent. An undecided
+barrier that still waits for it removes it from the wait set and, if every
+remaining tree has arrived, decides by the usual rule; the applier then
+finalizes the remaining trees. The dropped tree's pending bucket of the
+sub-saga is discarded, because the tree is no longer a replica of the
+origin. A terminal dropped or deferred for any other reason (a merge-mode
+mismatch, an apply failure) never decides the barrier. A barrier that has
+not opened is left untouched and persists nothing, since the tree and
+operation ids are peer-supplied.
+
 Once a tree's per-source-shard gate is final, a cross-tree terminal does
 **not** flip that tree's registry directly. Instead the receiver durably
 registers the tree's local txid as delegated to a **receiver coordinator
