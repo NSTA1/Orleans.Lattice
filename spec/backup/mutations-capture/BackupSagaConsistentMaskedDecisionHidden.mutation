@@ -1,0 +1,19 @@
+# Pairs with BackupSagaConsistent, and reproduces production before the #4619 fix.
+# TxRegistryGrain.CaptureLocalDecisions reported an expired decision tombstone
+# whose row is still stored as Indeterminate, so the capture hides the key of
+# a pending bucket, while the sweeps apply the recorded verdict to the other
+# shards. A committed batch is captured with one key post-saga and another
+# absent, losing the committed write from every restore.
+MODULE: BackupSagaConsistentMaskedDecisionHidden
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: the gate snapshot masks an expired but recorded decision as Indeterminate
+PERTURBS: GateAcquire
+
+--- FIND
+    /\ d0' = [d0 EXCEPT ![T] = [t \in Sagas |-> loc[t][T]]]
+--- REPLACE
+    \* MUTATION: an expired tombstone is masked as Indeterminate.
+    /\ d0' = [d0 EXCEPT ![T] = [t \in Sagas |->
+               IF T = "T1" /\ t = "s" /\ expired /\ loc[t][T] # "none" THEN "indeterminate" ELSE loc[t][T]]]
+--- END

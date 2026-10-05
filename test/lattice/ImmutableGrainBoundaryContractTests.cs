@@ -127,6 +127,11 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.RangeDeleteResult"] = ReadModel,
 
             ["Orleans.Lattice.BPlusTree.SiblingInitialization"] = CopiedOnReceipt,
+            ["Orleans.Lattice.BPlusTree.State.AppliedTerminalWitness"] =
+                "Applied-terminal witness keys (issue #4545). Every receiver copies them and keeps no shared array: the "
+                + "split sibling's adoption and the leaf's sidecar hydration add each key to the leaf's own HashSet, and "
+                + "LeafTerminalWitnessGrain.Merge builds fresh arrays for its durable record. No side writes into the "
+                + "array in place.",
 
             ["Orleans.Lattice.Operations.LatticeOperationBeginRequest"] = OperationCopiedOnReceipt,
             ["Orleans.Lattice.Operations.LatticeOperationCompletion"] = OperationCopiedOnReceipt,

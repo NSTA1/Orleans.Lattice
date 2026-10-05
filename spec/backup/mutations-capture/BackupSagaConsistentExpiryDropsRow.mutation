@@ -1,0 +1,25 @@
+# Pairs with BackupSagaConsistent. Expiry removes the decision row instead of
+# leaving it stored as a tombstone until the prune, so a saga whose terminal
+# fan-out is half done loses its decision while one of its buckets is still
+# pending. A capture then serves that bucket pre-saga beside a shard that
+# already applied the commit. Production keeps the expired row until
+# TxRegistryGrain.PruneExpired, which runs only after the saga forgot it,
+# and the saga forgets only after its broadcast. DEADLOCK is off because the
+# dropped row also strands the pending bucket for good: no sweep or
+# broadcast can terminate it, so the saga never quiesces.
+MODULE: BackupSagaConsistentExpiryDropsRow
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: an expired decision row is removed at expiry instead of at the prune
+PERTURBS: Expire
+DEADLOCK: off
+
+--- FIND
+    /\ expired' = TRUE
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc, term>>
+--- REPLACE
+    /\ expired' = TRUE
+    \* MUTATION: the row is dropped at expiry, before the terminals land.
+    /\ loc' = [loc EXCEPT !["s"]["T1"] = "none"]
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, term>>
+--- END

@@ -1,0 +1,22 @@
+# Pairs with BackupSagaConsistent, and answers the #4619 residual: a decision
+# row pruned while a bucket of its saga is still pending. Pruning before every
+# shard applied its terminal leaves the pending bucket with no local decision,
+# so the capture reads it pre-saga next to a shard already post-saga. In
+# production the saga calls ForgetAsync only after its broadcast acked, which
+# is the precondition this mutation drops. DEADLOCK is off because the
+# pruned row also strands the pending bucket for good: no sweep or
+# broadcast can terminate it, so the saga never quiesces.
+MODULE: BackupSagaConsistentPruneBeforeTerminals
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: an expired decision row is pruned while a bucket of its saga is still pending
+PERTURBS: Prune
+DEADLOCK: off
+
+--- FIND
+    /\ \A sh \in Writes("s") : term["s"][sh] # "none"
+    /\ loc' = [loc EXCEPT !["s"]["T1"] = "none"]
+--- REPLACE
+    \* MUTATION: pruned before every terminal was applied.
+    /\ loc' = [loc EXCEPT !["s"]["T1"] = "none"]
+--- END
