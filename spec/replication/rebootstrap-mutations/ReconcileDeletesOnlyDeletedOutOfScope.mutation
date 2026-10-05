@@ -8,8 +8,8 @@ SUMMARY: the reconcile ignores the export's scope, so a range-scoped export dele
 PERTURBS: EndExport
 
 --- FIND
-    /\ LET ok == /\ ex.scope
+           orphan == ex.scope /\ ex.precap.present /\ ~ex.carried
 --- REPLACE
 \* MUTATION: scope is not consulted.
-    /\ LET ok == /\ TRUE
+           orphan == ex.precap.present /\ ~ex.carried
 --- END

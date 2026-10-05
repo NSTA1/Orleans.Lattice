@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted in ReplicationReBootstrap. The foreign reconcile is sound only below
+# the low watermark the source held at export open: above it the source may not have
+# applied the entry, so its absence proves nothing.
+MODULE: ReconcileDeletesOnlyDeletedForeignAboveWatermark
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: an entry of another origin is reconciled whatever its HLC, so one the source never applied is turned into a delete
+PERTURBS: EndExport
+
+--- FIND
+           okFor == foreign /\ stable /\ reg[r].h < ex.lwm0
+--- REPLACE
+\* MUTATION: the watermark is not consulted.
+           okFor == foreign /\ stable
+--- END
