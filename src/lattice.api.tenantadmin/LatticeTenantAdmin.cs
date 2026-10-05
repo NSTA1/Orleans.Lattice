@@ -416,7 +416,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     /// <c>sys-</c> system-data prefix or the <c>_lattice_</c> system prefix is an
     /// avoidable confusion trap. Applied only on the create path: an existing
     /// tenant registered before this guard must still be readable and deletable,
-    /// so the shared <see cref="ParseTenant"/> grammar is deliberately unchanged.
+    /// so the shared <see cref="TenantAdminArguments.ParseTenantId(string, string)"/> grammar is deliberately unchanged.
     /// </summary>
     private static void ThrowIfReservedTenantId(TenantId tenant)
     {

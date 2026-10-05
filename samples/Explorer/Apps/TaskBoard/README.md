@@ -59,11 +59,11 @@ dialog, then:
    that text comes from the manifest and is shown as plain text.
 2. **Review consent.** Open the entry and choose **Install...**. The review shows
    what the app asks for, drawn against its own `a/task-board/` namespace:
-   - one tree, `tasks`;
-   - two roles, `viewer` (`Read`, `RangeRead`) and `editor` (`Read`,
+   - tree `tasks`;
+   - roles `viewer` (`Read`, `RangeRead`) and `editor` (`Read`,
      `RangeRead`, `Write`, `Delete`), both scoped to `tasks`;
    - replication of `tasks`, last-writer-wins (see [Tenants](#tenants));
-   - six bridge operations for its UI: `context.read`, `data.read`,
+   - bridge operations for its UI: `context.read`, `data.read`,
      `data.write`, `data.delete`, `nav.sync` and `ui.notify`, the data ones
      limited to `tasks`.
 
@@ -84,7 +84,7 @@ dialog, then:
    frame the default appearance and does not tell it when the console's theme
    changes.
 
-### The same app, three groups
+### The same app under different groups
 
 | Signed in as | Group | Role | What they see |
 |--------------|-------|------|---------------|

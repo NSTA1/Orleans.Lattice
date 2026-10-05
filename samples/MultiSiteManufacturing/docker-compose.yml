@@ -26,8 +26,8 @@
 # (round-robin) router for the gRPC service path.
 #
 # Only three host ports are published:
-#   5001 -> traefik-us -> Blazor UI + replication gRPC
-#   5002 -> traefik-eu -> Blazor UI + replication gRPC
+#   5001 -> traefik-us -> Blazor UI + replication/state/backup gRPC
+#   5002 -> traefik-eu -> Blazor UI + replication/state/backup gRPC
 #   3000 -> grafana -> observability dashboards
 #
 # Silo HTTP (:8080), Orleans silo (:11111), and gateway (:30000) ports

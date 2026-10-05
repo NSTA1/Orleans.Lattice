@@ -27,7 +27,7 @@ grounding, explanation, decomposition, and maintenance.
 
 The **data model you operate over is not yours and is not restated here**. It
 lives in [`backlog-protocol.md`](backlog-protocol.md),
-which is authoritative for the item schema, the attribute tags, the seven-relation
+which is authoritative for the item schema, the attribute tags, the relation
 vocabulary, the ready-set algorithm, the defect conditions, the grouping model,
 branch inheritance, the mirroring split, and entry gating. Read it before you act.
 This file describes **behaviour over that model**. Where the two ever appear to

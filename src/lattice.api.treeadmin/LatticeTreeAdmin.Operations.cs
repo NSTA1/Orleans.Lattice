@@ -53,27 +53,27 @@ internal sealed partial class LatticeTreeAdmin
     public async Task<LatticeOperationHandle> StartViewRebuildAsync(
         string viewName, string? operationId = null, CancellationToken cancellationToken = default)
     {
-        var start = await StartViewCoreAsync(rebuild: true, viewName, ResolveOperationId(operationId), cancellationToken)
+        var start = await StartViewCoreAsync(rebuild: true, viewName, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(start.Launch);
+        return LatticeOperationMapping.ToHandle(start.Launch);
     }
 
     /// <inheritdoc />
     public async Task<LatticeOperationHandle> StartViewReconcileAsync(
         string viewName, string? operationId = null, CancellationToken cancellationToken = default)
     {
-        var start = await StartViewCoreAsync(rebuild: false, viewName, ResolveOperationId(operationId), cancellationToken)
+        var start = await StartViewCoreAsync(rebuild: false, viewName, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(start.Launch);
+        return LatticeOperationMapping.ToHandle(start.Launch);
     }
 
     /// <inheritdoc />
     public async Task<LatticeOperationHandle> StartTagIndexReconcileAsync(
         string indexName, string? operationId = null, CancellationToken cancellationToken = default)
     {
-        var (_, launch, _) = await StartTagIndexReconcileCoreAsync(indexName, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch, _) = await StartTagIndexReconcileCoreAsync(indexName, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -86,9 +86,9 @@ internal sealed partial class LatticeTreeAdmin
         CancellationToken cancellationToken = default)
     {
         var (_, launch) = await StartWalMoveCoreAsync(
-            treeId, partition, targetProviderKey, options, ResolveOperationId(operationId), cancellationToken)
+            treeId, partition, targetProviderKey, options, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -290,7 +290,7 @@ internal sealed partial class LatticeTreeAdmin
         bool repair, string treeId, string? operationId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
         var runner = RequireRunner();
         var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         if (repair)
@@ -319,7 +319,7 @@ internal sealed partial class LatticeTreeAdmin
             totals => LatticeOperationCompletion.Succeeded(treeId, totals.ToResult(treeId, repair)))
             .ConfigureAwait(false);
 
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <summary>
@@ -454,20 +454,6 @@ internal sealed partial class LatticeTreeAdmin
 
     private LatticeOperationRunner RequireRunner() => _operationRunner ?? throw new InvalidOperationException(
         "The accept-then-poll tree-administration operations require the core operation coordinator, which AddLattice registers.");
-
-    private static string ResolveOperationId(string? operationId)
-    {
-        if (operationId is null)
-        {
-            return LatticeOperationKey.NewId();
-        }
-
-        LatticeOperationKey.ThrowIfInvalid(operationId, nameof(operationId));
-        return operationId;
-    }
-
-    private static LatticeOperationHandle ToHandle<TResult>(LatticeOperationLaunch<TResult> launch) =>
-        LatticeOperationMapping.ToHandle(launch.Record, created: launch.Completion is not null);
 
     private static Dictionary<string, string> ViewResult(string viewName, string sourceTreeId, bool? driftRepaired)
     {

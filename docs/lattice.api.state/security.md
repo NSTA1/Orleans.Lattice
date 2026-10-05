@@ -4,7 +4,7 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 ## The authorization seam
 
-`ILatticeStateApiAuthorizer` is the single per-call authorization seam. The binding installs an interceptor that calls it on every unary and streaming RPC before the request reaches the service - except the unauthenticated `GetAuthScheme` advertisement RPC, which the interceptor exempts so a client can discover how to sign in before it holds a credential. The package ships two reference implementations:
+`ILatticeStateApiAuthorizer` is the single per-call authorization seam. The binding installs an interceptor that calls it on every unary and streaming RPC before the request reaches the service - except the unauthenticated `GetAuthScheme` advertisement RPC, which the interceptor exempts so a client can discover how to sign in before it holds a credential. The package ships reference implementations:
 
 - `DenyAllStateApiAuthorizer` - rejects every protected call it sees. This is the **default**, registered with `TryAdd` so it only applies when you have not registered your own.
 - `AllowAllStateApiAuthorizer` - accepts every protected call it sees. Use it only behind an already-authenticated outer boundary (a service mesh, a gateway, or mutual-TLS termination that has already established trust).
@@ -13,7 +13,7 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 The seam describes mapped calls with a `LatticeStateApiAuthorizationContext` carrying the underlying `ServerCallContext` (`Call`), the `LatticeStateApiOperation` - one member per protected RPC, from `ListTrees` to `ListDeadLetters` - and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. `TargetTreeId` is the request's `TreeId` for the per-tree reads, `CancelScan`, the change feed, and the dead-letter RPCs; a catalog request's `SourceTreeId`; the one tree a metrics request names when it names exactly one; and `null` otherwise (`GetClusterInfo`, `ScanTagMembers`, and a multi-tree or unscoped metrics request). A method the interceptor does not map uses `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
 
-The three index-wide tag-browsing operations (`ListCoveredTrees`, `ListIndexTags`, `ScanTagMembers`) span every tree a tag index covers, so they carry no meaningful target tree: `ScanTagMembers` always presents a `null` `TargetTreeId`, while `ListCoveredTrees` and `ListIndexTags` present only the request's `SourceTreeId`, which both of them ignore - `null` in normal use, but caller-controlled. They authorize at the cluster / index level like `ListTrees` and `ListViews`, not per subject tree. A policy that grants tag-index browsing therefore grants it across all covered trees; scope it by operation (deny these three) rather than by target tree if a tenant must not see cross-tree membership. The subject-tree-scoped `ListTagValues` (which does carry a `TargetTreeId`) remains available for per-tree tag enumeration.
+The index-wide tag-browsing operations (`ListCoveredTrees`, `ListIndexTags`, `ScanTagMembers`) span every tree a tag index covers, so they carry no meaningful target tree: `ScanTagMembers` always presents a `null` `TargetTreeId`, while `ListCoveredTrees` and `ListIndexTags` present only the request's `SourceTreeId`, which both of them ignore - `null` in normal use, but caller-controlled. They authorize at the cluster / index level like `ListTrees` and `ListViews`, not per subject tree. A policy that grants tag-index browsing therefore grants it across all covered trees; scope it by operation (deny these methods) rather than by target tree if a tenant must not see cross-tree membership. The subject-tree-scoped `ListTagValues` (which does carry a `TargetTreeId`) remains available for per-tree tag enumeration.
 
 ### Turnkey credential authorizer
 
@@ -25,7 +25,7 @@ The turnkey authorizer's hash format is public: `LatticePasswordHash` encodes, p
 
 ### Identity and advertisement seams
 
-Two further public seams are `TryAdd`-registered by `AddLatticeStateApiGrpc`, so a host replaces either by registering its own implementation first:
+Further public seams are `TryAdd`-registered by `AddLatticeStateApiGrpc`, so a host replaces either by registering its own implementation first:
 
 - `ILatticeStateApiCredentialBridge` lifts the caller identity off each inbound call onto the ambient Lattice credential that drives the per-tree / per-key visibility filtering. The default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix; supply your own for, say, a client-certificate or signed-edge-header identity. It runs after, and independently of, `ILatticeStateApiAuthorizer`, and a `null` result leaves the caller anonymous, which auth-backed visibility denies.
 - `ILatticeStateApiAuthSchemeSource` supplies what the unauthenticated `GetAuthScheme` RPC returns. The default is backed by `LatticeStateApiGrpcOptions.AdvertisedAuthSchemes`; because the advertisement is served without a credential, an implementation must return public configuration only.
@@ -38,7 +38,7 @@ Silo-internal **system trees** (the reserved `_lattice_*` prefix) are hidden fro
 
 ## Default-deny posture
 
-With `AddLatticeStateApiGrpc` and nothing else, `LatticeStateApiGrpcOptions.RequireAuthorization` is at its default and the default-deny authorizer is in place, so the endpoint rejects all traffic. You open it one of two ways:
+With `AddLatticeStateApiGrpc` and nothing else, `LatticeStateApiGrpcOptions.RequireAuthorization` is at its default and the default-deny authorizer is in place, so the endpoint rejects all traffic. You open it deliberately:
 
 Register a real authorizer that validates the caller (a token, a client certificate, a claim):
 

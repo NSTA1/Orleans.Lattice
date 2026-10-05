@@ -16,6 +16,7 @@ and validated during registration.
 | `CallbackPath` | `string` | `DefaultCallbackPath` (`/signin-oidc`) | OIDC authorization-code callback path. Required to be non-blank. |
 | `SignedOutCallbackPath` | `string` | `DefaultSignedOutCallbackPath` (`/signout-callback-oidc`) | OIDC signed-out callback path. |
 | `Scopes` | `IList<string>` | Empty | Downstream State API scopes. When empty, the auth method resolves the scope from the State API advertised audience and appends `/.default` when needed. |
+| `AllowedAudiences` | `IList<string>` | Empty | Audiences an advertised State API audience may name when `Scopes` is empty. Empty admits `api://` resources and `https` resources on the endpoint host; non-empty replaces that rule with exact matches. |
 | `TokenCache` | `ExplorerWebTokenCacheKind` | `InMemory` | Microsoft.Identity.Web token-cache backing. Use `Distributed` with a shared `IDistributedCache` for multi-replica hosting. |
 | `RequireAuthenticatedUser` | `bool` | `true` | Installs a fallback authorization policy that challenges unauthenticated requests into OIDC. Set `false` to manage HTTP authorization yourself. |
 | `AutoSignIn` | `bool` | `true` | Enables the best-effort circuit handler that signs in to the State API automatically for an already browser-authenticated user. |

@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
@@ -79,7 +78,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeReplicationControl>();
                 return ReplicationToolInvocations.GetReplicationConfigAsync(control, cancellationToken);
             },
@@ -110,7 +109,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("Optional cluster id to pull an initial snapshot from when the tree already holds data; null skips the bootstrap.")] string? bootstrapSourceClusterId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeReplicationControl>();
                 return ReplicationToolInvocations.EnableReplicationAsync(
                     control, treeId, mode, bootstrapSourceClusterId, cancellationToken);
@@ -137,7 +136,7 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 [Description("The target tree id to disable replication for.")] string treeId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeReplicationControl>();
                 return ReplicationToolInvocations.DisableReplicationAsync(control, treeId, cancellationToken);
             },
@@ -156,27 +155,4 @@ internal sealed class ReplicationToolGroup : ILatticeApiMcpToolGroup
                 Destructive = true,
                 UseStructuredContent = true,
             });
-
-    private static IDisposable StampCredential(IServiceProvider services)
-    {
-        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
-        if (httpContext is null)
-        {
-            return NullScope.Instance;
-        }
-
-        var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
-        // A null credential leaves the ambient context cleared (fail-closed): the
-        // facade's access gate then denies the caller as anonymous.
-        return LatticeCredentialContext.With(credential);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
-    }
 }

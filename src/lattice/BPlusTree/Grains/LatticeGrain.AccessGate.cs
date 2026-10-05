@@ -11,14 +11,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// This issue wires only the <b>read-path key-filter</b>: the
+/// This partial wires the <b>read-path key-filter</b>: the
 /// <see cref="LatticeAccessDecision.KeyFilter"/> a gate returns is applied
 /// server-side, during enumeration, so unauthorized keys are pruned before any
-/// value crosses the grain boundary to the caller. Allow/deny enforcement for
-/// writes, deletes, CRDT apply, atomic writes, range-delete, and lifecycle is a
-/// later step; <see cref="AuthorizeAsync"/> is written generally (it returns the
-/// full decision) so that step can reuse it, but only the range-read surfaces
-/// consult it here.
+/// value crosses the grain boundary to the caller. It also carries the
+/// fail-closed allow/deny enforcement for writes, deletes, CRDT apply, atomic
+/// writes, range-delete, and whole-tree operations, which throws
+/// <see cref="LatticeAuthorizationDeniedException"/> on a denial, while a denied
+/// point read reports the key as absent.
 /// </para>
 /// <para>
 /// <b>Zero-cost default.</b> With only <c>AddLattice</c> registered the gate

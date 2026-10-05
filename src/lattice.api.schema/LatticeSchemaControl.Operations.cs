@@ -22,14 +22,14 @@ internal sealed partial class LatticeSchemaControl
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(targetPolicy);
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
         var operations = RequireOperations();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartRemediationAsync(tenantId, id, treeId, transform, targetPolicy)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -39,14 +39,14 @@ internal sealed partial class LatticeSchemaControl
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
         var operations = RequireOperations();
         RequireVersionAdmin();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartMigrationAsync(tenantId, id, treeId).ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -57,7 +57,7 @@ internal sealed partial class LatticeSchemaControl
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
         var operations = RequireOperations();
         RequireVersionAdmin();
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -65,7 +65,7 @@ internal sealed partial class LatticeSchemaControl
         var tenantId = await ResolveActiveTenantIdAsync(cancellationToken).ConfigureAwait(false);
         var launch = await operations.StartAdvanceAndMigrateAsync(tenantId, id, treeId, newTargetVersion)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -170,18 +170,4 @@ internal sealed partial class LatticeSchemaControl
     private SchemaOperationService RequireOperations() =>
         _operations ?? throw new InvalidOperationException(
             "Schema operations are not available on this silo; call AddLatticeSchemaEnforcement() to register them.");
-
-    private static string ResolveOperationId(string? operationId)
-    {
-        if (operationId is null)
-        {
-            return LatticeOperationKey.NewId();
-        }
-
-        LatticeOperationKey.ThrowIfInvalid(operationId, nameof(operationId));
-        return operationId;
-    }
-
-    private static LatticeOperationHandle ToHandle(LatticeOperationLaunch<LatticeSchemaRemediationReport> launch) =>
-        LatticeOperationMapping.ToHandle(launch.Record, created: launch.Completion is not null);
 }

@@ -29,6 +29,8 @@ host process.
 - An advertised authority is accepted only when it is an absolute `https` URL and
   its host is admitted. With no custom allow-list, the provider accepts the known
   Entra login hosts. A non-empty `AllowedAuthorityHosts` list replaces that set.
+- An advertised audience is accepted only when it is an `api://` resource, an
+  `https` resource on the endpoint host, or an exact match in `AllowedAudiences`.
 - `UseDeviceCode` switches from an interactive browser flow to device-code flow.
 
 ## Setup
@@ -64,6 +66,7 @@ services.AddExplorerEntraAuth(options =>
 | `ClientId` | `string?` | `null` | Public client application id registered in Entra. |
 | `Scopes` | `IList<string>` | Empty | Scopes requested for the access token. At least one scope is required after configuration and advertisement are combined. |
 | `AllowedAuthorityHosts` | `IList<string>` | Empty | Hosts an advertised authority may name. Empty means the built-in Entra host list; non-empty replaces it. |
+| `AllowedAudiences` | `IList<string>` | Empty | Audiences an advertised State API audience may name when `Scopes` is empty. Empty admits `api://` resources and `https` resources on the endpoint host; non-empty replaces that rule with exact matches. |
 | `UseDeviceCode` | `bool` | `false` | Uses device-code flow instead of an interactive browser redirect. |
 | `DeviceCodeCallback` | `Func<string, CancellationToken, Task>?` | `null` | Receives the device-code prompt when device-code flow is enabled. The default acquirer writes the prompt to the console. |
 

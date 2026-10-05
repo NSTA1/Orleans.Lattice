@@ -327,6 +327,7 @@ public sealed class LatticeBackupApiGrpcClient
             ApplyBatchSize = request.ApplyBatchSize,
             TrackingOperationId = trackingOperationId,
         };
+
     /// <summary>Lists the catalogued backups as a deterministic, cursor-resumable page.</summary>
     public Task<BackupCatalogPage> ListBackupsAsync(
         BackupCatalogRequest request,
@@ -392,18 +393,10 @@ public sealed class LatticeBackupApiGrpcClient
 
         var response = await UnaryAsync(
             _methods.RestoreBackup,
-            new RestoreRequestMessage
-            {
-                BackupId = request.BackupId,
-                TargetTreeId = request.TargetTreeId,
-                Scope = request.Scope,
-                Mode = request.Mode,
-                OperationId = request.OperationId,
-                ApplyBatchSize = request.ApplyBatchSize,
-            },
+            ToRestoreMessage(request, trackingOperationId: null),
             cancellationToken).ConfigureAwait(false);
 
-        return ToRestoreResult(response);
+        return RestoreResponseMapping.ToRestoreResult(response);
     }
 
     /// <summary>Reverts a shadow-cutover restore. Idempotent.</summary>
@@ -415,17 +408,7 @@ public sealed class LatticeBackupApiGrpcClient
 
         await UnaryAsync(
             _methods.RevertRestore,
-            new RestoreResponse
-            {
-                BackupId = restore.BackupId,
-                TargetTreeId = restore.TargetTreeId,
-                Mode = restore.Mode,
-                OperationId = restore.OperationId,
-                ManifestChain = restore.ManifestChain,
-                EntriesApplied = restore.EntriesApplied,
-                ShadowPhysicalTreeId = restore.ShadowPhysicalTreeId,
-                PreviousPhysicalTreeId = restore.PreviousPhysicalTreeId,
-            },
+            RestoreResponseMapping.ToRestoreResponse(restore),
             cancellationToken).ConfigureAwait(false);
     }
 
@@ -683,17 +666,6 @@ public sealed class LatticeBackupApiGrpcClient
             yield return call.ResponseStream.Current;
         }
     }
-
-    private static LatticeRestoreResult ToRestoreResult(RestoreResponse response) =>
-        new(
-            response.BackupId,
-            response.TargetTreeId,
-            response.Mode,
-            response.OperationId,
-            response.ManifestChain,
-            response.EntriesApplied,
-            response.ShadowPhysicalTreeId,
-            response.PreviousPhysicalTreeId);
 
     private static BackupScopeStatus? ToScopeStatus(BackupScopeStatusResponse response)
     {

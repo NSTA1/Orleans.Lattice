@@ -11,7 +11,7 @@ The same box also serves the retrieval and token-economics tools for you to use 
 test: explainable search, the budgeted context bundle, its reuse economics, and
 usage accounting (see [Retrieval and token economics](#retrieval-and-token-economics)).
 
-Three containers, one private network:
+The sample runs these containers on one private network:
 
 - **`repocontext`** - the MCP host image (`apps/repocontext/Dockerfile`). Its
   ONLY application listener is the MCP endpoint on port 8080 (plus the HTTP health
@@ -595,8 +595,8 @@ no shell-exec healthcheck:
 A `/health/ready` 503 that does not clear, on a container that is otherwise up,
 does **not** on its own mean the deployment is broken, and must not be used by
 itself as a rollback signal. The response body names each component and its verdict on its own line beneath the aggregate status, so the component holding readiness down is readable straight from the probe (issue #2962). That names the component, not the cause, so the steps below still apply: read the body first, then work through them to narrow why that component is unhappy. Before issue #2962 the endpoint returned a bare `Unhealthy` with no
-per-component breakdown, so a 503 was ambiguous until it had been narrowed by hand. Five steps,
-each one ruling out a cause the previous step left open:
+per-component breakdown, so a 503 was ambiguous until it had been narrowed by hand. Work through
+these steps, each one ruling out a cause the previous step left open:
 
 1. `curl -fsS http://localhost:8080/health/live`. A 200 says the process and the
    silo host are alive, so whatever is unhealthy is not the process. If this also
@@ -713,7 +713,7 @@ curl -fsS http://localhost:8080/metrics | head -n 20
 - The drain reports its own duration, so the budget can be derived rather than
   bisected. `docker logs` carries `RepoContext drain complete in <n>s, consuming
   <p>% of the 180s host shutdown budget`. Read it together with its severity,
-  because there are three distinct outcomes and the level is what separates them:
+  because the level separates the drain outcomes:
   - **No completion line at all.** The container was killed mid-drain, so
     `stop_grace_period` is smaller than the drain (issue #2389). The exit code
     will not tell you, because a killed container reports `137` and the next
@@ -828,8 +828,8 @@ the expected configuration could not be read), so automation can gate on it. Unt
 SUPPOSED to fail; the full contract is in the
 [local deployment runbook](../../docs/lattice.api.mcp.repocontext/local-deployment-runbook.md#what-its-exit-code-means).
 
-It performs seven checks against the running container and refuses unless all
-seven agree, printing every value it read either way:
+It performs a set of checks against the running container and refuses unless all
+of them agree, printing every value it read either way:
 
 1. **Compose provenance.** The container's own
    `com.docker.compose.project.working_dir` label resolves to the checkout you
@@ -973,7 +973,7 @@ direction is exercised against fabricated disagreements rather than assumed:
 pwsh -File ./scripts/Test-ContainerProvenance.ps1
 ```
 
-Every one of the seven checks has fixtures it accepts and fixtures it refuses,
+Every check has fixtures it accepts and fixtures it refuses,
 and several refusal fixtures are reconstructed from real gate-run and incident
 readings rather than invented. A check only ever
 observed passing is indistinguishable from one that cannot fail, which is the

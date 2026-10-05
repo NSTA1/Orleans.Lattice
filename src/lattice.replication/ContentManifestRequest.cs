@@ -21,8 +21,8 @@ public readonly record struct ContentManifestRequest
 
     /// <summary>
     /// The origin (sending) cluster id. Together with
-    /// <see cref="TreeName"/> this is the per-origin high-water-mark dedup
-    /// key the receiver advances when it elides an identical-content entry
+    /// <see cref="TreeName"/> this keys the per-origin high-water-mark
+    /// the receiver advances when it elides an identical-content entry
     /// carrying a newer clock.
     /// </summary>
     [Id(1)] public string OriginClusterId { get; init; }

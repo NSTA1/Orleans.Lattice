@@ -713,7 +713,10 @@ risk - reserved for unit tests or environments that disable adaptive
 splitting.
 
 A prepared write that reaches a leaf after that leaf has already applied
-the saga's terminal is refused rather than bucketed. A split's hot-path
+the saga's terminal is refused rather than bucketed, and so is a forwarded
+prepare (a split's shadow-forward or sweep replay) that arrives after its
+saga has decided, even when the leaf has not applied the terminal or no
+longer remembers it. A split's hot-path
 shadow-forward sends each prepared key as its own call, so one can trail
 the terminal by milliseconds. The terminal has already settled every key it
 carried to that leaf (a commit's committed-values backstop wrote the value,
@@ -722,8 +725,12 @@ ever drain the bucket. Left in place, it surfaced once the leaf no longer
 remembered the terminal - after a reactivation, or after a split stranded
 the key outside the leaf's span - as a stale value or as a key counted twice
 by `CountAsync`. The refusal happens before the write-ahead-log append, so
-the orphan cannot reappear on replay. The retention window above still
-covers a leaf whose current activation does not know the terminal. The sweep
+the orphan cannot reappear on replay. A leaf whose current activation does
+not know the terminal asks the registry instead: a forwarded prepare it does
+not recognise is checked against the saga's decision and refused once the
+saga has decided (a decision the retention window above has masked still
+counts), while a registry fault buckets it as before, because refusing a
+prepare the saga may still need would lose a write. The sweep
 reads each saga's verdict under the logical tree, where the saga records it,
 so the check also holds for a resized tree whose shards live under a
 physical copy.
@@ -1342,10 +1349,10 @@ the cache fast path.
 
 ## Cross-tree (multi-tree) atomic writes
 
-`SetManyAtomicAsync` is bound to a single tree. To commit a batch that
-spans **two or more distinct `ILattice` trees** all-or-nothing, use the
-`IGrainFactory.SetManyAtomicAsync` extension (or the
-`BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
+`SetManyAtomicAsync` is bound to a single tree. To commit a batch through
+the cross-tree coordinator - typically because it spans distinct `ILattice`
+trees all-or-nothing - use the `IGrainFactory.SetManyAtomicAsync` extension
+(or the `BeginAtomicWrite` fluent builder). The cross-tree primitive extends the
 same atomic-visibility guarantee the single-tree saga gives *within* a
 tree to a set of trees: either every targeted key across every
 participating tree becomes visible, or none of them do - observed

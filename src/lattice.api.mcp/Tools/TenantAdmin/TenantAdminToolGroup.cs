@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
@@ -101,7 +100,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("The tenant-admin subject ids to seed onto the new tenant, deciding who can subsequently see it. Omit or leave empty to seed the calling subject.")] string[]? adminSubjects = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
                 return TenantAdminToolInvocations.CreateTenantAsync(admin, tenantId, adminSubjects, cancellationToken);
             },
@@ -134,7 +133,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The tenant id to suspend. Must be a valid, non-empty tenant id.")] string tenantId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
                 return TenantAdminToolInvocations.SuspendTenantAsync(admin, tenantId, cancellationToken);
             },
@@ -160,7 +159,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The tenant id to resume. Must be a valid, non-empty tenant id.")] string tenantId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
                 return TenantAdminToolInvocations.ResumeTenantAsync(admin, tenantId, cancellationToken);
             },
@@ -186,7 +185,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The tenant id to delete. Must be a valid, non-empty tenant id.")] string tenantId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
                 return TenantAdminToolInvocations.DeleteTenantAsync(admin, tenantId, cancellationToken);
             },
@@ -223,7 +222,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The maximum number of entries in the tenant member set, or null for the default cap (5000). Never unbounded.")] long? maxMemberSubjects = null,
                 [Description("The maximum number of tenant-tier authorization rules, or null for the default cap (1000). Never unbounded.")] long? maxTenantRules = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var admin = context.Services!.GetRequiredService<ILatticeTenantAdmin>();
                 var quotas = new TenantQuotasDescriptor
                 {
@@ -270,7 +269,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The complete desired allowed region set. This is a replacement, not a delta: a currently-allowed region absent from this list is revoked.")] string[] allowedRegions,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
                 return TenantAdminToolInvocations.AuthorizeAllowedRegionsAsync(
                     regionAdmin, tenantId, allowedRegions ?? [], cancellationToken);
@@ -302,7 +301,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The complete desired residency set. This is a replacement, not a delta: a currently-resident region absent from this list begins draining. Must not be empty.")] string[] residencyRegions,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
                 return TenantAdminToolInvocations.SetResidencyAsync(
                     regionAdmin, tenantId, residencyRegions ?? [], cancellationToken);
@@ -340,7 +339,7 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 [Description("The tenant id to report on. Must be a valid, non-empty tenant id that is registered.")] string tenantId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var regionAdmin = context.Services!.GetRequiredService<ILatticeTenantRegionAdmin>();
                 return TenantAdminToolInvocations.GetTenantRegionStatusAsync(regionAdmin, tenantId, cancellationToken);
             },
@@ -363,27 +362,4 @@ internal sealed class TenantAdminToolGroup : ILatticeApiMcpToolGroup
                 Destructive = false,
                 UseStructuredContent = true,
             });
-
-    private static IDisposable StampCredential(IServiceProvider services)
-    {
-        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
-        if (httpContext is null)
-        {
-            return NullScope.Instance;
-        }
-
-        var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
-        // A null credential leaves the ambient context cleared (fail-closed): the
-        // facade's access gate then denies the caller as anonymous.
-        return LatticeCredentialContext.With(credential);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
-    }
 }

@@ -56,7 +56,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ## Producer-side filters
 
-Three options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the tree's WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped (snapshot exports and the opt-in anti-entropy repair paths do not apply these filters):
+These options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the tree's WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped (snapshot exports and the opt-in anti-entropy repair paths do not apply these filters):
 
 | Option | Default | Semantics |
 |---|---|---|
@@ -90,7 +90,7 @@ The append-time failure semantics inside the WAL grain itself (offset rollback, 
 
 ## Why a WAL grain rather than ship-time read
 
-Capturing each mutation into a WAL grain at commit time, rather than reading values at ship time, guarantees three properties:
+Capturing each mutation into a WAL grain at commit time, rather than reading values at ship time, guarantees these properties:
 
 - **No ship-time value read.** The captured `WalRecord` already carries the value (or delta) at commit-time HLC; the ship loop never re-reads the primary.
 - **No host-level outgoing-call filter.** Capture happens grain-side in the leaf's commit path - the commit-log writer appends to the WAL before the write reports success - so the WAL append is atomic with the write rather than a best-effort post-write hook.

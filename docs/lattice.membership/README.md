@@ -4,7 +4,7 @@ Identity and subject-resolution add-on for [Orleans.Lattice](../../README.md).
 
 ## What is it?
 
-`Orleans.Lattice.Membership` turns the raw credential a caller presents into the **subject** the authorization layer reasons about. It owns two things:
+`Orleans.Lattice.Membership` turns the raw credential a caller presents into the **subject** the authorization layer reasons about. It owns these pieces:
 
 - **A directory** of groups and their membership edges (with transitive group membership), persisted in ordinary, dogfooded `ILattice` trees (the reserved `sys-membership-*` trees: one for group records, one for membership edges) so it is fully introspectable through the standard read / scan / change-feed surface.
 - **A credential-to-subject resolution pipeline** that maps an incoming credential (an opaque scheme + token, or an anonymous request) onto a stable subject id plus the flat closure of every group that subject belongs to.
@@ -27,7 +27,7 @@ siloBuilder
     .AddLatticeMembership(options =>
     {
         // How token-asserted groups combine with directory groups. Cluster-wide;
-        // see "Group merge mode" below for the three modes and their impact.
+        // see "Group merge mode" below for the modes and their impact.
         options.GroupMergeMode = SubjectGroupMergeMode.Union;
 
         // How long a resolved subject (id + group closure) is cached.
@@ -221,7 +221,7 @@ Deleting a tenant removes its tenant groups and their edges in both directions.
 | Group | `MembershipGroup` | Stable `GroupId`, optional display name. |
 | Membership edge | `MembershipMemberKind` | An edge is a user-in-group or a group-in-group (nested); the member is referenced by id. |
 | Membership directory | `ILatticeMembershipDirectory` | The group and edge store that subject resolution reads (see [Managing the directory](#managing-the-directory)). |
-| Authenticated principal | `LatticePrincipal` | What an authenticator produces from a validated credential: the subject id, issuer, claim bag, token-asserted groups, and token expiry - before it is merged with the directory. |
+| Authenticated principal | `LatticePrincipal` | What an authenticator produces from a validated credential: the subject id, issuer, claim bag, token-asserted groups, and token expiry - before it is merged with the directory. The default mapper screens out an empty subject id, the reserved `anonymous` and `system` subjects, and any subject id in the reserved `t/` tenant-group namespace, resolving them as anonymous. |
 | Resolved subject | `LatticeSubject` (core) | The final subject id, transitive group closure, and claim bag the authorization layer evaluates. |
 | Credential authenticator | `ILatticeCredentialAuthenticator` | Recognizes a credential (`CanHandle`) and validates it into a `LatticePrincipal` (`AuthenticateAsync`). |
 | Built-in authenticators | `JwtCredentialAuthenticator`, `AnonymousCredentialAuthenticator` | The per-issuer JWT authenticator - the extensible base the Entra and OIDC authenticators specialize - and the fallback that never claims a credential. |

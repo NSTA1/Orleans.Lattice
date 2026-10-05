@@ -16,7 +16,7 @@ its own.
 Every wire message rides the Orleans serializer, so the contract stays versioned
 and additive-only.
 
-Wiring is two calls on the co-hosting silo:
+Wire the binding on the co-hosting silo:
 
 ```csharp
 builder.Services.AddLatticeTreeAdminApiGrpc(o => o.RequireAuthorization = true);

@@ -24,7 +24,7 @@ holds - or the smoothing releases - an earlier, higher value. `targetValue` is
 therefore the per-replica pressure the
 autoscaler holds the pool at, and it must be below `1` for the pool to grow: a
 `targetValue` of `1` asks for at most the current replica count and so can only
-hold or shrink the pool. All three files here set `targetValue: "0.5"`, as the
+hold or shrink the pool. The reference files here set `targetValue: "0.5"`, as the
 [`ClusterScaling` sample](../../../samples/ClusterScaling/README.md) does, which
 asks for twice the current count at full saturation.
 
