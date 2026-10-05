@@ -44,15 +44,16 @@ cross-cluster check is also narrower than its name:
   #4511, fixed by #4519).
 - It assumes the transport never loses a record. Production violates that: the
   receiver's dead-letter applier acknowledges a saga record it parked (issue
-  #4591), and the WAL can trim an entry the shipper has not read (issues #4579
-  and #4534). After such a trim the shipper withholds the peer's saga records
+  #4591), and a WAL retention (TTL) trim can pass an entry the shipper has not
+  read (issue #4534; a trim without the TTL is fixed by #4595, issue #4579).
+  After such a trim the shipper withholds the peer's saga records
   until it re-seeds (#4577). A prepare the shipper itself dead-letters poisons its saga
   instead, which is safe but leaves the saga invisible on that peer (issue
   #4494, fixed by #4570).
-- It imports a bootstrap atomically, while the receiver's drain installs the rows
-  one at a time and keeps serving reads, so a partial saga is observable
-  mid-drain (issue #4526). Its properties hold from live-incremental replication
-  onward.
+- It imports a bootstrap atomically. The receiver's drain installs the rows one
+  at a time, but behind a read fence for the whole drain (issue #4526, fixed by
+  #4594), so no reader observes a partial import. Under a forced gap the
+  export's own two-pass race can lose a key (issue #4627).
 - It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
   shipper drops the filtered prepares but ships every terminal, so all-or-nothing
   holds only over the keys that peer replicates.
@@ -335,7 +336,7 @@ The same directory holds the cross-cluster module,
 which instances `AtomicCommit` for the origin cluster and specifies the
 receiver: replication of each prepare and terminal over a transport that may
 reorder, drop a delivery and duplicate, but is assumed never to lose a record
-(production violates that, issues #4591, #4579 and #4534); the receiver's per-source-shard tally, including the
+(production violates that, issues #4591 and #4534); the receiver's per-source-shard tally, including the
 ungated legacy path; the cross-tree receiver barrier and the registry's
 delegation to it, with an undiallable barrier answering Indeterminate; the two
 delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its

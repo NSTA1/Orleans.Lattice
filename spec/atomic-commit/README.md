@@ -287,7 +287,7 @@ adds starts at the origin's WAL: every prepare and every per-source-shard
 terminal becomes a replication record, delivered to a receiver by a transport
 that may reorder, lose a delivery (the record is shipped again) and lose an ack
 (the record is delivered again), but is assumed never to lose a record outright,
-which production violates (#4591, #4579, #4534). The receiver stages prepares, tallies terminals
+which production violates (#4591, #4534; #4579 until #4595). The receiver stages prepares, tallies terminals
 per source shard (including the legacy path for a terminal with no count),
 hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
@@ -314,7 +314,7 @@ fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
 re-shipped (#4508, fixed by #4553). The base models the fixed design. What
 remains outside it is a transport that loses a record, which production still
 does where the receiver acknowledges a saga record it dead-lettered (#4591) and
-where the WAL trims an entry the shipper has not read (#4534, #4579; withheld
+where the WAL TTL trims an entry the shipper has not read (#4534; withheld
 until the peer re-seeds since #4577, safe but not live);
 `RAllOrNothingPrepareAckedUnapplied` reproduces it and the note records it as an
 abstraction gap. A prepare the shipper dead-letters poisons its saga instead

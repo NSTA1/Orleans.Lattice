@@ -78,7 +78,7 @@ every prepare would cause. That release is safe only because the base's
 transport never loses a record: a prepare leaves the outbox only once it has
 been applied. Where production loses one - acknowledged unapplied by the
 receiver's dead-letter applier (#4591), or trimmed before the shipper read it
-(#4579, #4534) - releasing its terminal splits the receiver, which
+(#4534; #4579 until #4595 gave the shipper an offset floor) - releasing its terminal splits the receiver, which
 `RAllOrNothingPrepareAckedUnapplied` shows. Since #4577 the shipper treats a
 trimmed-unread prepare as a forced gap and withholds the peer's saga records
 until it re-seeds, so of those only #4591 still releases a terminal. Releasing a terminal over a prepare

@@ -4,7 +4,8 @@
 # without being applied - what the receiver's dead-letter applier does today
 # after its retries run out (issue #4591), and what a trim of an unread entry
 # did at the sender before #4577 made the shipper withhold a peer's saga
-# records across such a gap (issues #4579, #4534). The shipper's terminal hold counts
+# records across a TTL gap (issue #4534) and #4595 gave it an offset floor
+# (issue #4579). The shipper's terminal hold counts
 # the acknowledged prepare as delivered and releases the saga's terminals; the
 # tally completes, the other key's bucket drains post-saga, and the lost key has
 # no bucket and stays pre-saga. Once the decision is recorded a later copy of
