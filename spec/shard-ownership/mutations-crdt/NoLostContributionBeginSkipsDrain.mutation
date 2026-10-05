@@ -1,0 +1,15 @@
+# Pairs with NoLostContribution. The migration's window opens as if the drain
+# had already passed the key, so a resize swaps to a copy whose snapshot never
+# copied a write acknowledged before the window opened.
+MODULE: NoLostContributionBeginSkipsDrain
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the window opens without the drain, so a resize swaps to a copy missing an earlier write
+PERTURBS: Begin
+
+--- FIND
+    /\ mg' = "window"
+--- REPLACE
+\* MUTATION: the window opens with the drain already counted as done.
+    /\ mg' = "copied"
+--- END

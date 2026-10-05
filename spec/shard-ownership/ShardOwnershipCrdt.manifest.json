@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-crdt",
+  "refinement": "RefinementCrdt.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 2,
+    "properties": 0,
+    "actions": 10,
+    "mutations": 9,
+    "behaviourRows": 10,
+    "distinctStates": 1573
+  }
+}

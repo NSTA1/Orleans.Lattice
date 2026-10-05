@@ -1,11 +1,12 @@
-# Pairs with ReadableOnceComplete. Reproduces production before #4545 was fixed (#4608): the
-# split sweep's replay of a prepare installs a shadow marker on the destination
-# leaf even when the saga's terminal has already applied there, so the marker is
-# dead on arrival; a leaf split's TransferShadowMarkersToSiblingAsync then
-# copies it to a fresh sibling that never sees the terminal, where it comes
-# alive and gates the key (StaleShardRoutingException(-1, -1, -1)) for as long
-# as the registry still reports the saga Committed. That gate also did not
-# check the row against the saga's prepare stamp.
+# Pairs with ReadableOnceComplete. Reproduces production before #4545 was fixed
+# (#4608, #4644): the split sweep's replay of a prepare installs a shadow marker
+# on the destination leaf even when the saga's terminal has already applied
+# there, so the marker is dead on arrival; a leaf split's
+# TransferShadowMarkersToSiblingAsync then copies it to a fresh sibling that
+# never sees the terminal, where it comes alive and gates the key
+# (StaleShardRoutingException(-1, -1, -1)) for as long as the registry still
+# reports the saga Committed. That gate checked neither the row against the
+# saga's prepare stamp nor a durable witness of the terminal.
 MODULE: ReadableOnceCompleteDeadMarkerTransferred
 TARGET: ReadableOnceComplete
 CLASS: Invariant
@@ -13,15 +14,15 @@ SUMMARY: a marker installed after its terminal is copied to a fresh sibling leaf
 PERTURBS: DeliverLate, LeafSplit
 
 --- FIND
-    /\ lk /\ ~term[c][s]
+    /\ lk /\ ~term[c][s] /\ ~wit
     /\ row[c][s][k] < SagaV
 --- REPLACE
-\* MUTATION: the gate does not check the row against the saga's prepare stamp.
+\* MUTATION: the gate reads neither the prepare stamp nor a durable witness.
     /\ lk /\ ~term[c][s]
 --- END
 
 --- FIND
-    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] /\ ~wit THEN TRUE ELSE lk
 --- REPLACE
 \* MUTATION: the marker is installed even when the leaf applied the terminal.
     /\ lk' = IF ~Gone(spCopy) THEN TRUE ELSE lk

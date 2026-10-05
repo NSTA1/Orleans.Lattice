@@ -1,0 +1,23 @@
+# Pairs with NoLostContribution. Reproduces production before #4611 was fixed
+# (#4617): the terminal's backstop installs the saga's staged state
+# last-writer-wins at a dominating stamp instead of joining it into the row.
+# The staged state is the owner's row at staging time with the saga's
+# contribution, so the install discards every contribution the row gained
+# after it: a bucket stranded by a leaf split, or the coordinator's backstop on
+# a leaf with no bucket, drops a non-atomic write acknowledged in between.
+MODULE: NoLostContributionBackstopInstallsLastWriterWins
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the terminal's backstop installs the staged state last-writer-wins, dropping a write acknowledged after the stage
+PERTURBS: Terminal
+
+--- FIND
+       ELSE JoinAt(l, staged, 0)
+--- REPLACE
+\* MUTATION: the backstop installs the staged state at a dominating stamp.
+       ELSE LET s == Max(clk[l], stamp[l]) + 1
+            IN /\ s <= MaxStamp
+               /\ row' = [row EXCEPT ![l] = staged]
+               /\ stamp' = [stamp EXCEPT ![l] = s]
+               /\ clk' = [clk EXCEPT ![l] = s]
+--- END
