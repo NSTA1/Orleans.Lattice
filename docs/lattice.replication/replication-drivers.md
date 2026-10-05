@@ -557,13 +557,22 @@ poisons its saga for that peer (#4494):
   reason `poisoned_saga`, instead of being shipped. A terminal already
   held behind its prepares is parked rather than released. The peer keeps
   the saga invisible: it serves it as never written, while this cluster
-  has it decided. A re-bootstrap of the peer ships the saga whole and
-  settles the prepares it already staged. No abort is sent to settle them:
-  this cluster never decided one.
+  has it decided. No abort is sent to settle the prepares it already
+  staged: this cluster never decided one.
+- Poisoning also takes the peer off the log through the
+  [forced-gap path](#forced-gap-a-peer-taken-off-the-log) (#4620): the
+  shipper takes the replay hold, records the tree's export epoch, withholds
+  saga records and asks the peer to re-seed on every push. It does so before
+  the batch is parked, durably with the poison, so a park a full queue
+  refuses still leaves the re-seed owed. The re-seed ships the decided saga
+  whole (committed rows and its decision row) and settles the prepares the
+  peer staged; without it the peer would serve the saga as never written
+  for good. After the echo, the rewind re-reads the poisoned saga's records
+  and parks them again, so the re-seed does not repeat.
 - Each poisoning logs a warning naming the transaction and the peer, and
   counts on `orleans.lattice.replication.shipper.saga_poisoned`
-  (`outcome=poisoned`). Treat any increment as a divergence that needs a
-  re-bootstrap of that peer.
+  (`outcome=poisoned`). The link reads `Stalled` until the peer has
+  re-seeded.
 - The poison list is persisted in the shipper's state with the cursors, so
   a reactivation keeps withholding the saga. An entry retires only once the
   saga can append no further record: the shipper has seen the origin
