@@ -228,15 +228,17 @@ check inside the harness's per-run budget.
 ## Deliberate abstraction gaps
 
 - **Composition with `ShardOwnership`.** Not a CI gate. A behaviour that needs
-  a stale writer, a re-bind, a reshard, a refused flip or an undo before a flip
-  together with a retention event is checked by neither module's gate. The
+  a stale writer, a re-bind, a reshard, a refused flip, an undo before a flip, a
+  stamp that disagrees with real time or a migrated row together with a
+  retention event is checked by neither module's gate. The
   composition of every action `ShardOwnership` has with this module, re-measured
   on the current modules (the applied-terminal witness and the forgotten-saga
   refusal included), is clean against all fifteen properties of both (680,740
-  distinct states, depth 29, 12 min 53 s on two workers); it exceeds the per-run
-  budget, which is why the modules are separate. It does not carry
-  `ShardOwnership`'s stamps or migrated rows (see the stamps bullet below). See
-  the README.
+  distinct states, depth 29, 12 min 53 s on two workers). So is the composition
+  that also adds `ShardOwnership`'s stamps and migrated rows (813,771 distinct
+  states, depth 29, 19 min 08 s), and the stamp and import mutations still go
+  red in it. Both exceed the per-run budget, which is why the modules are
+  separate. See the stamps bullet below and the README.
 - **The post-sweep cleanup and the sweep's non-atomic window.** The sweep is one
   step. Its window (a decision landing between the pre-check and the replay) is
   covered by the late forward, which may arrive at any time; the cleanup that
@@ -270,6 +272,16 @@ check inside the harness's per-run budget.
   stamp and import defects (#4522, #4564) as standing mutations. What this
   module adds to them, a reactivation that loses the activation's memory
   before a fresh-stamp backstop, is `NoKeyLostRetainedFreshStampBackstop`.
+  Their composition with this module's retention events is checked: see the
+  composition bullet above. That composition also checks this module's read
+  gate against production's. `LeafGated` gates the split destination's row
+  whatever its provenance, but production consults a shadow marker only for a
+  migrated row (`BPlusLeafGrain` tests `lww.IsMigrated` before
+  `IsShadowedReadSafeAsync`). Gating more hides more reads, and a hidden read
+  excuses the safety properties, so the composition gates as production does.
+  Every safety property holds there, and the wider gate still satisfies
+  `ReadableOnceComplete` with stamps present, so the difference loses nothing
+  in this instance.
 - **Time.** Retention windows, deadlines and the purge's delay are not modelled.
 
 ## Territory owned by other open issues

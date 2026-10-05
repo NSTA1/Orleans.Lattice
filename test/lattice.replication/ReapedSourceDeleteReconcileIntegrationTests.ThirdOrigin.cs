@@ -423,16 +423,33 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         var written = PastHlc(5);
         Assert.That((await ApplyFromSiteCAsync(_siteB, tree, key, written)).Applied, Is.True, "precondition");
 
+        // Both the frontier the export opens with (the drop floor and the
+        // reconcile) and the one it closes with (the tree frontier pin) are read
+        // under a lineage the export did not open under. Both writes sit below
+        // the foreign watermark, so either one installed would act on them.
+        var foreignLineage = Guid.NewGuid();
+        var foreignWatermark = PastHlc(3);
         ApplyResult? inDrain = null;
-        await RebootstrapSiteBAsync(
-            tree,
-            SiteCFrontier(PastHlc(3), lineage: Guid.NewGuid()),
-            async () => inDrain = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, inDrainKey, PastHlc(4)));
+        _closeFrontier = _ => ClosingFrontier(foreignWatermark, foreignLineage);
+        try
+        {
+            await RebootstrapSiteBAsync(
+                tree,
+                SiteCFrontier(foreignWatermark, lineage: foreignLineage),
+                async () => inDrain = await DeliverFromSiteCOutsideTheDrainAsync(_siteB, tree, inDrainKey, PastHlc(4)));
+        }
+        finally
+        {
+            _closeFrontier = null;
+        }
 
+        var pinned = await _siteB.Client.GetGrain<IReplicationTreeFrontierGrain>(tree).GetAsync();
         Assert.Multiple(async () =>
         {
             Assert.That(inDrain?.Applied, Is.True, "no floor is installed from a frontier of another lineage");
             Assert.That(await siteB.GetAsync(key), Is.EqualTo(ThirdValue), "nothing is reconciled against it either");
+            Assert.That(pinned.LowWatermarks.ContainsKey(SiteCClusterId), Is.False,
+                "and none of its watermarks is pinned on the receiver's tree frontier");
         });
     }
 }
