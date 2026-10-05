@@ -1,0 +1,17 @@
+# Pairs with AtomicAcrossCutover. The routing tier places a bound prepare on
+# whatever copy its cached pair names (#4358), so a prepare lands on a copy the
+# saga was never bound to and never discards; the shadow is then served torn
+# between a revert's swap and its redirect.
+MODULE: AtomicAcrossCutoverRouterIgnoresBinding
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: a bound prepare is placed on any published copy that admits it
+PERTURBS: Prepare
+
+--- FIND
+    /\ RoutedAdmits(bound)
+    /\ pend' = [pend EXCEPT ![bound][k] = TRUE]
+--- REPLACE
+    \* MUTATION: the router ignores the binding.
+    /\ \E c \in pub : RoutedAdmits(c) /\ pend' = [pend EXCEPT ![c][k] = TRUE]
+--- END

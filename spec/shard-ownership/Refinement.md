@@ -252,10 +252,16 @@ not read as coverage of another:
   two modules and why it is not a CI gate (see the README's account of the
   seam).
 - **Alias cutovers other than a resize.** A shadow-cutover restore and its
-  revert, an explicit `SetTreeAliasAsync`, and schema remediation all move the
-  alias too (#4357 fixed all of them); none is modelled. With them goes the
-  split's abandon path for those moves; the abandon an undo of a resize reaches
-  is modelled (`SplitAbandon`, #4478).
+  revert move the alias against a bound saga, and the companion module
+  `ShardOwnershipCutover` checks them
+  ([`RefinementCutover.md`](RefinementCutover.md)). There the copy the saga
+  leaves mirrors nowhere, so the saga re-binds and must discard what it left
+  behind (#4689, open). An explicit `SetTreeAliasAsync` and schema remediation
+  also move the alias (#4357 fixed all three), with no shadow to revert to, and
+  are not modelled. With them goes the split's abandon path for those moves. The
+  abandon an undo of a resize reaches is modelled (`SplitAbandon`, #4478), and
+  for a cutover it is pinned by
+  `TreeShardSplitGrainTests.Swap_after_an_alias_cutover_does_not_apply_the_slot_diff_to_the_logical_map`.
 - **Consolidation (a shrinking reshard).** `TreeShardConsolidationGrain` folds
   shards together through the same shadow-write window; the reshard here only
   grows. The #4452 hold applies to it too
