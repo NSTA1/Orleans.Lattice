@@ -211,7 +211,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 
@@ -349,7 +349,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0);
 
@@ -384,7 +384,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0,
             // Guards the NO-RECORD path (issue #2165). The comment above states

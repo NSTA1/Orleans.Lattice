@@ -18,63 +18,21 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// key whose only durable copy was the snapshot then read as absent.
 /// </para>
 /// <para>
-/// The leaf now keeps a durable kept-snapshot coverage marker in a sidecar,
-/// raised before any pin that licenses a trim behind the snapshot, and a cold
-/// start over an absent snapshot fails closed when the marker shows a kept
-/// snapshot covered a partition whose WAL has since been trimmed.
+/// The leaf now records, per WAL partition and in its own state row, that a
+/// snapshot covering the partition was kept. The durable pin flush persists that
+/// record before it publishes any pin, and a cold start over an absent snapshot
+/// fails closed when a recorded partition's WAL has since been trimmed.
 /// </para>
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
-    /// <summary>
-    /// In-memory kept-snapshot coverage marker sidecar with fault switches and a
-    /// shared event log, so a fixture can order the marker's raise against the
-    /// leaf's pin publication.
-    /// </summary>
-    private sealed class FakeCoverageMarker(List<string>? events = null) : ILeafSnapshotCoverageMarkerGrain
-    {
-        public long[]? Covered { get; set; }
-
-        public Exception? ThrowOnGet { get; set; }
-
-        public Exception? ThrowOnRaise { get; set; }
-
-        public int Clears { get; private set; }
-
-        public Task<long[]?> GetAsync()
-        {
-            events?.Add("marker-get");
-            return ThrowOnGet is { } fault ? Task.FromException<long[]?>(fault) : Task.FromResult(Covered);
-        }
-
-        public Task RaiseAsync(long[] covered)
-        {
-            if (ThrowOnRaise is { } fault)
-            {
-                ThrowOnRaise = null;
-                events?.Add("marker-raise-failed");
-                return Task.FromException(fault);
-            }
-
-            events?.Add($"marker-raise:{string.Join(",", covered)}");
-            Covered = LeafSnapshotCoverageMarkerGrain.Raise(Covered, covered) ?? Covered;
-            return Task.CompletedTask;
-        }
-
-        public Task ClearAsync()
-        {
-            Clears++;
-            Covered = null;
-            return Task.CompletedTask;
-        }
-    }
-
     private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, ILeafSnapshotStorageGrain Snapshot, ILeafReplayCoordinatorGrain Coordinator)
-        CreateVanishedSnapshotLeaf(FakeCoverageMarker marker, long persistedCheckpoint, long head, long tail, IReadOnlyList<CommitLogSliceEntry> entries)
+        CreateVanishedSnapshotLeaf(bool[]? keptCoverage, long persistedCheckpoint, long head, long tail, IReadOnlyList<CommitLogSliceEntry> entries)
     {
         var (_, state, snapshot, coordinator) = CreateTrimmedPrefixLeaf(persistedCheckpoint, head, tail, entries);
+        state.State.SnapshotCoveredPartitions = keptCoverage;
         snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<LeafSnapshotBlob?>(null));
-        var grain = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid(), marker);
+        var grain = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid());
         return (grain, state, snapshot, coordinator);
     }
 
@@ -86,14 +44,76 @@ public partial class BPlusLeafGrainTests
         return entries.ToArray();
     }
 
+    /// <summary>
+    /// A write observer that records the projection checkpoint of every state
+    /// write except one whose only purpose was to make a newly set kept-snapshot
+    /// flag durable (issue #4634): that write happens at most once per partition
+    /// per leaf lifetime, carries the checkpoint unchanged, and is not part of
+    /// the checkpoint cadence a fixture measures. Pass <paramref name="durableBefore"/>
+    /// when observation starts after the leaf has already written its row.
+    /// </summary>
+    internal static Action<LeafNodeState> CheckpointAdvancingWrites(List<long> offsets, LeafNodeState? durableBefore = null)
+    {
+        // Only the checkpoint is seeded: in-memory flags may be set but not yet durable.
+        bool[]? lastFlags = null;
+        long? lastOffset = durableBefore?.ProjectionCheckpointOffset;
+        long[]? lastByPartition = durableBefore?.ProjectionCheckpointOffsetsByPartition?.ToArray();
+        return written =>
+        {
+            var flags = written.SnapshotCoveredPartitions;
+            var flagRose = false;
+            if (flags is not null)
+            {
+                for (var p = 0; p < flags.Length; p++)
+                {
+                    if (flags[p] && (lastFlags is null || p >= lastFlags.Length || !lastFlags[p]))
+                        flagRose = true;
+                }
+            }
+
+            var byPartition = written.ProjectionCheckpointOffsetsByPartition;
+            var sameCheckpoint = lastOffset == written.ProjectionCheckpointOffset
+                && (byPartition ?? []).SequenceEqual(lastByPartition ?? []);
+            if (!(flagRose && sameCheckpoint))
+                offsets.Add(written.ProjectionCheckpointOffset);
+
+            lastFlags = flags?.ToArray();
+            lastOffset = written.ProjectionCheckpointOffset;
+            lastByPartition = byPartition?.ToArray();
+        };
+    }
+
+    /// <summary>
+    /// A leaf that loads a snapshot covering [0, 5], with every durable state
+    /// write and every published pin logged in order.
+    /// </summary>
+    private static (BPlusLeafGrain Grain, FakePersistentState<LeafNodeState> State, List<string> Events) CreateKeptSnapshotLeafWithEventLog()
+    {
+        var events = new List<string>();
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.FlushDurableMaterialiserFrontierAsync(
+                Arg.Any<string>(), Arg.Any<IReadOnlyList<MaterialiserPinReport>>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                events.Add("pin-publish");
+                return Task.FromResult(true);
+            });
+        var (_, state, snapshot, coordinator) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<LeafSnapshotBlob?>(TrimmedPrefixSnapshot(5)));
+        state.OnWriteState = written => events.Add(
+            written.SnapshotCoveredPartitions is { Length: > 0 } flags && flags[0] ? "write:covered" : "write:uncovered");
+        var grain = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid(), reporter);
+        return (grain, state, events);
+    }
+
     [Test]
     public async Task Vanished_snapshot_over_a_wal_trimmed_under_it_fails_the_replay_instead_of_coming_up_from_the_suffix()
     {
         // A snapshot covering [0, 5] was kept, so the GC trimmed through 5 and the
         // tail is 6. The snapshot then vanished: the store answers, with nothing.
-        var marker = new FakeCoverageMarker { Covered = [5] };
         var (grain, state, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+            [true], persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
 
         var fault = await ActivateCapturingFaultAsync(grain);
 
@@ -115,9 +135,8 @@ public partial class BPlusLeafGrainTests
     [Test]
     public async Task Vanished_snapshot_at_checkpoint_zero_over_a_trimmed_wal_fails_the_replay()
     {
-        var marker = new FakeCoverageMarker { Covered = [0] };
         var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 0, head: 3, tail: 1, entries: TrimmedPrefixEntries(1, 2));
+            [true], persistedCheckpoint: 0, head: 3, tail: 1, entries: TrimmedPrefixEntries(1, 2));
 
         Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>(),
             $"Came up holding [{string.Join(", ", grain.EntriesForTest.Keys)}] without k0.");
@@ -128,130 +147,99 @@ public partial class BPlusLeafGrainTests
     {
         // The snapshot was kept but the WAL was never trimmed under it, so the
         // cold rebuild has everything it needs and nothing is lost.
-        var marker = new FakeCoverageMarker { Covered = [5] };
         var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
+            [true], persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
         Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
         Assert.That(grain.EntriesForTest.Keys, Is.EquivalentTo(Enumerable.Range(0, 8).Select(i => $"k{i}")));
     }
 
     [Test]
-    public async Task Absent_snapshot_with_no_kept_marker_comes_up_cold_as_before()
+    public async Task Absent_snapshot_with_no_kept_record_comes_up_cold_as_before()
     {
-        // A leaf that never kept a snapshot has no marker: an absent snapshot is
-        // simply the normal first start, and the cold rebuild proceeds.
-        var marker = new FakeCoverageMarker();
-        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
+        // A leaf that never kept a snapshot has no record: an absent snapshot is
+        // the normal first start, and a trimmed tail is someone else's trim,
+        // which the existing fall-off guard judges.
+        var (grain, _, _, coordinator) = CreateVanishedSnapshotLeaf(
+            null, persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
         Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
         Assert.That(grain.EntriesForTest, Has.Count.EqualTo(8));
     }
 
     [Test]
-    public async Task Absent_snapshot_on_a_leaf_with_no_persisted_checkpoint_does_not_consult_the_marker()
+    public async Task Absent_snapshot_with_a_kept_record_only_for_another_partition_is_judged_on_that_partition()
     {
-        // Only a checkpointed leaf can have had a prefix covered and trimmed, so
-        // a brand-new leaf's first start pays no marker read at all.
-        var events = new List<string>();
-        var marker = new FakeCoverageMarker(events) { ThrowOnGet = new InvalidOperationException("must not be read") };
-        var (grain, state, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: -1, head: 3, tail: 0, entries: TrimmedPrefixEntries(0, 2));
-        state.State.ProjectionCheckpointOffsetAssigned = false;
+        // Partition 0 never had a snapshot kept; only partition 1 did, and its
+        // tail is 0, so nothing this leaf needed was trimmed behind a snapshot.
+        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
+            [false, true], persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
 
         Assert.That(await ActivateCapturingFaultAsync(grain), Is.Null);
-        Assert.That(events, Does.Not.Contain("marker-get"));
     }
 
     [Test]
-    public async Task Absent_snapshot_whose_marker_cannot_be_read_fails_the_replay_closed()
+    public async Task Absent_snapshot_whose_wal_tail_cannot_be_read_fails_the_replay_closed()
     {
-        var marker = new FakeCoverageMarker { ThrowOnGet = new TimeoutException("marker store unreachable") };
-        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
+        var (grain, _, _, coordinator) = CreateVanishedSnapshotLeaf(
+            [true], persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+        coordinator.GetTailOffsetAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<long>(new TimeoutException("wal unreachable")));
 
         var fault = await ActivateCapturingFaultAsync(grain);
 
         Assert.Multiple(() =>
         {
             Assert.That(fault, Is.InstanceOf<LeafSnapshotUnavailableException>(),
-                "A leaf that cannot tell a lost snapshot from one that never existed must not guess.");
-            Assert.That(fault?.InnerException?.InnerException, Is.InstanceOf<TimeoutException>());
+                "A leaf that cannot tell whether the prefix survives must not guess.");
             Assert.That(grain.EntriesForTest, Is.Empty);
         });
     }
 
     [Test]
-    public async Task Absent_snapshot_whose_wal_tail_cannot_be_read_fails_the_replay_closed()
+    public async Task Kept_snapshot_record_is_durable_in_the_leaf_row_before_any_pin_is_published()
     {
-        var marker = new FakeCoverageMarker { Covered = [5] };
-        var (grain, _, _, coordinator) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
-        coordinator.GetTailOffsetAsync(Arg.Any<CancellationToken>())
-            .Returns(_ => Task.FromException<long>(new TimeoutException("wal unreachable")));
-
-        var fault = await ActivateCapturingFaultAsync(grain);
-
-        Assert.That(fault, Is.InstanceOf<LeafSnapshotUnavailableException>());
-        Assert.That(grain.EntriesForTest, Is.Empty);
-    }
-
-    [Test]
-    public async Task Pin_flush_makes_the_kept_snapshot_marker_durable_before_publishing_any_pin()
-    {
-        var events = new List<string>();
-        var marker = new FakeCoverageMarker(events);
-        var reporter = Substitute.For<ILeafCursorReporter>();
-        reporter.FlushDurableMaterialiserFrontierAsync(
-                Arg.Any<string>(), Arg.Any<IReadOnlyList<MaterialiserPinReport>>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
-            {
-                events.Add("pin-publish");
-                return Task.FromResult(true);
-            });
-        var (_, state, snapshot, coordinator) = CreateTrimmedPrefixLeaf(
-            persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
-        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<LeafSnapshotBlob?>(TrimmedPrefixSnapshot(5)));
-        var grain = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid(), marker, reporter);
+        var (grain, state, events) = CreateKeptSnapshotLeafWithEventLog();
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
         await grain.FlushDurableMaterialiserFrontierAsync();
 
-        var raise = events.FindIndex(e => e.StartsWith("marker-raise:", StringComparison.Ordinal));
+        var covered = events.IndexOf("write:covered");
         var publish = events.IndexOf("pin-publish");
         Assert.Multiple(() =>
         {
             Assert.That(publish, Is.GreaterThanOrEqualTo(0), "control: the flush must publish a pin.");
-            Assert.That(raise, Is.GreaterThanOrEqualTo(0), "The loaded snapshot's coverage must reach the marker.");
-            Assert.That(raise, Is.LessThan(publish),
-                $"The marker must be durable before any pin that licenses a trim behind the snapshot. Events: [{string.Join(", ", events)}].");
-            Assert.That(marker.Covered?[0], Is.GreaterThanOrEqualTo(5L),
-                "The marker records at least the coverage of the snapshot the leaf loaded.");
+            Assert.That(covered, Is.GreaterThanOrEqualTo(0),
+                "The loaded snapshot's coverage must reach the leaf's own row.");
+            Assert.That(covered, Is.LessThan(publish),
+                $"The record must be durable before any pin that licenses a trim behind the snapshot. Events: [{string.Join(", ", events)}].");
+            Assert.That(state.State.SnapshotCoveredPartitions?[0], Is.True);
         });
     }
 
     [Test]
-    public async Task Failed_marker_raise_publishes_no_pin_and_the_next_flush_retries_it()
+    public async Task Kept_snapshot_record_is_written_once_not_on_every_flush()
     {
-        var events = new List<string>();
-        var marker = new FakeCoverageMarker(events);
-        var reporter = Substitute.For<ILeafCursorReporter>();
-        reporter.FlushDurableMaterialiserFrontierAsync(
-                Arg.Any<string>(), Arg.Any<IReadOnlyList<MaterialiserPinReport>>(), Arg.Any<CancellationToken>())
-            .Returns(_ =>
-            {
-                events.Add("pin-publish");
-                return Task.FromResult(true);
-            });
-        var (_, state, snapshot, coordinator) = CreateTrimmedPrefixLeaf(
-            persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
-        snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<LeafSnapshotBlob?>(TrimmedPrefixSnapshot(5)));
-        var grain = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid(), marker, reporter);
-        marker.ThrowOnRaise = new TimeoutException("marker store unreachable");
+        var (grain, _, events) = CreateKeptSnapshotLeafWithEventLog();
 
-        // Activation may itself reach the flush; whichever flush meets the
-        // fault first, no pin may be published by it.
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await grain.FlushDurableMaterialiserFrontierAsync();
+        var writesAfterFirst = events.Count(e => e.StartsWith("write:", StringComparison.Ordinal));
+        await grain.FlushDurableMaterialiserFrontierAsync();
+        await grain.FlushDurableMaterialiserFrontierAsync();
+
+        Assert.That(events.Count(e => e.StartsWith("write:", StringComparison.Ordinal)), Is.EqualTo(writesAfterFirst),
+            "The record only ever turns on, so a flush with nothing newly set must not write.");
+    }
+
+    [Test]
+    public async Task Failed_record_write_publishes_no_pin_and_the_next_flush_retries_it()
+    {
+        var (grain, state, events) = CreateKeptSnapshotLeafWithEventLog();
+        state.ThrowOnWrite = new TimeoutException("leaf row store unreachable");
+
+        // Activation may itself reach a write or the flush; whichever meets the
+        // single-shot fault first, no pin may be published by the flush it fails.
         try
         {
             await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
@@ -260,58 +248,73 @@ public partial class BPlusLeafGrainTests
         {
         }
 
-        if (marker.ThrowOnRaise is not null)
+        if (state.ThrowOnWrite is not null)
         {
             Assert.ThrowsAsync<TimeoutException>(async () => await grain.FlushDurableMaterialiserFrontierAsync());
         }
 
-        Assert.That(events, Does.Contain("marker-raise-failed"), "control: the raise must actually fail.");
         Assert.That(events, Does.Not.Contain("pin-publish"),
-            "A pin published over an undurable marker licenses a trim that a vanished snapshot could then turn into silent loss.");
+            "A pin published over an undurable record licenses a trim that a vanished snapshot could then turn into silent loss.");
 
         await grain.FlushDurableMaterialiserFrontierAsync();
 
         Assert.Multiple(() =>
         {
-            Assert.That(events.FindIndex(e => e.StartsWith("marker-raise:", StringComparison.Ordinal)), Is.GreaterThanOrEqualTo(0),
-                "The pending raise must survive the failure and be retried.");
-            Assert.That(events.FindIndex(e => e.StartsWith("marker-raise:", StringComparison.Ordinal)), Is.LessThan(events.IndexOf("pin-publish")));
-            Assert.That(marker.Covered?[0], Is.GreaterThanOrEqualTo(5L));
+            Assert.That(events.IndexOf("write:covered"), Is.GreaterThanOrEqualTo(0),
+                "The record must survive the failure and be retried.");
+            Assert.That(events.IndexOf("write:covered"), Is.LessThan(events.IndexOf("pin-publish")));
         });
     }
 
     [Test]
-    public async Task Rebuild_over_a_vanished_snapshot_clears_the_marker_and_the_leaf_comes_back_accepting_the_loss()
+    public async Task Rebuild_over_a_vanished_snapshot_drops_the_record_and_the_leaf_comes_back_accepting_the_loss()
     {
-        var marker = new FakeCoverageMarker { Covered = [5] };
         var (grain, state, snapshot, coordinator) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+            [true], persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+        var durable = new List<bool[]?>();
+        state.OnWriteState = written => durable.Add(written.SnapshotCoveredPartitions);
 
         Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
 
         await grain.RebuildProjectionFromWalAsync();
         Assert.Multiple(() =>
         {
-            Assert.That(marker.Covered, Is.Null, "The rebuild accepts the loss, so the record of the snapshot goes.");
-            Assert.That(marker.Clears, Is.EqualTo(1));
+            Assert.That(state.State.SnapshotCoveredPartitions, Is.Null,
+                "The rebuild accepts the loss, so the record of the snapshot goes.");
+            Assert.That(durable, Is.Not.Empty.And.Some.Null, "and the rebuild's own write makes that durable.");
         });
 
-        var next = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid(), marker);
+        var next = ActivateTrimmedPrefixLeafOver(state, snapshot, coordinator, Guid.NewGuid());
         Assert.That(await ActivateCapturingFaultAsync(next), Is.Null);
         Assert.That(next.EntriesForTest.Keys, Is.EquivalentTo(new[] { "k6", "k7" }),
             "Offsets 0..5 lived only in the vanished snapshot; that is the loss the rebuild accepted.");
     }
 
     [Test]
-    public async Task Clearing_the_leaf_clears_its_kept_snapshot_marker()
+    public async Task Rebuild_discarding_an_unreadable_snapshot_drops_the_record()
     {
-        var marker = new FakeCoverageMarker { Covered = [5] };
-        var (grain, _, _, _) = CreateVanishedSnapshotLeaf(
-            marker, persistedCheckpoint: 5, head: 8, tail: 0, entries: TrimmedPrefixEntries(0, 7));
+        var (grain, state, snapshot, _) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+        state.State.SnapshotCoveredPartitions = [true];
+        StoreUntilCleared(snapshot, UnreadableSnapshot(5));
+
+        Assert.That(await ActivateCapturingFaultAsync(grain), Is.InstanceOf<LeafSnapshotUnavailableException>());
+        await grain.RebuildProjectionFromWalAsync();
+
+        Assert.That(state.State.SnapshotCoveredPartitions, Is.Null);
+    }
+
+    [Test]
+    public async Task Rebuild_over_a_readable_snapshot_keeps_the_record()
+    {
+        var (grain, state, snapshot, _) = CreateTrimmedPrefixLeaf(
+            persistedCheckpoint: 5, head: 8, tail: 6, entries: TrimmedPrefixEntries(6, 7));
+        StoreUntilCleared(snapshot, TrimmedPrefixSnapshot(5));
+
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await grain.RebuildProjectionFromWalAsync();
 
-        await grain.ClearGrainStateAsync();
-
-        Assert.That(marker.Covered, Is.Null, "A removed leaf must not leave a marker that fails a reused key closed.");
+        Assert.That(state.State.SnapshotCoveredPartitions?[0], Is.True,
+            "The snapshot still exists and still covers the trimmed prefix, so the record must stay.");
     }
 }

@@ -769,12 +769,6 @@ internal static class TypeAliases
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
 
-    /// <summary>Alias for a leaf's kept-snapshot coverage marker sidecar grain interface (issue #4634).</summary>
-    internal const string ILeafSnapshotCoverageMarkerGrain = "ol.gkm";
-
-    /// <summary>Alias for a leaf's kept-snapshot coverage marker sidecar state (issue #4634).</summary>
-    internal const string LeafSnapshotCoverageMarkerState = "ol.lkm";
-
     /// <summary>
     /// Alias for one leaf's durable record of the keys a saga's terminal settled
     /// on it (issue #4545).

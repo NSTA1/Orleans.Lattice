@@ -4575,10 +4575,6 @@ internal sealed partial class BPlusLeafGrain(
             // cleared is idempotent and resumes the snapshot clear where it left off.
             await ClearSnapshotStorageAsync();
 
-            // The kept-snapshot coverage marker is keyed by the leaf too (issue
-            // #4634), and goes with it on the same terms.
-            await ClearKeptSnapshotCoverageMarkerAsync();
-
             // The applied-terminal witness sidecar is keyed by the leaf too
             // (issue #4545), and goes with it on the same terms.
             await ClearTerminalWitnessSidecarAsync();
