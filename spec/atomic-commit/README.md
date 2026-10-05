@@ -32,7 +32,8 @@ the receiver, and the cross-cluster module's properties cover nothing else.
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
 | [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json) | The module manifest: where the mutations and refinement note live, which actions are non-behavioural, and the counts the gates assert (see [Counts](#counts)). |
 | [`AtomicCommitCrossCluster.tla`](AtomicCommitCrossCluster.tla) | The cross-cluster module: the origin saga (this module, instanced) replicated to a receiver. |
-| [`AtomicCommitCrossCluster.cfg`](AtomicCommitCrossCluster.cfg) | Its TLC model. |
+| [`AtomicCommitCrossCluster.cfg`](AtomicCommitCrossCluster.cfg) | Its TLC model: every property, with no loss path. |
+| `AtomicCommitCrossCluster.<Variant>.cfg` | Its variant configurations: each loss path, checked with every property on slices of its instance that partition it (`GapFollow`, `GapJoin`, `DetachFollow`, `DetachJoinCommit`, `DetachJoinAbort`, `PoisonFollow`, `PoisonJoin`). |
 | [`mutations-cross-cluster/`](mutations-cross-cluster/) | Its mutation catalogue. See [`mutations-cross-cluster/README.md`](mutations-cross-cluster/README.md). |
 | [`RefinementCrossCluster.md`](RefinementCrossCluster.md) | Its refinement note, mapping it to the replication apply seam, the receiver registry and the cross-tree receiver barrier. |
 | [`AtomicCommitCrossCluster.manifest.json`](AtomicCommitCrossCluster.manifest.json) | Its manifest. |
@@ -286,21 +287,28 @@ registry-mask steps never run for it (an abstraction gap of the note). What it
 adds starts at the origin's WAL: every prepare and every per-source-shard
 terminal becomes a replication record, delivered to a receiver by a transport
 that may reorder, lose a delivery (the record is shipped again) and lose an ack
-(the record is delivered again), but is assumed never to lose a record outright,
-which production violates (#4591, #4534; #4579 until #4595). The receiver stages prepares, tallies terminals
+(the record is delivered again), and never loses a record by itself: every way
+production loses one to a peer is a loss-path action with its fix - a shipper
+gap (#4534, #4651), a detach and re-add (#4652) and a receiver poison (#4633) -
+together with the re-seed, the replay filter and the purge holds that bring the
+saga back (#4577, #4631, #4652, #4666). The receiver stages prepares, tallies terminals
 per source shard (including the legacy path for a terminal with no count),
 hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
 through a snapshot bootstrap, after which the origin re-ships whatever its WAL
 retains from before the cut and the receiver settles it against the exported
 decisions. Each behaviour fixes one shape: a single-tree saga
-over two source shards, or a cross-tree saga over two trees.
+over two source shards, or a cross-tree saga over two trees. A behaviour takes
+at most one loss path, in the single-tree shape; the base cfg checks the
+instance with none, and each loss path is checked, with every property, in the
+variant configurations, which partition its instance by how the receiver joins
+and by the saga's outcome so every run fits the TLC budget.
 
 Its properties are all claims about the receiver: `RAllOrNothing`,
 `RStrictIsolation`, `RLinearizedTerminals` and `DelegationsDisjoint` as
 invariants, and `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
 `RNoStrandedPrepare` as temporal properties under a fair transport. The base
-holds with deadlock checking on; the state graph's depth is 18.
+holds with deadlock checking on, and so does every variant configuration.
 
 The module models the protocol's intended design. Every place where
 production departed from it was filed as a defect and is now fixed, and each
@@ -311,14 +319,16 @@ hold), the snapshot read paths' handling of an undiallable delegation (#4448,
 fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
 #4501), pre-cut saga records re-shipped after a bootstrap (#4482, fixed by
 #4510's settle), and a decision purged while its saga's prepare could still be
-re-shipped (#4508, fixed by #4553). The base models the fixed design. What
-remains outside it is a transport that loses a record, which production still
-does where the receiver acknowledges a saga record it dead-lettered (#4591) and
-where the WAL TTL trims an entry the shipper has not read (#4534; withheld
-until the peer re-seeds since #4577, safe but not live);
-`RAllOrNothingPrepareAckedUnapplied` reproduces it and the note records it as an
-abstraction gap. A prepare the shipper dead-letters poisons its saga instead
-(#4494, fixed by #4570), which is safe but not live.
+re-shipped (#4508, fixed by #4553). Every loss path is kept the same way: a
+shipper that stays on the log after a gap, a detach that does not take the peer
+off the log, a re-add that does not re-mark, a parked prepare whose saga is not
+poisoned (#4591), a poisoned saga's terminal applied,
+the poison re-seed discarding a carried saga, the re-seed clear left out or
+widened, a decision row not fanned out, a stale export decision (#4627), the
+replay filter removed, clearing early or reading the decision alone, records withheld but not
+retained, a purge that ignores the holds, and a replay or a re-seed settled while
+a silo predates the purge hold (#4664, fixed by #4666). The base models the fixed
+design, and no part of production's transport is left outside it.
 
 The extracted cores it maps to are `TerminalArrivalTally` (now including the
 ungated test) and `CrossTreeReceiverBarrier`, both executed by the production
@@ -337,4 +347,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 14 | 23 | 20 | 14,843 |
+| `AtomicCommitCrossCluster` | 5 | 3 | 25 | 41 | 31 | 13,448 |
