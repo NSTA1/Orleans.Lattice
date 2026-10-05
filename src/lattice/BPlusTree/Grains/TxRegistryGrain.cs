@@ -1218,6 +1218,7 @@ internal sealed partial class TxRegistryGrain(
         // Advance the decision-purge guard before this call mutates anything,
         // so the prune below sees its latest cleared generation (#4508).
         await RefreshWalPurgeGuardAsync();
+        await RefreshWalPurgeHoldAsync();
 
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;

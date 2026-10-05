@@ -680,7 +680,14 @@ the snapshot export. After a forget, the registry samples every
 partition's next sequence (at most once per half retention, up to 30 s)
 and purges the tombstone once every partition's oldest retained entry is
 at or past that sample. It fails closed: a failed read or a changed
-partition layout keeps the tombstone. On such a host
+partition layout keeps the tombstone. A replication shipper can also hold
+every purge on the tree through a per-tree purge hold: while any hold is
+outstanding no decision on the tree is purged. A shipper takes one before
+it takes its peer off the log for a re-seed, and keeps it until the
+replay that follows has passed its horizon, so a saga in flight at the
+re-seed's export keeps its decision while the replay may still read it
+([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A failed
+read of the holds holds too. On such a host
 `TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
 (masked at once) rather than dropping it.
 

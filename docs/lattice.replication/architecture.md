@@ -104,8 +104,7 @@ flowchart LR
    holds the tree's inbound receive fence, so the sender re-ships it once the
    fence lifts; a single-entry apply checks the fence after those two gates,
    while a multi-entry batch checks it first and defers a fenced run whole. It
-   then drops entries a pinned bootstrap snapshot already
-   covers, suppresses repeated records by exact `(origin, hlc, key, op)` identity
+   then suppresses repeated records by exact `(origin, hlc, key, op)` identity
    (shadow-forward de-duplication), parks entries whose causal dependencies have
    not arrived, and performs CRDT-aware merges
    before committing through the same core leaf path that local writes use. See
@@ -215,11 +214,15 @@ a test that was proven to fail when that seam is broken, in the
 [refinement note](../../spec/replication/Refinement.md). And every property has
 a mutation that makes it fail, so none holds vacuously.
 
-The specification reproduces four production defects, each now fixed and kept
+The specification reproduces six production defects, each now fixed and kept
 as a mutation that reproduces it: a bootstrap pin that discarded writes
 (#4463), a causal buffer that could strand or lose parked entries (#4464), a
-duplicate of an in-flight entry that was acknowledged and lost (#4465), and a
-snapshot bootstrap that shipped no deletes (#4504).
+duplicate of an in-flight entry that was acknowledged and lost (#4465), a
+snapshot bootstrap that shipped no deletes (#4504), content-hash elision that
+kept a stale value (#4585), and a source WAL trim that nothing re-bootstrapped
+(#4587). It also models one defect that is still open: a batch the sender
+cannot encode is dead-lettered on the sender and skipped, with no re-seed of
+the peer (#4614).
 
 A second companion,
 [`ReplicationReBootstrap.tla`](../../spec/replication/ReplicationReBootstrap.tla),
@@ -228,13 +231,18 @@ receiver that fell off the source's log past a delete whose tombstone was
 then reaped receives it by no path, and keeps the deleted value. The module
 checks the planned receiver-side reconcile and its safety gates; until it is
 built that gap is open (#4537), and a key the receiver holds under another
-origin remains a residual (#4549).
+origin remains a residual (#4549). It also states the reap guard production
+lacks: a tombstone is reaped on the wall clock alone, so a write it beats
+that arrives after the grace period resurrects the key (#4615).
 
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is
-owned by #4436. The refinement note lists every other abstraction the model
-makes, among them a single WAL partition per cluster, a bounded fault budget,
-and an unbounded identity cache.
+owned by #4436. Causal ordering is not yet checked: production's dependency
+check compares against a high-water mark that is not downward-closed, so a
+dependent entry can be applied before its dependency (#4586), and the property
+arrives with that fix. The refinement note lists every other abstraction the
+model makes, among them anti-entropy repair, a single WAL partition per
+cluster, a bounded fault budget, and an unbounded identity cache.
 
 ## Relationship to the core library
 

@@ -145,6 +145,12 @@ internal sealed partial class ReplicationShipperGrain : IWalOffsetConsumer
         for (var p = 0; p < partitions; p++)
         {
             positions[p] = state.State.PartitionCursors.TryGetValue(p, out var next) ? Math.Max(0, next) : 0;
+
+            // Saga records withheld for a re-seed stay retained for its rewind (#4533).
+            if (state.State.ReseedRetainFrom is { } retain && p < retain.Length && retain[p] < positions[p])
+            {
+                positions[p] = retain[p];
+            }
         }
 
         return positions;
