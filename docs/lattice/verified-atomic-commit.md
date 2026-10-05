@@ -34,13 +34,36 @@ Coyote models of the receiver, described under
 Do not read coverage of either half as coverage of the other. The single-cluster
 properties say nothing about a receiver, and the cross-cluster properties are all
 claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
-barrier, a transport that can reorder, lose and duplicate) and its failure modes
-are its own. The cross-cluster check is also narrower than its name: it assumes a
-source shard's terminal reaches the receiver after that shard's prepares, which
-the shipper's terminal hold provides (issue #4480), and it reaches no stranded
-origin prepare at a bootstrap (issue #4481) and no re-shipped pre-cut record
-(issue #4482), nor one whose saga's decision the origin has purged (issue #4508).
-Those departures are recorded as defects with a standing mutation each, not covered. The receiver's integration tests and the cross-cluster chaos suites
+barrier, and a transport that may reorder, drop a delivery and duplicate, but is
+assumed never to lose a record) and its failure modes are its own. The
+cross-cluster check is also narrower than its name:
+
+- It assumes a source shard's terminal reaches the receiver after that shard's
+  prepares, which the built-in shipper's terminal hold provides (issue #4480); a
+  bridge built on `IChangeFeed` relies on the feed's own ordering instead (issue
+  #4511, fixed by #4519).
+- It assumes the transport never loses a record. Production violates that: the
+  receiver's dead-letter applier acknowledges a saga record it parked (issue
+  #4591), and a WAL retention (TTL) trim can pass an entry the shipper has not
+  read (issue #4534; a trim without the TTL is fixed by #4595, issue #4579).
+  After such a trim the shipper withholds the peer's saga records
+  until it re-seeds (#4577). A prepare the shipper itself dead-letters poisons its saga
+  instead, which is safe but leaves the saga invisible on that peer (issue
+  #4494, fixed by #4570).
+- It imports a bootstrap atomically. The receiver's drain installs the rows one
+  at a time, but behind a read fence for the whole drain (issue #4526, fixed by
+  #4594), so no reader observes a partial import. Under a forced gap the
+  export's own two-pass race can lose a key (issue #4627).
+- It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
+  shipper drops the filtered prepares but ships every terminal, so all-or-nothing
+  holds only over the keys that peer replicates.
+
+Those departures are recorded as defects or scope limits, not covered. The
+bootstrap is modelled as production now ships it: the export carries the
+recorded verdict of every saga the origin stores (issue #4481, fixed by #4501),
+retained pre-cut records are shipped again and settled against it (issue #4482,
+fixed by #4510), and the origin keeps that verdict while a prepare can still be
+re-shipped (issue #4508, fixed by #4553). The receiver's integration tests and the cross-cluster chaos suites
 in `test/lattice.replication/` remain the evidence for the deployed system
 (issue #2324).
 
@@ -159,8 +182,9 @@ delivery order, the late-prepare refusal, the whole-wait-set barrier, the
 register-before-notify order, and the Indeterminate answer for an undiallable
 delegation - and each must report a violation of one named property, checked by
 its tag in Coyote's bug report rather than accepted as any violation. Two of
-those guards reproduce production defects (issue #4480 as it stood before the shipper's terminal hold, and issue #4448), which is
-why they are guards rather than fixed-design tests.
+those guards reproduce production as it stood before a fix (issue #4480 before the
+shipper's terminal hold, and issue #4448 before #4461), which is why they are
+guards rather than fixed-design tests; they now stand as regression checks.
 
 ### Every model ships a non-vacuous guard test
 
@@ -310,8 +334,9 @@ decision are in [`spec/README.md`](../../spec/README.md), which also describes t
 The same directory holds the cross-cluster module,
 [`AtomicCommitCrossCluster.tla`](../../spec/atomic-commit/AtomicCommitCrossCluster.tla),
 which instances `AtomicCommit` for the origin cluster and specifies the
-receiver: replication of each prepare and terminal over a transport that can
-reorder, lose and duplicate; the receiver's per-source-shard tally, including the
+receiver: replication of each prepare and terminal over a transport that may
+reorder, drop a delivery and duplicate, but is assumed never to lose a record
+(production violates that, issues #4591 and #4534); the receiver's per-source-shard tally, including the
 ungated legacy path; the cross-tree receiver barrier and the registry's
 delegation to it, with an undiallable barrier answering Indeterminate; the two
 delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its

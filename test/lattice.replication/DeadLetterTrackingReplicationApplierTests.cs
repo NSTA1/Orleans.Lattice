@@ -41,7 +41,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var inner = Substitute.For<IReplicationApplier>();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(dlq);
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);

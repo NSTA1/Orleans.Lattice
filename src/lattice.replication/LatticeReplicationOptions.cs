@@ -231,6 +231,24 @@ public class LatticeReplicationOptions
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
 
     /// <summary>
+    /// How many applied write identities <c>(origin, HLC)</c> the receiver
+    /// remembers per tree and origin, so an entry whose causal dependency names
+    /// one of them is released at once (issue #4586). Each identity costs a few
+    /// dozen bytes of memory on the tree's high-water-mark activation; the
+    /// record is not persisted. When an identity has been forgotten - evicted
+    /// past this capacity, or lost to a reactivation - a dependent waits for the
+    /// origin's shipped low watermark to pass it instead, which trails the
+    /// origin's wall clock by its <c>LatticeOptions.ReplicationClockFloorLag</c>.
+    /// So the capacity trades memory for latency only, never correctness.
+    /// Defaults to <see cref="DefaultCausalAppliedIdentityCapacity"/>; must be
+    /// between <c>1</c> and <c>1_048_576</c>.
+    /// </summary>
+    public int CausalAppliedIdentityCapacity { get; set; } = DefaultCausalAppliedIdentityCapacity;
+
+    /// <summary>Default value for <see cref="CausalAppliedIdentityCapacity"/> (16,384 per tree and origin).</summary>
+    public const int DefaultCausalAppliedIdentityCapacity = 16_384;
+
+    /// <summary>
     /// Maximum estimated cumulative byte size of every entry parked
     /// on the per-tree causal-apply buffer. Eviction follows the same
     /// FIFO + dead-letter routing as <see cref="CausalBufferMaxEntries"/>.

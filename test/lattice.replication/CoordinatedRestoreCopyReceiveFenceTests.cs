@@ -162,11 +162,14 @@ public sealed class CoordinatedRestoreCopyReceiveFenceTests
         const string tree = "fence-epoch-parked";
         const string sagaId = "saga-epoch-parked";
         const string dependency = "site-dependency";
+        // One write: the stamp is taken once, because a dependency names exactly
+        // that write (#4586) and Hlc() reads the wall clock.
+        var dependencyStamp = Hlc(100);
         var (participant, request) = await PrepareRestoreAsync(tree, sagaId);
         var buffer = _fixture.GrainFactory.GetGrain<ICausalApplyBufferGrain>(tree);
 
         // Parked before the pause, behind a dependency that has not arrived.
-        var preCut = Entry(tree, "peer/parked-pre-cut", Hlc(15)) with { VectorClock = Vector(dependency, Hlc(100)) };
+        var preCut = Entry(tree, "peer/parked-pre-cut", Hlc(15)) with { VectorClock = Vector(dependency, dependencyStamp) };
         Assert.That(await buffer.ParkAsync(preCut, await CurrentEpochAsync(tree)), Is.EqualTo(1));
 
         await participant.CommitAsync(request);
@@ -174,11 +177,14 @@ public sealed class CoordinatedRestoreCopyReceiveFenceTests
         await _fixture.Fence(sagaId).PollResumeAsync();
 
         // Parked after the lift, behind the same dependency.
-        var postCut = Entry(tree, "peer/parked-post-cut", Hlc(16)) with { VectorClock = Vector(dependency, Hlc(100)) };
+        var postCut = Entry(tree, "peer/parked-post-cut", Hlc(16)) with { VectorClock = Vector(dependency, dependencyStamp) };
         Assert.That(await buffer.ParkAsync(postCut, await CurrentEpochAsync(tree)), Is.EqualTo(2));
 
-        // The dependency arrives; the drain runs over the open restored copy.
-        await _fixture.GrainFactory.GetGrain<IReplicationHighWaterMarkGrain>(tree).TryAdvanceAsync(dependency, Hlc(100));
+        // The dependency arrives - its exact write is recorded as applied, which
+        // is what meets a dependency (#4586) - and the drain runs over the open
+        // restored copy.
+        await _fixture.GrainFactory.GetGrain<IReplicationHighWaterMarkGrain>(tree)
+            .AdvanceAppliedAsync(dependency, dependencyStamp, [dependencyStamp], advanceHighWaterMark: true);
         var remaining = await buffer.DrainAsync();
 
         var lattice = _fixture.GrainFactory.GetGrain<ILattice>(tree);
