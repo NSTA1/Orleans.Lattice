@@ -85,6 +85,28 @@ public sealed class FileWalStorageProviderTests
         },
     };
 
+    [Test]
+    public async Task GetTrimWatermarkAsync_reports_the_durable_trim_point_across_a_restart_with_a_hole_above_it()
+    {
+        // Issue #4621: offset 2 is a hole directly above the trim point. The
+        // watermark - not the offset below the lowest stored entry - is what tells
+        // a reader that offset 2 was never trimmed.
+        using (var first = CreateProvider())
+        {
+            Assert.That(await first.GetTrimWatermarkAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(-1L));
+            await first.AppendBatchAsync(TreeId, 0, [Entry(0), Entry(1)], CancellationToken.None);
+            await first.AppendBatchAsync(TreeId, 0, [Entry(3)], CancellationToken.None);
+            await first.TrimAsync(TreeId, 0, 1, CancellationToken.None);
+            Assert.That(await first.GetTrimWatermarkAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(1L));
+        }
+
+        using var reopened = CreateProvider();
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await reopened.GetTrimWatermarkAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(1L));
+            Assert.That(await reopened.GetLowestOffsetAsync(TreeId, 0, CancellationToken.None), Is.EqualTo(3L));
+        });
+    }
     private static async Task<List<WalEntry>> ReadAllAsync(
         FileWalStorageProvider sut,
         string tree,
