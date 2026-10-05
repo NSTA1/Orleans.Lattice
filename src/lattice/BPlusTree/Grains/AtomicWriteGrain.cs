@@ -39,7 +39,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="Timeout.InfiniteTimeSpan"/> to disable retention cleanup.
 /// </para>
 /// </summary>
-internal sealed class AtomicWriteGrain(
+internal sealed partial class AtomicWriteGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
@@ -1421,6 +1421,12 @@ internal sealed class AtomicWriteGrain(
             return;
         }
 
+        // Issue #4522: a saga whose execute phase ran on a silo that predates
+        // the read-back reaches its commit broadcast with no stamps recorded.
+        // Its buckets are still pending until this broadcast, so read them now.
+        if (committed && state.State.Entries.Count > 0 && state.State.OriginalPrepareStampsPhysicalTreeId is null)
+            await ReadBackBeforeBroadcastAsync().ConfigureAwait(true);
+
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-entry] op={OperationKey} tx={transactionId} committed={committed} initialTouched=[{string.Join(",", state.State.TouchedShards)}] entriesCount={state.State.Entries.Count}");
 #endif
@@ -2405,6 +2411,13 @@ internal sealed class AtomicWriteGrain(
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+                // Issue #4522: carry each backstop key's original prepare stamp,
+                // only to a shard of the copy the stamps were minted on (see
+                // CarriedOriginalStamps). Set here, per delivery, so a re-resolve
+                // to another copy and #4475's purged-copy redelivery (which
+                // re-enters this method with that copy's id) carry none.
+                using var stampScope = LatticeOriginalPrepareStampContext.With(
+                    CarriedOriginalStamps(physicalTreeId, committed, committedValues));
                 return await shard.AppendTxTerminalAsync(
                     transactionId, committed, committedValues,
                     cancellationToken: CancellationToken.None,
@@ -3392,6 +3405,29 @@ internal sealed class AtomicWriteGrain(
                     }
                 }
 
+                // Issue #4522: read back each key's original prepare stamp
+                // while the buckets are still pending, and persist it with the
+                // checkpoint below, so the committed-values backstop can carry
+                // it. The read must account for every entry: one that faults or
+                // misses a key fails the batch, which is retried (re-preparing
+                // is idempotent) and, once the retries are spent, aborts, so the
+                // saga never commits without each key's stamp.
+                var prevOriginalStamps = state.State.OriginalPrepareStamps;
+                var prevOriginalStampsTree = state.State.OriginalPrepareStampsPhysicalTreeId;
+                if (batchFailure is null)
+                {
+                    try
+                    {
+                        await ReadBackOriginalPrepareStampsAsync().ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
+                        batchFailure = ex;
+                    }
+                }
+
                 if (batchFailure is null)
                 {
                     // Whole batch committed - single post-batch
@@ -3410,6 +3446,8 @@ internal sealed class AtomicWriteGrain(
                     {
                         state.State.NextIndex = prevNextIndex;
                         state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
                         throw;
                     }
 #if LATTICE_DIAG
