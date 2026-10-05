@@ -105,14 +105,16 @@ internal sealed partial class TxRegistryGrain
     /// Whether the guard lets the expired tombstone of <paramref name="txid"/>
     /// be physically purged.
     /// </summary>
-    private bool IsWalPurgeCleared(Guid txid)
-    {
-        if (!WalPurgeGuardApplies)
-        {
-            return true;
-        }
+    private bool IsWalPurgeCleared(Guid txid) =>
+        !WalPurgeGuardApplies || (IsWalTrimmedPast(txid) && !IsCrossTreeHeld(txid));
 
-        if (_walPurgeHeld || IsCrossTreeHeld(txid))
+    /// <summary>
+    /// The WAL half of <see cref="IsWalPurgeCleared"/>: no outstanding purge
+    /// hold, and every partition trimmed past a sample taken after the forget.
+    /// </summary>
+    private bool IsWalTrimmedPast(Guid txid)
+    {
+        if (_walPurgeHeld)
         {
             return false;
         }
@@ -186,7 +188,7 @@ internal sealed partial class TxRegistryGrain
                 if (_crossTreeReleased.Contains(txid)
                     || !state.State.CrossTreeMemberships.TryGetValue(txid, out var membership)
                     || (retention > TimeSpan.Zero && now - forgottenAt <= retention)
-                    || !IsWalPurgeCleared(txid))
+                    || (WalPurgeGuardApplies && !IsWalTrimmedPast(txid)))
                 {
                     continue;
                 }

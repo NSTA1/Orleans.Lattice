@@ -98,6 +98,49 @@ public class LatticeRemoteSnapshotGrpcServiceFailureTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
+    /// <summary>
+    /// A service whose real cross-tree export gate reports a silo that predates
+    /// the cross-tree decision purge hold (issue #4684).
+    /// </summary>
+    private static LatticeRemoteSnapshotGrpcService CreateDeferringService()
+    {
+        var inner = new LatticeRemoteSnapshotService(
+            new ThrowingSnapshotProvider(new InvalidOperationException("the export must not be reached")),
+            new AllEnrolledContext(),
+            NullLogger<LatticeRemoteSnapshotService>.Instance)
+        {
+            ExportGate = new CrossTreeExportGate(new ServiceCollection().BuildServiceProvider())
+            {
+                AllSilosHonourOverrideForTesting = () => false,
+            },
+        };
+        return new LatticeRemoteSnapshotGrpcService(
+            CreateMethods(),
+            inner,
+            NullLogger<LatticeRemoteSnapshotGrpcService>.Instance);
+    }
+
+    [Test]
+    public void A_deferred_export_surfaces_as_unavailable_which_the_receiver_retries()
+    {
+        var service = CreateDeferringService();
+
+        var metadata = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.GetMetadata(Request(), new FakeServerCallContext(CancellationToken.None)));
+        var writer = new CollectingStreamWriter<RemoteSnapshotStreamItemBox>();
+        var stream = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.RequestSnapshot(Request(), writer, new FakeServerCallContext(CancellationToken.None)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(metadata!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(stream!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(writer.Written, Is.Empty);
+            Assert.That(LatticeBootstrapTransientFaultClassifier.IsTransient(metadata), Is.True,
+                "the receiver's bootstrap retries a deferred export");
+        });
+    }
+
     [Test]
     public void GetMetadata_maps_an_unexpected_sender_fault_to_internal()
     {

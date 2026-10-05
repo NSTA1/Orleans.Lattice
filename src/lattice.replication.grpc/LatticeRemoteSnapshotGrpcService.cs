@@ -173,6 +173,12 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
         {
             throw;
         }
+        catch (LatticeSnapshotExportDeferredException ex)
+        {
+            // A transient refusal (issue #4684): Unavailable is the status the
+            // receiver's bootstrap classifies as transient and retries.
+            throw new RpcException(new Status(StatusCode.Unavailable, ex.Message));
+        }
         catch (UnauthorizedAccessException ex)
         {
             // Sender-side enrollment gate refusal. Surfaced as PermissionDenied
@@ -235,6 +241,12 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (LatticeSnapshotExportDeferredException ex)
+        {
+            // A transient refusal (issue #4684): Unavailable is the status the
+            // receiver's bootstrap classifies as transient and retries.
+            throw new RpcException(new Status(StatusCode.Unavailable, ex.Message));
         }
         catch (UnauthorizedAccessException ex)
         {

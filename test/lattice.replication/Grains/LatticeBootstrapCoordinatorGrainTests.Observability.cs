@@ -37,6 +37,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var factory = Substitute.For<IGrainFactory>();
         var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
         factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();

@@ -137,7 +137,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // delegate their inbound metadata/stream RPCs to the local
         // ISnapshotProvider without duplicating the contract-level
         // argument validation or the cut-point semantics.
-        builder.Services.TryAddSingleton<LatticeRemoteSnapshotService>();
+        builder.Services.TryAddSingleton<CrossTreeExportGate>();
+        builder.Services.TryAddSingleton(LatticeRemoteSnapshotService.Create);
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
         // The receiver bootstrap read fence the coordinator arms around every
         // snapshot drain (issue #4526).

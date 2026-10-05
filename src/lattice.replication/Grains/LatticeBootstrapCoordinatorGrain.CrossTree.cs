@@ -87,6 +87,76 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     }
 
     /// <summary>
+    /// The barriers that may wait for this tree's arrival through an operation
+    /// the export does not name (issue #4684): opened by
+    /// <paramref name="sourceClusterId"/>, undecided, waiting for
+    /// <paramref name="treeName"/>, and already holding a sibling's arrival.
+    /// Read before the export is requested, so every arrival they hold was
+    /// recorded before the export opened. Keyed by barrier, valued by
+    /// operation id.
+    /// </summary>
+    private async Task<Dictionary<string, string>> CaptureCrossTreeImportCandidatesAsync(string treeName, string sourceClusterId)
+    {
+        var candidates = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (string.IsNullOrEmpty(sourceClusterId))
+        {
+            return candidates;
+        }
+
+        var keys = await _grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(treeName).GetAsync().ConfigureAwait(true);
+        foreach (var key in keys)
+        {
+            var status = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key).GetStatusAsync().ConfigureAwait(true);
+            if (status.Opened
+                && !status.Decided
+                && string.Equals(status.OriginClusterId, sourceClusterId, StringComparison.Ordinal)
+                && status.WaitSet.Contains(treeName, StringComparer.Ordinal)
+                && !status.ArrivedTrees.Contains(treeName, StringComparer.Ordinal)
+                && status.ArrivedTrees.Count > 0)
+            {
+                candidates[key] = status.OperationId;
+            }
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Records this tree's arrival at every captured barrier whose operation
+    /// the export named in no row (issue #4684). The export opened after a
+    /// sibling's terminal was recorded here, so after the operation decided at
+    /// the origin and so after this tree's sub-saga prepared there: an export
+    /// that names it nowhere carried the sub-saga's outcome as plain rows,
+    /// because the origin had purged it. The tree arrives with its siblings'
+    /// verdict and stays read-fenced until the barrier decides.
+    /// </summary>
+    private async Task RecordUnnamedCrossTreeArrivalsAsync(
+        string treeName,
+        Dictionary<string, string> candidates,
+        HashSet<string> namedOperations,
+        HashSet<string> crossTreeBarriers,
+        CancellationToken cancellationToken)
+    {
+        foreach (var (key, operationId) in candidates)
+        {
+            if (namedOperations.Contains(operationId))
+            {
+                continue;
+            }
+
+            var decision = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key)
+                .RecordImportedArrivalAsync(treeName)
+                .ConfigureAwait(true);
+            if (decision.Decided)
+            {
+                await FinalizeCrossTreeTreesAsync(decision, cancellationToken).ConfigureAwait(true);
+            }
+
+            crossTreeBarriers.Add(key);
+        }
+    }
+
+    /// <summary>
     /// Materializes every participant of a decided barrier, as the terminal
     /// that completes a barrier does. Idempotent.
     /// </summary>

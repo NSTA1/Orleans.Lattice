@@ -77,6 +77,17 @@ internal static class HighWaterMarkTestGrains
         return frontier;
     }
 
+    /// <summary>
+    /// A cross-tree barrier index that names no barrier (issue #4684), for a
+    /// bootstrap coordinator under test whose tree no cross-tree barrier waits for.
+    /// </summary>
+    public static Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain EmptyBarrierIndex()
+    {
+        var index = NSubstitute.Substitute.For<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>();
+        index.GetAsync().Returns(System.Collections.Immutable.ImmutableArray<string>.Empty);
+        return index;
+    }
+
     /// <summary>A real origin-frontier grain for <paramref name="origin"/>.</summary>
     public static ReplicationOriginFrontierGrain Frontier(
         string origin,

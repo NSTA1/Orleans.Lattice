@@ -1180,6 +1180,23 @@ again: it is often trimmed, which is why the peer fell off the log. So
     sibling's own terminal reaches this receiver.
   - A re-driven drain records the same arrival again, and a terminal of the
     tree shipped later overwrites it. Both are no-ops.
+- **An import that names the operation nowhere still arrives.** The origin
+  keeps a cross-tree sub-saga's decision until every peer of every
+  participant has acknowledged past it (see
+  [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)),
+  but a decision purged before that hold existed reaches an export only as
+  the sub-saga's committed rows. So before it requests the export, the drain
+  reads the barriers that wait for this tree from the same source and
+  already hold a sibling's arrival
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). For each
+  whose operation no row of the export names, the tree arrives with the
+  siblings' verdict - one operation has one verdict - and stays read-fenced
+  until the barrier decides. Reading the barriers first is what makes this
+  sound: the export then opened after a sibling's terminal arrived, so after
+  the operation decided at the origin and so after this tree's sub-saga
+  prepared there. An export that opened earlier can predate the prepare, and
+  its rows can be pre-saga, so a barrier that opens during the drain leaves
+  the tree pending.
 
 A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's

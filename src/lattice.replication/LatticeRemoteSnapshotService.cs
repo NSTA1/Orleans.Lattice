@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -53,6 +54,30 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
     private readonly ISnapshotProvider _provider;
     private readonly ILatticeReplicationContext? _replicationContext;
     private readonly ILogger<LatticeRemoteSnapshotService> _logger;
+
+    /// <summary>
+    /// The cross-tree export preconditions (issue #4684), set when the service
+    /// is resolved from a host that registered replication. A service built
+    /// directly has none and serves exports as before.
+    /// </summary>
+    internal CrossTreeExportGate? ExportGate { get; init; }
+
+    /// <summary>
+    /// The container factory: the overload the container would select, with
+    /// the cross-tree export gate attached.
+    /// </summary>
+    internal static LatticeRemoteSnapshotService Create(IServiceProvider services)
+    {
+        var provider = services.GetRequiredService<ISnapshotProvider>();
+        var logger = services.GetRequiredService<ILogger<LatticeRemoteSnapshotService>>();
+        var context = services.GetService<ILatticeReplicationContext>();
+        return context is null
+            ? new LatticeRemoteSnapshotService(provider, logger)
+            : new LatticeRemoteSnapshotService(provider, context, logger)
+            {
+                ExportGate = services.GetService<CrossTreeExportGate>(),
+            };
+    }
 
     /// <summary>
     /// Constructs a new <see cref="LatticeRemoteSnapshotService"/>
@@ -190,6 +215,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
@@ -224,6 +250,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
@@ -254,6 +281,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)

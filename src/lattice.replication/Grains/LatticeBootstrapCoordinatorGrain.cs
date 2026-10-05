@@ -940,6 +940,12 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             .GetAsync(cancellationToken)
             .ConfigureAwait(true)).Epoch;
 
+        // The barriers that already hold a sibling's arrival for an operation
+        // this tree has not arrived at (#4684). Read before the export is
+        // requested, so the export opens after every one of those arrivals.
+        var crossTreeCandidates = await CaptureCrossTreeImportCandidatesAsync(treeName, sourceClusterId)
+            .ConfigureAwait(true);
+
         var snapshot = await _snapshotProvider
             .ExportAsync(treeName, sourceClusterId, HybridLogicalClock.Zero, cancellationToken)
             .ConfigureAwait(true);
@@ -1047,9 +1053,15 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var carriedSagas = new HashSet<Guid>();
         var decidedSagas = new Dictionary<Guid, bool>();
         var crossTreeBarriers = new HashSet<string>(StringComparer.Ordinal);
+        var namedCrossTreeOperations = new HashSet<string>(StringComparer.Ordinal);
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
+            if (!string.IsNullOrEmpty(entry.CrossTreeOperationId))
+            {
+                namedCrossTreeOperations.Add(entry.CrossTreeOperationId);
+            }
+
             if (entry.TransactionId != Guid.Empty)
             {
                 if (entry.SettledDecision is { } settled)
@@ -1204,6 +1216,9 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // The import settled cross-tree sub-sagas whose sibling trees may still
         // be pre-saga here: the tree stays read-fenced until every barrier it
         // arrived at has decided (#4683). Persisted with the phase below.
+        await RecordUnnamedCrossTreeArrivalsAsync(
+                treeName, crossTreeCandidates, namedCrossTreeOperations, crossTreeBarriers, cancellationToken)
+            .ConfigureAwait(true);
         state.State.PendingCrossTreeBarriers = await UndecidedBarriersAsync(crossTreeBarriers).ConfigureAwait(true);
 
         // Every snapshot entry is applied: the import is whole, so lift the read

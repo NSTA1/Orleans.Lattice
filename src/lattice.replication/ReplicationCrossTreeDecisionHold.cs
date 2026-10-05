@@ -40,7 +40,7 @@ internal sealed class ReplicationCrossTreeDecisionHold(
     IReplicationTopology topology,
     IOptionsMonitor<LatticeReplicationOptions> options,
     LatticeOptionsResolver optionsResolver,
-    IServiceProvider services) : ICrossTreeDecisionHold
+    CrossTreeExportGate capability) : ICrossTreeDecisionHold
 {
     /// <inheritdoc />
     public async Task<bool> MayPurgeAsync(
@@ -48,7 +48,7 @@ internal sealed class ReplicationCrossTreeDecisionHold(
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(crossTreeMembership);
-        if (!PurgeHoldSupport.AllSilosHonourCrossTreeHold(services))
+        if (!capability.AllSilosHonourCrossTreeHold())
         {
             return false;
         }

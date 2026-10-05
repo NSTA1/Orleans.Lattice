@@ -24,7 +24,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// <para>
 /// <b>Deadlock-freedom.</b> <see cref="NotifyTerminalAsync"/> never calls back
-/// into any grain - it only returns the set of trees to finalize. The calling
+/// into a participant grain - it only returns the set of trees to finalize; the
+/// one grain it calls, the trees' <see cref="ICrossTreeBarrierIndexGrain"/>,
+/// calls nothing. The calling
 /// <c>LatticeGrain</c> performs the finalizes after the call returns (self-tree
 /// inline, sibling trees via their own apply grains), so no circular grain wait
 /// is possible.
@@ -75,6 +77,28 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<TxStatus> GetDecisionAsync();
+
+    /// <summary>
+    /// Whether the barrier has opened and decided, its identity, frozen wait
+    /// set and arrived trees (issue #4684). A decision still awaiting its
+    /// persist reads as undecided. Pure read, safe to interleave.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<CrossTreeReceiverStatus> GetStatusAsync();
+
+    /// <summary>
+    /// Records that <paramref name="treeId"/> was imported from a source export
+    /// that settled its part of this operation without naming it (issue
+    /// #4684): the origin had purged the tree's sub-saga, so the export carried
+    /// its outcome as plain rows. The tree arrives with the verdict its
+    /// siblings' terminals already carry - one cross-tree operation has one
+    /// verdict - and no finalize record, since the import left nothing to
+    /// settle. Call it only when the export is known to reflect the tree's
+    /// outcome; the caller owns that precondition. A barrier that has not
+    /// opened, has no arrival to take the verdict from, or does not wait for
+    /// the tree is left unchanged. Returns the barrier's decision.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> RecordImportedArrivalAsync(string treeId);
 }
 
 /// <summary>

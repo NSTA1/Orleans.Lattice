@@ -1,4 +1,5 @@
 using System.Globalization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree.State;
@@ -12,8 +13,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="ILatticeCrossTreeReceiverGrain"/> for the contract and rationale.
 /// One activation per <c>(originClusterId, operationId)</c> (this grain's
 /// compound key). Purely reactive: it is driven entirely by the per-tree
-/// terminals that arrive over replication - it never runs a saga and never
-/// calls back into another grain, so it cannot participate in a circular wait.
+/// terminals that arrive over replication - it never runs a saga, and the only
+/// grain it calls is its trees' <see cref="ICrossTreeBarrierIndexGrain"/>,
+/// which calls nothing, so it cannot participate in a circular wait.
 /// <para>
 /// Crash recovery rides on replication's own at-least-once redelivery: every
 /// <see cref="NotifyTerminalAsync"/> persists before returning and returns the
@@ -162,6 +164,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // when it joins.
             ThrowIfWaitSetClusterIdsDisagree(frozen);
 
+            await IndexAsync(frozen);
             state.State.WaitSet = frozen;
             state.State.OriginClusterId = terminal.OriginClusterId;
             state.State.OperationId = terminal.OperationId;
@@ -190,6 +193,11 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // only its own arrival - never a recomputed set - grows the barrier.
             var grown = CanonicalStringSet.SortedDistinct(state.State.WaitSet.Append(terminal.TreeId));
             ThrowIfWaitSetClusterIdsDisagree(grown);
+            if (!state.State.Decided)
+            {
+                await IndexAsync([terminal.TreeId]);
+            }
+
             state.State.WaitSet = grown;
         }
 
@@ -225,6 +233,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
 
         // Arm one-shot retention cleanup now that the decision is terminal.
         await SlideTtlAsync();
+        await UnindexAsync();
         return BuildDecision();
     }
 
@@ -273,7 +282,123 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
 
         await SlideTtlAsync();
+        await UnindexAsync();
         return BuildDecision();
+    }
+
+    /// <inheritdoc />
+    public async Task<CrossTreeReceiverDecision> RecordImportedArrivalAsync(string treeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.Replication);
+
+        if (state.State.WaitSet.Count == 0 || state.State.Arrived.Count == 0)
+        {
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
+        if (state.State.Decided)
+        {
+            return _decisionAwaitingPersist ? CrossTreeReceiverDecision.InFlight : BuildDecision();
+        }
+
+        if (!state.State.WaitSet.Contains(treeId) || state.State.Arrived.ContainsKey(treeId))
+        {
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
+        // One cross-tree operation has one verdict, which every arrived
+        // terminal carries. No transaction id: the import settled the tree's
+        // rows itself, so the decision has nothing to finalize on it.
+        state.State.Arrived[treeId] = new CrossTreeReceiverTerminal
+        {
+            OriginClusterId = state.State.OriginClusterId,
+            OperationId = state.State.OperationId,
+            TreeId = treeId,
+            TransactionId = Guid.Empty,
+            Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived),
+            WaitSet = state.State.WaitSet,
+            ObservedSourceShards = [],
+            TerminalHlc = HybridLogicalClock.Zero,
+        };
+
+        if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
+        {
+            state.State.Decided = true;
+            state.State.Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived);
+            _decisionAwaitingPersist = true;
+        }
+
+        await state.WriteStateAsync();
+        _decisionAwaitingPersist = false;
+
+        if (!state.State.Decided)
+        {
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
+        await SlideTtlAsync();
+        await UnindexAsync();
+        return BuildDecision();
+    }
+
+    /// <inheritdoc />
+    public Task<CrossTreeReceiverStatus> GetStatusAsync() =>
+        Task.FromResult(new CrossTreeReceiverStatus
+        {
+            Opened = state.State.WaitSet.Count > 0,
+            Decided = state.State.Decided && !_decisionAwaitingPersist,
+            OriginClusterId = state.State.OriginClusterId,
+            OperationId = state.State.OperationId,
+            WaitSet = [.. state.State.WaitSet],
+            ArrivedTrees = [.. state.State.Arrived.Keys],
+        });
+
+    /// <summary>
+    /// Registers this barrier under every tree of <paramref name="trees"/>
+    /// (issue #4684), before the wait set that names them is persisted, so an
+    /// import of any of them finds it. Fails the call on a failed registration.
+    /// </summary>
+    private async Task IndexAsync(IEnumerable<string> trees)
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in trees)
+        {
+            await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).AddAsync(key);
+        }
+    }
+
+    /// <summary>
+    /// Withdraws the decided barrier from its trees' indexes. Best effort: an
+    /// entry left behind costs a reader one status read.
+    /// </summary>
+    private async Task UnindexAsync()
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in state.State.WaitSet)
+        {
+            try
+            {
+                await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).RemoveAsync(key);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex,
+                    "Cross-tree receiver {Key}: withdrawing from the barrier index of tree '{TreeId}' failed; the stale entry is skipped by readers.",
+                    key, tree);
+            }
+        }
     }
 
     /// <inheritdoc />
@@ -300,6 +425,12 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         var finalize = new List<CrossTreeReceiverTreeFinalize>(state.State.Arrived.Count);
         foreach (var t in state.State.Arrived.Values)
         {
+            if (t.TransactionId == Guid.Empty)
+            {
+                // An imported arrival (#4684): the import settled the tree.
+                continue;
+            }
+
             finalize.Add(new CrossTreeReceiverTreeFinalize
             {
                 TreeId = t.TreeId,
