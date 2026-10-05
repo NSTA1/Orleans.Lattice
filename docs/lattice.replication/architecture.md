@@ -201,7 +201,13 @@ A companion module,
 [`ReplicationCausalDelivery.tla`](../../spec/replication/ReplicationCausalDelivery.tla),
 checks that a receiver cannot deadlock on causal dependencies when shipping
 order inverts a cross-origin dependency cycle and every shipper waits on each
-acknowledgement.
+acknowledgement. Both modules check causal order: no replica holds a write
+without the write its dependency names. A third,
+[`ReplicationLowWatermark.tla`](../../spec/replication/ReplicationLowWatermark.tla),
+checks the low watermark that also meets a dependency: the per-partition WAL
+clock floors, the watermark counted from the acknowledged cursor and clamped
+below open prepares, the capability gate, the writes held back unapplied, and
+the bootstrap pin.
 
 The specification is tied to the code three ways. The decisions it checks run
 in production through pure cores (`ReplicationShipEligibility` for the
@@ -213,41 +219,41 @@ a test that was proven to fail when that seam is broken, in the
 [refinement note](../../spec/replication/Refinement.md). And every property has
 a mutation that makes it fail, so none holds vacuously.
 
-The specification reproduces seven production defects, each now fixed and
-kept as a mutation that reproduces it: a bootstrap pin that discarded writes
+The specifications reproduce production defects, each now fixed and kept as a
+mutation that reproduces it: a bootstrap pin that discarded writes
 (#4463), a causal buffer that could strand or lose parked entries (#4464), a
 duplicate of an in-flight entry that was acknowledged and lost (#4465), a
 snapshot bootstrap that shipped no deletes (#4504), content-hash elision that
 kept a stale value (#4585), a source WAL trim that nothing re-bootstrapped
 (#4587), and a batch the sender could not encode that was dead-lettered on the
-sender and skipped, with no re-seed of the peer (#4614).
+sender and skipped, with no re-seed of the peer (#4614). In the companions: a
+dependency met by the high-water mark, which is not downward-closed (#4586),
+and a full dead-letter queue that evicted (#4603).
 
 A second companion,
 [`ReplicationReBootstrap.tla`](../../spec/replication/ReplicationReBootstrap.tla),
 covers what happens once the source has garbage-collected a tombstone. A
 receiver that fell off the source's log past a delete whose tombstone was
 then reaped receives it by no path, and keeps the deleted value. The module
-checks the receiver-side reconcile and its safety gates. The reconcile of a
-key the source wrote is built (#4647, the fix for #4537), and so is the
-reconcile of a key another cluster wrote, below the source's low watermark
-for its origin, behind a bootstrap drop floor that stops an in-flight write
-resurrecting it (#4549). The module also states two guards production lacks
-and one contract:
+checks the receiver-side reconcile and its safety gates, each built: the
+reconcile of a key the source wrote (#4647, the fix for #4537), and of a key
+another cluster wrote, below the source's low watermark for its origin,
+behind a bootstrap drop floor that stops an in-flight write resurrecting it
+(#4675, the fix for #4549). It also checks:
 
-- A tombstone is reaped on the wall clock alone, so a write it beats that
-  arrives after the grace period resurrects the key (#4615).
-- A receiver aligned with a new source lineage still applies a batch read
-  under the old one (#4673).
+- The reap gate: a tombstone is reaped only below every origin's applied
+  frontier and every attached peer's vouched watermark (#4678, the fix for
+  #4615).
+- The stale-lineage refusal: a receiver aligned with a new source lineage
+  refuses a batch read under the old one (#4681, the fix for #4673).
 - The source-restore contract: a unilateral source restore never makes a
   peer delete a row it dropped, so peers may diverge, and a coordinated
   restore converges them.
 
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is
-owned by #4436. Causal ordering is not yet checked: production's dependency
-check compares against a high-water mark that is not downward-closed, so a
-dependent entry can be applied before its dependency (#4586), and the property
-arrives with that fix. The refinement note lists every other abstraction the
+owned by #4436, as is saga atomicity across a bootstrap (#4683, #4684,
+#4685). The refinement note lists every other abstraction the
 model makes, among them anti-entropy repair, a single WAL partition per
 cluster, a bounded fault budget, and an unbounded identity cache.
 
