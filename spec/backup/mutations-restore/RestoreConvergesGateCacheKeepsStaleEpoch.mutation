@@ -8,7 +8,6 @@ TARGET: RestoreConverges
 CLASS: Temporal
 SUMMARY: the receive-gate cache never refreshes the epoch it stamps
 PERTURBS: Refresh
-DEADLOCK: off
 
 --- FIND
     /\ seen' = [seen EXCEPT ![c] = [open |-> recvOn[c], ep |-> epoch[c]]]

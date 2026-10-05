@@ -7,7 +7,6 @@ TARGET: RestoreConverges
 CLASS: Temporal
 SUMMARY: a refused delivery is acknowledged instead of deferred
 PERTURBS: Land
-DEADLOCK: off
 
 --- FIND
          THEN UNCHANGED <<data, sent>>

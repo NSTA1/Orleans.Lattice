@@ -126,11 +126,10 @@ predate it), and as the hook the closed-copy age gauge reports.
 
 Per #2321's taxonomy every property is reached and falsifiable by a
 protocol-level mutation, and every liveness mutation leaves `Spec`'s fairness
-intact. `RestoreConvergesNoBackstop`, `RestoreConvergesRefusalAcked`,
-`RestoreConvergesResumeKeepsCopyClosed` and
-`RestoreConvergesGateCacheKeepsStaleEpoch` need `DEADLOCK: off`: each leaves a
-write that is never delivered, so the quiesced state the stuttering successor
-requires is never reached. No mutation adds an action.
+intact. None needs `DEADLOCK: off`: `Refresh` (the receive-gate cache re-read)
+is always enabled, so no mutant deadlocks even when it leaves a write that is
+never delivered; each violates `RestoreConverges` as a liveness
+counter-example instead. No mutation adds an action.
 
 ## Deliberate abstraction gaps
 
