@@ -12,7 +12,9 @@ namespace Orleans.Lattice.Replication;
 /// shard root's terminal mark, so a leaf's log replay never re-stages it:
 /// <list type="bullet">
 /// <item>A saga the export carries as a prepared row (in flight at the cut) or
-/// as an unsettled row is left for the terminal that follows the re-seed.</item>
+/// as an unsettled row, with no decision row, is left for the terminal that
+/// follows the re-seed. A saga that decided while the export ran carries both,
+/// and is drained by its decision (#4627).</item>
 /// <item>A saga the export carries as a decision row, or that this receiver's
 /// registry has decided, is drained by that decision: the rewind cannot re-ship
 /// a terminal the source already trimmed.</item>
@@ -63,7 +65,7 @@ internal static class StalePendingClearer
                 {
                     if (m.TransactionId != Guid.Empty
                         && string.Equals(m.OriginClusterId, sourceClusterId, StringComparison.Ordinal)
-                        && !carriedSagas.Contains(m.TransactionId))
+                        && (!carriedSagas.Contains(m.TransactionId) || decidedSagas.ContainsKey(m.TransactionId)))
                     {
                         if (!leftover.TryGetValue(m.TransactionId, out var shards))
                         {

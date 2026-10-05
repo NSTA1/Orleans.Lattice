@@ -49,10 +49,7 @@ internal sealed partial class ReplicationShipperGrain
         // The replay hold first: every export the re-seed can complete from is
         // taken after the epoch read below, so no saga in flight at it loses its
         // decision while the replay may still read it (#4533).
-        await TakeReplayHoldAsync();
-        var epoch = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName).GetAsync();
-        state.State.ReseedRequiredEpoch = epoch;
-        state.State.ReseedRequiredSinceUtcTicks = _cursorFlushClock.GetUtcNow().UtcTicks;
+        var epoch = await TakePeerOffLogStateAsync();
 
         // A held terminal may belong to a saga that lost a prepare in the gap.
         _terminalHolds.Clear();
@@ -69,6 +66,51 @@ internal sealed partial class ReplicationShipperGrain
             + "first retained {FirstRetained}). Saga records are withheld from the peer until it is re-seeded from a "
             + "snapshot export after epoch {Epoch}.",
             LogContext, partition, requested, firstRetained, epoch);
+    }
+
+    /// <summary>
+    /// Takes the replay hold, then records the re-seed marker at the tree's
+    /// current export epoch and the per-partition point the rewind must still
+    /// find retained, in state, without writing it. Returns the epoch.
+    /// </summary>
+    private async Task<long> TakePeerOffLogStateAsync()
+    {
+        // The replay hold first: every export the re-seed can complete from is
+        // taken after the epoch read below, so no saga in flight at it loses its
+        // decision while the replay may still read it (#4533).
+        await TakeReplayHoldAsync();
+        var epoch = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName).GetAsync();
+
+        // Every saga record withheld from here on sits at or above the durable
+        // cursor and is still retained, so keep it from the GC until the rewind
+        // re-ships it (#4533).
+        var heads = await ReadRetainedHeadsAsync();
+        var retain = new long[heads.Length];
+        for (var p = 0; p < heads.Length; p++)
+        {
+            var cursor = state.State.PartitionCursors.TryGetValue(p, out var c) ? Math.Max(0, c) : 0;
+            retain[p] = Math.Max(cursor, heads[p]);
+        }
+
+        state.State.ReseedRetainFrom = retain;
+        state.State.ReseedRequiredEpoch = epoch;
+        state.State.ReseedRequiredSinceUtcTicks = _cursorFlushClock.GetUtcNow().UtcTicks;
+        return epoch;
+    }
+
+    /// <summary>Each partition's lowest retained sequence (its next sequence when empty).</summary>
+    private async Task<long[]> ReadRetainedHeadsAsync()
+    {
+        var heads = new long[_partitionCount];
+        for (var p = 0; p < _partitionCount; p++)
+        {
+            var grain = _partitionGrainCache[p] ??=
+                _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}");
+            var head = await grain.ReadShippingAsync(0, 1, CancellationToken.None);
+            heads[p] = head.Entries.Count > 0 ? head.Entries[0].Sequence : head.NextSequence;
+        }
+
+        return heads;
     }
 
     // The highest export epoch the peer echoed this tick, by any ack: a push
@@ -121,12 +163,34 @@ internal sealed partial class ReplicationShipperGrain
         // so no GC pass on any silo trims between the read and the rewind
         // (issue #4579): the rewound positions are below the published ones.
         HoldPublishedReadPositionsAtZero();
+        var heads = await ReadRetainedHeadsAsync();
+
+        // The retention ceiling trimmed records this shipper withheld since it
+        // took the peer off the log: the echoed export may predate their saga's
+        // decision, so the rewind could not deliver it whole. Wait for an export
+        // taken after this point instead.
+        if (state.State.ReseedRetainFrom is { } retainFrom)
+        {
+            for (var p = 0; p < heads.Length; p++)
+            {
+                if (p < retainFrom.Length && heads[p] > retainFrom[p])
+                {
+                    var renewed = await TakePeerOffLogStateAsync();
+                    await state.WriteStateAsync();
+                    PublishDurableReadPositions();
+                    ReportReseedState();
+                    Logger.LogWarning(
+                        "{Context}: WAL partition {Partition} was trimmed past saga records withheld for the re-seed; "
+                        + "the peer must be re-seeded again, from a snapshot export after epoch {Epoch}.",
+                        LogContext, p, renewed);
+                    return;
+                }
+            }
+        }
+
         for (var p = 0; p < _partitionCount; p++)
         {
-            var grain = _partitionGrainCache[p] ??=
-                _grainFactory.GetGrain<IWalShardGrain>($"{_walTreeId}/{p}");
-            var head = await grain.ReadShippingAsync(0, 1, CancellationToken.None);
-            var lowest = head.Entries.Count > 0 ? head.Entries[0].Sequence : head.NextSequence;
+            var lowest = heads[p];
             if (!state.State.PartitionCursors.TryGetValue(p, out var cursor) || cursor > lowest)
             {
                 state.State.PartitionCursors[p] = lowest;
@@ -138,6 +202,7 @@ internal sealed partial class ReplicationShipperGrain
         PublishDurableReadPositions();
         Array.Clear(_ackedNext);
         state.State.ReseedRequiredEpoch = null;
+        state.State.ReseedRetainFrom = null;
         // Re-shipping from the lowest retained entry is a replay whose
         // snapshot carries any saga it withholds (#4533).
         await BeginReplayFilterAsync(_partitionCount, carried: true);

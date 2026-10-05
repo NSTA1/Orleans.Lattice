@@ -1025,6 +1025,16 @@ recorded verdict) ships as a value-less row that names it with no
 `SettledDecision`, so the receiver does not take it for a purged one;
 a receiver that predates it skips the row like any other value-less row.
 
+**Late decisions.** A saga snap0 had in flight can decide while the
+passes run and drain some of its keys before they are read: those keys
+reach the committed pass as plain values, while the rest still ship as
+prepared rows. Were its terminal then trimmed, nothing would settle the
+prepared rows on the receiver, which would serve the saga split
+([#4627](https://github.com/NSTA1/Orleans.Lattice/issues/4627)). So
+once the passes are done the export re-reads the decision of every saga
+it shipped as prepared rows, and ships a decision row for each one that
+decided meanwhile.
+
 <a id="re-seed-stale-pending-clear"></a>
 **Re-seed: clearing stale pending buckets.** A sender that took its
 peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-off-the-log))
@@ -1043,8 +1053,9 @@ one durably, through a terminal mark on the shards that hold it:
   or as a value-less row (known but unsettled) is left staged for the
   terminal that follows the re-seed. A saga undecided at the cut is
   therefore never cleared, and commits after the re-seed.
-- A saga the export carried as a decision row, or that this
-  receiver's registry has decided, is drained by that decision: the
+- A saga the export carried as a decision row (including one that also
+  shipped as prepared rows and decided while the export ran), or that
+  this receiver's registry has decided, is drained by that decision: the
   source may already have trimmed its terminal, which no rewind can
   re-ship.
 - Any other saga was decided and purged by the source. Its bucket is

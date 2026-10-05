@@ -190,4 +190,18 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(9)]
     public string? ReplayHoldLog { get; set; }
+
+    /// <summary>
+    /// While a re-seed is outstanding, per partition the lowest sequence this
+    /// shipper keeps retained for the rewind (issue #4533): its durable cursor
+    /// when it took the peer off the log, or the partition's lowest retained
+    /// entry when a trim had passed the cursor. Saga records it withholds
+    /// meanwhile sit at or above it, and its published read positions never
+    /// pass it, so the WAL GC keeps them for the rewind to re-ship. A trim the
+    /// retention ceiling forces past it is detected at the rewind, which then
+    /// takes the peer off the log again instead. <see langword="null"/> when no
+    /// re-seed is outstanding; legacy state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(10)]
+    public long[]? ReseedRetainFrom { get; set; }
 }

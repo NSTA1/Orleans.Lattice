@@ -164,6 +164,92 @@ public partial class CrossClusterAtomicVisibilityTests
         });
     }
 
+    [Test]
+    public async Task Saga_records_withheld_for_a_reseed_stay_retained_for_its_rewind()
+    {
+        // Withheld records are consumed and the cursor passes them, but the
+        // published read position must not, or the GC trims what the rewind
+        // has to re-ship (#4533).
+        const string tree = "ccv-reseed-retain";
+        var (feeds, walEncoder, txid, ticks) = TrimmedSagaFeeds(tree);
+        feeds[0].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "plain-after",
+            Value = new byte[] { 5 },
+            Timestamp = Hlc(ticks, 11),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+        var shipped = new List<WalRecord>();
+        var transport = RecordingTransport(walEncoder, shipped, () => null);
+        var registry = ReplayRegistry(Guid.NewGuid(), Guid.NewGuid(), txid);
+        var state = new FakePersistentState<ReplicationShipperState>();
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state,
+            configureFactory: factory => factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry));
+
+        await PumpAsync(shipper, ticks: 3);
+        var positions = await shipper.GetDurableReadPositionsAsync(tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.True, "precondition: the trim took the peer off the log");
+            Assert.That(shipped.Any(r => r.Key == "plain-after"), Is.True, "precondition: the plain write past the withheld record shipped");
+            Assert.That(state.State.PartitionCursors[0], Is.GreaterThan(1L), "precondition: the cursor passed the withheld saga record");
+            Assert.That(positions, Is.Not.Null);
+            Assert.That(positions![0], Is.LessThanOrEqualTo(1L),
+                "the published read position must keep the withheld saga record (sequence 1) from the GC");
+        });
+    }
+
+    [Test]
+    public async Task A_trim_past_withheld_records_takes_the_peer_off_the_log_again_instead_of_rewinding()
+    {
+        const string tree = "ccv-reseed-retrim";
+        var (feeds, walEncoder, txid, ticks) = TrimmedSagaFeeds(tree);
+        long? echo = null;
+        var shipped = new List<WalRecord>();
+        var transport = RecordingTransport(walEncoder, shipped, () => echo);
+        var registry = ReplayRegistry(Guid.NewGuid(), Guid.NewGuid(), txid);
+        var state = new FakePersistentState<ReplicationShipperState>();
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state,
+            configureFactory: factory => factory.GetGrain<ITxRegistryGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(registry));
+
+        await PumpAsync(shipper, ticks: 2);
+        Assert.That(shipper.ReseedRequired, Is.True, "precondition: the trim took the peer off the log");
+
+        // The retention ceiling trims the withheld saga record too, then the peer
+        // echoes a re-seed from an export that may predate its saga's decision.
+        feeds[0].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "plain-p0",
+            Value = new byte[] { 6 },
+            Timestamp = Hlc(ticks, 8),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+        feeds[0].TrimmedThrough = 2;
+        echo = 1;
+        feeds[1].Append(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "plain",
+            Value = new byte[] { 3 },
+            Timestamp = Hlc(ticks, 9),
+            OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+        });
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.True,
+                "a rewind that could not re-ship a withheld record must not resume saga records");
+            Assert.That(shipped.Any(r => r.TransactionId == txid), Is.False, "no record of the saga ships");
+        });
+    }
+
     private static (ReplicationShipperGrainTests.StubReplogShardGrain[] Feeds, ReplicationShipperGrainTests.StubWalRecordEncoder Encoder, Guid Txid, long Ticks)
         TrimmedSagaFeeds(string tree)
     {
