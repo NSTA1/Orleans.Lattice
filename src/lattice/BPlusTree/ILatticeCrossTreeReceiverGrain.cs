@@ -51,6 +51,21 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     Task<CrossTreeReceiverDecision> NotifyTerminalAsync(CrossTreeReceiverTerminal terminal);
 
     /// <summary>
+    /// Records that participating tree <paramref name="treeId"/> is no longer
+    /// replicated on this receiver (issue #4692): its terminal was dropped at the
+    /// receiver's enrollment gate, so it will never arrive. An undecided barrier
+    /// that still waits for the tree removes it from its wait set and decides if
+    /// every remaining tree has arrived, by the usual rule (commit iff every
+    /// arrival committed). A tree that already arrived, a tree outside the wait
+    /// set, a barrier that has not opened, and a decided barrier are left
+    /// unchanged. Call it only for a tree that has really stopped being
+    /// replicated here - never because a terminal was dropped for another reason.
+    /// Returns the barrier's decision, including the finalize records the caller
+    /// must materialize when this call decided it.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> NotifyParticipantAbsentAsync(string treeId);
+
+    /// <summary>
     /// The single global decision for this cross-tree batch on this receiver,
     /// dialled by every participating tree's registry when resolving a delegated
     /// txid. Returns <see cref="TxStatus.InFlight"/> while the wait set is

@@ -9,7 +9,10 @@ can deadlock waiting for causal dependencies when every shipper blocks at the
 head of its line. It models the design #4483 implemented as the fix for #4464
 (acknowledge a parked entry, hold it durably, drain it once its dependency is
 met), and the rejected option of withholding the acknowledgement stands as the
-mutation `EventualConvergenceDeferredParkStalls`.
+mutation `EventualConvergenceDeferredParkStalls`. It also checks `CausalOrder`
+with dependencies met by the exact write they name, as production's have been
+since #4640 (#4586 part 2a); the low watermark that also meets them is
+[`ReplicationLowWatermark.tla`](ReplicationLowWatermark.Refinement.md)'s.
 
 ## Variable mapping
 
@@ -20,7 +23,7 @@ mutation `EventualConvergenceDeferredParkStalls`.
 | `log[s]` | A writer's writes in shipping order | The order `ReplicationShipperGrain.MergeOneBatchAsync` drains the WAL partitions in, which is per-leaf HLC order across partitions and so can differ from authoring order (#1060). |
 | `cursor[s]` | Acknowledged position of the shipper to the receiver | `ReplicationShipperState.PartitionCursors`, which advances only on a positive acknowledgement. |
 | `applied` | The writes merged at the receiver | The receiver's replicas. |
-| `hwm[o]` | The receiver's per-origin high-water mark | `ReplicationHighWaterMarkState.Vector`. |
+| `hwm[o]` | The receiver's per-origin high-water mark | `ReplicationHighWaterMarkState.Vector`. Since #4640 it is not the dependency check, which reads the applied identities; the model keeps it only for the mutation that restores the old check. |
 | `buf` | The receiver's causal buffer | `CausalApplyBufferGrain`, durable since #4483 (the fix for #4464). |
 | `wake` | A drain is pending | A pending `CausalApplyBufferGrain.DrainAsync`. |
 
@@ -30,7 +33,7 @@ mutation `EventualConvergenceDeferredParkStalls`.
 |-------------|---------------|------------------|----------|
 | `Author(o, h, d, p)` | A writer commits a write and the shipper's merge places it | A leaf commit, its HLC from `BPlusLeafGrain.AdvanceClockOrOverride`, an optional application frontier, and the position the shipper's HLC-ordered merge gives it. **Over-approximation:** the write may take any position the shipper has not passed, which covers every interleaving of partitions with unordered leaf clocks. | Yes: `ReplicationShipperGrainTests.DrainBatchAsync_cold_partition_new_below_cursor_entry_is_shipped_not_dropped`. |
 | `Learn(x, w)` | A writer applies the other writer's write | `ReplicationApplier.ApplyAsync` at a writer, collapsed to one step because the main module checks that link. | Yes: `ReplicationApplierTests.ApplyAsync_advances_hwm_after_successful_apply` and `ReplicationHighWaterMarkGrainTests.TryAdvanceAsync_advances_when_candidate_is_strictly_greater`. |
-| `Deliver(s)` | The shipper delivers its head entry and the receiver runs its pipeline | `ReplicationApplier.ApplyAsync`: a held entry is a duplicate, a met dependency (`CausalApplyBuffer.RequiredDependencies` checked by `ReplicationHighWaterMarkGrain.CheckDependenciesAsync`) is merged and advances the high-water mark, an unmet one is parked durably (`ReplicationApplier.ParkAsync`, `CausalApplyBufferGrain.ParkAsync`). Every outcome is acknowledged, as production's transport does (`Accepted` on a park, never deferred). One entry per delivery: a larger batch can carry an entry past a deferred one, and the instance excludes that rescue so the deadlock it would hide is reachable. | Yes: `ReplicationApplierTests.ApplyAsync_parks_entry_when_vector_clock_dependency_missing`, `ReplicationApplierTests.ApplyAsync_still_acknowledges_a_duplicate_of_a_completed_park` and `ReplicationApplierTests.ApplyAsync_parked_entry_survives_a_restart_and_drains_when_its_dependency_arrives`. |
+| `Deliver(s)` | The shipper delivers its head entry and the receiver runs its pipeline | `ReplicationApplier.ApplyAsync`: a held entry is a duplicate, a met dependency (`CausalApplyBuffer.RequiredDependencies` checked by `ReplicationHighWaterMarkGrain.CheckDependenciesAsync` on the exact applied identity) is merged, advances the high-water mark and re-arms a drain, because a write below the mark can still meet a parked dependency (`EventualConvergenceDrainWakesOnlyOnAdvance`), an unmet one is parked durably (`ReplicationApplier.ParkAsync`, `CausalApplyBufferGrain.ParkAsync`). Every outcome is acknowledged, as production's transport does (`Accepted` on a park, never deferred). One entry per delivery: a larger batch can carry an entry past a deferred one, and the instance excludes that rescue so the deadlock it would hide is reachable. | Yes: `ReplicationApplierTests.ApplyAsync_parks_entry_when_vector_clock_dependency_missing`, `ReplicationApplierTests.ApplyAsync_still_acknowledges_a_duplicate_of_a_completed_park` and `ReplicationApplierTests.ApplyAsync_parked_entry_survives_a_restart_and_drains_when_its_dependency_arrives` and `ReplicationApplyIntegrationTests.An_entry_does_not_apply_before_its_dependency_when_a_later_write_of_the_origin_arrived_first`, whose dependency arrives below the mark and drains its parked dependent. |
 | `Drain` | Release of satisfied buffered entries | `CausalApplyBufferGrain.DrainAsync`, re-armed by the park that buffered the entry (`CausalApplyBufferGrain.ParkAsync`'s same-turn re-check). | Yes: `ReplicationApplierTests.ApplyAsync_drains_buffered_entries_when_dependency_arrives` and `ReplicationApplierTests.ApplyAsync_parked_entry_whose_dependency_was_met_before_the_insert_is_drained_by_the_park`. |
 | `Stutter` | Natural termination | Not a protocol step; a stuttering successor at full quiescence so TLC does not report ordinary termination as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
 
@@ -38,6 +41,7 @@ mutation `EventualConvergenceDeferredParkStalls`.
 
 | Spec property | Code-level property it abstracts | Detector |
 |---------------|----------------------------------|----------|
+| `CausalOrder` | The receiver never merges a write before the write its dependency names. Before #4640 the check compared the dependency's HLC with the high-water mark, which an origin's out-of-order arrivals push past writes not yet received (`CausalOrderDeliveryMaxHlcFrontier`). | Yes: `ReplicationApplyIntegrationTests.An_entry_does_not_apply_before_its_dependency_when_a_later_write_of_the_origin_arrived_first`, `ReplicationApplyIntegrationTests.A_batched_entry_does_not_apply_before_its_dependency_when_a_later_write_of_the_origin_arrived_first` and `ReplicationHighWaterMarkGrainTests.A_recorded_identity_is_met_and_a_higher_high_water_mark_alone_is_not`. |
 | `EventualConvergence` | Every write reaches the receiver even when shipping order inverts a cross-origin dependency cycle: parked entries are acknowledged, so no shipper stalls behind one, and they are drained once their dependencies arrive. Withholding the acknowledgement deadlocks (`EventualConvergenceDeferredParkStalls`). | Yes: `ReplicationApplierTests.ApplyAsync_drains_chain_of_dependent_entries_in_one_call` and `ReplicationApplierTests.ApplyAsync_still_acknowledges_a_duplicate_of_a_completed_park`. |
 
 ## Excluded properties
@@ -51,7 +55,8 @@ mutation `EventualConvergenceDeferredParkStalls`.
 | Property | Why it holds on the base | Class | Firing mutations |
 |----------|--------------------------|-------|------------------|
 | TypeOK | Every action keeps its variables in domain. | Faithfully inexpressible | `TypeOkCausalHlcRunaway` |
-| EventualConvergence | A parked entry is acknowledged, so the head of every line moves; a pending drain runs. Withholding the acknowledgement was the rejected option B of #4464. | Faithfully inexpressible | `EventualConvergenceDeferredParkStalls`, `EventualConvergenceDrainNeverReleases`, `EventualConvergenceDependencyOnUnseenWrite` |
+| CausalOrder | A dependency is met only on the exact write merged. | Faithfully inexpressible | `CausalOrderDeliveryMaxHlcFrontier` |
+| EventualConvergence | A parked entry is acknowledged, so the head of every line moves; every apply re-arms a drain, and a pending drain runs. Withholding the acknowledgement was the rejected option B of #4464. | Faithfully inexpressible | `EventualConvergenceDeferredParkStalls`, `EventualConvergenceDrainNeverReleases`, `EventualConvergenceDrainWakesOnlyOnAdvance`, `EventualConvergenceDependencyOnUnseenWrite` |
 
 No mutation adds an action, and every `EventualConvergence` mutation leaves the
 fairness intact.

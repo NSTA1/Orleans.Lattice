@@ -3,11 +3,11 @@
   "refinement": "Refinement.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 4,
+    "invariants": 5,
     "properties": 3,
     "actions": 14,
     "mutations": 22,
-    "behaviourRows": 19,
-    "distinctStates": 308258
+    "behaviourRows": 20,
+    "distinctStates": 306494
   }
 }

@@ -96,7 +96,7 @@
         "shard": "formal-tlc-rebootstrap",
         "tlc": true,
         "includeCategories": ["TlcShardReBootstrap"],
-        "note": "The ReplicationReBootstrap mutants, about 60 test-minutes. Its EventualConvergence mutants share one control and its ReconcileDeletesOnlyDeleted mutants another, so the module stays in one shard."
+        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Each module's mutants share their controls, so every companion module stays whole in this shard."
       },
       {
         "shard": "formal-tlc-replication-wal",
@@ -126,7 +126,7 @@
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base run of every module, the variant runs of every module but AtomicCommit*, the mutants of modules TlcCiShard does not group (a new spec module lands here, as ReplicationCausalDelivery's do), and the synthetic-module gates, about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
+        "note": "Every other TLC case: the base run of every module, the variant runs of every module but AtomicCommit*, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
       },
       {
         "shard": "rest",

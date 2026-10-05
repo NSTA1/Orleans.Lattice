@@ -86,11 +86,14 @@
 # test-minutes / 3.9, the parallelism the formal-tlc item itself measured
 # (165 / 41.9), or its single longest case if that is larger. Replace all seven
 # with measured medians at the next refresh.
+# The rebootstrap row also carries the replication companions moved into it
+# afterwards, ReplicationLowWatermark and ReplicationCausalDelivery, about 5.5
+# test-minutes measured locally.
 lattice	formal-tlc	deterministic	8.9
 lattice	formal-tlc-shard-ownership	deterministic	15.7
 lattice	formal-tlc-convergence	deterministic	15.1
 lattice	formal-tlc-replication-wal	deterministic	13.8
-lattice	formal-tlc-rebootstrap	deterministic	15.3
+lattice	formal-tlc-rebootstrap	deterministic	16.8
 lattice	formal-tlc-atomic	deterministic	10.4
 lattice	formal-tlc-backup	deterministic	7.7
 lattice	bplustree	deterministic	5.0

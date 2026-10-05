@@ -1,0 +1,18 @@
+# Pairs with CausalOrder. A silo latches the floor on its own upgrade instead of waiting for the
+# cluster manifest to show every active silo capable, so a partition on an old-build silo publishes a
+# floor it cannot enforce.
+MODULE: CausalOrderSiloOpensItsOwnGate
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a silo enables the floor on its own upgrade, while another silo still runs the old build
+PERTURBS: Upgrade
+
+--- FIND
+    /\ ~capable[p] /\ capable' = [capable EXCEPT ![p] = TRUE]
+    /\ UNCHANGED <<aAuth, aCom, alog, floor, pub, spart, floorOn>> /\ UNCHANGED Wire /\ UNCHANGED Rcv
+--- REPLACE
+    /\ ~capable[p] /\ capable' = [capable EXCEPT ![p] = TRUE]
+    \* MUTATION: the silo's own upgrade opens the gate.
+    /\ floorOn' = TRUE
+    /\ UNCHANGED <<aAuth, aCom, alog, floor, pub, spart>> /\ UNCHANGED Wire /\ UNCHANGED Rcv
+--- END

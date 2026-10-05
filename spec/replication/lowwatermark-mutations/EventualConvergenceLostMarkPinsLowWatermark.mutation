@@ -1,0 +1,20 @@
+# Pairs with EventualConvergence. Folds the held-back writes into the watermark as min(S, minHeld)
+# instead of excluding each by identity, so one lost mark blocks every dependent above it for ever.
+MODULE: EventualConvergenceLostMarkPinsLowWatermark
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the held-back minimum caps the watermark, so one lost mark pins every later dependent
+PERTURBS: Drain
+
+--- FIND
+    /\ IF \E i \in bBuf : bdeps[i] \in lost \/ DepsOk(bdeps[i])
+--- REPLACE
+    \* MUTATION: the held-back minimum caps the watermark.
+    /\ IF \E i \in bBuf : bdeps[i] \in lost \/ bdeps[i] \in ids \/ (bdeps[i] < srcv /\ bdeps[i] < MinHeld)
+--- END
+
+--- FIND
+               /\ bdeps[i] \in lost \/ DepsOk(bdeps[i])
+--- REPLACE
+               /\ bdeps[i] \in lost \/ bdeps[i] \in ids \/ (bdeps[i] < srcv /\ bdeps[i] < MinHeld)
+--- END

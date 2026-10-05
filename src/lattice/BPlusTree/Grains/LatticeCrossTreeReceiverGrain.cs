@@ -138,6 +138,10 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             // operation's verdict, which every participant's terminal shares.
             if (!state.State.Arrived.ContainsKey(terminal.TreeId))
             {
+                // The same premise as the undecided join: one verdict crosses the
+                // tree boundary only between trees that agree on cluster identity.
+                ThrowIfWaitSetClusterIdsDisagree(
+                    CanonicalStringSet.SortedDistinct(state.State.WaitSet.Append(terminal.TreeId)));
                 state.State.Arrived[terminal.TreeId] = terminal;
                 await state.WriteStateAsync();
             }
@@ -224,6 +228,54 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
 
         // Arm one-shot retention cleanup now that the decision is terminal.
+        await SlideTtlAsync();
+        return BuildDecision();
+    }
+
+    /// <inheritdoc />
+    public async Task<CrossTreeReceiverDecision> NotifyParticipantAbsentAsync(string treeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.Replication);
+
+        if (state.State.Decided)
+        {
+            // A decision still awaiting its persist reads as in flight; the next
+            // terminal or notification re-drives the write.
+            return _decisionAwaitingPersist ? CrossTreeReceiverDecision.InFlight : BuildDecision();
+        }
+
+        // A barrier that has not opened has nothing to wait for and must not
+        // persist anything: the tree id and operation are peer-supplied.
+        if (state.State.WaitSet.Count == 0
+            || !state.State.WaitSet.Contains(treeId)
+            || state.State.Arrived.ContainsKey(treeId))
+        {
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
+        Logger.LogWarning(
+            "Cross-tree receiver {Key}: tree '{TreeId}' is no longer replicated here, so the barrier stops waiting for it "
+            + "and decides on the trees that remain.",
+            GrainContext.GrainId.Key, treeId);
+
+        state.State.WaitSet = state.State.WaitSet.Where(t => !string.Equals(t, treeId, StringComparison.Ordinal)).ToList();
+        if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
+        {
+            state.State.Decided = true;
+            state.State.Committed = CrossTreeReceiverBarrier.CommitsAll(state.State.Arrived);
+            _decisionAwaitingPersist = true;
+        }
+
+        await state.WriteStateAsync();
+        _decisionAwaitingPersist = false;
+
+        if (!state.State.Decided)
+        {
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
         await SlideTtlAsync();
         return BuildDecision();
     }

@@ -45,6 +45,55 @@ public sealed class ShadowCutoverBoundSagaIntegrationTests
         // redirect, which refuses it. The previous copy mirrors nowhere, so the
         // saga re-binds to the restored copy, re-dispatches the whole batch there
         // and commits it whole on the copy the tree now resolves to.
+        var (tree, k1, k2, restore) = await SplitASagaAcrossACutoverAsync();
+
+        var read = await tree.GetManyAsync([k1, k2]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(restore.ShadowPhysicalTreeId, Is.Not.EqualTo(restore.PreviousPhysicalTreeId),
+                "precondition: the restore cut the tree over to a new copy");
+            Assert.That(Text(read, k1), Is.EqualTo("new"),
+                "the saga must commit on the copy the tree resolves to after the cutover");
+            Assert.That(Text(read, k2), Is.EqualTo("new"),
+                "the saga must commit its whole batch on the restored copy");
+        });
+    }
+
+    [Test]
+    public async Task A_saga_rebound_across_a_cutover_is_whole_after_the_revert()
+    {
+        // Issue #4689: the saga's first prepare stayed on the previous copy when
+        // it re-bound, and the revert makes that copy live again while the
+        // decision still reads committed. The saga discards what it left behind
+        // before it decides, so the previous copy serves its pre-saga values on
+        // both keys - the batch was committed on the restored copy, which the
+        // revert discards with everything written there.
+        var (tree, k1, k2, restore) = await SplitASagaAcrossACutoverAsync();
+
+        await _fixture.Restore.RevertRestoreAsync(restore);
+
+        var read = await tree.GetManyAsync([k1, k2]);
+        var p1 = await tree.GetAsync(k1) is { } r1 ? Encoding.UTF8.GetString(r1) : null;
+        var p2 = await tree.GetAsync(k2) is { } r2 ? Encoding.UTF8.GetString(r2) : null;
+        Assert.Multiple(() =>
+        {
+            Assert.That((Text(read, k1), Text(read, k2)), Is.EqualTo(("old", "old")),
+                "a multi-key read after the revert must see the batch on neither key");
+            Assert.That((p1, p2), Is.EqualTo(("old", "old")),
+                "point reads after the revert must see the batch on neither key");
+        });
+    }
+
+    private static string? Text(Dictionary<string, byte[]> read, string key) =>
+        read.TryGetValue(key, out var bytes) ? Encoding.UTF8.GetString(bytes) : null;
+
+    /// <summary>
+    /// Writes <c>old</c> to two keys on two shards, captures a backup, then runs a
+    /// saga writing <c>new</c> to both while a shadow-cutover restore of that
+    /// backup lands between its two prepares, and waits for the saga.
+    /// </summary>
+    private async Task<(ILattice Tree, string K1, string K2, LatticeRestoreResult Restore)> SplitASagaAcrossACutoverAsync()
+    {
         var treeId = $"cutover-saga-{Guid.NewGuid():N}";
         await Registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = 2 });
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(treeId);
@@ -75,17 +124,7 @@ public sealed class ShadowCutoverBoundSagaIntegrationTests
         }
 
         await saga.WaitAsync(TimeSpan.FromSeconds(60));
-
-        var read = await tree.GetManyAsync([k1, k2]);
-        Assert.Multiple(() =>
-        {
-            Assert.That(restore.ShadowPhysicalTreeId, Is.Not.EqualTo(restore.PreviousPhysicalTreeId),
-                "precondition: the restore cut the tree over to a new copy");
-            Assert.That(read.TryGetValue(k1, out var v1) ? Encoding.UTF8.GetString(v1) : null, Is.EqualTo("new"),
-                "the saga must commit on the copy the tree resolves to after the cutover");
-            Assert.That(read.TryGetValue(k2, out var v2) ? Encoding.UTF8.GetString(v2) : null, Is.EqualTo("new"),
-                "the saga must commit its whole batch on the restored copy");
-        });
+        return (tree, k1, k2, restore);
     }
     private static async Task<(string K1, string K2, int HeldShard)> KeysOnTwoShardsAsync(ILattice tree)
     {

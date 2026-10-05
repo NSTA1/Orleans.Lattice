@@ -85,7 +85,15 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         bool recordContact,
         CancellationToken cancellationToken)
     {
-        var (filtered, withheld) = await FilterPoisonedAsync([entry], cancellationToken).ConfigureAwait(false);
+        var (filtered, withheld, quarantined) = await FilterPoisonedAsync([entry], cancellationToken).ConfigureAwait(false);
+        if (quarantined is not null)
+        {
+            // A terminal of a quarantined saga (#4692) is parked, not applied.
+            return await ParkQuarantinedAsync(quarantined, cancellationToken).ConfigureAwait(false)
+                ? new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero }
+                : new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
+
         if (withheld)
         {
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
@@ -177,7 +185,18 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
         }
 
-        var (unpoisonedEntries, withheld) = await FilterPoisonedAsync(entries, cancellationToken).ConfigureAwait(false);
+        var (unpoisonedEntries, withheld, quarantined) = await FilterPoisonedAsync(entries, cancellationToken).ConfigureAwait(false);
+        if (quarantined is not null && !await ParkQuarantinedAsync(quarantined, cancellationToken).ConfigureAwait(false))
+        {
+            // The dead-letter queue is full (#4603): keep the push unacknowledged.
+            withheld = true;
+        }
+
+        if (unpoisonedEntries.Count == 0 && !withheld)
+        {
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+        }
+
         if (withheld)
         {
             // A record of a poisoned saga is withheld until the re-seed retires
@@ -387,6 +406,26 @@ internal sealed class DeadLetterTrackingReplicationApplier(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId ?? string.Empty),
                 LatticeTenantLabel.ForTree(entry.TreeId));
 
+            if (await TryQuarantineAsync(entry, key, failure, attempts).ConfigureAwait(false))
+            {
+                // Issue #4692: the saga is quarantined. Its record is parked, not
+                // applied, so the stream moves past it, and the saga is never
+                // re-seeded again for this cause.
+                if (!await ParkPoisonedSagaRecordAsync(
+                    entry,
+                    failure.Message ?? "<no message>",
+                    attempts,
+                    failure,
+                    cancellationToken).ConfigureAwait(false))
+                {
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                }
+
+                _failures.TryRemove(key, out _);
+                _firstDeferrals.TryRemove(key, out _);
+                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+            }
+
             if (await TryPoisonTimedOutSagaRecordAsync(entry, key, failure, attempts, cancellationToken).ConfigureAwait(false))
             {
                 if (!entry.IsPrepared)
@@ -490,13 +529,13 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     /// one, and if it cannot be applied it is parked at once. Returns the records
     /// to apply and whether any was withheld.
     /// </summary>
-    private async Task<(IReadOnlyList<WalRecord> Entries, bool Withheld)> FilterPoisonedAsync(
+    private async Task<(IReadOnlyList<WalRecord> Entries, bool Withheld, List<WalRecord>? Quarantined)> FilterPoisonedAsync(
         IReadOnlyList<WalRecord> entries,
         CancellationToken cancellationToken)
     {
         if (LatticeBootstrapApplyContext.IsActive)
         {
-            return (entries, false);
+            return (entries, false, null);
         }
 
         Dictionary<(string TreeId, string Origin), HashSet<Guid>>? byTreeOrigin = null;
@@ -524,37 +563,52 @@ internal sealed class DeadLetterTrackingReplicationApplier(
 
         if (byTreeOrigin is null)
         {
-            return (entries, false);
+            return (entries, false, null);
         }
 
         Dictionary<(string TreeId, string Origin), HashSet<Guid>>? poisoned = null;
+        Dictionary<(string TreeId, string Origin), HashSet<Guid>>? quarantinedSagas = null;
         foreach (var kvp in byTreeOrigin)
         {
-            var filtered = await grainFactory
+            var classified = await grainFactory
                 .GetGrain<IReceiverSagaPoisonGrain>(kvp.Key.TreeId)
-                .FilterPoisonedAsync(kvp.Key.Origin, kvp.Value)
+                .ClassifyAsync(kvp.Key.Origin, kvp.Value)
                 .ConfigureAwait(false);
-            if (filtered.Count == 0)
+            if (classified.Poisoned.Count > 0)
             {
-                continue;
+                (poisoned ??= new Dictionary<(string TreeId, string Origin), HashSet<Guid>>())[kvp.Key] = new HashSet<Guid>(classified.Poisoned);
             }
 
-            (poisoned ??= new Dictionary<(string TreeId, string Origin), HashSet<Guid>>())[kvp.Key] = new HashSet<Guid>(filtered);
+            if (classified.Quarantined.Count > 0)
+            {
+                (quarantinedSagas ??= new Dictionary<(string TreeId, string Origin), HashSet<Guid>>())[kvp.Key] = new HashSet<Guid>(classified.Quarantined);
+            }
         }
 
-        if (poisoned is null)
+        if (poisoned is null && quarantinedSagas is null)
         {
-            return (entries, false);
+            return (entries, false, null);
         }
 
         var unpoisoned = new List<WalRecord>(entries.Count);
         var withheld = false;
+        List<WalRecord>? quarantined = null;
         for (var i = 0; i < entries.Count; i++)
         {
             var entry = entries[i];
             var treeId = entry.TreeId ?? string.Empty;
             var origin = entry.OriginClusterId ?? string.Empty;
             if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort
+                && quarantinedSagas is not null
+                && quarantinedSagas.TryGetValue((treeId, origin), out var held)
+                && held.Contains(entry.TransactionId))
+            {
+                (quarantined ??= new List<WalRecord>()).Add(entry);
+                continue;
+            }
+
+            if (entry.Op is MutationKind.TxCommit or MutationKind.TxAbort
+                && poisoned is not null
                 && poisoned.TryGetValue((treeId, origin), out var set)
                 && set.Contains(entry.TransactionId))
             {
@@ -570,7 +624,89 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             unpoisoned.Add(entry);
         }
 
-        return (unpoisoned, withheld);
+        return (unpoisoned, withheld, quarantined);
+    }
+
+    /// <summary>
+    /// Parks every record of a quarantined saga (issue #4692) without applying
+    /// it, so the stream moves past it. Returns <see langword="false"/> when the
+    /// dead-letter queue is full (#4603): the caller then keeps the push
+    /// unacknowledged.
+    /// </summary>
+    private async Task<bool> ParkQuarantinedAsync(List<WalRecord> records, CancellationToken cancellationToken)
+    {
+        foreach (var record in records)
+        {
+            if (!await ParkPoisonedSagaRecordAsync(
+                    record,
+                    "The saga is quarantined: its record failed again after a re-seed settled it.",
+                    retryCount: 0,
+                    failure: null,
+                    cancellationToken).ConfigureAwait(false))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the saga of a record that keeps failing is, or must now be,
+    /// quarantined (issue #4692). A saga already quarantined is quarantined at
+    /// once. Otherwise, past <see cref="LatticeReplicationOptions.SagaDeferralTimeout"/>,
+    /// a saga whose poison a completed re-seed has already retired is quarantined
+    /// rather than poisoned again: its record failed for a reason the re-seed could
+    /// not remove (a malformed record, a contradictory decision, a misconfigured
+    /// cluster id), so another re-seed would only repeat the cycle and the stream
+    /// would never move past it. Quarantine is an input-integrity fault: the saga
+    /// is withheld whole on this receiver, so all-or-nothing visibility holds, but
+    /// its liveness is given up, and it is counted and logged for the operator.
+    /// </summary>
+    private async Task<bool> TryQuarantineAsync(WalRecord entry, RetryKey key, Exception failure, int attempts)
+    {
+        var origin = entry.OriginClusterId ?? string.Empty;
+        var poison = grainFactory.GetGrain<IReceiverSagaPoisonGrain>(entry.TreeId);
+        var classified = await poison.ClassifyAsync(origin, new[] { entry.TransactionId }).ConfigureAwait(false);
+        if (classified.Quarantined.Count > 0)
+        {
+            return true;
+        }
+
+        if (classified.Poisoned.Count > 0)
+        {
+            return false;
+        }
+
+        var now = DateTime.UtcNow;
+        var first = _firstDeferrals.GetOrAdd(key, now);
+        if (now - first < options.Get(entry.TreeId).SagaDeferralTimeout
+            || !await poison.IsRetiredAsync(origin, entry.TransactionId).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        if (!await poison.QuarantineAsync(origin, entry.TransactionId, failure.Message ?? "<no message>").ConfigureAwait(false))
+        {
+            RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedFull);
+            logger.LogError(
+                failure,
+                "Receiver could not quarantine saga transaction {TransactionId} (tree '{TreeId}', origin {Origin}) because the "
+                + "quarantine set is full; it is poisoned and re-seeded again instead.",
+                entry.TransactionId, entry.TreeId, origin);
+            return false;
+        }
+
+        RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaQuarantined);
+        logger.LogError(
+            failure,
+            "Input-integrity fault: saga transaction {TransactionId} from origin {Origin} on tree '{TreeId}' (cross-tree operation "
+            + "'{CrossTreeOperationId}') failed again after {Attempts} attempts although a re-seed already settled it, so the "
+            + "re-seed cannot remove the cause. The saga is QUARANTINED: its records are parked in the dead-letter queue without "
+            + "being applied, the stream moves past them, and it is not re-seeded again. Fix the cause (a malformed record, a "
+            + "contradictory decision, or a misconfigured ClusterId), then discard the parked records.",
+            entry.TransactionId, origin, entry.TreeId, entry.CrossTreeOperationId ?? string.Empty, attempts);
+        return true;
     }
 
     /// <summary>

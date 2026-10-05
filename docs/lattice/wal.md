@@ -496,10 +496,13 @@ exposed to a reader - by `ReadAsync`, `ReadShippingAsync`, or the readable head
 `GetReadableHeadAsync` that readers resume from - so a late landing is never
 below a reader's position. The record of such windows is process-wide, keyed by
 provider and shard, so a reactivation of the shard in the same process is held
-too. Exposure is also never past the highest offset the shard knows is stored,
+too, and a WAL move's quiesce does not report the shard's tail stable while any
+window in it is unsettled (issue #4699). Exposure is also never past the highest offset the shard knows is stored,
 plus one: a recovering allocator resumes there, so a trailing hole stays
 unexposed until something lands above it, and a reissued offset can never land
-below a reader. Once the call settles, its window is final: the entries landed,
+below a reader. The post-failure resync normally rewinds the allocator to that
+point itself; the bound matters when the resync fails and the activation keeps
+serving reads until it is deactivated. Once the call settles, its window is final: the entries landed,
 and are read in order, or the slot is a permanent hole, because the allocator is
 already past it. Offsets are therefore not dense.
 

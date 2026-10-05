@@ -1,0 +1,15 @@
+# Pairs with CausalOrder. Opens the gate before every active silo advertises the floor capability, so a
+# silo running the old build appends below the floor.
+MODULE: CausalOrderGateOpensBeforeEverySiloCapable
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: the capability gate opens while a silo cannot refuse a late stamp
+PERTURBS: EnableFloor
+
+--- FIND
+    /\ \A p \in Parts : capable[p]
+    /\ ~floorOn
+--- REPLACE
+    \* MUTATION: the gate does not wait for every silo.
+    /\ ~floorOn
+--- END

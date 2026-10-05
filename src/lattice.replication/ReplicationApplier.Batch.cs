@@ -1553,6 +1553,10 @@ internal sealed partial class ReplicationApplier
         }
 
         await RecordNotEnrolledLostAsync(origin, dropped, cancellationToken).ConfigureAwait(false);
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            await NotifyCrossTreeParticipantAbsentAsync(entries[k], cancellationToken).ConfigureAwait(false);
+        }
 
         for (var k = startInclusive; k < endExclusive; k++)
         {
