@@ -730,7 +730,7 @@ internal sealed partial class LatticeCursorGrain(
     /// </summary>
     private IDisposable BeginPointInTimeScopeIfNeeded()
     {
-        if (!state.State.Spec.PointInTime) return NoopScope.Instance;
+        if (!state.State.Spec.PointInTime) return NoOpDisposable.Instance;
         return LatticeRegistrySnapshotContext.BeginScope(state.State.PointInTimeSnapshot);
     }
 
@@ -824,17 +824,5 @@ internal sealed partial class LatticeCursorGrain(
                 "pin will expire via its own TTL.",
                 CursorKey, pinId);
         }
-    }
-
-    /// <summary>
-    /// Reusable no-op disposable for the non-point-in-time cursor
-    /// path so the <c>using</c> block in the page-fetch loops does
-    /// not allocate when point-in-time mode is off.
-    /// </summary>
-    private sealed class NoopScope : IDisposable
-    {
-        public static readonly NoopScope Instance = new();
-        private NoopScope() { }
-        public void Dispose() { }
     }
 }

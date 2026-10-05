@@ -3,7 +3,7 @@
 When a receiver cluster has fallen so far behind a sender that the sender has
 already trimmed the WAL entries the receiver still needs, incremental
 replication cannot bridge the gap and the receiver must re-seed from a fresh
-snapshot. Two seams collaborate to detect and react to this condition:
+snapshot. These seams collaborate to detect and react to this condition:
 
 | Seam | Side | Default | Purpose |
 |------|------|---------|---------|

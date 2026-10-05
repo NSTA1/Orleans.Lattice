@@ -34,19 +34,10 @@ internal static class McpToolCredentialScope
         var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
         if (httpContext is null)
         {
-            return NullScope.Instance;
+            return McpToolNoOpScope.Instance;
         }
 
         var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
         return LatticeCredentialContext.With(credential);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
     }
 }

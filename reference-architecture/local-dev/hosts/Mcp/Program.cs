@@ -121,7 +121,8 @@ var enableTreeAdminSchemaControl = config.GetValue("Mcp:EnableTreeAdminSchemaCon
 // endpoint (same address as State), so the endpoint defaults to the State
 // endpoint. The self-awareness tools (current / list / get) are contributed
 // whenever the endpoint is wired; EnableTenantControl additionally advertises the
-// mutating administration tools and defaults off.
+// tenant administration tools (lifecycle, residency and delegated tenant access)
+// and defaults off.
 var tenancyEnabled = config.GetValue("Mcp:EnableTenancy", false);
 var tenantAdminEndpoint = config["Mcp:TenantAdminEndpoint"] ?? stateEndpoint;
 var enableTenantControl = config.GetValue("Mcp:EnableTenantControl", false);

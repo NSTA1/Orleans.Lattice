@@ -7,11 +7,14 @@ using Orleans.Concurrency;
 /// activation per cluster, resolved via
 /// <c>grainFactory.GetGrain&lt;ILatticeAdmin&gt;(LatticeConstants.AdminGrainKey)</c>.
 /// Exposes operations that span every registered tree rather than a single
-/// tree - currently a byte-accurate storage-usage roll-up.
+/// tree - the byte-accurate storage-usage roll-up and refresh and the
+/// split-activity report - plus the WAL placement inspection, audit and move
+/// operations, which name the tree they act on.
 /// <para>
 /// Unlike <see cref="ILattice"/> (one logical grain per tree), the admin
-/// grain has no per-tree key: every method reduces across the full set of
-/// registered trees reported by the tree registry.
+/// grain has no per-tree key: the cluster-wide methods reduce across the full
+/// set of registered trees reported by the tree registry, and the WAL
+/// placement methods take the tree id as an argument.
 /// </para>
 /// </summary>
 [Alias(TypeAliases.ILatticeAdmin)]

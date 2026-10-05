@@ -1,7 +1,7 @@
 # Orleans.Lattice.Explorer.Entra.Web API reference
 
-The public surface is the options type and cache enum, one service-registration
-extension, two endpoint-mapping extensions, the token-acquirer seam and token
+The public surface is the options type and cache enum, the service-registration
+extension, the endpoint-mapping extensions, the token-acquirer seam and token
 result, the auth method, and the re-authentication exception. The
 Microsoft.Identity.Web-backed acquirer and the auto-sign-in circuit handler are
 internal.
@@ -153,9 +153,9 @@ ExplorerAuthSignIn signIn = await method.ChallengeAsync(
 ```
 
 `SchemeId` returns `entra`. `CanHandle` matches that scheme case-insensitively.
-`ChallengeAsync` resolves scopes from `ExplorerEntraWebOptions.Scopes` or the
-advertised audience, acquires the initial downstream token, and returns a bearer
-sign-in. Silent renewal latches the credential as revoked when token acquisition
+`ChallengeAsync` resolves scopes from `ExplorerEntraWebOptions.Scopes` or an
+admitted advertised audience, acquires the initial downstream token, and returns a
+bearer sign-in. Silent renewal latches the credential as revoked when token acquisition
 throws `ExplorerWebReauthRequiredException`.
 
 ## `ExplorerWebReauthRequiredException`

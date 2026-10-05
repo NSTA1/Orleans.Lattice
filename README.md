@@ -119,7 +119,7 @@ One machine, no cloud account, no external services. This is a first-class
 deployment target, not a degraded development mode.
 
 - **Durability.** The [file write-ahead log](docs/lattice.storage.file/README.md)
-  gives an append-and-fsync log per shard on local disk, with crash-safe
+  gives an append-and-fsync log per WAL partition on local disk, with crash-safe
   reconciliation and background compaction. Pair it with a durable grain-storage
   provider for tree state, as the
   [RepoContext container](samples/RepoContextContainer/README.md) does. The

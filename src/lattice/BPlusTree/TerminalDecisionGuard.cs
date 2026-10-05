@@ -68,7 +68,7 @@ internal enum TerminalRecordAction : byte
 /// terminal that is already recorded. Promoting that to the system invariant
 /// "a saga is never both committed and aborted" needs a second obligation the
 /// function cannot discharge: every call site must supply inputs whose
-/// <i>meaning</i> matches this contract. <paramref name="hasExisting"/> here
+/// <i>meaning</i> matches this contract. The <c>hasExisting</c> argument of <see cref="Classify"/> here
 /// means "a terminal has been recorded for this saga", and a caller that
 /// computes it as "the decision map holds a row right now" passes a value that
 /// is locally true and contractually false once the row has been retired. That

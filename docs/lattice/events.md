@@ -64,7 +64,7 @@ The following APIs intentionally skip event publication to keep their bulk I/O p
 - Cursor-page reads (`OpenKeyCursorAsync` / `OpenEntryCursorAsync` / `NextKeysAsync` / `NextEntriesAsync` / `CloseCursorAsync`) - read-only, never emit events.
 - Inbound replicated last-writer-wins applies - a set, delete, range delete, or merged batch arriving from a peer cluster is merged directly into the owning shard and does **not** publish events at the receiving silo.
 
-Two inbound replication shapes are the exception and **do** publish at the receiving silo when publication is enabled there: a replicated atomic batch's prepared writes are re-applied through the local set / delete path, and a replicated CRDT delta is folded through the local CRDT apply path, so both emit the same per-key events a local write on that path would. A subscriber that needs every write should therefore still attach at every cluster - each cluster emits the writes it originated - and treat a replicated atomic batch or CRDT delta that it also observes on a receiving cluster as a duplicate.
+Inbound replication has exceptions that **do** publish at the receiving silo when publication is enabled there: a replicated atomic batch's prepared writes are re-applied through the local set / delete path, and a replicated CRDT delta is folded through the local CRDT apply path, so both emit the same per-key events a local write on that path would. A subscriber that needs every write should therefore still attach at every cluster - each cluster emits the writes it originated - and treat a replicated atomic batch or CRDT delta that it also observes on a receiving cluster as a duplicate.
 
 A delete-range cursor is **not** event-silent: each `DeleteRangeStepAsync` step issues a range delete on the tree and so emits a `DeleteRange` event for its sub-range whenever it deleted at least one key.
 
@@ -117,7 +117,7 @@ If no `IStreamProvider` with the requested name is registered on the cluster cli
 
 ## Metrics
 
-The publish pipeline emits two counters under the `orleans.lattice` meter:
+The publish pipeline emits counters under the `orleans.lattice` meter:
 
 | Instrument | Type | Unit | Tags | Meaning |
 |---|---|---|---|---|

@@ -1,20 +1,12 @@
 namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
-/// A saga this shipper has poisoned for its peer (#4494): a prepare of the saga
-/// was parked on the dead-letter queue instead of shipped, so the peer never
-/// stages that write. Every later prepare and every terminal of the saga is
-/// parked too, so the peer keeps the saga invisible rather than committing it
-/// without the lost write.
-/// <para>
-/// The entry retires only once the saga can produce no further WAL record:
-/// the origin registry has been seen to hold the saga's decision and later to
-/// hold no row for it (a terminal, including a split sweep's late terminal,
-/// needs a recorded decision), and the shipper's durable cursor has passed
-/// every partition tail sampled after that observation. A count of the saga's
-/// terminals is not a bound: an unstamped or late sweep terminal can follow the
-/// stamped ones.
-/// </para>
+/// Legacy: a saga an earlier build poisoned for its peer (#4494) after parking a
+/// prepare of it that could not be encoded. Nothing creates one any more: an
+/// encode failure takes the peer off the log instead (#4614), and a shipper
+/// that activates with entries in <see cref="ReplicationShipperState.PoisonedSagas"/>
+/// takes the peer off the log and forgets them. The type and its alias stay so
+/// persisted state still decodes.
 /// </summary>
 [GenerateSerializer]
 [Alias(ReplicationTypeAliases.PoisonedSaga)]

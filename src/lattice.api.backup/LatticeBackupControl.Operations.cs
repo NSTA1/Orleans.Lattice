@@ -20,9 +20,9 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (_, launch) = await StartCaptureCoreAsync(request, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartCaptureCoreAsync(request, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -33,8 +33,8 @@ internal sealed partial class LatticeBackupControl
     {
         ArgumentNullException.ThrowIfNull(request);
         var (_, launch) = await StartIncrementalCaptureCoreAsync(
-            request, ResolveOperationId(operationId), cancellationToken).ConfigureAwait(false);
-        return ToHandle(launch);
+            request, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken).ConfigureAwait(false);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -44,9 +44,9 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (_, launch) = await StartSetCaptureCoreAsync(request, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartSetCaptureCoreAsync(request, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -56,9 +56,9 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (_, launch) = await StartRestoreCoreAsync(request, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartRestoreCoreAsync(request, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -68,9 +68,9 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var (_, launch) = await StartColdRestoreCoreAsync(request, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartColdRestoreCoreAsync(request, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -80,9 +80,9 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(backupId);
-        var (_, launch) = await StartHealthCheckCoreAsync(backupId, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartHealthCheckCoreAsync(backupId, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -90,9 +90,9 @@ internal sealed partial class LatticeBackupControl
         string? operationId = null,
         CancellationToken cancellationToken = default)
     {
-        var (_, launch) = await StartCatalogRebuildCoreAsync(ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartCatalogRebuildCoreAsync(LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -101,9 +101,9 @@ internal sealed partial class LatticeBackupControl
         string? operationId = null,
         CancellationToken cancellationToken = default)
     {
-        var (_, launch) = await StartCatalogScrubCoreAsync(pruneOrphans, ResolveOperationId(operationId), cancellationToken)
+        var (_, launch) = await StartCatalogScrubCoreAsync(pruneOrphans, LatticeOperationKey.ValidateOrGenerate(operationId), cancellationToken)
             .ConfigureAwait(false);
-        return ToHandle(launch);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -436,18 +436,4 @@ internal sealed partial class LatticeBackupControl
         || string.Equals(kind, BackupOperationKinds.ColdRestore, StringComparison.Ordinal)
         || string.Equals(kind, BackupOperationKinds.CatalogRebuild, StringComparison.Ordinal)
         || string.Equals(kind, BackupOperationKinds.CatalogScrub, StringComparison.Ordinal);
-
-    private static string ResolveOperationId(string? operationId)
-    {
-        if (operationId is null)
-        {
-            return LatticeOperationKey.NewId();
-        }
-
-        LatticeOperationKey.ThrowIfInvalid(operationId, nameof(operationId));
-        return operationId;
-    }
-
-    private static LatticeOperationHandle ToHandle<TResult>(LatticeOperationLaunch<TResult> launch) =>
-        LatticeOperationMapping.ToHandle(launch.Record, created: launch.Completion is not null);
 }

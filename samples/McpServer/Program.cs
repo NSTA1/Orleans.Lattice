@@ -13,28 +13,26 @@ using Orleans.Lattice.Samples.McpServer;
 // ---------------------------------------------------------------------------
 // Orleans.Lattice.Api.Mcp sample: a co-hosted single silo that exposes the
 // Model Context Protocol (MCP) server over streamable HTTP, then drives it with
-// a real MCP client end-to-end.
+// a real MCP client.
 //
 // One WebApplication process runs the whole stack: an Orleans silo with the core
 // tree, Membership (identity), Auth (a default-deny enforcement gate), and the
 // three transport-agnostic API facades (state, data, auth). On top of those the
-// MCP server advertises the facades as MCP tools, scoped per caller by the
-// caller's authorization grants.
+// MCP server adapts the facades as MCP tools.
 //
-// The sample proves the two headline properties of the MCP surface:
+// Intended journey: show permission-scoped discovery for a granted agent and the
+// fail-closed anonymous-caller posture. Current behaviour: this sample registers
+// no ILatticeApiMcpAuthorizer, so the default DenyAllMcpAuthorizer hides every
+// group tool and the client reaches only lattice_capabilities. See the README's
+// known issue before treating this as an end-to-end discovery demo.
 //
-//   1. Permission-scoped discovery. An authenticated agent that has been granted
-//      access sees the state / data / auth tool set and can call a tool
-//      end-to-end over MCP.
-//   2. Fail-closed by default. A caller the credential bridge cannot authenticate
-//      is offered NOTHING - not even the lattice_capabilities meta-tool.
-//
-// Authorization on the endpoint is disabled purely to keep the sample
-// one-command runnable with no identity provider; a demo credential bridge maps a
-// request carrying a marker header onto a fixed "agent" credential, and a demo
-// authenticator resolves that credential to the "agent" subject inside the
-// cluster. A real deployment leaves RequireAuthorization at its secure default
-// and lifts an authenticated ASP.NET Core principal onto the credential.
+// Authorization on the endpoint is disabled purely to avoid an identity
+// provider; it does not bypass the coarse MCP authorizer. A demo credential
+// bridge maps a request carrying a marker header onto a fixed "agent"
+// credential, and a demo authenticator resolves that credential to the "agent"
+// subject inside the cluster. A real deployment leaves RequireAuthorization at
+// its secure default and lifts an authenticated ASP.NET Core principal onto the
+// credential.
 // ---------------------------------------------------------------------------
 
 const string DemoTree = "catalog";
@@ -87,9 +85,9 @@ builder.Host.UseOrleans(silo =>
 // TryAdd-registered HttpContext bridge is skipped and ours wins.
 builder.Services.AddSingleton<ILatticeApiMcpCredentialBridge, DemoCredentialBridge>();
 
-// The MCP server front door. RequireAuthorization is disabled purely to keep the
-// sample one-command runnable; discovery is still fail-closed and
-// permission-scoped underneath.
+// The MCP server front door. RequireAuthorization is disabled purely to avoid an
+// ASP.NET Core identity provider; the default MCP authorizer still hides group
+// tools until the README known issue is addressed.
 builder.Services.AddLatticeMcp(options => options.RequireAuthorization = false);
 
 // Opt in to the three tool modules, with writes and auth administration enabled

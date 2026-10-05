@@ -1,6 +1,6 @@
 # Receiver-side flow control
 
-The replication sender ships a configured `LatticeReplicationOptions.ShipBatchSize` worth of WAL entries per pump tick by default. That blind-push shape is fine when the receiver keeps up; under load it is the wrong shape because a struggling receiver has no in-band way to ask the sender to slow down short of letting RPCs time out. The receiver-side flow-control seam closes that gap by letting the receiver stamp two optional hints onto every `ReplicationAck`:
+The replication sender ships a configured `LatticeReplicationOptions.ShipBatchSize` worth of WAL entries per pump tick by default. That blind-push shape is fine when the receiver keeps up; under load it is the wrong shape because a struggling receiver has no in-band way to ask the sender to slow down short of letting RPCs time out. The receiver-side flow-control seam closes that gap by letting the receiver stamp optional hints onto every `ReplicationAck`:
 
 - `SuggestedBatchSize` - the largest per-tick batch the receiver would like the sender to ship next, in entries.
 - `PauseForMs` - the number of milliseconds the sender should pause before the next pump tick to this peer.
@@ -27,7 +27,7 @@ The receiver-side gRPC service calls `EvaluateAsync` after a successful apply, o
 | `EntryCount` | Number of entries handed to the applier (includes deduped / parked entries). |
 | `ApplyDurationMs` | Wall-clock duration of the apply call, in milliseconds. The built-in gRPC receiver times every push, including an empty heartbeat batch (which reports a near-zero, not exactly `0`, duration); a custom receiver may pass `0` when it did not measure. Recognise a heartbeat by `EntryCount == 0`. |
 
-The policy returns a `ReceiverFlowControlHint` whose two `int?` fields project directly onto `ReplicationAck.SuggestedBatchSize` / `ReplicationAck.PauseForMs`.
+The policy returns a `ReceiverFlowControlHint` whose nullable fields project directly onto `ReplicationAck.SuggestedBatchSize` / `ReplicationAck.PauseForMs`.
 
 ## Defaults
 

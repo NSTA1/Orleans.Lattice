@@ -6987,8 +6987,13 @@ internal sealed partial class BPlusLeafGrain
         // with the checkpoint frozen for the entire census. Width is now
         // something the replay can spend to keep going, at every site that
         // replays rather than only at this one.
+        //
+        // The bound is newestOffset, not head (issue #3489): head is the
+        // exclusive next sequence while the reader's upper bound is inclusive,
+        // so bounding by head asked for an offset that does not exist and the
+        // loop paid one extra, empty read after the last real entry.
 
-        while (fromExclusive < head)
+        while (fromExclusive < newestOffset)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -6997,7 +7002,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 slice = await sliceReader.ReadSliceAsync(
                     fromExclusive,
-                    head,
+                    newestOffset,
                     (ex, narrowedTo) => ReplayLogger(context)?.LogWarning(
                         ex,
                         "Leaf {GrainId} replay of tree {TreeId} partition {Partition} could not afford a commit-log "

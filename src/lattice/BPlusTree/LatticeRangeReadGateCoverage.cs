@@ -8,7 +8,8 @@ namespace Orleans.Lattice;
 /// <remarks>
 /// <para>
 /// This type exists because the gated range-read surface reports denial and
-/// emptiness identically. A denied <b>point</b> read throws, but a denied
+/// emptiness identically. A denied <b>point</b> read reports the key as absent
+/// (deliberately, so a denial cannot disclose that the key exists), and a denied
 /// <b>range</b> read resolves to a reject-all key filter, which yields a clean,
 /// successful, empty result: no exception, no log, every instrument healthy. A
 /// caller that reads "no rows" as "the store is empty" therefore treats an

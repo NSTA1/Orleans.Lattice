@@ -659,7 +659,7 @@ internal sealed class LatticeAuthAdmin(
                 break;
             }
 
-            if (SelectorMatches(rule.Subject, subjectId, groupSet))
+            if (rule.Subject.Matches(subjectId, groupSet))
             {
                 rules.Add(rule);
             }
@@ -897,7 +897,7 @@ internal sealed class LatticeAuthAdmin(
                 continue;
             }
 
-            if (!SelectorMatches(rule.Subject, subject.SubjectId, groupSet))
+            if (!rule.Subject.Matches(subject.SubjectId, groupSet))
             {
                 continue;
             }
@@ -922,14 +922,6 @@ internal sealed class LatticeAuthAdmin(
             LatticeScopeKind.Key => (scope.KeyOrPrefix, (string?)null, (string?)null),
             LatticeScopeKind.Prefix => ((string?)null, scope.KeyOrPrefix, PrefixUpperBound(scope.KeyOrPrefix!)),
             _ => ((string?)null, (string?)null, (string?)null),
-        };
-
-    private static bool SelectorMatches(LatticeSubjectSelector selector, string subjectId, HashSet<string> groups) =>
-        selector.Kind switch
-        {
-            LatticeSubjectSelectorKind.User => string.Equals(selector.Id, subjectId, StringComparison.Ordinal),
-            LatticeSubjectSelectorKind.Group => groups.Contains(selector.Id),
-            _ => false,
         };
 
     /// <summary>

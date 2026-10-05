@@ -562,7 +562,7 @@ all.
 - **Sample spotlights**: one variable-driven template filled per sample, once
   the core paths exist.
 - **One CRDT, one join**: a short per scenario in the site's
-  `docs-site/figures/join-figures.json` (thirteen today), each its join figure
+  `docs-site/figures/join-figures.json`, each with its join figure
   narrated from the scenario's own step, settled and rule texts, so the video
   and the explainer page it embeds on cannot disagree. The diamond scenarios
   are ready; the chain layouts are ported first.

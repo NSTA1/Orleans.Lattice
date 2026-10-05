@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using ModelContextProtocol.Protocol;
@@ -124,7 +123,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Continuation cursor from a previous page's nextPageToken; null starts from the beginning.")] string? pageToken = null,
                 [Description("When true, order newest-first by capture time instead of by backup id.")] bool orderByCreatedDescending = false) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.ListBackupsAsync(control, pageSize, pageToken, orderByCreatedDescending, cancellationToken);
             },
@@ -148,7 +147,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The content-addressed backup id to describe.")] string backupId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.DescribeBackupAsync(control, backupId, cancellationToken);
             },
@@ -171,7 +170,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
         => McpServerTool.Create(
             (RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.GetInventoryAsync(control, cancellationToken);
             },
@@ -197,7 +196,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Scope extent: WholeTree (default), Prefix, or Key.")] string? scopeKind = null,
                 [Description("The exact key or key prefix for a Prefix/Key scope; null for WholeTree.")] string? keyOrPrefix = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.GetScopeStatusAsync(control, treeId, scopeKind, keyOrPrefix, cancellationToken);
             },
@@ -224,7 +223,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Resume cursor: the nextChunkOffset from a previous page; 0 starts from the beginning.")] int chunkOffset = 0,
                 [Description("Byte budget for this page; <= 0 uses the server default (256 KiB), capped at 4 MiB.")] int maxBytes = 0) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.ExportArtifactAsync(control, backupId, artifactId, chunkOffset, maxBytes, cancellationToken);
             },
@@ -259,7 +258,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
                 [Description("Optional idempotency id for the tracked operation (1-128 of A-Z, a-z, 0-9, '-', '_', '.'); a retried start with the same id returns the existing operation. Null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartBackupAsync(operations, name, treeId, scopeKind, keyOrPrefix, pageSize, operationId, cancellationToken);
             },
@@ -287,7 +286,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartIncrementalBackupAsync(operations, name, treeId, scopeKind, keyOrPrefix, baseBackupId, pageSize, operationId, cancellationToken);
             },
@@ -313,7 +312,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Raw-entry drain page size; <= 0 uses the server default.")] int pageSize = 0,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartBackupSetAsync(operations, name, treeIds, crossTreeConsistent, pageSize, operationId, cancellationToken);
             },
@@ -343,7 +342,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The restore's own idempotency key, which makes a retried restore a no-op; null derives one.")] string? restoreOperationId = null,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartRestoreAsync(operations, backupId, targetTreeId, mode, restoreOperationId, operationId, cancellationToken);
             },
@@ -369,7 +368,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartHealthCheckAsync(operations, backupId, operationId, cancellationToken);
             },
@@ -397,7 +396,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 CancellationToken cancellationToken,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartCatalogRebuildAsync(operations, operationId, cancellationToken);
             },
@@ -425,7 +424,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("When true, remove the orphan rows found; when false (the default), only flag them.")] bool pruneOrphans = false,
                 [Description("Optional idempotency id for the tracked operation; null generates one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartCatalogScrubAsync(operations, pruneOrphans, operationId, cancellationToken);
             },
@@ -456,7 +455,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description(RestoreModeDescription)] string? mode = null,
                 [Description("The restore's own idempotency key, which makes a retried restore a no-op; null derives one.")] string? operationId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.StartRestoreAsync(operations, backupId, targetTreeId, mode, operationId, operationId: null, cancellationToken);
             },
@@ -479,7 +478,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The operation id from a start tool's handle.")] string operationId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.GetOperationStatusAsync(operations, operationId, cancellationToken);
             },
@@ -506,7 +505,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("Maximum operations per page; <= 0 uses the server default (50, at most 500).")] int pageSize = 0,
                 [Description("Continuation cursor from a previous page's nextPageToken; null starts at the newest.")] string? pageToken = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.ListOperationsAsync(operations, pageSize, pageToken, cancellationToken);
             },
@@ -530,7 +529,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The operation id to cancel.")] string operationId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var operations = context.Services!.GetRequiredService<ILatticeBackupOperations>();
                 return BackupToolInvocations.CancelOperationAsync(operations, operationId, cancellationToken);
             },
@@ -574,7 +573,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The shadow physical tree id from the restore result (shadow-cutover only).")] string? shadowPhysicalTreeId = null,
                 [Description("The previous physical tree id from the restore result (shadow-cutover only).")] string? previousPhysicalTreeId = null) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.RevertRestoreAsync(
                     control, backupId, targetTreeId, mode, operationId, manifestChain, entriesApplied,
@@ -601,7 +600,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 [Description("The content-addressed backup id to delete.")] string backupId,
                 CancellationToken cancellationToken) =>
             {
-                using var scope = StampCredential(context.Services!);
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
                 var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
                 return BackupToolInvocations.DeleteBackupAsync(control, backupId, cancellationToken);
             },
@@ -618,27 +617,4 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
                 Destructive = true,
                 UseStructuredContent = true,
             });
-
-    private static IDisposable StampCredential(IServiceProvider services)
-    {
-        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
-        if (httpContext is null)
-        {
-            return NullScope.Instance;
-        }
-
-        var credential = services.GetService<ILatticeApiMcpCredentialBridge>()?.Resolve(httpContext);
-        // A null credential leaves the ambient context cleared (fail-closed): the
-        // facade's access gate then denies the caller as anonymous.
-        return LatticeCredentialContext.With(credential);
-    }
-
-    private sealed class NullScope : IDisposable
-    {
-        public static readonly NullScope Instance = new();
-
-        public void Dispose()
-        {
-        }
-    }
 }

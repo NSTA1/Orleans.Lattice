@@ -52,6 +52,19 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
             .Returns(ci => LiveKeys(kept, ci.ArgAt<string?>(0), ci.ArgAt<string?>(1), ci.ArgAt<CancellationToken>(4)));
         subject.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(ci => Task.FromResult(keptSet.Contains(ci.ArgAt<string>(0))));
+        subject.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var values = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+                foreach (var key in ci.ArgAt<List<string>>(0))
+                {
+                    if (keptSet.Contains(key))
+                    {
+                        values[key] = [1];
+                    }
+                }
+                return Task.FromResult(new GatedMultiReadResult { Values = values });
+            });
 
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Arg.Any<string>(), Arg.Any<string?>())

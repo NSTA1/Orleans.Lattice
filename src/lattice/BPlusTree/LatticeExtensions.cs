@@ -190,7 +190,7 @@ public static class LatticeExtensions
     /// names - a leaf replaying its WAL window from cold, an activation queued
     /// behind another call, a contended storage read - which clear in seconds,
     /// not in the milliseconds that
-    /// <see cref="ComputeReconnectDelayMs"/> waits for an enumerator reclaim.
+    /// <see cref="ResilientScanResume.ReconnectDelayMs(int)"/> waits for an enumerator reclaim.
     /// Resuming on that millisecond ramp would descend onto the same still-parked
     /// read and burn another whole ceiling.
     /// </para>

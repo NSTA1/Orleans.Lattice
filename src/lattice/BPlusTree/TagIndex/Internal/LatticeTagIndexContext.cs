@@ -726,12 +726,54 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             // A flag membership row is authored as a typed enable delta minted
             // against that row's own current state, so the rows cannot be
-            // collapsed into one value batch; keep the per-row loop.
-            foreach (var tag in tags)
+            // collapsed into one value batch the way the LwwRegister branch
+            // below does. They can still stop being serial: the rows are
+            // distinct keys (a tag-major row and its key-major mirror, across
+            // distinct tags), so no two enables in the wave contend on one row's
+            // state, and the router grain is a stateless worker, so independent
+            // writes issued together are serviced by separate local workers
+            // rather than queued behind one another. The window reuses
+            // RemoveRowConcurrencyLimit for the reason documented there.
+            //
+            // Validation runs as its own pass first, for the same reason the
+            // LwwRegister branch hoists it: interleaved with the writes it could
+            // reject tag i after tags 0..i-1 had already been durably written,
+            // and overlapping the writes would widen that window rather than
+            // introduce it.
+            for (var i = 0; i < tags.Count; i++)
             {
-                ValidateTag(tag);
-                await WriteRowAsync(RowKey(tag, treeId, key), cancellationToken).ConfigureAwait(false);
-                await WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken).ConfigureAwait(false);
+                ValidateTag(tags[i]);
+            }
+
+            List<Task>? wave = null;
+            for (var i = 0; i < tags.Count; i++)
+            {
+                var tag = tags[i];
+                var row = WriteRowAsync(RowKey(tag, treeId, key), cancellationToken);
+                var mirror = WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken);
+
+                if (tags.Count == 1)
+                {
+                    // One tag is two writes; a wave container would cost more
+                    // than the overlap saves.
+                    await row.ConfigureAwait(false);
+                    await mirror.ConfigureAwait(false);
+                    break;
+                }
+
+                wave ??= new List<Task>(Math.Min(tags.Count * 2, RemoveRowConcurrencyLimit));
+                wave.Add(row);
+                wave.Add(mirror);
+                if (wave.Count >= RemoveRowConcurrencyLimit)
+                {
+                    await Task.WhenAll(wave).ConfigureAwait(false);
+                    wave.Clear();
+                }
+            }
+
+            if (wave is { Count: > 0 })
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
             }
         }
         else
@@ -1224,26 +1266,158 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         var orphans = 0;
         if (candidates is not null)
         {
-            foreach (var candidate in candidates)
-            {
-                // Re-verify against the subject before deleting: the live set is
-                // a point-in-time snapshot, so a key written concurrently after
-                // the snapshot (value first, then tags) could otherwise have its
-                // freshly-committed tag rows destroyed as false orphans.
-                if (await subject.ExistsAsync(candidate.Key, cancellationToken).ConfigureAwait(false))
-                {
-                    continue;
-                }
-                // In a flag membership mode this authors a disable delta (the
-                // scan already filtered out already-disabled rows), never a
-                // plain delete - so orphan cleanup also ships a typed delta.
-                await RemoveRowAsync(candidate.RowKey, cancellationToken).ConfigureAwait(false);
-                await RemoveRowAsync(KeyRowKey(candidate.Tree, candidate.Key, candidate.Tag), cancellationToken).ConfigureAwait(false);
-                orphans++;
-            }
+            orphans = await DeleteConfirmedOrphansAsync(subject, candidates, cancellationToken).ConfigureAwait(false);
         }
 
         return new TagReconcileReport(1, keysScanned, rowsScanned, orphans);
+    }
+
+    /// <summary>
+    /// Maximum number of candidate keys re-verified against the subject tree in
+    /// one call by <see cref="DeleteConfirmedOrphansAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The candidate list is request-sized - a scan of a large tree can produce
+    /// arbitrarily many orphan rows - so the confirmation cannot be issued as a
+    /// single unbounded read. It is windowed at the same 32 the rest of this
+    /// file uses, matching <see cref="AndQueryCandidateWindow"/>, whose shape
+    /// (confirm a request-sized candidate set against the subject tree) is
+    /// identical.
+    /// </remarks>
+    internal const int OrphanVerifyWindow = 32;
+
+    /// <summary>
+    /// Re-verifies candidate orphan rows against the subject tree and deletes
+    /// the rows whose key is confirmed absent.
+    /// </summary>
+    /// <remarks>
+    /// Re-verification is needed because the live set is a point-in-time
+    /// snapshot, so a key written concurrently after the snapshot (value first,
+    /// then tags) could otherwise have its freshly-committed tag rows destroyed
+    /// as false orphans.
+    /// <para>
+    /// Confirmation is per <em>key</em>, not per row: a key carrying T tags
+    /// contributes T candidate rows, all naming the same key, so probing each
+    /// row separately paid T identical reads for one answer. Folding the
+    /// candidates to their distinct keys and confirming a window of them in one
+    /// batched read reduces a scan's confirmation traffic from one call per
+    /// candidate row to one call per 32 distinct keys.
+    /// </para>
+    /// <para>
+    /// The confirmation reads through the gate-accounting overload because this
+    /// loop concludes from a key's <em>absence</em>: a read filtered by the
+    /// access gate is indistinguishable from a genuinely missing key on the
+    /// plain overload, so a gated reconcile could delete live membership rows
+    /// for keys the gate merely hid. When a window reports any gate-pruned key
+    /// the whole window is treated as present and nothing in it is deleted,
+    /// which is the conservative direction: a missed orphan is reclaimed by the
+    /// next reconcile, a wrongly deleted row is not.
+    /// </para>
+    /// </remarks>
+    private async Task<int> DeleteConfirmedOrphansAsync(
+        ILattice subject,
+        List<OrphanCandidate> candidates,
+        CancellationToken cancellationToken)
+    {
+        var absent = await ConfirmAbsentKeysAsync(subject, candidates, cancellationToken).ConfigureAwait(false);
+        if (absent.Count == 0)
+        {
+            return 0;
+        }
+
+        var orphans = 0;
+        List<Task>? wave = null;
+        foreach (var candidate in candidates)
+        {
+            if (!absent.Contains(candidate.Key))
+            {
+                continue;
+            }
+
+            // In a flag membership mode this authors a disable delta (the scan
+            // already filtered out already-disabled rows), never a plain delete
+            // - so orphan cleanup also ships a typed delta. The two rows are
+            // distinct keys, as are the rows of any other confirmed orphan, so
+            // the deletes overlap in a wave capped at the same limit and for the
+            // same reason as RemoveTagsForKeyAsync.
+            wave ??= new List<Task>(OrphanVerifyWindow);
+            wave.Add(RemoveRowAsync(candidate.RowKey, cancellationToken));
+            wave.Add(RemoveRowAsync(KeyRowKey(candidate.Tree, candidate.Key, candidate.Tag), cancellationToken));
+            orphans++;
+
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
+                wave.Clear();
+            }
+        }
+
+        if (wave is { Count: > 0 })
+        {
+            await Task.WhenAll(wave).ConfigureAwait(false);
+        }
+
+        return orphans;
+    }
+
+    private async Task<HashSet<string>> ConfirmAbsentKeysAsync(
+        ILattice subject,
+        List<OrphanCandidate> candidates,
+        CancellationToken cancellationToken)
+    {
+        var absent = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var window = new List<string>(OrphanVerifyWindow);
+
+        foreach (var candidate in candidates)
+        {
+            if (!seen.Add(candidate.Key))
+            {
+                continue;
+            }
+
+            window.Add(candidate.Key);
+            if (window.Count < OrphanVerifyWindow)
+            {
+                continue;
+            }
+
+            await ConfirmWindowAsync(subject, window, absent, cancellationToken).ConfigureAwait(false);
+            window.Clear();
+        }
+
+        if (window.Count > 0)
+        {
+            await ConfirmWindowAsync(subject, window, absent, cancellationToken).ConfigureAwait(false);
+        }
+
+        return absent;
+    }
+
+    private static async Task ConfirmWindowAsync(
+        ILattice subject,
+        List<string> window,
+        HashSet<string> absent,
+        CancellationToken cancellationToken)
+    {
+        var result = await subject
+            .GetManyWithGateAccountingAsync(window, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (!result.IsComplete)
+        {
+            // An absence in this window may be the gate rather than the tree.
+            // Classify nothing.
+            return;
+        }
+
+        foreach (var key in window)
+        {
+            if (!result.Values.ContainsKey(key))
+            {
+                absent.Add(key);
+            }
+        }
     }
 
     internal async Task<TagReconcileReport> ReconcileAllAsync(string? startInclusive, string? endExclusive, CancellationToken cancellationToken)

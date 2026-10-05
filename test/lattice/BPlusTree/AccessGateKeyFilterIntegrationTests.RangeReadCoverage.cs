@@ -8,10 +8,10 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// (<see cref="ILattice.GetRangeReadGateCoverageAsync"/>, issue #2423) against a
 /// real <see cref="ILatticeAccessGate"/>.
 /// <para>
-/// The defect these pin is the asymmetry between the point and range read paths.
-/// A denied <b>point</b> read throws, so the caller cannot miss it. A denied
-/// <b>range</b> read resolves to a reject-all key filter and yields a clean,
-/// successful, empty result, so the caller cannot see it at all. That is the
+/// The defect these pin is that a denied <b>range</b> read resolves to a
+/// reject-all key filter and yields a clean, successful, empty result, so the
+/// caller cannot see the denial at all. (A denied <b>point</b> read likewise
+/// reports the key as absent, by design.) That is the
 /// shared mechanism behind issues #2277, #2252/#2407, #2406 and #2480: an empty
 /// result read as a factual negative.
 /// </para>
