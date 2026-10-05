@@ -86,10 +86,14 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         const string tree = "rsdr-4692-readd-live";
         const string key = "staged-mid-drain";
         var txid = Guid.NewGuid();
+        var stale = Guid.NewGuid();
 
         var siteA = _siteA.Client.GetGrain<ILattice>(tree);
         await siteA.SetAsync("anchor", new byte[] { 1 });
         await BootstrapSiteBAsync(tree);
+
+        // A stale saga pending before the export opens, so the drain's clearer runs.
+        Assert.That((await Applier(_siteB).ApplyAsync(StrandedPrepare(tree, "stale", stale))).Applied, Is.True, "precondition");
 
         // The sender holds nothing back during a plain bootstrap, so a saga can
         // stage on the receiver after the export opened. The export does not
@@ -115,7 +119,11 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         }
 
         Assert.That(staged?.Applied, Is.True, "precondition: the prepare staged inside the drain");
-        Assert.That(await CountSiteBPendingAsync(tree, txid), Is.GreaterThan(0),
-            "a saga staged after the export opened must keep its bucket for its terminal");
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await CountSiteBPendingAsync(tree, stale), Is.Zero, "precondition: the clearer ran and settled the stale saga");
+            Assert.That(await CountSiteBPendingAsync(tree, txid), Is.GreaterThan(0),
+                "a saga staged after the export opened must keep its bucket for its terminal");
+        });
     }
 }
