@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The type invariant is a gate too: a migration that opens
+# its window records a phase outside the four the module declares, which
+# TypeOK must reject.
+MODULE: TypeOkMigrationPhaseOutsideDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an opened migration window records a phase outside its domain
+PERTURBS: Begin
+
+--- FIND
+    /\ mg' = "window"
+--- REPLACE
+\* MUTATION: an undeclared phase.
+    /\ mg' = "opening"
+--- END

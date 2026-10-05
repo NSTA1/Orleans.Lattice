@@ -1,0 +1,26 @@
+# Pairs with ReadableOnceComplete. #4545's second fix (#4644) without the
+# witness carriage: a leaf split hands the moved key to a fresh sibling without
+# the donor's durable witness that the saga's terminal settled it, so an
+# unstamped marker reaching the sibling later is installed and gates the key
+# after the saga completed.
+MODULE: ReadableOnceCompleteWitnessNotCarried
+TARGET: ReadableOnceComplete
+CLASS: Invariant
+SUMMARY: a leaf split drops the witness, so an unstamped marker on the sibling gates the key after the saga completed
+PERTURBS: LeafSplit
+
+--- FIND
+    /\ lk /\ ~term[c][s] /\ ~wit
+    /\ row[c][s][k] < SagaV
+--- REPLACE
+\* MUTATION: the marker carries no prepare stamp.
+    /\ lk /\ ~term[c][s] /\ ~wit
+--- END
+
+--- FIND
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, reacted, ackOn>>
+--- REPLACE
+\* MUTATION: the split does not carry the witness to the sibling.
+    /\ wit' = FALSE
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, pend, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, reacted, ackOn>>
+--- END

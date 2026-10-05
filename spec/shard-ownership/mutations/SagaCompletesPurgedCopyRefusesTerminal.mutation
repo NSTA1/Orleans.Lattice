@@ -1,4 +1,5 @@
-# Pairs with SagaCompletes. Reproduces current production: a saga bound to the
+# Pairs with SagaCompletes. Reproduces production before #4475 was fixed (#4531,
+# #4581): a saga bound to the
 # old copy keeps sending its terminals there, and once the purge has cleared
 # that copy and unregistered it, AppendTxTerminalAsync (a non-write that does
 # not answer a purged tree as empty) refuses with InvalidOperationException.

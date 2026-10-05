@@ -70,9 +70,11 @@ public class UnboundLeafSelfHealIntegrationTests
         Assert.That(leafId, Is.Not.Null);
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
 
-        // The damaged state, reached without any tree-lifecycle call: node state
-        // wiped, shard root still routing to it.
-        await leaf.ClearGrainStateAsync();
+        // The damaged state the self-heal covers: the leaf's row survives but
+        // carries no tree id - the binding an unbound split donor hands its
+        // sibling - and the shard root still routes to it. A leaf with no row at
+        // all is not this case (issue #4654; see the test below).
+        await UnbindLeafRowAsync(leaf);
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the leaf is unbound");
 
         await router.OrFlag("a").EnableAsync("replica-1");
@@ -116,7 +118,7 @@ public class UnboundLeafSelfHealIntegrationTests
         Assert.That(siblingKeys, Is.Not.Empty, "precondition: the sibling owns a key range");
         var damagedKey = siblingKeys[0];
 
-        await sibling.ClearGrainStateAsync();
+        await UnbindLeafRowAsync(sibling);
         Assert.That(await sibling.GetTreeIdAsync(), Is.Null, "precondition: the sibling is unbound");
         Assert.That(await leftmost.GetTreeIdAsync(), Is.EqualTo(treeName), "precondition: the leftmost leaf is untouched");
 
@@ -145,17 +147,62 @@ public class UnboundLeafSelfHealIntegrationTests
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId!.Value);
 
         await router.DeleteTreeAsync();
+        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
         await leaf.ClearGrainStateAsync();
         await router.RecoverTreeAsync();
 
-        // Re-damage after recovery: the recover-time repair has already run, so
-        // only the write path can heal this.
-        await leaf.ClearGrainStateAsync();
+        // Re-damage after recovery: the leaf is unbound again but keeps its row,
+        // so only the write path can heal this.
+        await UnbindLeafRowAsync(leaf);
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the leaf is unbound after recovery");
 
         await router.OrFlag("a").EnableAsync("replica-1");
 
         Assert.That(await router.OrFlag("a").IsEnabledAsync(), Is.True);
+    }
+
+    /// <summary>
+    /// Rewrites <paramref name="leaf"/>'s durable row with no tree id, the binding
+    /// an unbound split donor hands its sibling, and deactivates the leaf so its
+    /// next activation reads it.
+    /// </summary>
+    private static async Task UnbindLeafRowAsync(IBPlusLeafGrain leaf)
+    {
+        var services = Orleans.Lattice.Tests.Wal.SiloServiceProviderCaptureForWalTests.Captured
+            ?? throw new InvalidOperationException("Silo IServiceProvider was not captured by the fixture.");
+        await leaf.ForceDeactivateAsync();
+        await Task.Delay(200);
+
+        var storage = Microsoft.Extensions.DependencyInjection.ServiceProviderKeyedServiceExtensions
+            .GetRequiredKeyedService<Orleans.Storage.IGrainStorage>(services, LatticeOptions.StorageProviderName);
+        var row = new GrainState<LeafNodeState>();
+        await storage.ReadStateAsync("leaf", leaf.GetGrainId(), row);
+        Assert.That(row.RecordExists, Is.True, "precondition: the leaf has a row");
+        row.State.TreeId = null;
+        await storage.WriteStateAsync("leaf", leaf.GetGrainId(), row);
+    }
+
+    /// <summary>
+    /// Issue #4654. A leaf with no state row at all - whether a purge cleared it or
+    /// its row and row record were lost - cannot be told apart, so the write path
+    /// does not re-create it: binding it would turn a lost leaf into an empty one.
+    /// The typed CRDT write fails closed instead.
+    /// </summary>
+    [Test]
+    public async Task CrdtWrite_to_a_routed_leaf_with_no_row_fails_closed()
+    {
+        var treeName = $"selfheal-rowless-{Guid.NewGuid():N}";
+        var router = await CreateSingleShardTreeAsync(treeName);
+        await router.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+
+        var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{treeName}/0");
+        var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>((await shard.GetLeftmostLeafIdAsync())!.Value);
+        await leaf.ClearGrainStateAsync();
+
+        var write = Assert.CatchAsync(async () => await router.OrFlag("a").EnableAsync("replica-1"));
+
+        Assert.That(write, Is.InstanceOf<ILatticeLeafUnavailable>(), $"got {write}");
+        Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "the write path must not bind the rowless leaf");
     }
 
     /// <summary>

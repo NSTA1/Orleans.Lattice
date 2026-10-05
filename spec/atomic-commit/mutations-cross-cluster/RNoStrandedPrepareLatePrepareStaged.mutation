@@ -17,9 +17,11 @@ PERTURBS: DeliverPrepare
     /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
 --- REPLACE
 \* MUTATION: no settle and no late-prepare refusal.
     /\ rpend' = [rpend EXCEPT ![m.key] = "pending"]
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt>>
 --- END

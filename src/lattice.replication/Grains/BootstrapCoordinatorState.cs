@@ -220,4 +220,12 @@ internal sealed class BootstrapCoordinatorState
     /// <see cref="Guid.Empty"/>, which pins nothing.
     /// </summary>
     [Id(24)] public Guid FrontierEpoch { get; set; }
+
+    /// <summary>
+    /// The source's applied low watermarks and held writes the current drain's
+    /// export carried, kept only when the export's source generation was stable
+    /// under the lineage they were read under (issue #4586 part 2b); the handoff
+    /// pins them on the tree frontier. <see langword="null"/> installs none.
+    /// </summary>
+    [Id(25)] public SnapshotSourceFrontier? ExportedFrontier { get; set; }
 }

@@ -1,6 +1,7 @@
 # Shard-ownership mutations
 
-Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/),
+Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/)
+and [`../mutations-crdt/`](../mutations-crdt/),
 is one controlled experiment: a deliberate defect in one module that must make
 one named property fire, run as two arms (the property holds on the unmutated
 module, and fails on the mutant). The file format, and why a mutation is
@@ -9,7 +10,8 @@ generated from the base rather than checked in as a copy, are described in
 these catalogues use it unchanged, including `PERTURBS:`.
 
 This directory holds the `ShardOwnership` catalogue and
-`../mutations-retention/` the `ShardOwnershipRetention` one. Mutation names are
+`../mutations-retention/` the `ShardOwnershipRetention` one, and
+`../mutations-crdt/` the `ShardOwnershipCrdt` one. Mutation names are
 unique across every module, because they name test cases; where both modules
 pair an action with the same kind of defect, the retention module's file has its
 own name.
@@ -23,12 +25,15 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503 and #4564, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618 and #4619, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
-  the discarded copy's refusal to the old copy. `ReadableOnceCompleteMarkerWithoutSelfCheck`
-  is #4545's fix without its self-verifying marker.
+  the discarded copy's refusal to the old copy. `ReadableOnceCompleteWitnessNotCarried` and
+  `ReadableOnceCompleteWitnessNotDurable` are #4545's second fix without the
+  witness's carriage or durability, and `NoLiveBucketAfterForgetForwardRecreatesRow`
+  and `AtomicOnOwnerParticipantRowBestEffort` are #4619's fix without its
+  join-only registration or with a best-effort participant row.
 - **Pairings.** Every other mutation pairs an action with a property, so that
   every action in each module's `Next` is perturbed by at least one mutation
   and every checked property fires under at least one.
@@ -105,6 +110,7 @@ declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same wa
 
 | Mutation | Target | Class | Perturbs | What it breaks |
 |----------|--------|-------|----------|----------------|
+| [`AtomicOnOwnerParticipantRowBestEffort`](../mutations-retention/AtomicOnOwnerParticipantRowBestEffort.mutation) | `AtomicOnOwner` | Invariant | none (edits `PRow`) | with a best-effort participant row the guard refuses a live saga's forward, tearing the batch |
 | [`AtomicOnOwnerPrepareNotMirrored`](../mutations-retention/AtomicOnOwnerPrepareNotMirrored.mutation) | `AtomicOnOwner` | Invariant | `SagaPrepare` | a prepare during a resize is not mirrored, so the resized copy reads the batch torn |
 | [`AtomicOnOwnerRetainedDecidesEarly`](../mutations-retention/AtomicOnOwnerRetainedDecidesEarly.mutation) | `AtomicOnOwner` | Invariant | `SagaDecide` | the decision is recorded once any entry is dispatched, so readers see the batch torn |
 | [`AtomicOnOwnerRetainedStartCheckpointsEntry`](../mutations-retention/AtomicOnOwnerRetainedStartCheckpointsEntry.mutation) | `AtomicOnOwner` | Invariant | `SagaStart` | the saga records an entry as dispatched before dispatching it, so the batch commits torn |
@@ -116,6 +122,8 @@ declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same wa
 | [`NoKeyLostRetainedSplitDuringResize`](../mutations-retention/NoKeyLostRetainedSplitDuringResize.mutation) | `NoKeyLost` | Invariant | `SplitBegin` | a split opens while a resize is in flight, so the resize neither captures nor fences its target |
 | [`NoKeyLostSplitInSoftDeleteWindow`](../mutations-retention/NoKeyLostSplitInSoftDeleteWindow.mutation) | `NoKeyLost` | Invariant | none (edits `TermClosure`) | a split on the resized copy in the soft-delete window strands the bound saga's bucket, because the mirrored terminal does not follow it |
 | [`NoKeyLostUndoRestoresForeignMap`](../mutations-retention/NoKeyLostUndoRestoresForeignMap.mutation) | `NoKeyLost` | Invariant | `UndoSwap` | the undo moves the alias back with a map that routes a key to a shard the old copy never held it on |
+| [`NoLiveBucketAfterForgetForwardRecreatesRow`](../mutations-retention/NoLiveBucketAfterForgetForwardRecreatesRow.mutation) | `NoLiveBucketAfterForget` | Invariant | none (edits `PRow`) | the late forward's registration recreates the forgotten saga's row, so the guard never fires |
+| [`NoLiveBucketAfterForgetLateForwardBucketed`](../mutations-retention/NoLiveBucketAfterForgetLateForwardBucketed.mutation) | `NoLiveBucketAfterForget` | Invariant | `DeliverLate` | a late forward of a forgotten saga is bucketed on a leaf that lost its memory of the terminal, stranded for good |
 | [`NoResurrectionLatePrepareActivationMemory`](../mutations-retention/NoResurrectionLatePrepareActivationMemory.mutation) | `NoResurrection` | Invariant | `DeliverLate` | the late-prepare refusal reads per-activation memory, so a late orphan serves a stale value |
 | [`NoResurrectionRetainedFlipUnfenced`](../mutations-retention/NoResurrectionRetainedFlipUnfenced.mutation) | `NoResurrection` | Invariant | `ResizeFlip` | the alias flips before the old copy is fenced, so a reader still on it is served a value the new copy has superseded |
 | [`NoResurrectionRetainedPurgedCopyServesEmpty`](../mutations-retention/NoResurrectionRetainedPurgedCopyServesEmpty.mutation) | `NoResurrection` | Invariant | none (edits `RoutedRefused`) | a routed read on the purged old copy answers empty, below an acknowledged value |
@@ -129,7 +137,9 @@ declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same wa
 | [`OwnerMonotonicRetainedSnapshotDropsBuckets`](../mutations-retention/OwnerMonotonicRetainedSnapshotDropsBuckets.mutation) | `OwnerMonotonic` | Invariant | `SnapCopy` | the snapshot copies committed entries only, so a commit decided before the flip reverts on the resized copy |
 | [`OwnerMonotonicSweepIndeterminateLeavesMarker`](../mutations-retention/OwnerMonotonicSweepIndeterminateLeavesMarker.mutation) | `OwnerMonotonic` | Invariant | `SplitSweep` | the sweep replays an Indeterminate prepare that the destination refuses, leaving only an activation-scoped marker |
 | [`ReadableOnceCompleteDeadMarkerTransferred`](../mutations-retention/ReadableOnceCompleteDeadMarkerTransferred.mutation) | `ReadableOnceComplete` | Invariant | `DeliverLate`, `LeafSplit` | a marker installed after its terminal is copied to a fresh sibling leaf, which gates the key after the saga completed |
-| [`ReadableOnceCompleteMarkerWithoutSelfCheck`](../mutations-retention/ReadableOnceCompleteMarkerWithoutSelfCheck.mutation) | `ReadableOnceComplete` | Invariant | none (edits `LeafGated`) | without the self-check, a leaf that lost its terminal memory takes a late marker that gates the key after the saga completed |
+| [`ReadableOnceCompleteMarkerWithoutSelfCheck`](../mutations-retention/ReadableOnceCompleteMarkerWithoutSelfCheck.mutation) | `ReadableOnceComplete` | Invariant | `DeliverLate` | an unstamped marker on a leaf with no durable witness of the terminal gates the key after the saga completed |
+| [`ReadableOnceCompleteWitnessNotCarried`](../mutations-retention/ReadableOnceCompleteWitnessNotCarried.mutation) | `ReadableOnceComplete` | Invariant | `LeafSplit` | a leaf split drops the witness, so an unstamped marker on the sibling gates the key after the saga completed |
+| [`ReadableOnceCompleteWitnessNotDurable`](../mutations-retention/ReadableOnceCompleteWitnessNotDurable.mutation) | `ReadableOnceComplete` | Invariant | `Reactivate` | a reactivation loses the witness, so a later unstamped marker gates the key after the saga completed |
 | [`ResizeCompletesFenceNeverLands`](../mutations-retention/ResizeCompletesFenceNeverLands.mutation) | `ResizeCompletes` | Temporal | `ResizeFence` | the fence step records nothing, so the flip never becomes enabled |
 | [`ResizeCompletesUndoNeverClears`](../mutations-retention/ResizeCompletesUndoNeverClears.mutation) | `ResizeCompletes` | Temporal | `UndoClear` | the undo's last step never records that the undo finished |
 | [`SagaCompletesCompletionNeverRecorded`](../mutations-retention/SagaCompletesCompletionNeverRecorded.mutation) | `SagaCompletes` | Temporal | `SagaComplete` | the saga never records its completion once the broadcast has visited every target |
@@ -144,3 +154,18 @@ Apply the mutation's edits to a copy of the module, rename the copy's
 names `TypeOK` and the mutation's `TARGET` (under `INVARIANTS` for an
 invariant, `PROPERTIES` for a temporal property). `TlcModelCheckTests`
 generates exactly that cfg.
+
+## Inventory: ShardOwnershipCrdt
+
+| Mutation | Target | Class | Perturbs | What it breaks |
+|----------|--------|-------|----------|----------------|
+| [`NoLostContributionBackstopInstallsLastWriterWins`](../mutations-crdt/NoLostContributionBackstopInstallsLastWriterWins.mutation) | `NoLostContribution` | Invariant | `Terminal` | the terminal's backstop installs the staged state last-writer-wins, dropping a write acknowledged after the stage |
+| [`NoLostContributionBeginSkipsDrain`](../mutations-crdt/NoLostContributionBeginSkipsDrain.mutation) | `NoLostContribution` | Invariant | `Begin` | the window opens without the drain, so a resize swaps to a copy missing an earlier write |
+| [`NoLostContributionCompleteSkipsDestination`](../mutations-crdt/NoLostContributionCompleteSkipsDestination.mutation) | `NoLostContribution` | Invariant | `Complete` | the saga completes before its terminal reaches the migration's destination |
+| [`NoLostContributionDecisionAcknowledgesCaller`](../mutations-crdt/NoLostContributionDecisionAcknowledgesCaller.mutation) | `NoLostContribution` | Invariant | `Decide` | the saga acknowledges its caller at the decision, before any terminal |
+| [`NoLostContributionLeafSplitLeavesRowBehind`](../mutations-crdt/NoLostContributionLeafSplitLeavesRowBehind.mutation) | `NoLostContribution` | Invariant | `LeafSplit` | a leaf split does not move the key's row to the sibling that now declares it |
+| [`NoLostContributionResizeDrainLastWriterWins`](../mutations-crdt/NoLostContributionResizeDrainLastWriterWins.mutation) | `NoLostContribution` | Invariant | `Copy` | the resize's snapshot drain merges last-writer-wins, losing a contribution only the source held |
+| [`NoLostContributionResizeWriteNotMirrored`](../mutations-crdt/NoLostContributionResizeWriteNotMirrored.mutation) | `NoLostContribution` | Invariant | `WriteB` | a CRDT write after the resize's drain passed its key is not mirrored and is lost at the swap |
+| [`NoLostContributionSplitImportDropsOverOwnRow`](../mutations-crdt/NoLostContributionSplitImportDropsOverOwnRow.mutation) | `NoLostContribution` | Invariant | `WriteB`, `Copy`, `Commit` | a split's import drops the source's row over the destination's own fold, losing a contribution only the source held |
+| [`NoLostContributionStageOmitsOwnContribution`](../mutations-crdt/NoLostContributionStageOmitsOwnContribution.mutation) | `NoLostContribution` | Invariant | `Stage` | the staged state omits the saga's own contribution, which a backstop then never applies |
+| [`TypeOkMigrationPhaseOutsideDomain`](../mutations-crdt/TypeOkMigrationPhaseOutsideDomain.mutation) | `TypeOK` | Invariant | `Begin` | an opened migration window records a phase outside its domain |

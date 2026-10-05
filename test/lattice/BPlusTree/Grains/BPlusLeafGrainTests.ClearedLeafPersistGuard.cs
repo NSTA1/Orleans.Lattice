@@ -59,7 +59,9 @@ public partial class BPlusLeafGrainTests
     {
         var (grain, state) = CreateRowlessTreelessLeaf();
 
-        await grain.SetShardIndexAsync(3);
+        // A rowless leaf not being created fails closed rather than binding
+        // (issue #4654); either way no stub row is written.
+        Assert.ThrowsAsync<LeafStateRowLostException>(async () => await grain.SetShardIndexAsync(3));
 
         AssertNoStubRowWritten(state);
     }
@@ -69,7 +71,7 @@ public partial class BPlusLeafGrainTests
     {
         var (grain, state) = CreateRowlessTreelessLeaf();
 
-        await grain.SetKeyRangeAsync("a", "m");
+        Assert.ThrowsAsync<LeafStateRowLostException>(async () => await grain.SetKeyRangeAsync("a", "m"));
 
         AssertNoStubRowWritten(state);
     }
@@ -123,7 +125,11 @@ public partial class BPlusLeafGrainTests
     {
         var (grain, state) = CreateRowlessTreelessLeaf();
 
-        await grain.SetTreeIdAsync("seed-tree");
+        // A seed is a create path, so it carries a create intent (issue #4654).
+        using (LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain)))
+        {
+            await grain.SetTreeIdAsync("seed-tree");
+        }
 
         Assert.That(state.WriteCount, Is.EqualTo(1), "the topology seed assigns TreeId before persisting and must not be refused");
         Assert.That(state.State.TreeId, Is.EqualTo("seed-tree"));
@@ -147,7 +153,11 @@ public partial class BPlusLeafGrainTests
         state.State.TreeId = "seeded-tree";
         var grain = CreateGrain(state);
 
-        await grain.SetNextSiblingAsync(GrainId.Create("leaf", "next"));
+        // A rowless leaf carrying a tree id in memory is one being created.
+        using (LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain)))
+        {
+            await grain.SetNextSiblingAsync(GrainId.Create("leaf", "next"));
+        }
 
         Assert.That(state.WriteCount, Is.EqualTo(1));
     }
@@ -156,6 +166,7 @@ public partial class BPlusLeafGrainTests
     public async Task Unbound_split_sibling_init_persists_and_keeps_moved_entries()
     {
         var (grain, state) = CreateRowlessTreelessLeaf();
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain));
 
         await grain.InitializeSiblingAsync(new SiblingInitialization
         {
@@ -186,6 +197,9 @@ public partial class BPlusLeafGrainTests
     public async Task Unbound_rowless_leaf_data_write_is_persisted_by_the_next_persist()
     {
         var (grain, state) = CreateRowlessTreelessLeaf();
+
+        // Only a leaf being created may take a write while rowless (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain));
 
         await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>
         {
