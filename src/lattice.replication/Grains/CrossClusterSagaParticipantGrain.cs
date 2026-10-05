@@ -49,7 +49,8 @@ internal sealed class CrossClusterSagaParticipantGrain : TtlGrain<CrossClusterSa
     /// <summary>
     /// The bounded cutover fence window a prepared participant holds while
     /// waiting for the coordinator decision. Must exceed the coordinator's
-    /// decide-and-deliver latency; past it the participant auto-compensates. A
+    /// decide-and-deliver latency; past it the participant asks the coordinator
+    /// for the saga's decision rather than compensating on its own (#4637). A
     /// build-progress (prepare) deadline is a separate, longer coordinator-side
     /// concern.
     /// </summary>
