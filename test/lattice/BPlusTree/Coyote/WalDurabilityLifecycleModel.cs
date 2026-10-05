@@ -297,6 +297,11 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                 var offset = WalOffsetAllocationCore.Assign(ref next);
                 s.Next = next;
                 s.Inflight[offset] = true;
+                if (_guard == WalDurabilityLifecycleGuard.AckBeforeFlush)
+                {
+                    s.Acked[offset] = true; // the guard: acknowledged before the flush lands
+                }
+
                 break;
             }
 
@@ -317,16 +322,8 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
             }
 
             case Kind.Read:
-            {
-                var o = ReadFrom(s, l);
-                if (s.Durable[o] && _owner[o] == l)
-                {
-                    s.Cache[l][o] = true;
-                }
-
-                s.Rp[l] = o; // a READ position: advances over other leaves' entries too
+                ReadOne(s, l);
                 break;
-            }
 
             case Kind.Persist:
                 s.DurCp[l] = s.Rp[l];
@@ -477,12 +474,35 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
         s.Tail = tail;
     }
 
-    private static void Activate(State s, int l)
+    /// <summary>
+    /// Reads the next entry past <paramref name="l"/>'s read position: folds it in
+    /// if the leaf owns it and advances the read position over it either way.
+    /// Returns whether the read position moved.
+    /// </summary>
+    private bool ReadOne(State s, int l)
+    {
+        var o = ReadFrom(s, l);
+        if (_guard == WalDurabilityLifecycleGuard.ReadPositionTracksOwnEntries && _owner[o] != l)
+        {
+            return false; // the guard: the read position tracks only the leaf's own entries
+        }
+
+        if (s.Durable[o] && _owner[o] == l)
+        {
+            s.Cache[l][o] = true;
+        }
+
+        s.Rp[l] = o; // a READ position: advances over other leaves' entries too
+        return true;
+    }
+
+    private void Activate(State s, int l)
     {
         if (s.HasSnapshot[l])
         {
             Array.Copy(s.SnapRows[l], s.Cache[l], Writes);
             s.Rp[l] = s.StCp[l] = s.Anchor[l] = s.Cov[l] = s.SnapCov[l];
+
             if (WalFallOffCore.IsPrefixLost(s.SnapCov[l], s.Tail))
             {
                 s.Stale[l] = true;
@@ -492,7 +512,9 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
         else
         {
             Array.Clear(s.Cache[l]);
-            s.Rp[l] = -1;
+            s.Rp[l] = _guard == WalDurabilityLifecycleGuard.ColdStartResumesFromCheckpoint
+                ? s.DurCp[l] // the guard: resume at the checkpoint over an empty projection
+                : -1;
             s.StCp[l] = s.Anchor[l] = s.DurCp[l];
             if (WalFallOffCore.IsPrefixLost(s.DurCp[l], s.Tail))
             {
@@ -537,15 +559,8 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
                     continue;
                 }
 
-                while (CanRead(s, l))
+                while (CanRead(s, l) && ReadOne(s, l))
                 {
-                    var o = ReadFrom(s, l);
-                    if (s.Durable[o] && _owner[o] == l)
-                    {
-                        s.Cache[l][o] = true;
-                    }
-
-                    s.Rp[l] = o;
                 }
 
                 if (s.Rp[l] > s.StCp[l])
@@ -658,6 +673,11 @@ public sealed class WalDurabilityLifecycleModel : ICoyoteModel
     private bool CanRead(State s, int l)
     {
         var offset = ReadFrom(s, l);
+        if (_guard == WalDurabilityLifecycleGuard.ReplayStopsAtPersistedCheckpoint && offset > s.DurCp[l])
+        {
+            return false; // the guard: the replay never reads past the persisted checkpoint
+        }
+
         if (_guard == WalDurabilityLifecycleGuard.ReaderIgnoresWatermark)
         {
             return offset < s.Next; // the guard: the allocator's head, not the durable-contiguous tail
