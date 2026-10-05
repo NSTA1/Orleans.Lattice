@@ -351,7 +351,7 @@ public class GrpcPushTransportIntegrationTests
         var invoker = _channel.CreateCallInvoker();
 
         var clock = new HybridLogicalClock { WallClockTicks = 9000, Counter = 4 };
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("origin", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(clock));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);

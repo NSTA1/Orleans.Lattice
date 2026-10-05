@@ -236,6 +236,7 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "the tree is not enrolled for replication on this receiver.",
                         entry.TreeId, entry.OriginClusterId);
+                    await RecordNotEnrolledLostAsync(entry.OriginClusterId, [entry.Timestamp], cancellationToken);
                     outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
 
@@ -639,18 +640,19 @@ internal sealed partial class ReplicationApplier(
 
                 RecordFifoState(entry);
 
-                // Advance the HWM only after the apply commits.
-                var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
+                // Advance the HWM only after the apply commits, and record the
+                // write's identity in the same call (issue #4586).
+                var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken);
                 var newHwm = advanced
                     ? entry.Timestamp
                     : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-                // The advance may have unblocked entries parked by an earlier
-                // delivery whose deps included this origin's diagonal. Drain
-                // FIFO until the buffer reaches a fixed point - each drained
-                // apply may itself advance the local vector clock, so re-fetch
-                // before each pass.
-                if (advanced)
+                // A recorded identity may meet a parked entry's dependency whether
+                // or not the high-water mark moved: a write below the mark is still
+                // a new identity (issue #4586). Drain FIFO to a fixed point; the
+                // call is skipped unless this silo last saw the buffer non-empty.
+                if (advanced || !entry.IsPrepared)
                 {
                     await DrainBufferAsync(entry.TreeId, cancellationToken);
                 }
@@ -906,9 +908,45 @@ internal sealed partial class ReplicationApplier(
         RecordFifoState(entry);
         RecordAppliedContentForIndex(in entry, resolved);
         await GetHwmGrain(entry.TreeId)
-            .TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken)
+            .AdvanceAppliedAsync(entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// Marks the writes a not-enrolled tree's drop acknowledged as lost on their
+    /// origin's frontier (issue #4586). The sender's low watermark passes a
+    /// dropped write, so without the mark a dependent of it would be released
+    /// although the write is never visible here; with it, the dependent is
+    /// dead-lettered. The origin is wire-supplied, so a mark is recorded only for
+    /// a configured <see cref="LatticeReplicationOptions.ReplicationPeers"/>
+    /// member when that list is set, which bounds the frontiers a peer can make
+    /// this receiver keep.
+    /// </summary>
+    private Task RecordNotEnrolledLostAsync(string? originClusterId, IReadOnlyCollection<HybridLogicalClock> dropped, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(originClusterId) || dropped.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var peers = options.CurrentValue.ReplicationPeers;
+        if (peers is not null && !peers.Contains(originClusterId))
+        {
+            return Task.CompletedTask;
+        }
+
+        return grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+            .RecordLostAsync(dropped, cancellationToken);
+    }
+
+    /// <summary>
+    /// The identity an applied <paramref name="entry"/> records on the tree's
+    /// high-water-mark grain (issue #4586): its source HLC, or nothing for a saga
+    /// prepare, which is not visible until its terminal - a dependent of it is
+    /// decided by the origin's frontier instead.
+    /// </summary>
+    private static HybridLogicalClock[] AppliedIdentity(in WalRecord entry) =>
+        entry.IsPrepared ? Array.Empty<HybridLogicalClock>() : [entry.Timestamp];
 
     private ICausalApplyBufferGrain GetBufferGrain(string treeId) =>
         grainFactory.GetGrain<ICausalApplyBufferGrain>(treeId);
