@@ -100,8 +100,38 @@ before calling `AddLatticeReplication`.
   one minute to a six-hour cap, so a sender that never reports a
   generation does not re-bootstrap the tree on every tick. Source-origin
   keys carrying an expiry are not captured because they expire on their
-  own, and receiver-local or third-origin stale keys remain the residual
-  tracked by #4549.
+  own.
+
+  Rows of any other origin - the receiver's own writes and a third
+  cluster's - converge through the source's applied frontier (#4549). The
+  export carries, when it opens and after its opening generation, the
+  source tree's per-origin applied low watermark `S(o)` and the writes
+  below it the source holds without applying `H(o)` (lost marks
+  included). A write of origin `o` stamped below `S(o)` and not in `H(o)`
+  was applied at the source before the export opened, so the export
+  already reflects it: carried, or superseded by a later write or a delete.
+  Before the drain, once the import is recorded, the receiver installs
+  `(S, H)` as a durable **bootstrap drop floor** on its high-water-mark
+  grain, provided the frontier was read under the export's opening
+  lineage; otherwise it clears any earlier floor. From then on a delivery
+  of such a write - a third cluster's write still in flight, a dead-letter
+  replay, or a causal-buffer drain - is acknowledged without being merged
+  (`outcome=bootstrap-floor-dropped`), so it cannot resurrect a key the
+  source deleted and reaped. The drain's own rows, saga terminals, and
+  range deletes are exempt. After the drain the coordinator scans the
+  receiver's live, non-expiring last-writer-wins rows of every origin other
+  than the source (a local row counts as this cluster's id), and deletes,
+  at the row's own HLC and stamped with the source's id, each one whose key
+  the export did not carry and whose write is below `S(o)` and not in
+  `H(o)`. The scan runs after the floor is in force, so every write applied
+  before the floor was installed is seen and every later one below it was
+  dropped. It needs a stable generation like the source-origin reconcile,
+  but not the aligned-lineage record: the frontier itself proves the
+  source applied the write. An export whose generation moved clears the
+  floor and owes a retry, and the retry installs a fresh one. The floor
+  belongs to the receiver's lineage of the tree: the tree frontier's
+  re-stamp clears it with the tree's applied identities. A sender that
+  carries no frontier installs no floor and reconciles no other origin.
 
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see

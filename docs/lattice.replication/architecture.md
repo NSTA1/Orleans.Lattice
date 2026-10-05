@@ -227,9 +227,10 @@ A second companion,
 covers what happens once the source has garbage-collected a tombstone. A
 receiver that fell off the source's log past a delete whose tombstone was
 then reaped receives it by no path, and keeps the deleted value. The module
-checks the planned receiver-side reconcile and its safety gates; until it is
-built that gap is open (#4537), and a key the receiver holds under another
-origin remains a residual (#4549). It also states the reap guard production
+checks the receiver-side reconcile and its safety gates: source-origin keys
+reconcile against the receiver's aligned lineage (#4537), and keys of any
+other origin against the source's applied frontier, behind a bootstrap drop
+floor that stops an in-flight write resurrecting them (#4549). It also states the reap guard production
 lacks: a tombstone is reaped on the wall clock alone, so a write it beats
 that arrives after the grace period resurrects the key (#4615).
 
