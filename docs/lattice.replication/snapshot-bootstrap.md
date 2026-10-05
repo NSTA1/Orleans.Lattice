@@ -106,6 +106,29 @@ before calling `AddLatticeReplication`.
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **An unbounded export carries the source's applied frontier**
+  ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). For
+  every foreign origin, it carries the applied low watermark below which
+  each of that origin's writes to the tree is reflected in the export, and
+  the writes the source held without applying them (parked, dead-lettered
+  or lost). The values come from the source's own receiver tree frontier,
+  and only when that frontier observed the open generation's lineage. The
+  source's own origin is never covered: a restore, revert or alias move of
+  the source's tree can lose its own writes without deleting them, and the
+  source's shipped watermark, tagged with the receiver's lineage after its
+  re-seed rewind, covers its writes at each receiver anyway. The value
+  rides the export metadata at open, so a receiver can put a drop floor in
+  force before the drain applies anything, and the end-of-stream trailer
+  at close. The receiver keeps it only when the open and close generations
+  match, are known, describe a live tree, and carry the lineage the
+  frontier was read under. The bootstrap pin then installs it on the
+  receiver's tree frontier: each origin's watermark starts from the
+  export's, and the source's held writes stay held until the receiver
+  applies them itself or the origin's own watermark passes them. Otherwise
+  every origin starts from zero, which is sound and rises as each origin's
+  own sender ships its watermark. The export reads every key of the tree
+  through non-interleaving calls, so a write the watermarks cover cannot be
+  overtaken by the read. A bounded or scoped export carries no frontier.
 - **Expired keys are not emitted.** The committed projection reads an
   expired key as absent; the receiver's copy carries the same absolute
   expiry, so it expires there too.
