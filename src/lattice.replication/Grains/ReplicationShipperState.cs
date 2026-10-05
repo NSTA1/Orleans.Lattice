@@ -206,12 +206,24 @@ internal sealed class ReplicationShipperState
     public long[]? ReseedRetainFrom { get; set; }
 
     /// <summary>
+    /// <see langword="true"/> once the peer was removed from the replication
+    /// topology (issue #4534): the shipper no longer holds the write-ahead log
+    /// for it - it has withdrawn from the log's offset consumers and released
+    /// its decision-purge holds - and, being off the log, ships only plain
+    /// writes until the peer returns and is re-seeded. Cleared when the peer
+    /// is added back. A state written before this slot decodes to
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(11)]
+    public bool DetachedFromLog { get; set; }
+
+    /// <summary>
     /// What the shipper needs to vouch for the peer's applied low watermark
     /// (issue #4586 part 2b): the receiver lineage it last saw, the shipped
     /// prepares whose terminals the peer has not acknowledged yet, and the
     /// records it passed without delivering. Legacy state decodes to an empty
     /// value, under which the shipper vouches for nothing until it has seen
-    /// the receiver's lineage. Slots 11 to 19 are reserved for other work.
+    /// the receiver's lineage. Slots 12 to 19 are reserved for other work.
     /// </summary>
     [Id(20)]
     public SourceFrontierShipperState Frontier { get; set; } = new();

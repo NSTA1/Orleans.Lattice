@@ -46,9 +46,24 @@ internal sealed partial class ReplicationShipperGrain
             return;
         }
 
-        // The replay hold first: every export the re-seed can complete from is
-        // taken after the epoch read below, so no saga in flight at it loses its
-        // decision while the replay may still read it (#4533).
+        // Durable before the merge consumes past the gap.
+        var epoch = await TakePeerOffLogAsync();
+
+        Logger.LogWarning(
+            "{Context}: WAL partition {Partition} was trimmed past the unshipped cursor (requested sequence {Requested}, "
+            + "first retained {FirstRetained}). Saga records are withheld from the peer until it is re-seeded from a "
+            + "snapshot export after epoch {Epoch}.",
+            LogContext, partition, requested, firstRetained, epoch);
+    }
+
+    /// <summary>
+    /// Durably records the re-seed marker at the tree's current export epoch,
+    /// dropping every held terminal, tally and staged saga record, and returns
+    /// the epoch. From the write on, every saga record is withheld from the peer.
+    /// </summary>
+    private async Task<long> TakePeerOffLogAsync()
+    {
+        // The replay hold first, then the marker and the retain point (#4533).
         var epoch = await TakePeerOffLogStateAsync();
 
         // A held terminal may belong to a saga that lost a prepare in the gap.
@@ -57,15 +72,9 @@ internal sealed partial class ReplicationShipperGrain
         _prepareTallyOrder.Clear();
         PurgeSagaRecordsFromDrainBuffer();
 
-        // Durable before the merge consumes past the gap.
         await state.WriteStateAsync();
         ReportReseedState();
-
-        Logger.LogWarning(
-            "{Context}: WAL partition {Partition} was trimmed past the unshipped cursor (requested sequence {Requested}, "
-            + "first retained {FirstRetained}). Saga records are withheld from the peer until it is re-seeded from a "
-            + "snapshot export after epoch {Epoch}.",
-            LogContext, partition, requested, firstRetained, epoch);
+        return epoch;
     }
 
     /// <summary>
@@ -143,9 +152,14 @@ internal sealed partial class ReplicationShipperGrain
         }
 
         var ack = new ReplicationAck { Accepted = true, BootstrapEpoch = echoedThisTick };
+
+        // A detached shipper (its peer left the topology) keeps the marker: the
+        // GC no longer holds the log for it, so a later trim could pass a
+        // prepare it has not read.
         if (state.State.ReseedRequiredEpoch is not { } marker
             || ack.BootstrapEpoch is not { } echoed
-            || echoed <= marker)
+            || echoed <= marker
+            || state.State.DetachedFromLog)
         {
             return;
         }
@@ -211,6 +225,10 @@ internal sealed partial class ReplicationShipperGrain
         await OnReseedRewoundForFrontierAsync(echoed);
         await state.WriteStateAsync();
         ReportReseedState();
+
+        // Every rewound position is past whatever a trim removed, so the
+        // decision-purge hold a forced trim recorded is now covered.
+        await MaybeReleasePurgeHoldAsync(force: true);
 
         Logger.LogInformation(
             "{Context}: the peer completed a bootstrap from export epoch {Echoed} (marker {Marker}); saga records "

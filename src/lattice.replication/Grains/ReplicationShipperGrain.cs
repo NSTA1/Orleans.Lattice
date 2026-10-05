@@ -714,6 +714,9 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        // The driver ensures a shipper only for a peer in the topology, so a
+        // shipper detached when its peer was removed holds the log again.
+        await ReattachToLogAsync();
         // RegisterOrUpdateReminder is idempotent; StartPhaseTimer's
         // _phaseTimer ??= guard makes the second call a no-op. Safe
         // for repeated invocation.
@@ -867,6 +870,10 @@ internal sealed partial class ReplicationShipperGrain(
     protected internal override async Task ProcessNextPhaseAsync()
     {
         ParseGrainKey();
+
+        // Ahead of the pause and backoff gates: releasing a covered purge hold
+        // depends on neither, and a held registry blocks every decision purge.
+        await MaybeReleasePurgeHoldAsync(force: false);
 
         // Durable administrative pause (saga cutover): no post-cut entry may
         // leave the cluster while a saga is in flight. The cursor is never
