@@ -306,4 +306,7 @@ public static class ReplicationTypeAliases
     internal const string IReplicationOriginFrontierGrain = "olr.og";
     internal const string ReplicationOriginFrontierState = "olr.os";
 
+    // The sender's applied low watermark for a receiver's tree (#4586 part 2b).
+    internal const string ReplicationSourceFrontier = "olr.sf";
+
 }
