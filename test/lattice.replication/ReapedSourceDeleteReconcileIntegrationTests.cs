@@ -70,7 +70,7 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         _siteAProvider = new LatticeSnapshotProvider(
             _siteA.Client,
             new InMemoryWalCursorRegistry(),
-            LatticeSnapshotProviderUnitTests.TestOptions());
+            LatticeSnapshotProviderUnitTests.TestOptions(SiteAClusterId));
         SiteATransports[SiteAClusterId] = new LatticeRemoteSnapshotService(
             _siteAProvider,
             new StubReplicationContext(SiteAClusterId, LatticeMergeMode.LwwRegister),
