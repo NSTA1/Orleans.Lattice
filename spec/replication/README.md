@@ -211,7 +211,7 @@ On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
 (1,604,442 generated) at a complete-search depth of 17. Every property in
 `ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
-held over 378,636 distinct states (1,052,531 generated) at a depth of 18.
+held over 633,326 distinct states (1,878,200 generated) at a depth of 26.
 
 ## Counts
 
@@ -226,4 +226,4 @@ This table is the one place this directory states them; see
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `Replication` | 4 | 3 | 14 | 22 | 19 | 308,258 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
-| `ReplicationReBootstrap` | 2 | 1 | 16 | 26 | 17 | 378,636 |
+| `ReplicationReBootstrap` | 2 | 1 | 16 | 26 | 17 | 633,326 |

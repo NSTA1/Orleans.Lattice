@@ -251,10 +251,11 @@ Reap ==
 (* Detach: an operator detaches r as a peer of s's tree (#4534-B), and     *)
 (* later re-attaches it, which requests a full re-seed. While detached r   *)
 (* holds back no reap, so a delete it missed can be reaped before its re-  *)
-(* seed, which the reconcile repairs.                                      *)
+(* seed, which the reconcile repairs. It can follow an earlier re-seed:    *)
+(* only one in progress blocks it.                                         *)
 (***************************************************************************)
 Detach ==
-    /\ ~fellOff
+    /\ fellOff => booted
     /\ ~detached
     /\ cursor' = [cursor EXCEPT ![<<s, r>>] = Len(wal[s])]
     /\ detached' = TRUE
