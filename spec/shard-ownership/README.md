@@ -11,7 +11,9 @@ It is one area indexed in [`spec/README.md`](../README.md), which describes the
 layout every module follows, how to run TLC and why TLC runs in CI. This README
 covers only what is particular to shard ownership. The area is specified by
 **two modules**, and the seam between them is part of what this README
-documents.
+documents. A third, `ShardOwnershipCrdt`, checks the same ownership moves for a
+CRDT-mode key, whose copies must be joined rather than overwritten (see
+[`RefinementCrdt.md`](RefinementCrdt.md)).
 
 ## Files
 
@@ -27,6 +29,11 @@ documents.
 | [`ShardOwnershipRetention.manifest.json`](ShardOwnershipRetention.manifest.json) | Its manifest. |
 | [`mutations-retention/`](mutations-retention/) | Its mutation catalogue. |
 | [`RefinementRetention.md`](RefinementRetention.md) | Its refinement note. |
+| [`ShardOwnershipCrdt.tla`](ShardOwnershipCrdt.tla) | CRDT ownership: that a leaf split, a shard split and an online resize join a CRDT-mode key's copies, so no acknowledged contribution is lost. |
+| [`ShardOwnershipCrdt.cfg`](ShardOwnershipCrdt.cfg) | Its TLC model. |
+| [`ShardOwnershipCrdt.manifest.json`](ShardOwnershipCrdt.manifest.json) | Its manifest. |
+| [`mutations-crdt/`](mutations-crdt/) | Its mutation catalogue. |
+| [`RefinementCrdt.md`](RefinementCrdt.md) | Its refinement note. |
 | `README.md` | This file. |
 
 ## Two modules and the seam between them
@@ -150,15 +157,21 @@ Each loses no behaviour the instance can distinguish.
   real-time order; mutations use the separation to reproduce the stamp and
   import defects (#4522, #4564).
 
-Both modules model the **intended** design where production has an open defect,
-and keep a mutation that reproduces production as it stands. The refinement
-notes list each one with its issue.
+- **CRDT keys** (CRDT module only): a staged CRDT mutation in a saga, a
+  non-atomic CRDT write, a leaf split that strands the saga's bucket, and one
+  shard split or online resize whose forward, drains and terminal must join the
+  key's copies.
+
+Each module modelled the **intended** design while production had an open
+defect, with a mutation that reproduced production. Every such defect is now
+fixed, and each mutation stays as a regression check; the refinement notes list
+them with their issues.
 
 ## Properties checked
 
 | Property | Kind | Module | Meaning |
 |----------|------|--------|---------|
-| `TypeOK` | invariant | both | State stays well-typed. |
+| `TypeOK` | invariant | all | State stays well-typed. |
 | `UniqueOwner` | invariant | ownership | Every routing pair any router may hold is refused for a key or reaches that key's one owner. |
 | `NoKeyLost` | invariant | both | The owner holds every value acknowledged to a writer (or, under retention, the gate declines to answer). |
 | `NoResurrection` | invariant | both | No read through any pair returns a value older than one already acknowledged. |
@@ -171,6 +184,8 @@ notes list each one with its issue.
 | `SagaCompletes` | liveness | both | A saga that started completes. |
 | `RoutingConverges` | liveness | ownership | Eventually the registry's own pair serves every key. |
 | `ReadableOnceComplete` | invariant | retention | Once a saga has completed, and while its row is neither retired nor masked, no read at the owner is gated (#4545). |
+| `NoLiveBucketAfterForget` | invariant | retention | No copy that can still become the tree keeps a bucket of a saga whose registry row is retired (#4619). |
+| `NoLostContribution` | invariant | crdt | The owner's copy of a CRDT key holds every contribution acknowledged to a writer. |
 | `NoStrandedBucket` | liveness | retention | A decided saga's bucket on a copy that can still become the tree is eventually consumed, unless the registry retired the row first. |
 
 Every liveness property can fail on a protocol defect under the fairness the
@@ -220,10 +235,14 @@ standing mutation. The refinement notes record which are fixed.
 | #4473 | The split's sweep treats Indeterminate as InFlight (fixed, #4561) | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
 | #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there (fixed, #4516) | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
 | #4475 | A saga bound to a purged old copy never completes (fixed, #4531 and #4581) | `SagaCompletesPurgedCopyRefusesTerminal` |
-| #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design; the drain fixed, #4566) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
+| #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design; fixed, #4566, #4610 and #4629) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
 | #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design; fixed, #4600) | `NoKeyLostMigrationImportDropped` |
-| #4545 | A shadow marker installed after its terminal is copied by a leaf split to a sibling that never sees the terminal, gating the key after the saga completed (found by 10238ade's CI triage; the dead-marker transfer fixed, #4608) | `ReadableOnceCompleteDeadMarkerTransferred`, `ReadableOnceCompleteMarkerWithoutSelfCheck` |
+| #4545 | A shadow marker installed after its terminal is copied by a leaf split to a sibling that never sees the terminal, gating the key after the saga completed (found by 10238ade's CI triage; fixed, #4608 and #4644) | `ReadableOnceCompleteDeadMarkerTransferred`, `ReadableOnceCompleteMarkerWithoutSelfCheck`, `ReadableOnceCompleteWitnessNotCarried`, `ReadableOnceCompleteWitnessNotDurable` |
 | #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false; fixed, #4528) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
+| #4611 | A CRDT prepare applied by the terminal's backstop is installed last-writer-wins, losing contributions the row gained after staging (found while extending this area to CRDT keys; fixed, #4617) | `NoLostContributionBackstopInstallsLastWriterWins` |
+| #4613 | A split's import of a CRDT row is dropped over the destination's own fold, and CRDT writes were not forwarded during the split (fixed, #4626) | `NoLostContributionSplitImportDropsOverOwnRow` |
+| #4618 | A resize neither mirrors a CRDT write nor joins the rows it merges into the resized copy (fixed, #4665) | `NoLostContributionResizeWriteNotMirrored`, `NoLostContributionResizeDrainLastWriterWins` |
+| #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -237,6 +256,7 @@ From this directory, with the toolchain described in
 ```bash
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnership.cfg ShardOwnership.tla
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipRetention.cfg ShardOwnershipRetention.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -config ShardOwnershipCrdt.cfg ShardOwnershipCrdt.tla
 ```
 
 `-lncheck final` defers the liveness check to the end of the search, which is
@@ -246,13 +266,15 @@ distinct-state count in [Counts](#counts).
 
 ## Last checked
 
-Both modules were checked with tla2tools v1.7.4 on a Temurin 17 JDK, two TLC
-workers, liveness checked at the end, deadlock checking on, on a 16-core
-workstation (wall clock includes JVM start-up):
+The modules were checked with tla2tools v1.7.4 on a Temurin 17 JDK, liveness
+checked at the end, deadlock checking on, on a 16-core workstation, with two
+TLC workers for `ShardOwnership` and four for the other two (wall clock
+includes JVM start-up):
 
 ```
 ShardOwnership:          100,666 distinct states, depth 26, clean, 1 min 32 s
-ShardOwnershipRetention: 160,365 distinct states, depth 25, clean, 1 min 41 s
+ShardOwnershipRetention: 142,980 distinct states, depth 24, clean, 1 min 18 s
+ShardOwnershipCrdt:        1,573 distinct states, depth 11, clean, 2 s
 ```
 
 The current specifications are model-checked in CI by
@@ -268,4 +290,5 @@ TLC's own state counts.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `ShardOwnership` | 7 | 5 | 28 | 44 | 38 | 100,666 |
-| `ShardOwnershipRetention` | 6 | 4 | 27 | 31 | 35 | 160,365 |
+| `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
+| `ShardOwnershipCrdt` | 2 | 0 | 10 | 9 | 10 | 1,573 |
