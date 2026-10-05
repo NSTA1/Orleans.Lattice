@@ -507,10 +507,12 @@ internal interface ILatticeRegistry : IGrainWithStringKey
 
     /// <summary>
     /// Raises the physical tree's bootstrap drop-floor epoch to
-    /// <paramref name="epoch"/> (issue #4549), registering the tree if it has no
-    /// entry. A lower or equal value is a no-op: the epoch never decreases. Every
-    /// shard root of the tree then refuses a replicated write admitted under an
-    /// older epoch.
+    /// <paramref name="epoch"/> (issue #4549). Like every non-create verb it
+    /// refuses a tree with no registry entry, with
+    /// <see cref="LatticeTreeNotRegisteredException"/>, and writes nothing. A
+    /// lower or equal value is a no-op: the epoch never decreases. Every shard
+    /// root of the tree then refuses a replicated write admitted under an older
+    /// epoch.
     /// </summary>
     /// <param name="treeId">The physical tree id.</param>
     /// <param name="epoch">The floor epoch to raise to.</param>
