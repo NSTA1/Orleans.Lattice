@@ -615,6 +615,8 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var undo = ApplyPendingCheckpointAdvance(pending);
+        var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+        PruneDiscardedSagaPreparesCoveredByCheckpoints();
         try
         {
             await PersistAsync();
@@ -624,6 +626,7 @@ internal sealed partial class BPlusLeafGrain
             // Issue #4017: the durable write failed, so the advance is NOT
             // durable and must not be readable as though it were.
             RollbackCheckpointCommit(in undo, pending);
+            RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
             throw;
         }
 
@@ -657,6 +660,8 @@ internal sealed partial class BPlusLeafGrain
         if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
         {
             var undo = ApplyPendingCheckpointAdvance(pending);
+            var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+            PruneDiscardedSagaPreparesCoveredByCheckpoints();
             try
             {
                 await PersistAsync();
@@ -666,6 +671,7 @@ internal sealed partial class BPlusLeafGrain
                 // Issue #4017: the durable write failed, so the advance is NOT
                 // durable and must not be readable as though it were.
                 RollbackCheckpointCommit(in undo, pending);
+                RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
                 throw;
             }
             // The durable advance has now committed. Per the #2220
@@ -679,7 +685,17 @@ internal sealed partial class BPlusLeafGrain
 
         if (persistEvenWithoutPendingAdvance)
         {
-            await PersistAsync();
+            var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+            PruneDiscardedSagaPreparesCoveredByCheckpoints();
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
+                throw;
+            }
             // Durable write committed; contain the post-persist tail so a
             // notification failure cannot destroy the activation (#2220).
             await CompleteCheckpointFlushTailAsync();

@@ -320,16 +320,25 @@ internal sealed partial class ReplicationApplier
         // ack that makes the sender re-ship the run after the fence lifts. A run
         // is a single (treeId, originClusterId) segment, so one gate check covers
         // it.
-        if (_receiveGate is not null
-            && await _receiveGate.IsReceivePausedAsync(entries[startInclusive].TreeId, cancellationToken)
-                .ConfigureAwait(false))
+        //
+        // The answer carries the fence's epoch and the run is stamped with it
+        // (issue #4593), so a restored copy refuses a run admitted under an
+        // epoch older than its restore's pause.
+        if (_receiveGate is not null)
         {
-            return new ApplyResult
+            var observed = await _receiveGate.ObserveAsync(entries[startInclusive].TreeId, cancellationToken)
+                .ConfigureAwait(false);
+            if (observed.Paused)
             {
-                Applied = false,
-                HighWaterMark = HybridLogicalClock.Zero,
-                Deferred = true,
-            };
+                return new ApplyResult
+                {
+                    Applied = false,
+                    HighWaterMark = HybridLogicalClock.Zero,
+                    Deferred = true,
+                };
+            }
+
+            ReplicationAdmissionEpoch.Stamp(entries[startInclusive].TreeId, observed.Epoch);
         }
 
         try
@@ -348,6 +357,19 @@ internal sealed partial class ReplicationApplier
             // the receive fence does; the sender re-ships it, entries this run
             // already applied are acknowledged as re-deliveries, and the refused
             // terminal is re-applied once the capture releases the registry.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
+        catch (CopyReceiveFencedException)
+        {
+            // Issue #4593: the run routed to a restored copy whose receive fence a
+            // coordinated restore still holds closed. Defer the run exactly as the
+            // receive fence does; the sender re-ships it once the copy opens.
             RecordInboundContact(entries[startInclusive], success: true);
             return new ApplyResult
             {
@@ -711,6 +733,11 @@ internal sealed partial class ReplicationApplier
         var advancedAtAll = false;
         var highestApplied = hwm;
 
+        // Issue #4586: the identities this run applied, recorded on the tree's
+        // high-water-mark grain in the end-of-run call so a dependent of one is
+        // released at once. Saga prepares are not visible until their terminal.
+        List<HybridLogicalClock>? appliedIdentities = null;
+
         // Set when an entry in this run duplicates an identity whose
         // reservation another, still-running delivery holds (#4465). The
         // run then reports Deferred so the transport returns a
@@ -814,6 +841,11 @@ internal sealed partial class ReplicationApplier
                 {
                     highestApplied = deferredEntry.Timestamp;
                 }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
+                }
             }
 
             anyApplied = true;
@@ -884,6 +916,11 @@ internal sealed partial class ReplicationApplier
                 if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
                 {
                     highestApplied = deferredEntry.Timestamp;
+                }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
                 }
             }
 
@@ -1140,6 +1177,11 @@ internal sealed partial class ReplicationApplier
                     {
                         highestApplied = entry.Timestamp;
                     }
+
+                    if (!entry.IsPrepared)
+                    {
+                        (appliedIdentities ??= new List<HybridLogicalClock>()).Add(entry.Timestamp);
+                    }
                     anyApplied = true;
                     advancedAtAll = true;
                     outcome = LatticeReplicationMetrics.OutcomeSuccess;
@@ -1275,13 +1317,20 @@ internal sealed partial class ReplicationApplier
 
         if (advancedAtAll && !bootstrapMode)
         {
-            var advanced = await hwmGrain.TryAdvanceAsync(origin!, highestApplied, cancellationToken)
+            var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    origin!,
+                    highestApplied,
+                    (IReadOnlyList<HybridLogicalClock>?)appliedIdentities ?? Array.Empty<HybridLogicalClock>(),
+                    advanceHighWaterMark: true,
+                    cancellationToken)
                 .ConfigureAwait(false);
             var newHwm = advanced
                 ? highestApplied
                 : await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
 
-            if (advanced)
+            // A recorded identity may meet a parked dependency whether or not the
+            // high-water mark moved (issue #4586).
+            if (advanced || appliedIdentities is { Count: > 0 })
             {
                 await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
@@ -1452,6 +1501,14 @@ internal sealed partial class ReplicationApplier
             "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
             + "the tree is not enrolled for replication on this receiver.",
             endExclusive - startInclusive, treeId, origin);
+
+        var dropped = new HybridLogicalClock[endExclusive - startInclusive];
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            dropped[k - startInclusive] = entries[k].Timestamp;
+        }
+
+        await RecordNotEnrolledLostAsync(origin, dropped, cancellationToken).ConfigureAwait(false);
 
         for (var k = startInclusive; k < endExclusive; k++)
         {

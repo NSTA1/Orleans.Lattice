@@ -530,6 +530,27 @@ internal sealed class TreeShardSplitGrain(
     public Task<bool> IsIdleAsync() => Task.FromResult(!state.State.InProgress);
 
     /// <summary>
+    /// Trees whose split coordinators skip their timer-driven background drain
+    /// passes; see <see cref="HoldBackgroundDrainForTest"/>.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> BackgroundDrainHeldForTest =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Test seam (issue #4613): stops the split coordinator of
+    /// <paramref name="treeId"/> running a background
+    /// <see cref="ShardSplitPhase.Drain"/> pass from its phase timer until
+    /// <see cref="ReleaseBackgroundDrainForTest"/>, so a fixture can interleave
+    /// writes before the final drain without a background pass importing the
+    /// source's rows in between. An explicit <see cref="RunSplitPassAsync"/>
+    /// still drives the drain.
+    /// </summary>
+    internal static void HoldBackgroundDrainForTest(string treeId) => BackgroundDrainHeldForTest[treeId] = 0;
+
+    /// <summary>Lifts <see cref="HoldBackgroundDrainForTest"/> for <paramref name="treeId"/>.</summary>
+    internal static void ReleaseBackgroundDrainForTest(string treeId) => BackgroundDrainHeldForTest.TryRemove(treeId, out _);
+
+    /// <summary>
     /// Processes a single phase of the split. Exposed as <c>internal</c> via
     /// <c>protected</c> override for unit testing.
     /// </summary>
@@ -545,6 +566,8 @@ internal sealed class TreeShardSplitGrain(
                     await RunSplitPassAsync();
                     break;
                 case ShardSplitPhase.Drain:
+                    if (!BackgroundDrainHeldForTest.IsEmpty && BackgroundDrainHeldForTest.ContainsKey(TreeId))
+                        break;
                     if (await IsBoundTreeCurrentAsync())
                         await DrainAsync();
                     else

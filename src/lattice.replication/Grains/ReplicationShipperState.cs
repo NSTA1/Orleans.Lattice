@@ -165,4 +165,43 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(7)]
     public long ReseedRequiredSinceUtcTicks { get; set; }
+
+    /// <summary>
+    /// Set while this shipper replays its log non-contiguously (issue #4533):
+    /// after a re-seed rewinds it to the lowest retained entry, or after a
+    /// source-identity rebind restarts it on a new log. Per partition, the next
+    /// sequence when the replay began, raised whenever the shipper withholds a
+    /// saga the origin proves forgotten and purged. While set, every saga
+    /// record is checked; cleared once every partition's cursor has passed it.
+    /// A contiguous stream never sets it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(8)]
+    public long[]? ReplayFilterHorizon { get; set; }
+
+    /// <summary>
+    /// The physical log whose <c>IWalPurgeHoldGrain</c> carries this shipper's
+    /// replay hold (issue #4533), or <see langword="null"/> when it holds none.
+    /// Taken before the peer is taken off the log (or a rebind replay begins)
+    /// and released once the replay filter clears with no re-seed outstanding,
+    /// so no saga in flight at the re-seed's export loses its decision while
+    /// the replay may still need it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(9)]
+    public string? ReplayHoldLog { get; set; }
+
+    /// <summary>
+    /// While a re-seed is outstanding, per partition the lowest sequence this
+    /// shipper keeps retained for the rewind (issue #4533): its durable cursor
+    /// when it took the peer off the log, or the partition's lowest retained
+    /// entry when a trim had passed the cursor. Saga records it withholds
+    /// meanwhile sit at or above it, and its published read positions never
+    /// pass it, so the WAL GC keeps them for the rewind to re-ship. A trim the
+    /// retention ceiling forces past it is detected at the rewind, which then
+    /// takes the peer off the log again instead. <see langword="null"/> when no
+    /// re-seed is outstanding; legacy state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(10)]
+    public long[]? ReseedRetainFrom { get; set; }
 }

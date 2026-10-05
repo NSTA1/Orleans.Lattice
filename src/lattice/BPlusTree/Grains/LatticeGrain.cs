@@ -529,6 +529,12 @@ internal sealed partial class LatticeGrain(
     // shard-cache hit path. Combined: no async state-machine box and no
     // RoutingInfo allocation on the steady-state read/write fast path.
     private RoutingInfo? _cachedRouting;
+    // Physical copies this activation has read as receive-open, with each one's
+    // minimum admission epoch (issue #4593). A restored copy only moves from
+    // closed to open and its epoch is fixed once open, so an open copy's status
+    // is cached and a closed one is always re-read. Consulted only under
+    // ReplicationApplyScope.
+    private Dictionary<string, long>? _receiveOpenCopies;
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
@@ -4880,7 +4886,14 @@ internal sealed partial class LatticeGrain(
         // data; the shard grains enforce the real boundary on reads/writes.
         cancellationToken.ThrowIfCancellationRequested();
         var cached = _cachedRouting;
-        if (cached is not null) return new ValueTask<RoutingInfo>(cached);
+        if (cached is not null)
+        {
+            // Issue #4593: a replication apply must re-check a copy it has not
+            // yet seen open, even on the cached fast path.
+            if (ReplicationApplyScope.IsActive)
+                return CheckCopyReceive(cached);
+            return new ValueTask<RoutingInfo>(cached);
+        }
         return GetRoutingSlowAsync(cancellationToken);
     }
 
@@ -4983,6 +4996,11 @@ internal sealed partial class LatticeGrain(
             _physicalTreeId = physicalTreeId;
             _shardMap = shardMap;
             _cachedRouting = routing;
+        }
+
+        if (ReplicationApplyScope.IsActive)
+        {
+            return await CheckCopyReceive(routing);
         }
 
         return routing;

@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// fell-off-log break in <c>StreamAsync</c> (lines 276-277).
 /// </summary>
 [TestFixture]
-public sealed class IncrementalDeltaCollectorTests
+public sealed partial class IncrementalDeltaCollectorTests
 {
     private ServiceProvider _services = null!;
     private Serializer _serializer = null!;

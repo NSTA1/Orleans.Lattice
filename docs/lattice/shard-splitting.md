@@ -37,7 +37,10 @@ stateDiagram-v2
    the registry, persists its intent, and opens *S*'s shadow-write window for
    the moved slots. From that moment every successful write *S* applies to a
    key in a moved virtual slot is also mirrored to *T* through *T*'s batched
-   merge, preserving the original HLC. Before the drain begins, the
+   merge, preserving the original HLC; a typed CRDT delta apply
+   (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`) is mirrored as the
+   key's post-fold state
+   ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)). Before the drain begins, the
    coordinator then runs a **retroactive prepared-mutation sweep**: it walks
    *S*'s leaf chain, snapshots every in-flight prepared saga mutation whose
    key hashes into a moved virtual slot, and replays each one into *T*'s
@@ -437,6 +440,13 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
 * **No data loss** - every write committed to *S* is either drained,
   shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
+  A CRDT key can take contributions on both shards during the split - a
+  saga's delta folded on *T* by its terminal while *S* takes a non-atomic
+  CRDT write - so a migrated CRDT row is joined into the row *T* holds, through
+  the key's registered `CrdtShape`, rather than replacing it or being refused
+  by it: *T* ends with the union of both copies' contributions whatever order
+  the fold, the mirror and the drain arrive in
+  ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)).
 * **No prepared-mutation loss** - the retroactive sweep at
   `BeginShadowWrite` re-stamps every in-flight prepared mutation from
   *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`

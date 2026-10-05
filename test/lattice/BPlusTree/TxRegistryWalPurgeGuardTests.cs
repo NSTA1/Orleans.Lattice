@@ -100,6 +100,49 @@ public sealed class TxRegistryWalPurgeGuardTests
         Assert.That(await registry.GetRecordedStatusAsync(txid), Is.EqualTo(TxStatus.InFlight));
     }
 
+    [Test]
+    public async Task Outstanding_purge_hold_suspends_every_purge_until_it_is_removed()
+    {
+        // A trim forced past a replication consumer's unshipped cursor holds
+        // every decision on the tree until that consumer re-seeds (#4534).
+        var tree = $"{ReplicatedPrefix}hold-{Guid.NewGuid():N}";
+        var (registry, txid, prepareSequence) = await DecideAndForgetSagaAsync(tree);
+        var hold = _cluster.Client.GetGrain<IWalPurgeHoldGrain>(tree);
+        await hold.AddAsync("peer-b", [prepareSequence, -1]);
+        await WalProvider().TrimAsync(tree, 0, prepareSequence, CancellationToken.None);
+
+        await AgeAndPruneAsync(registry);
+        await AgeAndPruneAsync(registry);
+
+        Assert.That(await registry.GetRecordedStatusAsync(txid), Is.EqualTo(TxStatus.Committed),
+            "a decision whose prepares are gone must still be held while a consumer awaits a re-seed");
+
+        await hold.RemoveAsync("peer-b");
+        await AgeAndPruneAsync(registry);
+
+        Assert.That(await registry.GetRecordedStatusAsync(txid), Is.EqualTo(TxStatus.InFlight));
+    }
+
+    [Test]
+    public async Task Purge_hold_widens_per_partition_and_keeps_its_first_time()
+    {
+        var hold = _cluster.Client.GetGrain<IWalPurgeHoldGrain>($"hold-merge-{Guid.NewGuid():N}");
+
+        await hold.AddAsync("peer", [5, -1]);
+        var first = (await hold.GetAsync())["peer"];
+        await hold.AddAsync("peer", [3, 7, 2]);
+        var widened = (await hold.GetAsync())["peer"];
+        await hold.RemoveAsync("peer");
+        await hold.RemoveAsync("peer");
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(widened.TrimmedThrough.ToArray(), Is.EqualTo(new long[] { 5, 7, 2 }));
+            Assert.That(widened.Since, Is.EqualTo(first.Since));
+            Assert.That(await hold.GetAsync(), Is.Empty);
+        });
+    }
+
     /// <summary>
     /// Appends a prepare of a new saga to partition 0, then decides and
     /// forgets the saga, in the order a real saga does.

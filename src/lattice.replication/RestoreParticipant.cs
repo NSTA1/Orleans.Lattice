@@ -328,6 +328,11 @@ internal sealed class RestoreParticipant(
             Trees = [request.TargetTree],
             CoordinatorClusterId = request.CoordinatorClusterId,
             FenceWindowSeconds = CutoverFenceWindowSeconds,
+            // Issue #4593: the restored copy is closed for inbound replication
+            // before the swap below makes it routable, and opens only when the
+            // fence lifts, so a peer write that passed the cached receive gate
+            // before the pause can never land on it.
+            ReceiveClosedCopies = ShadowCopies([result]),
         });
 
         // Single atomic alias swap: a reader sees whole-old or whole-new, never
@@ -584,6 +589,7 @@ internal sealed class RestoreParticipant(
             Trees = members.Select(static m => m.TreeId).ToList(),
             CoordinatorClusterId = request.CoordinatorClusterId,
             FenceWindowSeconds = CutoverFenceWindowSeconds,
+            ReceiveClosedCopies = ShadowCopies(built),
         });
 
         // The alias swaps run INSIDE the fence, so this loop's length is the
@@ -684,6 +690,24 @@ internal sealed class RestoreParticipant(
                 slot => SafeGarbageCollectAsync(requests[offset + slot], cancellationToken),
                 cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// The shadows a commit is about to make routable, each physical id mapped to
+    /// the tree it restores, so the fence closes each with that tree's pause epoch.
+    /// </summary>
+    private static Dictionary<string, string> ShadowCopies(IReadOnlyList<LatticeRestoreResult> built)
+    {
+        var copies = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var result in built)
+        {
+            if (!string.IsNullOrEmpty(result.ShadowPhysicalTreeId))
+            {
+                copies[result.ShadowPhysicalTreeId] = result.TargetTreeId;
+            }
+        }
+
+        return copies;
     }
 
     /// <summary>Builds the per-member engine restore requests for a set, in resolved (tree-id) order.</summary>

@@ -110,6 +110,7 @@ internal sealed partial class TxRegistryGrain
     private async Task PruneExpiredForAdmissionAsync()
     {
         await RefreshWalPurgeGuardAsync();
+        await RefreshWalPurgeHoldAsync();
         var pruned = PruneExpired(TimeProvider.GetUtcNow(), Retention);
         if (!pruned.Any)
         {

@@ -33,6 +33,14 @@ internal sealed class ReplicationTreeAliasObserver(
     /// <inheritdoc />
     public async Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
     {
+        // Issue #4586: the tree's contents changed lineage, so a write recorded
+        // as applied before the swap may no longer be in it. Forget the record
+        // before anything else, and let a failure propagate: releasing a
+        // dependent on a stale record would show it without its dependency.
+        await _grainFactory
+            .GetGrain<IReplicationHighWaterMarkGrain>(change.TreeId)
+            .ResetAppliedIdentitiesAsync(cancellationToken);
+
         var peers = _topology.CurrentPeers;
         if (peers.Count == 0)
         {

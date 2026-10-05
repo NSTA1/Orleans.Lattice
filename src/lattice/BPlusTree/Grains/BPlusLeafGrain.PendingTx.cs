@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -126,6 +127,14 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </summary>
     private Dictionary<(Guid TransactionId, int Partition), long>? _pendingTxOffsets;
+
+    /// <summary>
+    /// Lookup companion for <see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.DiscardedSagaPrepares"/>.
+    /// Built lazily from persisted state so replay can test whether a prepared
+    /// record belongs to a poisoned saga discard without allocating on leaves
+    /// that never use the mechanism.
+    /// </summary>
+    private Dictionary<Guid, DiscardedSagaPrepare>? _discardedSagaPrepares;
 
     /// <summary>
     /// Parallel side-map to <see cref="_pendingTx"/> recording, per
@@ -275,9 +284,9 @@ internal sealed partial class BPlusLeafGrain
             return false;
 
         TxStatus status;
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
         try
         {
-            var registry = TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
             status = await registry.GetStatusAsync(txid);
             if (status == TxStatus.Indeterminate)
                 status = await registry.GetRecordedStatusAsync(txid);
@@ -299,7 +308,65 @@ internal sealed partial class BPlusLeafGrain
         }
 
         // The terminal may have landed while the registry call was in flight.
-        return status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid);
+        if (status is TxStatus.Committed or TxStatus.Aborted || IsRecentlyTerminal(txid))
+            return true;
+
+        return await IsForwardedPrepareForForgottenTransactionAsync(registry, txid, treeId);
+    }
+
+    /// <summary>
+    /// Whether the saga of a forwarded prepare whose registry reports it undecided
+    /// was in fact forgotten and its decision pruned (issue #4632). A forward
+    /// abandoned at its deadline can still be delivered after its saga committed,
+    /// completed and was forgotten, onto a leaf that no longer remembers the
+    /// terminal; bucketed, nothing would ever settle it, every later split or
+    /// resize would carry it, and it would pin the leaf's WAL prefix.
+    /// <para>
+    /// The registry's participant row tells the two apart for a saga this cluster
+    /// authored. Its coordinator holds the row in the registry the forwarded
+    /// marker names - its own tree - from before its first prepare dispatch until
+    /// <see cref="ITxRegistryGrain.ForgetAsync"/>, which runs after the decision,
+    /// and a forwarded registration only joins an existing row
+    /// (<see cref="ITxRegistryGrain.RegisterParticipantAsync"/>). Every forward is
+    /// sent after its source prepare, so an undecided saga with no row was
+    /// forgotten. The status is read first: a forget between the two reads leaves
+    /// the saga decided either way.
+    /// </para>
+    /// <para>
+    /// A replicated prepare (one carrying its author's
+    /// <see cref="LatticeOriginContext"/>) belongs to a saga this cluster never
+    /// forgets and whose row may be held by another registry, so it is bucketed
+    /// as before. Fails open on a registry fault.
+    /// </para>
+    /// </summary>
+    private async ValueTask<bool> IsForwardedPrepareForForgottenTransactionAsync(
+        ITxRegistryGrain registry, Guid txid, string treeId)
+    {
+        if (LatticeOriginContext.Current is not null)
+            return false;
+
+        IReadOnlyList<int> participants;
+        try
+        {
+            participants = await registry.GetParticipantsAsync(txid);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            var logger = ResolveLogger();
+            if (logger is not null && logger.IsEnabled(LogLevel.Debug))
+            {
+                logger.LogDebug(
+                    ex,
+                    "Could not read the participants of saga '{TxId}' on tree '{TreeId}' before bucketing a forwarded "
+                    + "prepare; bucketing it.",
+                    txid,
+                    treeId);
+            }
+
+            return false;
+        }
+
+        return participants.Count == 0 || IsRecentlyTerminal(txid);
     }
 
     /// <summary>
@@ -421,6 +488,12 @@ internal sealed partial class BPlusLeafGrain
                 "A prepared mutation must carry a non-empty TransactionId. "
                 + "The saga coordinator stamps the id via LatticeTransactionContext "
                 + "before opening a LatticePreparedContext scope.");
+        }
+
+        if (IsDiscardedSagaPrepare(transactionId))
+        {
+            RecordDiscardedSagaPrepareOffset(transactionId);
+            return;
         }
 
         var pending = _pendingTx ??= new Dictionary<Guid, Dictionary<string, LwwValue<byte[]>>>();
@@ -2048,6 +2121,175 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Returns whether <paramref name="transactionId"/> is durably marked as a
+    /// discarded receiver-side saga prepare on this leaf.
+    /// </summary>
+    private bool IsDiscardedSagaPrepare(Guid transactionId)
+    {
+        if (transactionId == Guid.Empty)
+            return false;
+
+        if (_discardedSagaPrepares is null)
+        {
+            var persisted = state.State.DiscardedSagaPrepares;
+            if (persisted is null || persisted.Count == 0)
+                return false;
+
+            _discardedSagaPrepares = new Dictionary<Guid, DiscardedSagaPrepare>(persisted.Count);
+            foreach (var entry in persisted)
+            {
+                if (entry.TransactionId != Guid.Empty)
+                    _discardedSagaPrepares[entry.TransactionId] = entry;
+            }
+        }
+
+        return _discardedSagaPrepares.ContainsKey(transactionId);
+    }
+
+    /// <summary>
+    /// Adds <paramref name="transactionId"/> to the persisted discarded-prepare
+    /// set and records any prepare offsets currently known to this activation.
+    /// Returns <c>true</c> when state changed and must be persisted.
+    /// </summary>
+    private bool RememberDiscardedSagaPrepare(Guid transactionId)
+    {
+        if (transactionId == Guid.Empty)
+            return false;
+
+        var changed = false;
+        var persisted = state.State.DiscardedSagaPrepares ??= new List<DiscardedSagaPrepare>();
+        var entry = persisted.FirstOrDefault(e => e.TransactionId == transactionId);
+        if (entry is null)
+        {
+            entry = new DiscardedSagaPrepare { TransactionId = transactionId };
+            persisted.Add(entry);
+            changed = true;
+        }
+
+        (_discardedSagaPrepares ??= new Dictionary<Guid, DiscardedSagaPrepare>())[transactionId] = entry;
+
+        if (_pendingTxOffsets is not null)
+        {
+            foreach (var ((tx, partition), offset) in _pendingTxOffsets)
+            {
+                if (tx != transactionId)
+                    continue;
+
+                if (!entry.PrepareOffsetsByPartition.TryGetValue(partition, out var existing)
+                    || offset > existing)
+                {
+                    entry.PrepareOffsetsByPartition[partition] = offset;
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
+    /// Records the ambient replay offset for a skipped discarded prepare, when
+    /// replay supplied one. The offset is only pruning evidence; the skip itself
+    /// is authorized by the persisted txid marker.
+    /// </summary>
+    private void RecordDiscardedSagaPrepareOffset(Guid transactionId)
+    {
+        var ambientOffset = LatticeApplyOffsetContext.Current;
+        if (ambientOffset is not long offset)
+            return;
+
+        var persisted = state.State.DiscardedSagaPrepares;
+        if (persisted is null)
+            return;
+
+        var entry = persisted.FirstOrDefault(e => e.TransactionId == transactionId);
+        if (entry is null)
+            return;
+
+        var partition = LatticeApplyOffsetContext.CurrentPartition ?? 0;
+        if (!entry.PrepareOffsetsByPartition.TryGetValue(partition, out var existing)
+            || offset > existing)
+        {
+            entry.PrepareOffsetsByPartition[partition] = offset;
+        }
+    }
+
+    /// <summary>
+    /// Drops discarded-prepare markers whose observed prepare offsets are all
+    /// now behind the durable projection checkpoints.
+    /// </summary>
+    private bool PruneDiscardedSagaPreparesCoveredByCheckpoints()
+    {
+        var persisted = state.State.DiscardedSagaPrepares;
+        if (persisted is null || persisted.Count == 0)
+            return false;
+
+        var retained = new List<DiscardedSagaPrepare>(persisted.Count);
+        var changed = false;
+        foreach (var entry in persisted)
+        {
+            if (entry.PrepareOffsetsByPartition.Count == 0)
+            {
+                retained.Add(entry);
+                continue;
+            }
+
+            var covered = true;
+            foreach (var (partition, offset) in entry.PrepareOffsetsByPartition)
+            {
+                if (GetPersistedCheckpointForPartition(partition) < offset)
+                {
+                    covered = false;
+                    break;
+                }
+            }
+
+            if (covered)
+            {
+                changed = true;
+                _discardedSagaPrepares?.Remove(entry.TransactionId);
+            }
+            else
+            {
+                retained.Add(entry);
+            }
+        }
+
+        if (!changed)
+            return false;
+
+        state.State.DiscardedSagaPrepares = retained.Count == 0 ? null : retained;
+        if (state.State.DiscardedSagaPrepares is null)
+            _discardedSagaPrepares = null;
+        return true;
+    }
+
+    private static List<DiscardedSagaPrepare>? CloneDiscardedSagaPrepares(
+        List<DiscardedSagaPrepare>? source)
+    {
+        if (source is null)
+            return null;
+
+        var clone = new List<DiscardedSagaPrepare>(source.Count);
+        foreach (var entry in source)
+        {
+            clone.Add(new DiscardedSagaPrepare
+            {
+                TransactionId = entry.TransactionId,
+                PrepareOffsetsByPartition = new Dictionary<int, long>(entry.PrepareOffsetsByPartition),
+            });
+        }
+
+        return clone;
+    }
+
+    private void RestoreDiscardedSagaPrepares(List<DiscardedSagaPrepare>? snapshot)
+    {
+        state.State.DiscardedSagaPrepares = snapshot;
+        _discardedSagaPrepares = null;
+    }
+
     /// <inheritdoc />
     public async Task<List<string>> GetPendingKeysAsync()
     {
@@ -2164,6 +2406,27 @@ internal sealed partial class BPlusLeafGrain
         }
 
         return result;
+    }
+
+    /// <inheritdoc />
+    public async Task DiscardPendingTransactionAsync(Guid transactionId)
+    {
+        await AwaitReplayBarrierAsync();
+
+        EnsureInternalOrigin(LatticeOperation.Admin);
+        if (transactionId == Guid.Empty)
+        {
+            return;
+        }
+
+        var hadPending = _pendingTx is not null && _pendingTx.ContainsKey(transactionId);
+        var markerChanged = hadPending && RememberDiscardedSagaPrepare(transactionId);
+        ApplyTxAbort(transactionId);
+        ClearSagaShadow(transactionId);
+        if (markerChanged)
+        {
+            await PersistAsync();
+        }
     }
 
     /// <summary>

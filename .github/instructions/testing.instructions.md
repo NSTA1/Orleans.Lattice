@@ -990,7 +990,9 @@ The replication module, `spec/replication/Replication.tla` (with its companion
 replication; sagas carried over replication are out of its scope (#4436). Its
 decisions run in production through two pure cores, `ReplicationShipEligibility`
 and `ReplicationReceiveDedup`, and three Coyote models in
-`test/lattice.replication/Coyote/` execute them. Every guard test removes one
+`test/lattice.replication/Coyote/` execute them; the dedup model drives the
+production `ReplicationApplier` itself, so its fixed design goes red on a
+regression in the applier, not only in a core. Every guard test removes one
 fix and requires each reported violation to carry its own property's label
 (`AssertViolationOf`), so a guard cannot pass on a neighbouring assertion. Each
 model also has an `Exploration_reaches_*` probe proving the exploration reaches
@@ -1002,9 +1004,9 @@ production detectors, each proven red by perturbing production, in
 |---------------|-------------------------|------|------------------------------|---------------------------------|------------------|
 | `NoRelay` | A cluster ships only writes it authored; a write applied from a peer is never re-shipped. | `ReplicationShipEligibility.IsShipEligible` | `ReplicationCycleBreakModel` asserts every delivered write's origin is the sender or the receiver. | `Without_the_ship_filter_a_cluster_relays_a_peers_write` in `ReplicationConvergenceCoyoteTests`. | Net-new. |
 | `NoReflection` | A cluster never applies its own write received back from a peer. | `ReplicationReceiveDedup.IsOwnOrigin` | `ReplicationCycleBreakModel` asserts no receiver applies an entry of its own origin. | `Without_the_receiver_guard_an_echoed_own_write_is_applied`. | Net-new. |
-| `CursorNeverSkipsUnshipped` | The shipper's cursor never passes an entry the peer has not received; the scalar HLC cursor is not a skip criterion (#1060). | `ReplicationShipEligibility.IsBelowLegacyScalarCursor` | `ReplicationShipCursorModel` asserts every consumed entry was shipped. | `Scalar_cursor_filter_skips_an_unshipped_write`. | Net-new. |
-| `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | `ReplicationReceiveDedup.AdvancesHighWaterMark` with `RecentApplyCache` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
-| `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | `ReplicationReceiveDedup` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
+| `CursorNeverSkipsUnshipped` | The shipper's cursor never passes an entry the peer has not received; the scalar HLC cursor is not a skip criterion (#1060). | `ReplicationShipEligibility.IsLegacyMigrationTick` and `ReplicationShipEligibility.IsBelowLegacyScalarCursor` | `ReplicationShipCursorModel` decides each tick's legacy filter through `IsLegacyMigrationTick`, as the shipper does, and asserts every consumed entry was shipped. | `Scalar_cursor_filter_skips_an_unshipped_write`. | Net-new. |
+| `DedupNeverDropsNew` | The receiver drops an entry as a duplicate only if its value already reflects it; the incremental high-water mark is not a drop threshold (#1060). | The production `ReplicationApplier` (`ApplyAsync` and `ApplyBatchAsync`) over the real `ReplicationHighWaterMarkGrain`, with `RecentApplyCache` and `ReplicationReceiveDedup.AdvancesHighWaterMark` | `ReplicationDedupConvergenceModel` asserts a dropped entry's merge leaves the replica unchanged and the high-water mark covers every applied entry. | `Incremental_diagonal_dedup_drops_a_new_write`. | Net-new. |
+| `EventualConvergence` | At quiescence every replica of every key holds the value of all its writes. | The production `ReplicationApplier` with the merge primitives | `ReplicationDedupConvergenceModel` asserts the last-writer-wins and counter keys converge. | None of its own: the model's convergence assertion is the positive arm (`Identity_and_merge_dedup_never_drops_a_new_write_and_converges`). The causal buffer's liveness (#4464) is checked by the TLA+ modules and their production detectors, not re-encoded in Coyote. | Net-new. |
 | `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is applied when it arrives (#4463). | None: the pin installs no floor, so no decision is left to extract. | TLA+ only. | Not applicable; the production detectors are listed in `spec/replication/Refinement.md`. | TLA+ only. |
 | `ReconcileDeletesOnlyDeleted` | An in-place re-bootstrap turns an export's absence into a delete only where the source really deleted the key (`ReplicationReBootstrap.tla`, the reconcile of a reaped delete). | None yet: the reconcile is #4537. | TLA+ only. | Not applicable until #4537 extracts the decision. | TLA+ only. |
 
@@ -1039,10 +1041,10 @@ reported under that fix's own assertion tag, not merely some violation.
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
 | `EveryAckedWriteMaterialised` | Every acknowledged write is eventually held by its owner. | All five | Bounded progress: `[EveryAckedWriteMaterialised]` at quiescence. | None of its own. | Net-new. |
 | `ReclamationEventuallyAdvances` | The WAL is eventually fully reclaimed. | `LeafDurablePinCore`, `WalGcTrimCore` | Bounded progress: `[ReclamationEventuallyAdvances]` at quiescence. | None of its own. | Net-new; cited from `WalGcTrimFloorModel`'s final pass. |
-| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is TLA+ only. | Cited. |
+| `MovedStreamKeepsAckedWrites`, `CopyTakenQuiesced` (`WalMove`) | A move never loses an acknowledged write; the copy is taken from a quiesced stream. | `WalMoveFenceCore` | `WalMoveQuiesceModel`. | `WalMoveQuiesceCoyoteTests.Split_fence_check_strands_an_offset_past_the_fence`. The durable fence a shard crash must not lose (#4525) is not in the Coyote model; its production detectors are named in `spec/wal/MoveRefinement.md`. | Cited. |
 | `ReaderNeverPassesHole`, `AllocatorNeverReissues` (`WalMove`) | As `ShippingNeverSkips` and `OffsetContiguity`. | `WalShippingWatermark`, `WalOffsetAllocationCore` | `WalShippingWatermarkModel`, `WalOffsetContiguityModel`. | Their models' guard tests. | Cited. |
 | `StreamEventuallyComplete` (`WalMove`) | A move's fence is always eventually lowered. | - | Not encoded in Coyote. | - | Gap: TLA+ only. |
-| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; the durable fence is #4525's. |
+| `FenceEventuallyReleased` (`WalMove`) | A durable move fence is never held for ever, even once its coordinator is lost. | - | Not encoded in Coyote. | - | Gap: TLA+ only; its production detectors (#4525's fix) are named in `spec/wal/MoveRefinement.md`. |
 
 **Gap analysis.** Four WAL properties have no Coyote guard specific to them, and the
 table says so rather than borrowing one:
@@ -1056,8 +1058,8 @@ table says so rather than borrowing one:
 `FenceEventuallyReleased` are not encoded in Coyote at all. The TLA+ catalogue pairs
 every one of them with a firing mutation. The four defects the model found (#4450,
 #4451, #4456, #4467) are fixed, and their mutations in `spec/wal/` are now ordinary
-regression checks. The review (#4433) found #4523 (fixed) and #4525 (open: a standing mutation in
-`spec/wal/` and gap rows in its refinement note until its fix lands).
+regression checks. The review (#4433) found #4523 and #4525, both now fixed; their mutations are
+ordinary regression checks too.
 
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
@@ -1115,7 +1117,7 @@ its window, #4589).
 | `BackupIncremental` | `ChainCoversCommitted`, `SagaFallbackOnlyAcrossFull` | A link whose decision snapshot holds a saga committed restores it whole; an increment falls back to a full backup only for a saga straddling the full capture's frontier. | None; detectors in the note. |
 | `BackupProvenance` | `ProvenanceNoEmptyOrigin`, `ProvenanceCoversCaptured`, `FrontierCoversCaptured`, `ChainFrontierMonotonic` | The #2621 empty-origin rule; no real origin dropped; the #3758 frontier covers what a link captured and never regresses. | None; `BackupChainFrontierTests`. |
 | `BackupRestore` | `RestoreAllOrNothing` | No cluster serves its restored copy unless every cluster voted commit and none compensated. | `CoordinatedRestoreDecisionModel` (`Committing_on_any_vote_leaves_the_restore_mixed`). |
-| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
+| `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
 | `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore completes on retry (liveness). | None; integration and chaos detectors in the note. |
 
 What these do not cover - the participant fence timer, a batch in flight across

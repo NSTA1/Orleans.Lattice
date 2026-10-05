@@ -49,7 +49,7 @@ public partial class ReplicationApplierTests
 
         var apply = Substitute.For<IReplicationApplyGrain>();
         var apply2 = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationApplyGrain>(SecondTree).Returns(apply2);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
@@ -162,7 +162,7 @@ public partial class ReplicationApplierTests
     public async Task ApplyBatchAsync_defers_every_run_while_the_receive_fence_is_engaged()
     {
         var gate = Substitute.For<IReplicationReceiveGate>();
-        gate.IsReceivePausedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(true);
+        gate.ObserveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new ReceiveFenceObservation { Paused = true });
         var (applier, apply, apply2, _) = CreateTwoTreeApplier(receiveGate: gate);
 
         var result = await applier.ApplyBatchAsync(new[]
@@ -189,8 +189,8 @@ public partial class ReplicationApplierTests
         var gate = Substitute.For<IReplicationReceiveGate>();
         // Only the second tree is fenced, so the batch mixes an applied run with a
         // deferred one and the aggregation must keep both signals.
-        gate.IsReceivePausedAsync(SecondTree, Arg.Any<CancellationToken>()).Returns(true);
-        gate.IsReceivePausedAsync(Tree, Arg.Any<CancellationToken>()).Returns(false);
+        gate.ObserveAsync(SecondTree, Arg.Any<CancellationToken>()).Returns(new ReceiveFenceObservation { Paused = true });
+        gate.ObserveAsync(Tree, Arg.Any<CancellationToken>()).Returns(new ReceiveFenceObservation { Paused = false });
         var (applier, apply, apply2, _) = CreateTwoTreeApplier(applyMaxParallelRuns: 4, receiveGate: gate);
 
         var result = await applier.ApplyBatchAsync(new[]
