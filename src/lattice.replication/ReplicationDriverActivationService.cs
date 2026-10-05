@@ -44,12 +44,15 @@ namespace Orleans.Lattice.Replication;
 /// the initial snapshot drives the startup activation pass, and a
 /// long-lived <see cref="IReplicationTopology.Subscribe"/> subscription
 /// activates one shipper per <b>currently enrolled</b> replicated tree
-/// for every peer added at runtime. <see cref="PeerChangeKind.Removed"/>
-/// events do not trigger any teardown. Existing shippers keep running
-/// and continue to ship backlog and later local writes; a producer-side
+/// for every peer added at runtime. A <see cref="PeerChangeKind.Removed"/>
+/// event does not stop the removed peer's shippers: they keep running and
+/// ship backlog and later local writes best effort, and a producer-side
 /// doorbell ring no longer targets the removed peer because
 /// <c>ShardedReplogSink</c> reads <see cref="IReplicationTopology.CurrentPeers"/>
-/// per WAL append.
+/// per WAL append. It does detach each of them from the write-ahead log
+/// (<see cref="IReplicationShipperGrain.DetachFromLogAsync"/>, issue #4534),
+/// so a removed peer no longer holds the log's trims or the tree's saga
+/// decision purges; adding the peer back re-attaches them.
 /// </para>
 /// <para>
 /// <see cref="IHostedService.StartAsync"/> ordering is not guaranteed
@@ -216,20 +219,18 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
 
     /// <summary>
     /// Fire-and-forget activation of one shipper per currently enrolled
-    /// tree for a newly-added peer. Invoked off the topology subscription
-    /// callback so the subscriber stays non-blocking.
+    /// tree for a newly-added peer, or detachment of each from the
+    /// write-ahead log for a removed one. Invoked off the topology
+    /// subscription callback so the subscriber stays non-blocking.
     /// </summary>
     private void OnPeerChange(PeerChanged change, CancellationToken stoppingToken)
     {
-        if (change.Kind != PeerChangeKind.Added)
+        if (change.Kind is not (PeerChangeKind.Added or PeerChangeKind.Removed))
         {
-            // Removed events do not trigger teardown. Existing shippers
-            // keep running and continue to ship backlog and later local
-            // writes; ShardedReplogSink simply stops ringing their
-            // doorbells because it reads IReplicationTopology.CurrentPeers.
             return;
         }
 
+        var removed = change.Kind == PeerChangeKind.Removed;
         string[] trees;
         lock (_gate)
         {
@@ -245,6 +246,25 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
 
             var capturedTree = treeName;
             var capturedPeer = change.PeerClusterId;
+            if (removed)
+            {
+                // The removed peer's shippers keep running; they only stop
+                // holding the log. A detach that loses a race with the peer
+                // being added back is skipped, so it cannot undo the re-attach.
+                _ = Task.Run(
+                    () => ActivateWithRetryAsync(
+                        kind: "shipper detach",
+                        label: $"({capturedTree}, {capturedPeer})",
+                        activate: ct => _topology.CurrentPeers.Contains(capturedPeer)
+                            ? Task.CompletedTask
+                            : _grainFactory
+                                .GetGrain<IReplicationShipperGrain>($"{capturedTree}/{capturedPeer}")
+                                .DetachFromLogAsync(ct),
+                        stoppingToken),
+                    stoppingToken);
+                continue;
+            }
+
             _ = Task.Run(
                 () => ActivateWithRetryAsync(
                     kind: "shipper",
