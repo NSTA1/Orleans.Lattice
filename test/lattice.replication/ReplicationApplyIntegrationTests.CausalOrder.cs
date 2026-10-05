@@ -105,7 +105,7 @@ public partial class ReplicationApplyIntegrationTests
         // The origin's low watermark passes a1: every write of the origin below
         // it was acknowledged here, and none is held.
         await _fixture.SiteB.Client.GetGrain<IReplicationOriginFrontierGrain>(origin)
-            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), CancellationToken.None);
+            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), generation: 0, CancellationToken.None);
         await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(dependentTree).DrainAsync();
 
         Assert.That((await lattice.GetWithVersionAsync("b")).Value, Is.EqualTo(new byte[] { 2 }));
@@ -131,7 +131,7 @@ public partial class ReplicationApplyIntegrationTests
 
         // The low watermark passes a1, but a1 is held, not applied.
         await _fixture.SiteB.Client.GetGrain<IReplicationOriginFrontierGrain>(origin)
-            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), CancellationToken.None);
+            .RecordLowWatermarkAsync(RecentHlc(TimeSpan.TicksPerSecond), generation: 0, CancellationToken.None);
         await _fixture.SiteB.Client.GetGrain<ICausalApplyBufferGrain>(dependentTree).DrainAsync();
         Assert.That((await lattice.GetWithVersionAsync("b")).Value, Is.Null, "acknowledged is not applied while a1 is parked");
 

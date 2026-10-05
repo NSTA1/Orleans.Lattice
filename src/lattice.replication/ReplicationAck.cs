@@ -232,14 +232,22 @@ public readonly record struct ReplicationAck
     [Id(8)] public long? BootstrapEpoch { get; init; }
 
     /// <summary>
-    /// The receiver's current lineage of the batch's tree (issue #4586): an
-    /// identity re-stamped whenever the tree's contents are replaced - a
-    /// restore, revert, alias swap or purge and recreate. A sender tags the
-    /// applied low watermark it ships with the lineage its covering
-    /// acknowledgements were taken under, and treats a change as a forced gap:
-    /// it re-seeds the peer, because the new contents may lack writes it
-    /// already shipped. <see langword="null"/> when the receiver tracks no
-    /// lineage for the tree, in which case the sender ships no watermark.
+    /// The receiver's frontier epoch for the batch's tree (issue #4586): an
+    /// identity the receiver re-mints whenever the tree's contents may have been
+    /// replaced - a restore, revert, alias swap, purge and recreate, or a change
+    /// of the tree's registry lineage. A sender tags the applied low watermark it
+    /// ships with the epoch its covering acknowledgements were taken under, and
+    /// treats a move to a non-empty epoch it has not seen last as a forced gap:
+    /// it re-seeds the peer, because the new contents may lack writes it already
+    /// shipped.
+    /// <list type="bullet">
+    /// <item><description><see langword="null"/>: not reported on this ack (a receiver
+    /// built before this slot, or a transient failure). Not a change; the ack
+    /// vouches for no epoch.</description></item>
+    /// <item><description><see cref="Guid.Empty"/>: the receiver tracks no lineage for
+    /// the tree (degraded mode), so the sender ships no watermark.</description></item>
+    /// <item><description>Any other value: the current epoch.</description></item>
+    /// </list>
     /// <para>
     /// Strictly additive on the wire: receivers built before this slot omit
     /// it.

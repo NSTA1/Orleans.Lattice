@@ -34,12 +34,15 @@ internal sealed class ReplicationTreeAliasObserver(
     public async Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
     {
         // Issue #4586: the tree's contents changed lineage, so a write recorded
-        // as applied before the swap may no longer be in it. Forget the record
-        // before anything else, and let a failure propagate: releasing a
-        // dependent on a stale record would show it without its dependency.
+        // as applied before the swap, or covered by a shipped low watermark,
+        // may no longer be in it. The tree frontier re-mints its epoch - every
+        // sender then re-seeds this receiver - caps each origin's aggregate and
+        // forgets the applied identities, before anything else, and a failure
+        // propagates: releasing a dependent on stale coverage would show it
+        // without its dependency.
         await _grainFactory
-            .GetGrain<IReplicationHighWaterMarkGrain>(change.TreeId)
-            .ResetAppliedIdentitiesAsync(cancellationToken);
+            .GetGrain<IReplicationTreeFrontierGrain>(change.TreeId)
+            .OnContentsReplacingAsync(cancellationToken);
 
         var peers = _topology.CurrentPeers;
         if (peers.Count == 0)

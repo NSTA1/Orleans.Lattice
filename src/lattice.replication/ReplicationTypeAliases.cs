@@ -309,4 +309,10 @@ public static class ReplicationTypeAliases
     // The sender's applied low watermark for a receiver's tree (#4586 part 2b).
     internal const string ReplicationSourceFrontier = "olr.sf";
 
+    // Receiver per-tree causal frontier (#4586 part 2b).
+    internal const string IReplicationTreeFrontierGrain = "olr.tf";
+    internal const string ReplicationTreeFrontierState = "olr.ts";
+    internal const string ReplicationTreeOriginFrontier = "olr.to";
+    internal const string ReplicationTreeFrontierSnapshot = "olr.tn";
+
 }
