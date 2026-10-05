@@ -29,9 +29,12 @@ public partial class ReplicationApplierTests
     public async Task ApplyAsync_parked_entry_whose_dependency_was_met_before_the_insert_is_drained_by_the_park()
     {
         var h = CreateCausalHarness();
-        var staleVectorRead = new TaskCompletionSource<VersionVector>();
-        h.Hwm.GetVectorAsync(Arg.Any<CancellationToken>())
-            .Returns(_ => staleVectorRead.Task, _ => Task.FromResult(CloneVc(h.Vc)));
+        var staleCheck = new TaskCompletionSource<CausalDependencyVerdict[]>();
+        var noneLost = new HashSet<(string, HybridLogicalClock)>();
+        h.Hwm.CheckDependenciesAsync(Arg.Any<IReadOnlyList<VersionVector>>(), Arg.Any<CancellationToken>())
+            .Returns(
+                _ => staleCheck.Task,
+                call => Task.FromResult(CausalDependencyTestDouble.Verdicts(h.Vc, noneLost, (IReadOnlyList<VersionVector>)call[0])));
 
         var blocked = h.Applier.ApplyAsync(BlockedOnSiteC("k", 100));
         Assert.That(blocked.IsCompleted, Is.False, "Held at its dependency check.");
@@ -41,7 +44,7 @@ public partial class ReplicationApplierTests
         var satisfier = await h.Applier.ApplyAsync(SetEntry("dep", Hlc(50), OriginC));
         Assert.That(satisfier.Applied, Is.True);
 
-        staleVectorRead.SetResult(new VersionVector());
+        staleCheck.SetResult([CausalDependencyVerdict.Unmet]);
         var parked = await blocked;
 
         Assert.That(parked.Applied, Is.False, "It took the park branch.");
@@ -208,15 +211,5 @@ public partial class ReplicationApplierTests
 
         Assert.That(h.BufferState.State.Entries.Select(p => p.Entry.Key), Is.EqualTo(new[] { "first" }));
         Assert.That(await h.Factory.GetGrain<ICausalApplyBufferGrain>(Tree).CountAsync(), Is.EqualTo(1));
-    }
-
-    private static VersionVector CloneVc(VersionVector source)
-    {
-        var clone = new VersionVector();
-        foreach (var (k, v) in source.Entries)
-        {
-            clone.Entries[k] = v;
-        }
-        return clone;
     }
 }

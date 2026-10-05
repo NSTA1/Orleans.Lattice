@@ -319,6 +319,11 @@
           "legendFormat": "removed {{reason}}"
         },
         {
+          "refId": "Q",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_refused_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "refused (queue full) {{reason}}"
+        },
+        {
           "refId": "P",
           "expr": "sum by (outcome) (rate(orleans_lattice_replication_shipper_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "saga poisoned {{outcome}}"

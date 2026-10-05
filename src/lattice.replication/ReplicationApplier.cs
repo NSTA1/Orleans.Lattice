@@ -266,7 +266,14 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
                         entry.TreeId, entry.OriginClusterId, entry.Mode, expectedMode);
-                    await DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken).ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
             }
@@ -291,8 +298,14 @@ internal sealed partial class ReplicationApplier(
                     .EvaluateAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
                 if (decision != ReplicationTenantIsolationDecision.Admit)
                 {
-                    await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
-                        .ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = decision switch
                     {
                         ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
@@ -552,10 +565,29 @@ internal sealed partial class ReplicationApplier(
                 // ordering across the saga's keys is irrelevant -
                 // the terminal flip is the single atomic-visibility
                 // transition.
-                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
+                if (!isPreparedAtomicBatch
+                    && CausalApplyBuffer.RequiredDependencies(entry, resolved.ClusterId) is { } required)
                 {
-                    var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
+                    var verdicts = await hwmGrain.CheckDependenciesAsync([required], cancellationToken);
+                    var verdict = verdicts.Length == 0 ? CausalDependencyVerdict.Unmet : verdicts[0];
+                    if (verdict == CausalDependencyVerdict.Lost)
+                    {
+                        // A dependency names a write this tree acknowledged and then
+                        // lost for good (#4603): the entry can never apply in causal
+                        // order, so dead-letter it as a terminal state. A full queue
+                        // defers it instead, so nothing is acknowledged and lost.
+                        cache.Remove(entry);
+                        if (!await TryDeadLetterDependencyLostAsync(entry, cancellationToken))
+                        {
+                            outcome = LatticeReplicationMetrics.OutcomeDedup;
+                            return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeRejectedDependencyLost;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    }
+
+                    if (verdict == CausalDependencyVerdict.Unmet)
                     {
                         await ParkAsync(entry, cancellationToken);
                         // The durable buffer now holds the entry and dedups its
@@ -697,8 +729,32 @@ internal sealed partial class ReplicationApplier(
             });
     }
 
-    private static bool HasCausalDependencies(WalRecord entry) =>
-        entry.VectorClock is { Entries.Count: > 0 };
+    /// <summary>
+    /// Dead-letters <paramref name="entry"/> with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> (#4603), or
+    /// returns <see langword="false"/> when the dead-letter queue is full so the
+    /// caller defers the entry rather than acknowledge and lose it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterDependencyLostAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId).EnqueueAsync(
+                entry,
+                failureReason: "A causal dependency of this entry names a write this cluster acknowledged and then lost "
+                    + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
+                retryCount: 0,
+                reasonTag: LatticeReplicationMetrics.ReasonDependencyLost,
+                cancellationToken).ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Records a successfully-applied point mutation into the
@@ -1210,6 +1266,46 @@ internal sealed partial class ReplicationApplier(
     /// </summary>
     private LatticeMergeMode? ResolveLocalMergeMode(string treeId, out bool hasEnrollmentSource) =>
         ReplicationInboundAdmission.ResolveLocalMergeMode(_replicationContext, options, treeId, out hasEnrollmentSource);
+
+    /// <summary>
+    /// Awaits a dead-letter enqueue and reports whether it parked the entry:
+    /// <see langword="false"/> when the queue is full (#4603), in which case the
+    /// caller must keep the entry unacknowledged (defer it) rather than drop it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterAsync(WalRecord entry, Task enqueue)
+    {
+        try
+        {
+            await enqueue.ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Marks (or clears) the inbound link of <paramref name="entry"/> as stalled
+    /// on a full dead-letter queue (#4603), so the peer-status read path reports
+    /// it as stalled rather than quiet while its entries are deferred. Only an
+    /// existing inbound row is updated.
+    /// </summary>
+    private void RecordDeadLetterFull(WalRecord entry, bool full)
+    {
+        if (_peerStats is null || string.IsNullOrEmpty(entry.TreeId) || string.IsNullOrEmpty(entry.OriginClusterId))
+        {
+            return;
+        }
+
+        _peerStats.RecordDeadLetterFull(
+            entry.TreeId,
+            entry.OriginClusterId,
+            ReplicationContactDirection.Inbound,
+            full ? DateTimeOffset.UtcNow : null);
+    }
 
     /// <summary>
     /// Dead-letters an inbound entry the receiver-side merge-mode gate rejected

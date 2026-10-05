@@ -280,7 +280,23 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         // entry against the same tuple gets a fresh budget.
         var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
         var reasonTag = ClassifyFailure(failure);
-        await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            // Surface the stall on the peer-status path rather than as a quiet link.
+            peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+
+            // The dead-letter queue is full (#4603). Parking is the only thing
+            // that keeps an acknowledged entry, so do not acknowledge it: defer
+            // (a not-accepted, cursor-preserving ack) so the sender keeps it and
+            // re-ships, leave the high-water mark alone, and keep the retry count
+            // so the re-delivery tries to park again straight away.
+            return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+        }
 
         // Advance HWM only for point-applied entries; range deletes do
         // not consult the HWM (see ReplicationApplier) so advancing it

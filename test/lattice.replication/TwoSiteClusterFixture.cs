@@ -23,6 +23,16 @@ internal sealed class TwoSiteClusterFixture
     /// <summary>Cluster id assigned to the second site.</summary>
     public const string SiteBClusterId = "site-b";
 
+    /// <summary>
+    /// A tree whose replication dead-letter queue holds at most
+    /// <see cref="SmallDeadLetterCapacity"/> entries on every silo, so tests can
+    /// drive it to capacity (#4603).
+    /// </summary>
+    public const string SmallDeadLetterQueueTree = "ri-dlq-small";
+
+    /// <summary>The dead-letter capacity of <see cref="SmallDeadLetterQueueTree"/>.</summary>
+    public const int SmallDeadLetterCapacity = 2;
+
     private static readonly ConcurrentDictionary<string, LoopbackTransport> Transports = new();
     private static readonly ConcurrentDictionary<string, RecordingReplogSink> Sinks = new();
 
@@ -161,6 +171,8 @@ internal sealed class TwoSiteClusterFixture
         siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
         siloBuilder.UseInMemoryReminderService();
         siloBuilder.AddLatticeReplication(opts => opts.ClusterId = clusterId);
+        siloBuilder.ConfigureLatticeReplication(
+            SmallDeadLetterQueueTree, opts => opts.DeadLetterQueueCapacity = SmallDeadLetterCapacity);
 
         // Register the OR-Map shape for the dogfooded sys-replication-config tree
         // so a real config-store OR-Map write is (de)serialisable on these silos,
