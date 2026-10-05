@@ -3095,13 +3095,18 @@ public class LatticeMicroBenchmarks
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns(string.Empty);
 
+        // A never-replicated partition: its clock floor stays zero (issue #4586).
+        var leafQueueFloorState = Substitute.For<IPersistentState<WalShardFloorState>>();
+        leafQueueFloorState.State.Returns(new WalShardFloorState());
         _leafQueueWal = new WalShardGrain(
             grainContext,
             monitor,
             new LatticeOptionsResolver(_grainFactory, monitor),
             modeResolver,
             clusterIdResolver,
-            encoder);
+            encoder,
+            leafQueueFloorState,
+            Substitute.For<IWalClockFloorGate>());
         _leafQueueWal
             .InitializeForTestingAsync("leafqueue-tree", 0, _leafQueueStorage, CancellationToken.None)
             .GetAwaiter()
