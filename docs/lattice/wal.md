@@ -941,6 +941,12 @@ floor does not cover caps the partition's ceiling at its frontier: that frontier
 published by an empty release, when the leaf held no row there and had applied
 nothing, so every entry the leaf has since written to the partition is stamped above
 it, even though the pin store's monotone merge keeps the frontier after that write.
+A leaf publishes an empty release for a partition only after its activation's
+replay has latched (issue #4669). Until then every partition counts as data-bearing
+when the leaf resolves its pins, even one it holds no row in yet, so a checkpoint
+flush that runs part-way through the replay (pass 1 flushes incrementally, sweeping
+partitions in ascending backlog order) keeps the block on a partition it has not yet
+read, unless that partition's WAL is proven empty.
 A held or capped partition grows for as long as the hold stands; watch
 `orleans.lattice.wal.gc.leaf_pin_hold_age` (see [Metrics](metrics.md)).
 

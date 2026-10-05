@@ -207,7 +207,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+            var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
             var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
                 partitionCount, partitionsWithLiveData, treeId);
             for (var partition = 0; partition < partitionCount; partition++)
@@ -403,7 +403,7 @@ internal sealed partial class BPlusLeafGrain
         // any pin that licenses the WAL GC to trim behind that snapshot.
         await PersistKeptSnapshotCoverageMarkerAsync();
 
-        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
         if (neverWritten && !HasNeverWrittenScannedThroughPartition(partitionCount, partitionsWithLiveData))
         {
             return 0;
@@ -788,7 +788,7 @@ internal sealed partial class BPlusLeafGrain
         var clock = state.State.Clock;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
-        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
         var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
             partitionCount, partitionsWithLiveData, treeId);
         for (var partition = 0; partition < partitionCount; partition++)
@@ -1013,6 +1013,35 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static string BuildConsumerId(string idBase, int partition, int partitionCount)
         => partitionCount == 1 ? idBase : $"{idBase}_{partition}";
+
+    /// <summary>
+    /// Whether this activation's WAL replay has latched: completed, retired, or
+    /// never required. Until then the cache does not show every row the leaf owns.
+    /// </summary>
+    private bool IsReplayLatched
+        => _replayBarrierSatisfied || _replayBarrierRetired || !_replayBarrierArmed;
+
+    /// <summary>
+    /// Treats every partition as holding live rows until this activation's replay
+    /// has latched (issue #4669). A cold
+    /// activation's cache is empty for a partition its replay has not read yet, so
+    /// a pin published meanwhile - by the checkpoint flush tail of a partition the
+    /// replay swept first - would resolve that partition as an empty release, a
+    /// real frontier with no offset, which licenses the WAL GC to trim writes the
+    /// leaf owns and has not replayed. Treated as live, the partition keeps its
+    /// block pin unless its WAL is proven empty, and is released by the first
+    /// publish after the replay latches.
+    /// </summary>
+    private bool[] WithUnreplayedPartitionsLive(bool[] partitionsWithLiveData)
+    {
+        if (IsReplayLatched)
+        {
+            return partitionsWithLiveData;
+        }
+
+        Array.Fill(partitionsWithLiveData, true);
+        return partitionsWithLiveData;
+    }
 
     /// <summary>
     /// Computes, in a single cache pass, which WAL partitions this leaf holds
