@@ -6,7 +6,7 @@ MODULE: RestoredCutNotReAdvancedCommitLeavesReceiveOpen
 TARGET: RestoredCutNotReAdvanced
 CLASS: Invariant
 SUMMARY: the commit fence does not pause inbound apply
-PERTURBS: Commit
+PERTURBS: Engage
 
 --- FIND
     /\ recvOn' = [recvOn EXCEPT ![c] = FALSE]

@@ -60,26 +60,30 @@ Outcomes == {"none", "committed", "aborted"}
 (*  attempt       the attempt in progress.                                 *)
 (*  before[T]     the epoch the drain gate observed at its drained moment.*)
 (*  capd[sh]      shard sh has been captured in this attempt.             *)
-(*  img[sh][t]    what the capture holds of t on shard sh.                 *)
+(*  img[sh][t]    what the capture holds of t on shard sh: none, pre,      *)
+(*                post, or absent (a hidden key, #4619).                  *)
+(*  expired       saga s's decision tombstone on T1 has outlived its       *)
+(*                retention (TxDecisionRetention); the row is still stored. *)
 (***************************************************************************)
-VARIABLES reg, deleg, epoch, prep, dec, loc, term,
+VARIABLES reg, deleg, epoch, prep, dec, loc, term, expired,
           lease, held, gated, d0,
           kind, phase, attempt, before, capd, img
 
-sagaVars == <<reg, deleg, epoch, prep, dec, loc, term>>
+sagaVars == <<reg, deleg, epoch, prep, dec, loc, term, expired>>
 leaseVars == <<lease, held, gated, d0>>
 capVars == <<kind, phase, attempt, before, capd, img>>
-vars == <<reg, deleg, epoch, prep, dec, loc, term, lease, held, gated, d0,
+vars == <<reg, deleg, epoch, prep, dec, loc, term, expired, lease, held, gated, d0,
           kind, phase, attempt, before, capd, img>>
 
-\* The instance's writes depend on the capture kind, which Init fixes.
-Writes(t) == IF t = "s" THEN {"a", "b"} ELSE IF kind = "single" THEN {"a", "b", "c"} ELSE {"b", "c"}
+\* Every saga writes the same shards under both capture kinds (#4441 F3).
+Writes(t) == IF t = "s" THEN {"a", "b"} ELSE {"a", "b", "c"}
 TreesOf(t) == {TreeOf[sh] : sh \in Writes(t)}
 CrossTree(t) == t = "x"
-\* A set capture runs only the cross-tree saga: the single-tree saga's
-\* consistency within a tree is the single-tree capture's to check, and the
-\* set re-checks it per member regardless.
-Active(t) == kind = "single" \/ t = "x"
+\* Both sagas run under both capture kinds (issue #4441 F3): under a set
+\* capture the single-tree saga s is the within-member half of
+\* BackupSagaConsistent - a saga on one member deciding while the set holds
+\* its gate - which only the set's lease validation defends.
+Active(t) == TRUE
 
 TypeOK ==
     /\ reg \in [Sagas -> [Trees -> BOOLEAN]]
@@ -89,16 +93,17 @@ TypeOK ==
     /\ dec \in [Sagas -> {"inflight", "committed", "aborted"}]
     /\ loc \in [Sagas -> [Trees -> Outcomes]]
     /\ term \in [Sagas -> [Shards -> {"none", "commit", "abort"}]]
+    /\ expired \in BOOLEAN
     /\ lease \in [Trees -> {"none", "fence", "gate"}]
     /\ held \in [Trees -> BOOLEAN]
     /\ gated \in [Trees -> BOOLEAN]
-    /\ d0 \in [Trees -> [Sagas -> Outcomes]]
+    /\ d0 \in [Trees -> [Sagas -> Outcomes \cup {"indeterminate"}]]
     /\ kind \in {"single", "set"}
     /\ phase \in {"fence", "drain", "gating", "capture", "done", "failed"}
     /\ attempt \in 1..MaxAttempts
     /\ before \in [Trees -> 0..1]
     /\ capd \in [Shards -> BOOLEAN]
-    /\ img \in [Shards -> [Sagas -> {"none", "pre", "post"}]]
+    /\ img \in [Shards -> [Sagas -> {"none", "pre", "post", "absent"}]]
 
 Members == IF kind = "single" THEN {"T1"} ELSE Trees
 MemberShards == {sh \in Shards : TreeOf[sh] \in Members}
@@ -111,15 +116,18 @@ Fenced(T) == lease[T] # "none"
 (* What the capture holds of saga t on shard sh: an applied terminal as    *)
 (* applied; a still-pending bucket resolved against the tree's gate        *)
 (* snapshot d0, as SelectDecidingPrepare and AtomicVisibilityGate.ResolveKey*)
-(* resolve it - a LOCAL committed decision serves post-saga, anything else *)
-(* (none, an abort, a delegated txid with no local decision) pre-saga.     *)
+(* resolve it - a LOCAL committed decision serves post-saga, an           *)
+(* Indeterminate one hides the key (SnapshotProjectionFolder), anything    *)
+(* else (none, an abort, a delegated txid with no local decision) pre-saga.*)
 (***************************************************************************)
 Image(t, sh) ==
     IF sh \notin Writes(t) THEN "none"
     ELSE IF term[t][sh] = "commit" THEN "post"
     ELSE IF term[t][sh] = "abort" THEN "pre"
     ELSE IF prep[t][sh]
-         THEN (IF d0[TreeOf[sh]][t] = "committed" THEN "post" ELSE "pre")
+         THEN (CASE d0[TreeOf[sh]][t] = "committed" -> "post"
+                 [] d0[TreeOf[sh]][t] = "indeterminate" -> "absent"
+                 [] OTHER -> "pre")
     ELSE "pre"
 
 Init ==
@@ -130,6 +138,7 @@ Init ==
     /\ dec = [t \in Sagas |-> "inflight"]
     /\ loc = [t \in Sagas |-> [T \in Trees |-> "none"]]
     /\ term = [t \in Sagas |-> [sh \in Shards |-> "none"]]
+    /\ expired = FALSE
     /\ lease = [T \in Trees |-> "none"]
     /\ held = [T \in Trees |-> FALSE]
     /\ gated = [T \in Trees |-> FALSE]
@@ -157,7 +166,7 @@ Register(t, T) ==
     /\ reg' = [reg EXCEPT ![t][T] = TRUE]
     /\ deleg' = [deleg EXCEPT ![t][T] = TRUE]
     /\ epoch' = [epoch EXCEPT ![T] = epoch[T] + 1]
-    /\ UNCHANGED <<prep, dec, loc, term>>
+    /\ UNCHANGED <<prep, dec, loc, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -173,7 +182,7 @@ RegisterRefused(t, T) ==
     /\ dec[t] = "inflight"
     /\ Fenced(T)
     /\ dec' = [dec EXCEPT ![t] = "aborted"]
-    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, loc, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -189,7 +198,7 @@ Prepare(t, sh) ==
     /\ dec[t] = "inflight"
     /\ CrossTree(t) => reg[t][TreeOf[sh]]
     /\ prep' = [prep EXCEPT ![t][sh] = TRUE]
-    /\ UNCHANGED <<reg, deleg, epoch, dec, loc, term>>
+    /\ UNCHANGED <<reg, deleg, epoch, dec, loc, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -208,7 +217,7 @@ Decide(t) ==
          /\ dec' = [dec EXCEPT ![t] = outcome]
          /\ loc' = IF CrossTree(t) THEN loc
                    ELSE [loc EXCEPT ![t] = [T \in Trees |-> IF T \in TreesOf(t) THEN outcome ELSE "none"]]
-    /\ UNCHANGED <<reg, deleg, epoch, prep, term>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -224,7 +233,7 @@ Finalize(t, T) ==
     /\ ~Gated(T)
     /\ loc' = [loc EXCEPT ![t][T] = dec[t]]
     /\ deleg' = [deleg EXCEPT ![t][T] = FALSE]
-    /\ UNCHANGED <<reg, epoch, prep, dec, term>>
+    /\ UNCHANGED <<reg, epoch, prep, dec, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -242,7 +251,7 @@ CacheVerdict(t, T) ==
     /\ ~Gated(T)
     /\ loc' = [loc EXCEPT ![t][T] = dec[t]]
     /\ deleg' = [deleg EXCEPT ![t][T] = FALSE]
-    /\ UNCHANGED <<reg, epoch, prep, dec, term>>
+    /\ UNCHANGED <<reg, epoch, prep, dec, term, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -257,7 +266,7 @@ Broadcast(t, sh) ==
     /\ term[t][sh] = "none"
     /\ loc[t][TreeOf[sh]] # "none"
     /\ term' = [term EXCEPT ![t][sh] = IF loc[t][TreeOf[sh]] = "committed" THEN "commit" ELSE "abort"]
-    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
@@ -274,10 +283,46 @@ Sweep(t, sh) ==
     /\ term[t][sh] = "none"
     /\ loc[t][TreeOf[sh]] # "none"
     /\ term' = [term EXCEPT ![t][sh] = IF loc[t][TreeOf[sh]] = "committed" THEN "commit" ELSE "abort"]
-    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc>>
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc, expired>>
     /\ UNCHANGED leaseVars
     /\ UNCHANGED capVars
 
+(***************************************************************************)
+(* Expire: saga s's committed decision tombstone on T1 outlives           *)
+(* TxDecisionRetention (an expired abort can never be read post-saga, so  *)
+(* it cannot tear a batch and is left out of the instance)                *)
+(* while the row is still stored (TxRegistryGrain.IsTombstoneExpired).     *)
+(* Not fair. The sweeps keep applying the recorded verdict (Sweep reads    *)
+(* loc), and a capture resolves a pending bucket against the same recorded *)
+(* verdict (#4619): GateAcquire snapshots loc, expired or not. Enabled   *)
+(* for a single-tree capture only: a set's GateAcquire builds d0 through  *)
+(* the same registry call (TxRegistryGrain.CaptureLocalDecisions), so the *)
+(* set adds no behaviour here and only multiplies the state space.        *)
+(***************************************************************************)
+Expire ==
+    /\ kind = "single"
+    /\ ~expired
+    /\ loc["s"]["T1"] = "committed"
+    /\ expired' = TRUE
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, loc, term>>
+    /\ UNCHANGED leaseVars
+    /\ UNCHANGED capVars
+
+(***************************************************************************)
+(* Prune: the expired row is removed (TxRegistryGrain.PruneExpired, after  *)
+(* the saga's ForgetAsync and, on a replicating host, the #4508 WAL purge  *)
+(* guard). The saga forgets only after its broadcast acked, so every shard *)
+(* of s has applied its terminal first: no reader can find a bucket of s   *)
+(* pending once the row is gone. Not fair.                                 *)
+(***************************************************************************)
+Prune ==
+    /\ expired
+    /\ loc["s"]["T1"] # "none"
+    /\ \A sh \in Writes("s") : term["s"][sh] # "none"
+    /\ loc' = [loc EXCEPT !["s"]["T1"] = "none"]
+    /\ UNCHANGED <<reg, deleg, epoch, prep, dec, term, expired>>
+    /\ UNCHANGED leaseVars
+    /\ UNCHANGED capVars
 (***************************************************************************)
 (* CAPTURE ACTIONS.                                                        *)
 (*                                                                         *)
@@ -442,6 +487,8 @@ Next ==
     \/ \E t \in Sagas : \E T \in Trees : CacheVerdict(t, T)
     \/ \E t \in Sagas : \E sh \in Shards : Broadcast(t, sh)
     \/ \E t \in Sagas : \E sh \in Shards : Sweep(t, sh)
+    \/ Expire
+    \/ Prune
     \/ Fence
     \/ DrainGate
     \/ \E T \in Trees : GateAcquire(T)
@@ -481,11 +528,12 @@ Spec == Init /\ [][Next]_vars
 
 \* An accepted capture never holds part of a saga within one tree: no shard
 \* holds it post-saga while another shard of the same tree holds it
-\* pre-saga. This is the guarantee every single-tree CaptureAsync makes.
+\* pre-saga or hides the key (absent: neither value survives a restore).
+\* This is the guarantee every single-tree CaptureAsync makes.
 BackupSagaConsistent ==
     phase = "done" =>
         \A t \in Sagas : \A a, b \in Writes(t) \cap MemberShards :
-            TreeOf[a] = TreeOf[b] => ~(img[a][t] = "post" /\ img[b][t] = "pre")
+            TreeOf[a] = TreeOf[b] => ~(img[a][t] = "post" /\ img[b][t] \in {"pre", "absent"})
 
 \* An accepted cross-tree-consistent set never holds part of a saga across
 \* its members.

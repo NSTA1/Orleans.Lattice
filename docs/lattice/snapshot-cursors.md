@@ -78,10 +78,12 @@ returning the cursor ID:
 
    Every saga prepare still pending at a shard's captured head is
    resolved, during that shard's fold, against the gate's decision
-   snapshot exactly as a live multi-key read resolves it: a batch
-   Committed in the snapshot reads post-saga, one the registry can no
-   longer determine (Indeterminate) reads as absent, and any other reads
-   pre-saga. Every shard resolves against the same decisions, so an
+   snapshot: a batch Committed in the snapshot reads post-saga, and any
+   other reads pre-saga. The snapshot holds each decision the registry
+   records, including one whose retention window has elapsed - which a
+   live read reports as Indeterminate and hides - because a capture is
+   permanent and the sweeps settle such a bucket from the same recorded
+   decision ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)). Every shard resolves against the same decisions, so an
    atomic batch is on one side of the snapshot on every shard it touched,
    even though each shard captures at its own moment and a batch's commit
    terminal reaches each shard separately. That holds because, under the

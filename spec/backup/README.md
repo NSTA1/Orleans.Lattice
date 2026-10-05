@@ -119,7 +119,7 @@ table in [`RefinementCapture.md`](RefinementCapture.md).
 
 | Core | Routes | Coverage |
 |------|--------|----------|
-| `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, with a fixed-design arm, a no-regression arm, an anti-vacuity witness, and a guard per rule. |
+| `CrossTreeFenceWindow` (backup) | The drain gate and post-capture re-observation of `LatticeBackupCaptureService` | `CrossTreeFenceWindowTests`; Coyote `CrossTreeFenceCaptureCoyoteTests`, which models the fence, its lapse window, the gate, the gated re-check and the post-capture re-observation over a two-tree saga, with a fixed-design arm, a quiet-set arm, an anti-vacuity witness that an accepted set holds the committed saga, four single-defence arms (each of the drain, the re-check, the re-observed epoch and the re-observed in-flight count alone keeps the set whole against the race it covers), and two guards that find a torn set once the defences for a race are removed. |
 | `IncrementalSagaStaging` (backup) | How an increment resolves the sagas in its window against the decision gate, in `IncrementalDeltaCollector` | `IncrementalSagaStagingTests` (core unit suite; the staging is a fold over the drained entries against a fixed decision snapshot, so it is not schedule-sensitive). |
 | `BackupChainFrontier` (backup) | Origin normalisation, per-origin high-water, and both consistency cuts, in both collectors and the capture service | `BackupChainFrontierTests` (core unit suite; the rules are not schedule-sensitive). |
 | `CrossClusterSagaDecisionCore` (replication) | The coordinated restore's single global decision in `CrossClusterSagaCoordinatorGrain` | `CrossClusterSagaDecisionCoreTests`; Coyote `CoordinatedRestoreDecisionCoyoteTests`, with a fixed-design arm and a guard. |
@@ -142,8 +142,8 @@ notes and TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `BackupCapture` | 5 | 1 | 17 | 17 | 21 | 41,423 |
+| `BackupCapture` | 5 | 1 | 19 | 21 | 23 | 256,606 |
 | `BackupIncremental` | 5 | 0 | 8 | 13 | 11 | 1,709 |
 | `BackupProvenance` | 5 | 0 | 4 | 5 | 8 | 2,199 |
-| `BackupRestore` | 5 | 1 | 14 | 18 | 18 | 21,890 |
-| `BackupCutover` | 5 | 1 | 9 | 10 | 14 | 31 |
+| `BackupRestore` | 5 | 1 | 16 | 20 | 20 | 22,700 |
+| `BackupCutover` | 5 | 2 | 10 | 12 | 16 | 39 |

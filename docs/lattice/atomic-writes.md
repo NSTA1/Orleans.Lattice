@@ -650,6 +650,24 @@ or by a later commit or abort decision carrying a *conflicting* outcome
 (a repeat of the same outcome is recognised as idempotent and leaves the
 tombstone in place, so it can never resurrect a decision the tree already
 retired).
+A prepare forwarded shard to shard (a split's hot-path shadow-forward, an
+online resize's mirror, or a split sweep's replay) can still be delivered
+after its saga has completed, been forgotten and had its decision pruned: a
+forward abandoned at `ShardForwardTimeout` keeps running. The registry then
+holds no row for the saga and can only answer in flight, and a destination
+leaf that no longer remembers the terminal would bucket a prepare that
+nothing ever settles, which every later split or resize carries and which
+pins the leaf's write-ahead log prefix. The saga's participant row tells the
+two cases apart
+([#4632](https://github.com/NSTA1/Orleans.Lattice/issues/4632)). The saga
+holds the row in its tree's registry from before its first prepare dispatch
+(the execute phase re-asserts it, and a registry fault fails the step) until
+`ForgetAsync`, and a forwarded prepare's participant registration only joins
+an existing row, never recreating it. So a destination leaf refuses a
+forwarded prepare whose saga the registry reports undecided and holds no row
+for, before it writes anything. A prepare applied by replication carries its
+author cluster's origin and belongs to a saga this cluster never forgets, so
+it is bucketed as before.
 On a host with replication enabled, every tree's expired tombstone is
 also held until the write-ahead log can no longer retain a prepare of its
 saga ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) -
@@ -750,11 +768,16 @@ matters most for the cross-cluster bootstrap export built from that
 snapshot - see
 [Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md).
 
-The masked row remains readable to the one caller that legitimately
-needs it: the leaf's activation-time self-terminalisation sweep, which
-is finishing a prepare it already owns rather than disclosing an
-outcome to a caller, reads past the mask through a deliberately narrow
-registry bypass. Read paths never do.
+The masked row remains readable to the callers that finish a prepare
+rather than disclose an outcome to a reader, through a deliberately
+narrow registry bypass: the leaf's activation-time self-terminalisation
+sweep, a split's or a resize copy's prepared-bucket sweep, and a
+snapshot capture. A capture resolves a still-pending bucket against the
+decision the registry records, masked or not, because a capture is
+permanent: hiding the key would leave it absent from every restore while
+another key of the same committed batch, whose terminal already landed,
+is held post-saga ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)).
+Read paths never read past the mask.
 
 `TxStatus.Indeterminate` is additive by value, so a mixed-version
 cluster stays wire-compatible: a node that predates the case takes the

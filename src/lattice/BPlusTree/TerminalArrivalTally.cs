@@ -33,6 +33,7 @@ internal static class TerminalArrivalTally
     /// <param name="expectedShardCount">The touched-shard count the terminal carries.</param>
     /// <returns><see langword="true"/> when the count is not positive.</returns>
     public static bool IsUngated(int expectedShardCount) => expectedShardCount <= 0;
+
     /// <summary>
     /// Folds an incoming expected-terminal count into the saga's recorded expected
     /// count. The expected count is monotonic non-decreasing: a later arrival that
