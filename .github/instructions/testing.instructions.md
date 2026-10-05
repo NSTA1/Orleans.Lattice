@@ -1078,7 +1078,10 @@ specified by two TLA+ modules under `spec/shard-ownership/`: `ShardOwnership`
 reactivation, over a saga bound across a split and a resize). The seam between
 them is described in that directory's README: each module's CI gate covers
 only that module, and their composition was checked once, clean, but is too
-large to gate. Three ownership
+large to gate. Two companion modules sit beside them: `ShardOwnershipCrdt`
+(CRDT-mode keys) and `ShardOwnershipCutover`, which checks a saga bound to the
+previous copy across a shadow-cutover restore and its revert and found #4689
+(open). Three ownership
 decisions are extracted into pure cores the grains call - `ResizeFence`,
 `SagaCopyBinding` and `RoutingPairPublishGate` - each with a Coyote model whose
 guard tests remove one rule and must find the violation. Every TLA+ property
@@ -1095,6 +1098,7 @@ encoding is listed where one exists.
 | `OwnerMonotonic` | both | A fresh reader's value never moves backwards (except across an undo, by contract), stated over history. | TLA+ only. | Mutations, e.g. `OwnerMonotonicSweepIndeterminateLeavesMarker`. |
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes`, `RoutingConverges` | `ShardOwnership` (the first, third and fourth in both) | Each started operation finishes; stale routing converges. | TLA+ only. | Mutations, e.g. `SagaCompletesPurgedCopyRefusesTerminal`. |
 | `NoStrandedBucket` | `ShardOwnershipRetention` | A decided saga's bucket on a live copy is eventually consumed. | TLA+ only. | `NoStrandedBucketTerminalNotMirrored`. |
+| `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy`, `SagaSettles` | `ShardOwnershipCutover` | No reader is served a saga's batch torn across a shadow-cutover restore or its revert; once committed, the batch sits only on its bound copy; the saga settles. | TLA+ only. | Mutations, e.g. `AtomicAcrossCutoverDecideSkipsDiscard` (production, #4689) and `SagaSettlesDiscardRouted`. |
 | (routing assumption) | both | A router never holds a pair the registry did not publish, nor one already invalidated. | `RoutingPairPublishModel` asserts the published pair never regresses and is never republished after an invalidation; `LatticeGrainTests.GetRoutingAsync_does_not_publish_a_pair_read_before_an_invalidation` pins the grain's call site. | `Without_the_version_check_a_slow_resolve_overwrites_a_newer_pair`, `Without_the_epoch_check_an_invalidated_pair_is_published_again`. |
 
 Each Coyote guard also has a specificity test (`..._is_caught_only_by_...`,
@@ -1128,7 +1132,8 @@ its window, #4589).
 | `BackupRestore` | `RestoredCutNotReAdvanced`, `RestoreAdmitsOnlyNamespace`, `AckedWritesServed`, `RestoreConverges` | No pre-cutover write reaches a restored copy (the #4490 rebind-first resume, and the #4593 restored-copy fence against a stale cached admission or a parked entry); no foreign record installed; post-cutover writes survive; resumed replication converges (liveness). | None; detectors in the note. |
 | `BackupCutover` | `RestoreNeverTorn`, `CutoverServesRestored`, `RevertNeverServesRestored`, `DeleteNeverMidCutover`, `RestoreReturns`, `RevertReturns` | Alias and map move together; stale routing heals after a restore and after a revert; no delete mid-cutover; a crashed restore, and a revert crashed between its swap and its fix-up, complete on retry (liveness). | None; integration and chaos detectors in the note. |
 
-What these do not cover - a batch in flight across a whole cutover, reader atomicity across set members, in-place and cold
+What these do not cover - a batch in flight across a whole cutover (checked by
+`ShardOwnershipCutover` under `spec/shard-ownership/`), reader atomicity across set members, in-place and cold
 restores, resharded trees, and the receiver side (#4480) - is listed in each
 module's refinement note and in
 [`docs/lattice.backup/verified-backup.md`](../../docs/lattice.backup/verified-backup.md).
