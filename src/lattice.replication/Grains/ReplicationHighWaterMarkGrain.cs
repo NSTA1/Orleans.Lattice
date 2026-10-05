@@ -151,6 +151,69 @@ internal sealed class ReplicationHighWaterMarkGrain(
         return raised;
     }
 
+    /// <inheritdoc />
+    public async Task RecordLostAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var lost = state.State.Lost;
+        if (!lost.TryGetValue(originClusterId, out var identities))
+        {
+            identities = new HashSet<HybridLogicalClock>();
+            lost[originClusterId] = identities;
+        }
+
+        if (!identities.Add(timestamp))
+        {
+            return;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            identities.Remove(timestamp);
+            if (identities.Count == 0)
+            {
+                lost.Remove(originClusterId);
+            }
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<CausalDependencyVerdict[]> CheckDependenciesAsync(IReadOnlyList<VersionVector> dependencies, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var verdicts = new CausalDependencyVerdict[dependencies.Count];
+        for (var i = 0; i < dependencies.Count; i++)
+        {
+            var verdict = CausalDependencyVerdict.Met;
+            foreach (var (origin, required) in dependencies[i].Entries)
+            {
+                if (state.State.Lost.TryGetValue(origin, out var lost) && lost.Contains(required))
+                {
+                    verdict = CausalDependencyVerdict.Lost;
+                    break;
+                }
+
+                if (state.State.Vector.GetClock(origin) < required)
+                {
+                    verdict = CausalDependencyVerdict.Unmet;
+                }
+            }
+
+            verdicts[i] = verdict;
+        }
+
+        return Task.FromResult(verdicts);
+    }
+
     private static bool VectorsEqual(VersionVector left, VersionVector right)
     {
         if (left.Entries.Count != right.Entries.Count)

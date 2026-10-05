@@ -125,7 +125,9 @@ flowchart LR
    merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts
    or fails to apply when it drains, or the sender cannot encode are parked at
    once, so replication continues
-   past them. See
+   past them. The queue is bounded but never evicts: when it is full it
+   refuses the park and the affected link is held back, so no acknowledged
+   write is ever lost. See
    [`dead-letter-queue.md`](dead-letter-queue.md).
 
 ## Invariants the pipeline preserves

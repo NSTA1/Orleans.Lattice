@@ -1100,7 +1100,8 @@ emits; the table shows which driver is the source of each.
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
 | `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |
 | `shipper.saga_poisoned` | Shipper grain (poisoned saga) | A saga withheld from the peer (`outcome=poisoned`), or a full poison list refusing to advance (`outcome=refused`). |
-| `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
+| `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
+| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
 
 ---
 

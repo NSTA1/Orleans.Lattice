@@ -59,6 +59,13 @@ public class ShardRootGrainShadowForwardTrackingTests
         leaf.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(Task.FromResult<SplitResult?>(null));
         leaf.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
             .Returns(Task.FromResult<SplitResult?>(null));
+        // The resize mirror ships the row the local apply stored (issue #4522).
+        leaf.GetRawEntryAsync(Arg.Any<string>()).Returns(ci => Task.FromResult<LwwEntry?>(new LwwEntry
+        {
+            Key = (string)ci[0],
+            Value = [1],
+            Timestamp = new HybridLogicalClock { WallClockTicks = 1_000, Counter = 1 },
+        }));
         configureLeaf?.Invoke(leaf);
         factory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
 
@@ -113,7 +120,7 @@ public class ShardRootGrainShadowForwardTrackingTests
         var forwardFailure = new InvalidOperationException("forward-blew-up");
 
         var h = CreateHarness(
-            configureShadowTarget: t => t.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            configureShadowTarget: t => t.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
                 .Returns<Task>(_ => Task.FromException(forwardFailure)));
 
         var entries = new List<KeyValuePair<string, byte[]>> { new("k1", [1]) };
@@ -129,20 +136,21 @@ public class ShardRootGrainShadowForwardTrackingTests
         var h = CreateHarness();
         await h.Grain.SetAsync("k1", [1]);
 
-        await h.ShadowTarget.Received(1).SetAsync("k1", Arg.Any<byte[]>());
+        await h.ShadowTarget.Received(1).MergeManyAsync(
+            Arg.Is<Dictionary<string, LwwValue<byte[]>>>(d => d.ContainsKey("k1")), false);
     }
 
     [Test]
     public void TrackShadowForward_logs_warning_when_abandoned_forward_faults()
     {
-        // Scenario: shadow target's SetAsync faults asynchronously; caller
+        // Scenario: shadow target's mirror merge faults asynchronously; caller
         // abandons it (never awaits). The fault-logger continuation must fire
         // and log exactly one warning so the fault is never silent.
         var logger = new CapturingLogger();
         var forwardTcs = new TaskCompletionSource();
         var h = CreateHarness(
             logger: logger,
-            configureShadowTarget: t => t.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>())
+            configureShadowTarget: t => t.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>())
                 .Returns(forwardTcs.Task));
 
         var setTask = h.Grain.SetAsync("k1", [1]);

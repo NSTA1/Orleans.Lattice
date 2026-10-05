@@ -128,11 +128,29 @@ internal sealed class CausalApplyBufferGrain(
             // clock and unblock further entries on the next pass.
             while (buffer.Count > 0)
             {
-                var localVc = await hwm.GetVectorAsync(CancellationToken.None).ConfigureAwait(true);
-                var ready = buffer.DrainSatisfied(localVc, resolved.ClusterId);
-                if (ready.Count == 0)
+                var (ready, lost) = await TakeDecidedAsync(buffer, hwm, resolved.ClusterId).ConfigureAwait(true);
+                if (ready.Count == 0 && lost.Count == 0)
                 {
                     return;
+                }
+
+                // Entries taken out of the in-memory buffer that must stay parked
+                // because the dead-letter queue is full (#4603); re-inserted before
+                // the removal below is persisted.
+                List<WalRecord>? keepParked = null;
+
+                // A dependency on a write this tree lost for good can never be
+                // satisfied (#4603): dead-letter the dependent as a terminal state.
+                foreach (var ent in lost)
+                {
+                    if (!await TryDeadLetterAsync(
+                            ent,
+                            "A causal dependency of this entry names a write this cluster acknowledged and then lost "
+                            + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
+                            LatticeReplicationMetrics.ReasonDependencyLost).ConfigureAwait(true))
+                    {
+                        (keepParked ??= new List<WalRecord>()).Add(ent);
+                    }
                 }
 
                 var deferred = false;
@@ -165,18 +183,30 @@ internal sealed class CausalApplyBufferGrain(
                         var reasonTag = ex is ArgumentException or InvalidOperationException
                             ? LatticeReplicationMetrics.ReasonSchema
                             : LatticeReplicationMetrics.ReasonUnknown;
-                        await grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).EnqueueAsync(
-                            ent,
-                            failureReason: ex.Message ?? "<no message>",
-                            retryCount: 0,
-                            reasonTag: reasonTag,
-                            CancellationToken.None).ConfigureAwait(true);
+                        if (!await TryDeadLetterAsync(ent, ex.Message ?? "<no message>", reasonTag).ConfigureAwait(true))
+                        {
+                            (keepParked ??= new List<WalRecord>()).Add(ent);
+                        }
                     }
                 }
 
                 if (deferred)
                 {
                     Rebuild();
+                    return;
+                }
+
+                if (keepParked is not null)
+                {
+                    // The dead-letter queue is full: keep these acknowledged
+                    // entries parked rather than lose them, and stop this drain so
+                    // they are retried on the next one instead of spinning here.
+                    foreach (var ent in keepParked)
+                    {
+                        buffer.Restore(ent, DateTime.UtcNow.Ticks);
+                    }
+
+                    await PersistAsync(buffer).ConfigureAwait(true);
                     return;
                 }
 
@@ -195,6 +225,82 @@ internal sealed class CausalApplyBufferGrain(
             logger.LogWarning(ex, "Causal-apply buffer drain for tree {Tree} failed; it will be retried", TreeId);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Dead-letters <paramref name="entry"/>, or returns <see langword="false"/>
+    /// when the dead-letter queue is full (#4603) so the caller keeps it parked.
+    /// </summary>
+    private async Task<bool> TryDeadLetterAsync(WalRecord entry, string failureReason, string reasonTag)
+    {
+        try
+        {
+            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).EnqueueAsync(
+                entry,
+                failureReason,
+                retryCount: 0,
+                reasonTag,
+                CancellationToken.None).ConfigureAwait(true);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Asks the tree's high-water-mark grain for a verdict on every parked
+    /// entry that declares dependencies, then takes the decided ones out of
+    /// the in-memory buffer in FIFO order: those whose dependencies are met
+    /// (or that declare none) and those that depend on a write the tree lost
+    /// for good. The grain is non-reentrant, so the buffer cannot change
+    /// between the snapshot and the drain.
+    /// </summary>
+    private static async Task<(List<WalRecord> Ready, List<WalRecord> Lost)> TakeDecidedAsync(
+        CausalApplyBuffer buffer,
+        IReplicationHighWaterMarkGrain hwm,
+        string? localClusterId)
+    {
+        var parked = buffer.Snapshot();
+        var verdicts = new Dictionary<WalRecord, CausalDependencyVerdict>();
+        List<VersionVector>? toCheck = null;
+        List<WalRecord>? checkedEntries = null;
+        foreach (var (entry, _) in parked)
+        {
+            var required = CausalApplyBuffer.RequiredDependencies(entry, localClusterId);
+            if (required is null)
+            {
+                verdicts[entry] = CausalDependencyVerdict.Met;
+                continue;
+            }
+
+            (toCheck ??= new List<VersionVector>()).Add(required);
+            (checkedEntries ??= new List<WalRecord>()).Add(entry);
+        }
+
+        if (toCheck is not null)
+        {
+            var results = await hwm.CheckDependenciesAsync(toCheck, CancellationToken.None).ConfigureAwait(true);
+            for (var i = 0; i < checkedEntries!.Count && i < results.Length; i++)
+            {
+                verdicts[checkedEntries[i]] = results[i];
+            }
+        }
+
+        var ready = new List<WalRecord>();
+        var lost = new List<WalRecord>();
+        if (verdicts.Count == 0)
+        {
+            return (ready, lost);
+        }
+
+        foreach (var entry in buffer.DrainSatisfied(e => verdicts.TryGetValue(e, out var v) && v != CausalDependencyVerdict.Unmet))
+        {
+            (verdicts[entry] == CausalDependencyVerdict.Lost ? lost : ready).Add(entry);
+        }
+
+        return (ready, lost);
     }
 
     private CausalApplyBuffer EnsureLoaded()
