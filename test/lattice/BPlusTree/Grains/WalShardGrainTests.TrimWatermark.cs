@@ -67,6 +67,29 @@ public partial class WalShardGrainTests
         });
     }
 
+    [Test]
+    public async Task A_trim_past_every_written_offset_collapses_the_tail_to_the_next_sequence()
+    {
+        // A tree discard trims through the head and a test may trim through
+        // long.MaxValue: the tail must collapse to the next sequence, never wrap.
+        var provider = new InMemoryWalStorageProvider();
+        await provider.AppendBatchAsync(TreeId, 0, [WalEntryAt(0), WalEntryAt(1), WalEntryAt(2)], CancellationToken.None);
+        var grain = await CreateGrainAsync(provider);
+        grain.TrimWatermarkSupportForTesting = () => true;
+        await provider.TrimAsync(TreeId, 0, long.MaxValue, CancellationToken.None);
+        var factory = Substitute.For<IGrainFactory>();
+        factory.GetGrain<IWalShardGrain>($"{TreeId}/0").Returns(grain);
+
+        var tail = await new WalCommitLogReader(factory).GetTailOffsetAsync(TreeId, 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tail, Is.EqualTo(3L));
+            Assert.That(WalFallOffCore.IsPrefixLost(0, tail), Is.True, "a reader at offset 0 lost offsets 1 and 2");
+            Assert.That(WalFallOffCore.IsPrefixLost(2, tail), Is.False, "a reader that read everything lost nothing");
+        });
+    }
+
     /// <summary>
     /// A shard holding offsets 0, 1 and 3 - offset 2 was allocated but never
     /// written - trimmed through 1, with a real <see cref="WalCommitLogReader"/>

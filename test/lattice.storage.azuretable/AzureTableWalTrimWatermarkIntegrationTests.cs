@@ -156,6 +156,22 @@ public class AzureTableWalTrimWatermarkIntegrationTests
     }
 
     [Test]
+    public async Task A_trim_past_the_committed_tail_caps_the_watermark_at_the_tail()
+    {
+        var sut = CreateProvider();
+        await SeedAsync(sut);
+        await sut.TrimAsync(TreeId, Shard, long.MaxValue, CancellationToken.None);
+        await sut.AppendBatchAsync(TreeId, Shard, [Entry(4)], CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await CreateProvider().GetTrimWatermarkAsync(TreeId, Shard, CancellationToken.None), Is.EqualTo(3L),
+                "nothing above the committed tail was trimmed");
+            Assert.That(await ReadAllAsync(sut), Is.EqualTo(new long[] { 4 }), "the next batch is readable");
+        });
+    }
+
+    [Test]
     public async Task A_shard_trimmed_before_the_watermark_row_existed_reports_the_offset_below_its_lowest_entry()
     {
         var sut = CreateProvider();

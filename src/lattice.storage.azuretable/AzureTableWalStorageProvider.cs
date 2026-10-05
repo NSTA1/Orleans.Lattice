@@ -2092,7 +2092,13 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // The watermark is durable before anything is deleted (issue #4621), so a
         // crash part-way through leaves it above entries that still exist, never
         // a deleted range below a stale watermark.
-        await RaiseTrimWatermarkAsync(table, manifestPartitionKey, throughOffsetInclusive, cancellationToken).ConfigureAwait(false);
+        // It covers only offsets that were ever committed: a trim past TAIL (a tree
+        // discard, or long.MaxValue) deletes no batch above it.
+        var committedTail = await GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+        if (Math.Min(throughOffsetInclusive, committedTail) is var mark and >= 0)
+        {
+            await RaiseTrimWatermarkAsync(table, manifestPartitionKey, mark, cancellationToken).ConfigureAwait(false);
+        }
         if (AfterTrimWatermarkRaisedForTesting is { } afterRaised)
         {
             await afterRaised().ConfigureAwait(false);

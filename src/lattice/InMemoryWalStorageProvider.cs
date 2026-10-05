@@ -472,8 +472,11 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
 
         lock (shard.Gate)
         {
-            // The watermark is raised before anything is deleted (issue #4621).
-            shard.TrimmedThrough = Math.Max(shard.TrimmedThrough, throughOffsetInclusive);
+            // The watermark is raised before anything is deleted (issue #4621). It
+            // covers only offsets that were ever written: a trim through an offset
+            // past the highest one (a tree discard, or long.MaxValue) deletes
+            // nothing above it, and a watermark there would refuse the next append.
+            shard.TrimmedThrough = Math.Max(shard.TrimmedThrough, Math.Min(throughOffsetInclusive, shard.HighestAssignedOffset));
 
             var entries = shard.Entries;
             var firstSurvivor = 0;

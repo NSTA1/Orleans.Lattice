@@ -79,6 +79,19 @@ public class InMemoryWalStorageProviderTrimWatermarkTests
     }
 
     [Test]
+    public async Task A_trim_past_every_written_offset_caps_the_watermark_and_admits_the_next_append()
+    {
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, [Entry(0), Entry(1)], CancellationToken.None);
+        await sut.TrimAsync(Tree, 0, long.MaxValue, CancellationToken.None);
+
+        Assert.That(await sut.GetTrimWatermarkAsync(Tree, 0, CancellationToken.None), Is.EqualTo(1L),
+            "nothing above the highest written offset was trimmed");
+        await sut.AppendBatchAsync(Tree, 0, [Entry(2)], CancellationToken.None);
+        Assert.That(await ReadAllAsync(sut), Is.EqualTo(new long[] { 2 }));
+    }
+
+    [Test]
     public async Task An_append_at_or_below_the_watermark_is_refused_and_allocation_stays_above_it()
     {
         var sut = new InMemoryWalStorageProvider();

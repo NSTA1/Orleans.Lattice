@@ -145,6 +145,6 @@ public sealed partial class AzureTableWalStorageProvider
     /// </summary>
     private long ClampToTrimWatermark(string manifestPartitionKey, long firstWantedOffset)
         => _trimWatermarks.TryGetValue(manifestPartitionKey, out var watermark) && watermark >= firstWantedOffset
-            ? watermark + 1
+            ? (watermark == long.MaxValue ? long.MaxValue : watermark + 1)
             : firstWantedOffset;
 }
