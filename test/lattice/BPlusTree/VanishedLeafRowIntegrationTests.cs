@@ -228,9 +228,12 @@ public sealed class VanishedLeafRowIntegrationTests
     }
 
     /// <summary>
-    /// The #1744 write-path self-heal re-binds a routable leaf that has a row but
-    /// no tree id. A leaf with no row at all is not something it may re-create, so
-    /// a typed CRDT write to a leaf whose row and record were lost fails closed.
+    /// The #1744 write-path self-heal - the CRDT-delta apply that re-binds a
+    /// routable leaf with a row but no tree id - must not re-create a leaf with no
+    /// row at all: a typed CRDT delta routed to a leaf whose row and record were
+    /// lost fails closed. Drives <c>ApplyCrdtDeltaAsync</c> directly, the path the
+    /// self-heal wraps (an accessor such as an OR-flag reads and compares-and-sets
+    /// instead, and never reaches it).
     /// </summary>
     [Test]
     public async Task The_write_path_self_heal_does_not_re_create_a_leaf_whose_row_was_lost()
@@ -241,7 +244,12 @@ public sealed class VanishedLeafRowIntegrationTests
         Exception? healFailure = null;
         try
         {
-            await tree.OrFlag("k-00").EnableAsync("replica-1");
+            var delta = new PnCounterDelta
+            {
+                Increments = new Dictionary<string, long>(StringComparer.Ordinal) { ["r1"] = 1 },
+                Decrements = new Dictionary<string, long>(0, StringComparer.Ordinal),
+            };
+            await tree.ApplyCrdtDeltaAsync("k-pn", LatticeMergeMode.PnCounter, JsonLatticeSerializer<PnCounterDelta>.Default.Serialize(delta));
         }
         catch (Exception ex)
         {
