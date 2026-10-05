@@ -6,17 +6,31 @@
 # re-ship a prepare of the saga: the export then carried no verdict, the
 # receiver had nothing to settle against, and a retained prepare whose
 # terminal was trimmed was staged with no terminal behind it. Since #4553 the
-# row is kept until the WAL can no longer re-ship a prepare of the saga, which
-# the base's Snap0 states.
+# row is kept until the WAL has trimmed every prepare of the saga, which
+# OriginPurge states. The replay filter (#4533) now also withholds a purged
+# saga's re-shipped prepare, so the guard is defence in depth: the mutation
+# removes both, and either alone keeps RNoStrandedPrepare.
 MODULE: RNoStrandedPrepareDedupeOverPurgedDecision
 TARGET: RNoStrandedPrepare
 CLASS: Temporal
-SUMMARY: the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553
-PERTURBS: Bootstrap
+SUMMARY: the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, and no replay filter withholds it
+PERTURBS: OriginPurge
 
 --- FIND
-         /\ (forgotten[T] /\ snap = "inflight") => ~\E p \in kept : p.type = "prep"
+       ELSE /\ ~Held
+            /\ \/ ~rconn
+               \/ detached
+               \/ ~\E p \in outbox : p.type = "prep"
+            /\ ptrim' = TRUE
+            /\ outbox' = {r \in outbox : r.type # "prep"}
 --- REPLACE
-\* MUTATION: the decision may be purged while a prepare is still retained.
-         /\ TRUE
+\* MUTATION: the decision is purged while a prepare is still retained.
+       ELSE /\ ~Held
+            /\ UNCHANGED <<outbox, ptrim>>
+--- END
+--- FIND
+ReplayShips == ~filt \/ FirstSight = "ship"
+--- REPLACE
+\* MUTATION: and no replay filter withholds the purged saga.
+ReplayShips == TRUE
 --- END

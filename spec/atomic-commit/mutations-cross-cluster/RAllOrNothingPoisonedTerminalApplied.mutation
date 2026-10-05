@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The receiver poisons a saga whose prepare it gave up
+# on, parks that prepare, and still applies the saga's terminals: the saga
+# commits without the parked key. #4633 withholds every terminal of a poisoned
+# saga, unacknowledged, until the re-seed retires the poison.
+MODULE: RAllOrNothingPoisonedTerminalApplied
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the receiver applies a terminal of a saga it poisoned
+PERTURBS: DeliverTerminal
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ rs = "none"
+    /\ ~rpoison
+    /\ ReplayShips
+--- REPLACE
+    /\ rs = "none"
+\* MUTATION: a poisoned saga's terminal is applied.
+    /\ ReplayShips
+--- END

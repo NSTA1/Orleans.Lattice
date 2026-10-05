@@ -43,8 +43,32 @@ transport assumption or its read view already does.
 | `RNoStrandedPrepareShipperDropsTerminal` | `RNoStrandedPrepare` | Temporal | `OriginBroadcast` | one source shard's terminal is never replicated (the #2324 class) |
 | `RNoStrandedPrepareLatePrepareStaged` | `RNoStrandedPrepare` | Temporal | `DeliverPrepare` | a duplicate prepare trailing its terminal is staged, with neither the settle nor the late-prepare refusal in front of it |
 | `RNoStrandedPrepareBootstrapReshipsPreCut` | `RNoStrandedPrepare` | Temporal | `Bootstrap`, `DeliverPrepare` | re-shipped pre-cut prepares are staged with no decision row to settle them, as before #4510 (regression check for #4482) |
-| `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, so the re-shipped prepare has nothing to settle against (regression check for #4508) |
+| `RNoStrandedPrepareDedupeOverPurgedDecision` | `RNoStrandedPrepare` | Temporal | `OriginPurge` | the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, and no replay filter withholds the re-shipped prepare, which has nothing to settle against (regression check for #4508; the guard alone is covered by the filter) |
 | `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` | `RNoStrandedPrepare` | Temporal (`DEADLOCK: off`) | `OriginPrepare`, `DeliverTerminal` | a terminal waits on every prepare the saga wrote, one of which is never shipped, so it is never released |
+| `RAllOrNothingGapStaysOnLog` | `RAllOrNothing` | Invariant | `ShipperGap` | a shipper that loses a record to a trim or an encode failure stays on the log (before #4577 and #4651) |
+| `RAllOrNothingDetachStaysOnLog` | `RAllOrNothing` | Invariant | `Detach` | a removed peer's shipper detaches without taking the peer off the log (before #4652) |
+| `RNoStrandedPrepareReaddKeepsDetachedDrain` | `RNoStrandedPrepare` | Temporal | `Readd` | a re-added peer's re-seed is settled by an export drained while its shipper was detached (before #4652) |
+| `RAllOrNothingPoisonedTerminalApplied` | `RAllOrNothing` | Invariant | `DeliverTerminal` | the receiver applies a terminal of a saga it poisoned (before #4633) |
+| `RAllOrNothingPoisonSettleDiscardsCarried` | `RAllOrNothing` | Invariant | `PoisonReseed` | the poison re-seed discards a saga the export carried as prepared rows (before #4633) |
+| `RNoStrandedPrepareReseedKeepsStaleBucket` | `RNoStrandedPrepare` | Temporal | `ReseedDrain` | the re-seed drain leaves a purged saga's leftover bucket (before #4631) |
+| `RAllOrNothingReseedClearsCarriedBucket` | `RAllOrNothing` | Invariant | `ReseedDrain` | the re-seed clear discards a carried saga's buckets too (before #4631) |
+| `RNoStrandedPrepareDecisionRowNotFannedOut` | `RNoStrandedPrepare` | Temporal | `ReseedDrain` | a decision row is recorded but its saga's leftover buckets are not drained by it (before #4631) |
+| `RNoStrandedPrepareReplayVerdictReadsDecisionOnly` | `RNoStrandedPrepare` | Temporal | `ReplayWithhold` | the replay filter reads the decision alone, so an undecided saga reads as purged (before #4533's participants-first read) |
+| `RNoStrandedPrepareReplayFilterOff` | `RNoStrandedPrepare` | Temporal | `ReplayWithhold` | no replay filter, so a purged saga's retained prepare is re-shipped (before #4533) |
+| `RNoStrandedPrepareDrainUnderPreHoldSiloSettles` | `RNoStrandedPrepare` | Temporal | `ReseedDrain` | an export drained while a silo predates the purge hold settles the re-seed (#4664, before #4666) |
+| `RNoStrandedPrepareWithheldRecordsNotRetained` | `RNoStrandedPrepare` | Temporal | `ReseedRewind` | the records withheld while the peer was off the log are gone by the rewind (before `ReseedRetainFrom`) |
+| `RAllOrNothingExportDecisionReadStale` | `RAllOrNothing` | Invariant | `ReseedDrain` | the re-seed export's decision read predates its row passes (#4627, before its late-decision pass) |
+| `RNoStrandedPrepareBootstrapUnderPreHoldSilo` | `RNoStrandedPrepare` | Temporal | `Bootstrap` | a bootstrap's replay starts while a silo predates the purge hold (before #4533's wait) |
+| `RNoStrandedPreparePurgeIgnoresHold` | `RNoStrandedPrepare` | Temporal | `OriginPurge` | the registry purges while a re-seed or its replay holds purges (before #4533 and #4534-B) |
+| `RAllOrNothingReceiverParksWithoutPoison` | `RAllOrNothing` | Invariant | `ReceiverPoison` | the receiver parks and acknowledges a prepare it gave up on without poisoning its saga (regression check for #4591, fixed by #4633) |
+| `RNoStrandedPrepareFilterClearsBeforeHorizon` | `RNoStrandedPrepare` | Temporal | `FilterClear` | the replay filter clears before every cursor has passed its horizon (before #4533) |
+| `RCommittedEventuallyVisibleUpgradeNeverSeen` | `RCommittedEventuallyVisible` | Temporal | `UpgradeDone` | the shipper never sees every silo honour the purge hold, so a joining receiver waits for ever |
+
+Each loss-path mutation declares `BOUNDS:` to enable its loss path on one slice
+of the instance (`LossPath`, `JoinStart`, `SagaOutcome`): the base cfg enables
+none, so the control arm checks the target on the instance with no loss path,
+and the variant configurations check every property under each loss path with
+its fix.
 
 Every mutant but one is deadlock-free: run with a cfg naming only `TypeOK` and
 deadlock checking on, each reports no error (`TypeOkTallyExpectedRunaway`
@@ -59,9 +83,10 @@ reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`
 (#4480), `RAllOrNothingSnapshotReadsUnresolvableAsInFlight` (#4448),
 `RAllOrNothingExportOverStrandedPrepare` (#4481),
 `RNoStrandedPrepareBootstrapReshipsPreCut` (#4482) and
-`RNoStrandedPrepareDedupeOverPurgedDecision` (#4508). Each restores what
-production did before the fix, and the refinement note cites the detectors that
-go red when production does it again.
+`RNoStrandedPrepareDedupeOverPurgedDecision` (#4508), and every loss-path
+mutation above, one per fix (#4577, #4651, #4652, #4633, #4631, #4627, #4533,
+#4534-B and #4666). Each restores what production did before the fix, and the
+refinement note cites the detectors that go red when production does it again.
 
 Every safety property is a state invariant, so TLC checks it in every
 reachable state: a receiver reader observing between any two steps - between
@@ -74,17 +99,12 @@ The ordering a terminal waits for in the base is stated over the prepares still
 **outstanding**, never over every prepare the saga wrote, so a prepare that has
 left the outbox cannot hold its terminal back for ever;
 `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` is the wedge that waiting on
-every prepare would cause. That release is safe only because the base's
-transport never loses a record: a prepare leaves the outbox only once it has
-been applied. Where production loses one - acknowledged unapplied by the
-receiver's dead-letter applier (#4591), or trimmed before the shipper read it
-(#4534; #4579 until #4595 gave the shipper an offset floor) - releasing its terminal splits the receiver, which
-`RAllOrNothingPrepareAckedUnapplied` shows. Since #4577 the shipper treats a
-trimmed-unread prepare as a forced gap and withholds the peer's saga records
-until it re-seeds, so of those only #4591 still releases a terminal. Releasing a terminal over a prepare
-that was never shipped is therefore not a contract to keep: the shipper now
-poisons a saga whose prepare it dead-lettered instead (#4494, fixed by #4570),
-and a key-filtered prepare is outside the peer's replicated keys by design.
+every prepare would cause. That release is safe because every way a prepare
+leaves the outbox unapplied - a shipper gap, a detach, a receiver poison - takes
+the peer off the log or poisons the saga first, so its terminal is withheld until
+a re-seed restores the saga. Where neither happens, releasing the terminal splits
+the receiver, which `RAllOrNothingPrepareAckedUnapplied`, `RAllOrNothingGapStaysOnLog`
+and `RAllOrNothingDetachStaysOnLog` show.
 
 ## Liveness fails on protocol defects, under the module's own fairness
 
@@ -92,8 +112,12 @@ All three temporal properties are paired with mutations that leave `Spec`'s
 fairness untouched and change a protocol step instead (issue #2321's
 requirement): a prepare or a terminal the origin never replicates, a fan-out
 that never runs or consumes a bucket without draining it, a late prepare staged,
-a re-shipped pre-cut prepare with nothing to settle it against, and a decision
-purged while a prepare of its saga can still be re-shipped. The transport stays fair about
+a re-shipped pre-cut prepare with nothing to settle it against, a decision
+purged while a prepare of its saga can still be re-shipped, and each loss path's
+re-seed missing a step: a stale bucket left, a decision row not fanned out, a
+replay that withholds a live saga or re-ships a purged one, withheld records
+lost, a purge the holds do not stop, and an export that settles a re-seed it
+cannot vouch for. The transport stays fair about
 every record it is given; the defect is always in what it is given or in what
 the receiver does with it.
 
@@ -106,13 +130,13 @@ reading the code the refinement note maps.
 
 | Property | Why it holds on the base | Cells the base cannot reach |
 | --- | --- | --- |
-| `RAllOrNothing` | The tally, the barrier, the register-before-notify order and the Indeterminate dial answer; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, a bootstrap over a stranded origin prepare, and a prepare lost to a peer while its terminal ships. The first four are **faithfully inexpressible**: the shipper holds every terminal until its saga's prepares are acked (#4480), the snapshot read paths answer Indeterminate (#4448, fixed by #4461), and a stored aged-out row exports its recorded verdict (#4481, fixed by #4501); a stranded bucket whose row is already purged exports the split the origin itself serves (#2318's premise). The last is **blindly inexpressible**: the base's transport never loses a record, while production does (#4591; the WAL-trim losses of #4534 and #4579 are withheld until the peer re-seeds since #4577), and `RAllOrNothingPrepareAckedUnapplied` reproduces it. |
+| `RAllOrNothing` | The tally, the barrier, the register-before-notify order, the Indeterminate dial answer, and every loss path's fix; mutations of each fire it. | A terminal overtaking its prepare, an unstamped multi-shard terminal, an undiallable delegation read through a snapshot, and a bootstrap over a stranded origin prepare, all **faithfully inexpressible**: the shipper holds every terminal until its saga's prepares are acked (#4480), the snapshot read paths answer Indeterminate (#4448, fixed by #4461), and a stored aged-out row exports its recorded verdict (#4481, fixed by #4501); a stranded bucket whose row is already purged exports the split the origin itself serves (#2318's premise). A prepare lost to a peer is reached in the variant configurations, with the fix that withholds its terminal. |
 | `RStrictIsolation` | The receiver records the outcome its terminals carry, which is the origin's. | None. |
 | `RLinearizedTerminals` | The receiver marks before it fans out, and the fan-out carries the recorded outcome. | None. |
 | `DelegationsDisjoint` | The registry's coexistence check on the foreign claim. | None: the claim is enabled for the whole window the authoring row exists. |
 | `RMonotonicVisibility` | The fan-out drains a committed bucket into the projection. | A late orphan on a reactivated receiver leaf, which the module does not model: **faithfully inexpressible** on the replication path, where the settle (#4510) and, since #4461, the leaf's registry-consulting late-prepare refusal (#4445's fix) both stand in front of it; recorded as an abstraction gap. |
-| `RCommittedEventuallyVisible` | At-least-once delivery, the tally, the barrier and the fan-out. | A record lost to the peer, and a saga the shipper poisons: **blindly inexpressible**, because the base's transport never loses a record while production does (#4591), and a poisoned saga's terminals, or a re-seed-required peer's saga records, are withheld by design (#4494's fix, #4570; #4534 and #4579, #4577); `RCommittedEventuallyVisiblePrepareNotShipped` reaches that cell. Stated over materialisation so that a dial fault lasting forever, which production also allows, does not make it unfalsifiable-by-construction. |
-| `RNoStrandedPrepare` | Late prepares are refused, a re-shipped pre-cut prepare is settled against the exported decision (#4510), and the origin keeps that decision while the prepare can still be re-shipped (#4553). | A retained pre-cut prepare re-shipped after its terminal was trimmed: **faithfully inexpressible** since #4510 and #4553 (#4482, #4508). A terminal lost to a peer, or withheld from a poisoned saga: **blindly inexpressible**, because the base's transport never loses a record while production does (#4591), and a poisoned saga's terminals, or a re-seed-required peer's saga records, are withheld by design (#4494's fix, #4570; #4534 and #4579, #4577); `RNoStrandedPrepareShipperDropsTerminal` reaches that cell. |
+| `RCommittedEventuallyVisible` | At-least-once delivery, the tally, the barrier, the fan-out, and each loss path's re-seed. | None: every record production can lose is reached in the variant configurations, and the re-seed brings its saga back. Stated over materialisation so that a dial fault lasting forever, which production also allows, does not make it unfalsifiable-by-construction. |
+| `RNoStrandedPrepare` | Late prepares are refused, a re-shipped pre-cut prepare is settled against the exported decision (#4510), the replay filter withholds a purged saga whole (#4533), and each loss path's re-seed drains or discards every leftover bucket. | A retained pre-cut prepare re-shipped after its terminal was trimmed: **faithfully inexpressible** since #4510 and #4553 (#4482, #4508). |
 
 **Bounded-out.** The instance has two source shards (or two trees) and one
 touched-shard count per saga, so the tally's upward merge of a raised count - a

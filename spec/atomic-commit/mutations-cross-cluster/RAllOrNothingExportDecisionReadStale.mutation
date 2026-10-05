@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The re-seed export reads the saga as undecided, then
+# its row passes see one key drained post-saga and the other still in a bucket:
+# the receiver serves one key post-saga and stages the other with no decision
+# (issue #4627). The export's late-decision pass ships a decision row for a saga
+# that decided while it ran.
+MODULE: RAllOrNothingExportDecisionReadStale
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the re-seed export's decision read can predate its row passes
+PERTURBS: ReseedDrain
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ rs = "marked"
+    /\ \E snap \in Snap0 :
+--- REPLACE
+    /\ rs = "marked"
+\* MUTATION: the decision read may predate the row passes.
+    /\ \E snap \in Snap0 \cup {"inflight"} :
+--- END

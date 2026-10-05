@@ -12,10 +12,10 @@ PERTURBS: DialFault
 
 --- FIND
     /\ rdial' = [rdial EXCEPT ![tr] = ~rdial[tr]]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, rdeleg, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, rdeleg, barrierVars, lossVars>>
 --- REPLACE
 \* MUTATION: the failed dial forgets the delegation.
     /\ rdial' = [rdial EXCEPT ![tr] = ~rdial[tr]]
     /\ rdeleg' = [rdeleg EXCEPT ![tr] = FALSE]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, barrierVars>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rstage, barrierVars, lossVars>>
 --- END

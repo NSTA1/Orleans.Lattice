@@ -31,8 +31,8 @@ OriginForget ==
     /\ UNCHANGED xvars
 --- END
 --- FIND
-    IF forgotten[T] THEN {decision[T], "inflight"} ELSE {Origin!RegistryView(T)}
+    ELSE IF forgotten[T] THEN {decision[T]}
 --- REPLACE
 \* MUTATION: a stored row the registry no longer reports is exported as Indeterminate.
-    IF forgotten[T] THEN {"indeterminate", "inflight"} ELSE {Origin!RegistryView(T)}
+    ELSE IF forgotten[T] THEN {"indeterminate"}
 --- END
