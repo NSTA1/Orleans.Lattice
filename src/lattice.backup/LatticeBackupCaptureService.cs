@@ -176,6 +176,23 @@ internal sealed class LatticeBackupCaptureService(
             throw;
         }
 
+        // Legacy base (issue #4686): a manifest captured before the base recorded the
+        // atomic writes it held pre-saga because they were undecided cannot hand them
+        // on, so an increment layered on it could omit a batch committed before the
+        // increment's decision snapshot that has no record in its window. It is not
+        // knowable which sagas those are, so fail closed and start a new, fully
+        // recorded chain.
+        if (PredatesUndecidedSagaRecording(baseManifest.ConsistencyCut))
+        {
+            logger.LogWarning(
+                "Base backup {BaseBackupId} of tree {TreeId} predates undecided-saga recording; "
+                + "falling back to a full backup.",
+                request.BaseBackupId, treeId);
+            LatticeBackupMetrics.RecordCaptureRetry(LatticeBackupMetrics.ReasonIncrementalFallback);
+            return await CaptureTreeAsync(request.Name, scope, request.PageSize, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
         var partitions = await optionsResolver.GetWalPartitionsAsync(treeId).ConfigureAwait(false);
         var baseOffsets = ResolveBaseOffsets(baseManifest.ConsistencyCut, partitions);
 
@@ -1184,6 +1201,17 @@ internal sealed class LatticeBackupCaptureService(
 
         return heads;
     }
+
+    /// <summary>
+    /// Whether <paramref name="cut"/> was written before a capture recorded the atomic
+    /// writes it held pre-saga because they were undecided (issue #4686). Every capture
+    /// since records the set, empty included, so only a legacy manifest carries
+    /// <see langword="null"/>; an increment cannot be layered on it saga-consistently.
+    /// </summary>
+    /// <param name="cut">The base backup's consistency cut.</param>
+    /// <returns><see langword="true"/> when the base is a legacy manifest.</returns>
+    internal static bool PredatesUndecidedSagaRecording(BackupConsistencyCut cut) =>
+        cut.UndecidedSagaIds is null;
 
     /// <summary>
     /// Resolves the base backup's per-partition resume frontier: the recorded
