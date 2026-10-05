@@ -291,4 +291,4 @@ TLC's own state counts.
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `ShardOwnership` | 7 | 5 | 28 | 44 | 38 | 100,666 |
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
-| `ShardOwnershipCrdt` | 2 | 0 | 10 | 9 | 10 | 1,573 |
+| `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
