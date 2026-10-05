@@ -120,6 +120,25 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
 
     /// <summary>
+    /// Durably records that sub-saga <paramref name="txid"/> belongs to the
+    /// cross-tree atomic write <paramref name="operationId"/> over
+    /// <paramref name="participants"/> (issue #4683). Called before the
+    /// sub-saga parks prepared, so it precedes every terminal of the saga. The
+    /// record lives exactly as long as the sub-saga's decision is stored, so a
+    /// snapshot export can name the operation on the decision row it ships.
+    /// Idempotent; the first recording wins.
+    /// </summary>
+    [AlwaysInterleave]
+    Task RecordCrossTreeMembershipAsync(Guid txid, string operationId, IReadOnlyList<string> participants);
+
+    /// <summary>
+    /// The cross-tree membership recorded for each of <paramref name="txids"/>
+    /// that has one (issue #4683). A txid with none is absent from the result.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, CrossTreeMembership>> GetCrossTreeMembershipsAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
     /// Receiver-side analogue of
     /// <see cref="RegisterExternalDecisionAuthorityAsync"/>: registers that the
     /// replicated cross-tree sub-saga identified by <paramref name="txid"/>

@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -203,6 +204,23 @@ public readonly record struct SnapshotEntry
     public bool IsDecision => SettledDecision is not null;
 
     /// <summary>
+    /// The cross-tree atomic write the saga <see cref="TransactionId"/> belongs
+    /// to, on a decision row or a prepared row of a sub-saga the source authored
+    /// as part of one (issue #4683), or <see langword="null"/>. A receiver
+    /// that imports a cross-tree sub-saga's decision records the tree's arrival
+    /// at its cross-tree barrier for this operation, as a shipped terminal
+    /// would, so the sibling trees are not left waiting for a terminal the
+    /// import replaced. A receiver that predates this slot ignores it.
+    /// </summary>
+    [Id(13)] internal string? CrossTreeOperationId { get; init; }
+
+    /// <summary>
+    /// The trees the cross-tree write <see cref="CrossTreeOperationId"/>
+    /// touched, ordinal-sorted, or empty when the row names no operation.
+    /// </summary>
+    [Id(14)] internal ImmutableArray<string> CrossTreeParticipants { get; init; }
+
+    /// <summary>
     /// Compares two entries by value, with <see cref="Value"/> and
     /// <see cref="Delta"/> compared by content. The compiler-generated
     /// record-struct equality compares each <see cref="byte"/> array with
@@ -225,7 +243,12 @@ public readonly record struct SnapshotEntry
         && ExpiresAtTicks == other.ExpiresAtTicks
         && ByteArrayEquality.ContentEquals(Delta, other.Delta)
         && Mode == other.Mode
-        && SettledDecision == other.SettledDecision;
+        && SettledDecision == other.SettledDecision
+        && string.Equals(CrossTreeOperationId, other.CrossTreeOperationId, StringComparison.Ordinal)
+        && (CrossTreeParticipants.IsDefaultOrEmpty
+            ? other.CrossTreeParticipants.IsDefaultOrEmpty
+            : !other.CrossTreeParticipants.IsDefaultOrEmpty
+                && CrossTreeParticipants.AsSpan().SequenceEqual(other.CrossTreeParticipants.AsSpan()));
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -252,6 +275,7 @@ public readonly record struct SnapshotEntry
 
         hash.Add(Mode);
         hash.Add(SettledDecision);
+        hash.Add(CrossTreeOperationId, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
 }

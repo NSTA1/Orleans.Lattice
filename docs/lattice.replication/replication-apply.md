@@ -320,6 +320,15 @@ per-tree finalizes - itself inline, siblings via their apply grains - so
 there is no circular wait. A null/empty `crossTreeOperationId` routes the
 terminal through the legacy single-tree gate unchanged.
 
+A bootstrap or re-seed of one participating tree arrives at the barrier
+too. Its export carries a decision row that names the sub-saga's
+cross-tree operation, and the drain records the tree's arrival with that
+verdict as the tree's terminal would. The imported tree stays read-fenced
+until the barrier decides, so it is never served post-saga beside a
+sibling that is still pre-saga
+([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683); see
+[Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
+
 Public readers therefore observe the receiver-side same-cluster
 atomic-visibility property end-to-end: at every point in time,
 either every key the saga prepared on the receiver is at its

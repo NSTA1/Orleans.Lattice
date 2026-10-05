@@ -647,6 +647,16 @@ internal sealed partial class AtomicWriteGrain(
             if (txid != Guid.Empty)
             {
                 var registry = RegistryFor(state.State.TreeId, txid);
+
+                // The membership precedes the delegation, and so every terminal
+                // of the saga, and lives as long as its decision (#4683).
+                if (state.State.CrossTreeParticipants is { Count: > 0 } participants)
+                {
+                    await TxRegistryWriteRetry.RunAsync(
+                        (registry, txid, coordinatorKey, participants),
+                        static s => s.registry.RecordCrossTreeMembershipAsync(s.txid, s.coordinatorKey, s.participants));
+                }
+
                 await TxRegistryWriteRetry.RunAsync(
                     (registry, txid, coordinatorKey),
                     static s => s.registry.RegisterExternalDecisionAuthorityAsync(s.txid, s.coordinatorKey));

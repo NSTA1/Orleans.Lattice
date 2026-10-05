@@ -41,7 +41,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/>.
 /// </para>
 /// </summary>
-internal sealed class LatticeBootstrapCoordinatorGrain(
+internal sealed partial class LatticeBootstrapCoordinatorGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IBootstrapSnapshotSource snapshotProvider,
@@ -1046,6 +1046,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // while the drain runs.
         var carriedSagas = new HashSet<Guid>();
         var decidedSagas = new Dictionary<Guid, bool>();
+        var crossTreeBarriers = new HashSet<string>(StringComparer.Ordinal);
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
@@ -1066,6 +1067,17 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             if (entry.IsDecision)
             {
                 await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
+
+                // A cross-tree sub-saga's decision replaces its terminal here, so
+                // it arrives at the receiver's barrier as the terminal would
+                // (#4683). Recorded only after the decision, so a sibling the
+                // barrier finalizes never sees this tree undecided.
+                if (await NotifyImportedCrossTreeArrivalAsync(treeName, sourceClusterId, entry, cancellationToken)
+                        .ConfigureAwait(true) is { } barrier)
+                {
+                    crossTreeBarriers.Add(barrier);
+                }
+
                 continue;
             }
 
@@ -1189,11 +1201,21 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.ReseedAfterEpochs.Remove(sourceClusterId);
         }
 
+        // The import settled cross-tree sub-sagas whose sibling trees may still
+        // be pre-saga here: the tree stays read-fenced until every barrier it
+        // arrived at has decided (#4683). Persisted with the phase below.
+        state.State.PendingCrossTreeBarriers = await UndecidedBarriersAsync(crossTreeBarriers).ConfigureAwait(true);
+
         // Every snapshot entry is applied: the import is whole, so lift the read
-        // fence before leaving the drain (issue #4526). Lifted before the phase
-        // is persisted: a crash in between resumes the drain, which re-arms the
-        // fence and re-applies the (idempotent) import.
-        await LiftReadFenceAsync().ConfigureAwait(true);
+        // fence before leaving the drain (issue #4526) - unless a cross-tree
+        // barrier above holds it. Lifted before the phase is persisted: a crash
+        // in between resumes the drain, which re-arms the fence and re-applies
+        // the (idempotent) import.
+        if (state.State.PendingCrossTreeBarriers.Count == 0)
+        {
+            await LiftReadFenceAsync().ConfigureAwait(true);
+        }
+
         state.State.Phase = LatticeBootstrapState.IncrementalHandoff;
         await state.WriteStateAsync().ConfigureAwait(true);
 
@@ -1725,6 +1747,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// </summary>
     private async Task PinAndCompleteAsync()
     {
+        // The import stays read-fenced until every cross-tree barrier it
+        // arrived at has decided (#4683); the phase timer re-checks.
+        if (!await ReleaseCrossTreeHoldAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
         var asOfHlc = state.State.SnapshotAsOfHlc;
