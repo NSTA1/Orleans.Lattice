@@ -8,7 +8,7 @@ Code-first gRPC binding for [Orleans.Lattice.Api.State](../lattice.api.state/REA
 
 It provides:
 
-- **A code-first gRPC service.** Unary RPCs for the remotely supported read-only facade operations, including dead-letter count and listing, plus two server-streaming subscriptions (change and metric observation) and an unauthenticated auth-scheme advertisement RPC, all bound from C# definitions rather than a `.proto`.
+- **A code-first gRPC service.** Unary RPCs for the remotely supported read-only facade operations, including dead-letter count and listing, server-streaming subscriptions for change and metric observation, and an unauthenticated auth-scheme advertisement RPC, all bound from C# definitions rather than a `.proto`.
 - **A public typed client.** `LatticeStateApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
 - **Shared Orleans marshalling.** Every message is a `[GenerateSerializer]` C# record, serialized with the Orleans binary serializer; gRPC-specific envelopes wrap scalar facade arguments or results where needed, so client and server stay in lock-step by construction.
 - **Fail-closed authorization.** A per-call `ILatticeStateApiAuthorizer` seam gates every protected RPC; the default denies protected traffic until configured. `GetAuthScheme` is unauthenticated for scheme discovery.

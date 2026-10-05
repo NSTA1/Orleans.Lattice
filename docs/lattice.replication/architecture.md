@@ -122,9 +122,8 @@ flowchart LR
 
 8. **Dead-letter quarantine.** An entry whose apply keeps failing is
    quarantined per tree after a configurable retry budget, and entries the
-   merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts
-   or fails to apply when it drains, or the sender cannot encode are parked at
-   once, so replication continues
+   merge-mode or tenant-isolation gate refuses, or the causal-apply buffer
+   evicts or fails to apply when it drains, are parked at once, so replication continues
    past them. The queue is bounded but never evicts: when it is full it
    refuses the park and the affected link is held back, so no acknowledged
    write is ever lost. See
@@ -214,15 +213,14 @@ a test that was proven to fail when that seam is broken, in the
 [refinement note](../../spec/replication/Refinement.md). And every property has
 a mutation that makes it fail, so none holds vacuously.
 
-The specification reproduces six production defects, each now fixed and kept
-as a mutation that reproduces it: a bootstrap pin that discarded writes
+The specification reproduces seven production defects, each now fixed and
+kept as a mutation that reproduces it: a bootstrap pin that discarded writes
 (#4463), a causal buffer that could strand or lose parked entries (#4464), a
 duplicate of an in-flight entry that was acknowledged and lost (#4465), a
 snapshot bootstrap that shipped no deletes (#4504), content-hash elision that
-kept a stale value (#4585), and a source WAL trim that nothing re-bootstrapped
-(#4587). It also models one defect that is still open: a batch the sender
-cannot encode is dead-lettered on the sender and skipped, with no re-seed of
-the peer (#4614).
+kept a stale value (#4585), a source WAL trim that nothing re-bootstrapped
+(#4587), and a batch the sender could not encode that was dead-lettered on the
+sender and skipped, with no re-seed of the peer (#4614).
 
 A second companion,
 [`ReplicationReBootstrap.tla`](../../spec/replication/ReplicationReBootstrap.tla),

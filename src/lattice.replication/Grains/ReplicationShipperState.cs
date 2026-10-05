@@ -128,15 +128,16 @@ internal sealed class ReplicationShipperState
     public string? AdminPauseSagaId { get; set; }
 
     /// <summary>
-    /// Sagas poisoned for this peer because a prepare of theirs was parked on
-    /// the dead-letter queue instead of shipped (#4494), keyed by transaction id.
-    /// Every later prepare and every terminal of a poisoned saga is parked as
-    /// well, so the peer never commits the saga without the lost write. Persisted
-    /// with the cursors so a reactivation keeps withholding the saga.
+    /// Legacy: sagas an earlier build poisoned for this peer after parking a
+    /// prepare it could not encode (#4494). Nothing adds to it any more: an
+    /// encode failure takes the peer off the log instead (#4614). A shipper that
+    /// activates with entries here takes the peer off the log, so a re-seed
+    /// delivers each such saga whole, and then empties it. Kept so persisted
+    /// state, and the <see cref="PoisonedSaga"/> wire alias, still decode.
     /// </summary>
     /// <remarks>
     /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
-    /// <c>[Id(5)]</c> slot decodes to an empty map.
+    /// <c>[Id(5)]</c> slot decodes to an empty map. Never reuse the slot.
     /// </remarks>
     [Id(5)]
     public Dictionary<Guid, PoisonedSaga> PoisonedSagas { get; set; } = new();
@@ -204,4 +205,58 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(10)]
     public long[]? ReseedRetainFrom { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> once the peer was removed from the replication
+    /// topology (issue #4534): the shipper no longer holds the write-ahead log
+    /// for it - it has withdrawn from the log's offset consumers and released
+    /// its decision-purge holds - and, being off the log, ships only plain
+    /// writes until the peer returns and is re-seeded. Cleared when the peer
+    /// is added back. A state written before this slot decodes to
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(11)]
+    public bool DetachedFromLog { get; set; }
+
+    /// <summary>
+    /// Per partition, the first sequence of the encode-failure quarantine (issue
+    /// #4614): the merged hull of every batch this shipper could not encode since
+    /// the quarantine was last empty. Every record in it was appended before the
+    /// re-seed marker the failure set, so the snapshot export that clears the
+    /// marker carries its effects, and the rewind consumes it without shipping.
+    /// Empty when nothing is quarantined; legacy state decodes to an empty map.
+    /// </summary>
+    [Id(12)]
+    public Dictionary<int, long> EncodeQuarantineFrom { get; set; } = new();
+
+    /// <summary>
+    /// Per partition, the last sequence of the encode-failure quarantine (issue
+    /// #4614); see <see cref="EncodeQuarantineFrom"/>. Cleared once no re-seed is
+    /// outstanding and every partition's cursor has passed it, and on a rebind
+    /// to a new source log. Legacy state decodes to an empty map.
+    /// </summary>
+    [Id(13)]
+    public Dictionary<int, long> EncodeQuarantineThrough { get; set; } = new();
+
+    /// <summary>
+    /// What the shipper needs to vouch for the peer's applied low watermark
+    /// (issue #4586 part 2b): the receiver lineage it last saw, the shipped
+    /// prepares whose terminals the peer has not acknowledged yet, and the
+    /// records it passed without delivering. Legacy state decodes to an empty
+    /// value, under which the shipper vouches for nothing until it has seen
+    /// the receiver's lineage. Slots 14 to 19 are reserved for other work.
+    /// </summary>
+    [Id(20)]
+    public SourceFrontierShipperState Frontier { get; set; } = new();
+
+    /// <summary>
+    /// <see langword="true"/> once a silo that predates the decision-purge hold
+    /// was seen while the re-seed marker was set (issue #4664). The first tick
+    /// that sees every silo honour the hold raises the marker to the tree's
+    /// current export epoch and clears this, so an export drained while an older
+    /// registry could purge a decision never settles the re-seed. A state
+    /// written before this slot decodes to <see langword="false"/>.
+    /// </summary>
+    [Id(21)]
+    public bool ReseedSpansPreHoldSilo { get; set; }
 }

@@ -121,6 +121,11 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// at (issue #4522); only the routing tier, a forwarding shard, the split
     /// sweep, and the saga's terminal delivery may assert them.
     /// </para>
+    /// <para>
+    /// The CRDT-join merge marker is included because a leaf honours it to join
+    /// an incoming CRDT row into its own instead of resolving last-writer-wins
+    /// (issue #4618); only the resize and snapshot mirror and drain may assert it.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -138,6 +143,7 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
         LatticeEventConstants.PreparedRouteRequestContextKey,
         LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
+        LatticeEventConstants.CrdtJoinMergeRequestContextKey,
     ];
 
     /// <inheritdoc />

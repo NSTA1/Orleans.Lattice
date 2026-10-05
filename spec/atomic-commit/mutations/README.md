@@ -171,12 +171,12 @@ Worth stating plainly, because it is a real gap rather than an oversight:
 | Action property | `Error: Action property <Name> is violated.` | yes |
 | Temporal | `Error: Temporal properties were violated.` | **no** |
 
-So the four temporal properties - `MonotonicVisibility`, `Termination`,
+So temporal targets - `MonotonicVisibility`, `Termination`,
 `EveryCommittedKeyReadable` and `NoStrandedPrepare` - cannot have their banner
 checked against the property name. `MonotonicVisibility` is a safety property,
 but it is stated over whole behaviours with a nested `[]` (a single-step form is
 too weak once an observation can be hidden), and TLC reports that form the same
-way as liveness. For those four the guard against a misattributed violation is
+way as liveness. For temporal targets the guard against a misattributed violation is
 that the generated cfg names exactly one property, backed by the harness
 asserting the violation *count* is one.
 
@@ -248,29 +248,30 @@ instead, and each claim below was measured with TLC rather than argued.
   current `MonotonicVisibility` from the single-step form it replaced: the old
   form model-checks clean on it, because no single step goes from post to pre.
 
-### Sixteen mutations perturb the protocol; four add an action it does not have
+### Protocol mutations and added-action mutations
 
 This distinction matters, and reading past it would reproduce in miniature the
 overclaim this whole directory exists to prevent.
 
-Sixteen mutations change something the protocol actually does: a guard, an
+Most mutations change something the protocol actually does: a guard, an
 action's effect, a gate definition, a projection, or the fairness assumption.
 For those, the pairing shows the property constrains the modelled protocol -
-weaken the protocol and the property notices. The eleven that carry `PERTURBS:`
+weaken the protocol and the property notices. Mutations that carry `PERTURBS:`
 change a protocol action itself, which is the claim the refinement note's
 action rows rest on.
 
 `MonotonicVisibilityPurgeAfterMask` adds an action, `PruneExpired`, and for a
-different reason from the three below. It is a production event the base
-deliberately leaves out: the lazy purge of an aged-out tombstone with no
-ordering against the participants. Its property is not unfalsifiable - three
+different reason from the added-action mutations below. It is a production
+event the base deliberately leaves out: the lazy purge of an aged-out tombstone
+with no ordering against the participants. Its property is not unfalsifiable -
 protocol-level mutations already make it fire - so what this mutation
 establishes is narrower: that the property, as now stated, would report that
 hazard if the model reached it. It says nothing about whether the base reaches
 it (it does not; see the retention-window gap in
 [`../Refinement.md`](../Refinement.md)).
 
-Three others do not perturb the protocol at all. `TypeOkRevisionRunaway`, `DecisionDurabilityDecisionFlip` and
+The remaining added-action mutations do not perturb the protocol at all.
+`TypeOkRevisionRunaway`, `DecisionDurabilityDecisionFlip` and
 `RevisionMonotonicRollback` splice a brand-new action into `Next`
 (`RevisionRunaway`, `DecisionFlip`, `RevisionRollback`) that models no step of
 the protocol. They do this because the properties they target are
@@ -294,8 +295,9 @@ while the retirement half was covered only at the implementation level, by
 now covers it here too, by dropping that guard, and it is a protocol-level
 perturbation rather than an added action.
 
-For those three the two-arm experiment therefore establishes something weaker
-than it does for the other seventeen. It establishes that the property is
+For those added-action classifier mutations the two-arm experiment therefore
+establishes something weaker than it does for protocol-level mutations. It
+establishes that the property is
 **well-formed**: that it is not a tautology, that it says what its name says,
 and that TLC would report it if the state it forbids became reachable. It does
 **not** establish that the property currently constrains the protocol, because
@@ -307,7 +309,7 @@ two revision properties there is none, which is precisely the point. It is a
 limit on what may be concluded, and issue #2323's second supporting control
 names it directly: such a result is a classifier,
 never evidence of reachability. A future revision that lets a saga re-enter
-`"prepared"` - a retry, a re-prepare, a recovery path - would make these three
+`"prepared"` - a retry, a re-prepare, a recovery path - would make these classifier
 properties load-bearing, and the mutations are the standing check that they
 would be ready to fire on the day it does.
 

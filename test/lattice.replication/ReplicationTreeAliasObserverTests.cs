@@ -63,26 +63,26 @@ public class ReplicationTreeAliasObserverTests
     }
 
     [Test]
-    public async Task OnTreeAliasChanged_resets_the_applied_identity_record_even_without_peers()
+    public async Task OnTreeAliasChanged_forces_a_gap_on_the_tree_frontier_even_without_peers()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
-        factory.GetGrain<IReplicationHighWaterMarkGrain>("alpha").Returns(hwm);
+        var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        factory.GetGrain<IReplicationTreeFrontierGrain>("alpha").Returns(frontier);
         var observer = Create(factory, []);
 
         await observer.OnTreeAliasChangedAsync(Change(tree: "alpha"), CancellationToken.None);
 
-        await hwm.Received(1).ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>());
+        await frontier.Received(1).OnContentsReplacingAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public void OnTreeAliasChanged_propagates_a_failed_identity_reset_and_does_not_rebind()
+    public void OnTreeAliasChanged_propagates_a_failed_gap_and_does_not_rebind()
     {
         var factory = Substitute.For<IGrainFactory>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
-        hwm.ResetAppliedIdentitiesAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromException(new InvalidOperationException("hwm down")));
-        factory.GetGrain<IReplicationHighWaterMarkGrain>("alpha").Returns(hwm);
+        var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        frontier.OnContentsReplacingAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("frontier down")));
+        factory.GetGrain<IReplicationTreeFrontierGrain>("alpha").Returns(frontier);
         var observer = Create(factory, ["site-b"]);
 
         Assert.That(

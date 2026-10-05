@@ -22,7 +22,7 @@ a rebuild. Until that rebuild lands the tenant layer holds no rules, so a reques
 would have decided falls through to `DefaultEffect`; under the recommended `Deny`
 default that fails closed. Turning the layer off takes effect on the next decision.
 
-## Two layers
+## Layers
 
 - **The operator layer** is every rule whose id does not start with `tenant:`,
   including the cluster-wide `Tree:*` tier and the `app:` rules installed apps
@@ -58,7 +58,7 @@ deny can never revoke an operator allow:
 
 ### Range and scan filters
 
-A collection request (a range read, a scan, a range delete) composes the two layers
+A collection request (a range read, a scan, a range delete) composes the layers
 key by key, so its filter admits exactly the keys a point request would allow. As
 sets, the admitted keys are the keys an operator rule allows, plus the keys the
 tenant layer (or the default effect) allows that **no operator rule covers**, minus
@@ -71,7 +71,7 @@ The decision is uniform, with no per-key filter, only when neither layer can var
 key: the operator layer has no key or prefix rule for the subject and operation (and
 so decides every key alike, ending the evaluation if it matched), and the tenant
 tree has none either. A request the existence checks make - whether a subject holds
-any grant on a tree - follows the same two layers.
+any grant on a tree - follows the same layers.
 
 ## Tenant-tier rule ids
 

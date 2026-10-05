@@ -909,32 +909,25 @@ internal sealed class LatticeWalGcScheduler(
     private static readonly TimeSpan ReactivationRearmMaxBackoff = TimeSpan.FromHours(6);
 
     /// <summary>
-    /// Shortest interval a re-arm may ever wait, including when evidence says
-    /// the blocking condition has lifted.
+    /// Shortest interval a re-arm may ever wait.
     /// </summary>
     /// <remarks>
-    /// A completed capture elsewhere in the process collapses the escalated
-    /// backoff (see <see cref="ReactivationRearmBaseBackoff"/>) to this floor,
-    /// because it is direct evidence that whatever made this consumer's touches
-    /// futile is no longer in force. The floor is what stops that evidence
-    /// becoming a hot loop: a process healing many leaves in quick succession
-    /// can re-arm a stranded one at most once per floor interval, no matter how
-    /// much evidence arrives.
+    /// <para>
+    /// <see cref="RearmBackoff"/> clamps to this floor, and it must stay no
+    /// shorter than <see cref="ReactivationRetryCooldown"/> so the first touch
+    /// of a restored cycle is never made to serve a further cooldown.
+    /// </para>
+    /// <para>
+    /// It used to be the backoff every abandoned consumer collapsed to once any
+    /// other leaf in the process healed (issue #2783). That is no longer the
+    /// case (issue #3605): a heal elsewhere says nothing about why <i>this</i>
+    /// consumer's touches were futile, and on an estate where some leaf heals
+    /// every few minutes the collapse fired on every cycle, so the advertised
+    /// 30 minute / 1 hour escalation never took effect and an unfixable
+    /// consumer re-armed every 15 minutes indefinitely.
+    /// </para>
     /// </remarks>
     private static readonly TimeSpan ReactivationRearmMinBackoff = TimeSpan.FromMinutes(15);
-
-    /// <summary>
-    /// Count of blocked leaves this silo has seen stop blocking after the sweep
-    /// touched them. Read only as a change detector: a consumer whose budget was
-    /// abandoned while this counter held one value, observing a different value,
-    /// has direct evidence that some leaf completed a capture since - so
-    /// whatever made its own touches futile is no longer in force.
-    /// </summary>
-    /// <remarks>
-    /// An instance field rather than a static one, so it cannot leak between
-    /// schedulers in a host running several, nor between test fixtures.
-    /// </remarks>
-    private long _reactivationHealEpoch;
 
     /// <summary>
     /// How long a tree's cursor floor may stay continuously blocked with the
@@ -1103,12 +1096,6 @@ internal sealed class LatticeWalGcScheduler(
     /// <param name="AbandonedAt">When the budget was last spent, if it ever has been.</param>
     /// <param name="Cycles">How many times the budget has been restored after a backoff.</param>
     /// <param name="Refunds">Faulted touches excused in the current cycle.</param>
-    /// <param name="HealEpochAtAbandonment">
-    /// The value of <see cref="_reactivationHealEpoch"/> when the budget was
-    /// last spent. A later value is evidence that some leaf has healed since,
-    /// which collapses this consumer's backoff to
-    /// <see cref="ReactivationRearmMinBackoff"/>.
-    /// </param>
     /// <param name="HealCredited">
     /// Whether this consumer has already been credited a heal in the current
     /// episode. The credit fires when the cursor floor becomes usable, which can
@@ -1123,10 +1110,7 @@ internal sealed class LatticeWalGcScheduler(
     /// credit rather than accelerating anything: the retry cooldown, the attempt
     /// ceiling and the re-arm backoff are all untouched, so the consumer merely
     /// rejoins the ordinary eligible pool and walks its budget down to
-    /// <c>abandoned</c> with its loud report. Withholding is strictly the
-    /// slower path, because crediting a heal also advances
-    /// <see cref="_reactivationHealEpoch"/>, which collapses every abandoned
-    /// consumer's backoff estate-wide.
+    /// <c>abandoned</c> with its loud report.
     /// </param>
     /// <param name="Terminal">
     /// Why the sweep has stopped driving this consumer for the rest of the
@@ -1160,7 +1144,6 @@ internal sealed class LatticeWalGcScheduler(
         DateTimeOffset? AbandonedAt = null,
         int Cycles = 0,
         int Refunds = 0,
-        long HealEpochAtAbandonment = 0,
         bool PinStateClassified = false,
         bool HealCredited = false,
         bool OffsetAdvanceOwed = false,
@@ -4169,7 +4152,6 @@ internal sealed class LatticeWalGcScheduler(
                     {
                         Abandoned = true,
                         AbandonedAt = now,
-                        HealEpochAtAbandonment = _reactivationHealEpoch,
                     };
                     budgets[consumerId] = budget;
                     observation = observation with { AnyAbandoned = true };
@@ -4712,9 +4694,8 @@ internal sealed class LatticeWalGcScheduler(
     /// <para>
     /// <b>Nor is a terminal consumer.</b> The sweep stopped driving it (issue
     /// #3478), so a floor that later clears was cleared by something else - an
-    /// operator rebuild of a latched leaf - and crediting it would both inflate
-    /// the ratio and advance the heal epoch, shortening every other consumer's
-    /// backoff on evidence that says nothing about headroom.
+    /// operator rebuild of a latched leaf - and crediting it would inflate the
+    /// ratio.
     /// </para>
     /// </remarks>
     private void CreditHealedConsumers(
@@ -4730,19 +4711,15 @@ internal sealed class LatticeWalGcScheduler(
                 && !budget.OffsetAdvanceOwed
                 && budget.Terminal == ReactivationTerminal.None)
             {
-                // Advance the heal epoch before recording. A credited heal is
-                // direct evidence that a blocked leaf managed to activate,
-                // replay and capture a snapshot in this process right now - so
-                // whatever headroom a stranded leaf needs demonstrably exists,
-                // and any consumer abandoned before this moment is entitled to
-                // retry on the shortened backoff rather than serve out an
-                // escalation earned under conditions that have since lifted.
+                // A heal here is recorded only. It no longer shortens any other
+                // consumer's re-arm backoff (issue #3605): a capture completing
+                // on one leaf says nothing about why another consumer's touches
+                // were futile.
                 //
                 // A consumer re-armed after abandonment is creditable here
                 // again, because the re-arm clears Abandoned: its budget is
                 // live, and if it stops blocking it healed in exactly the sense
                 // this counter means.
-                _reactivationHealEpoch++;
                 RecordBlockedLeafReactivation(
                     LatticeMetrics.BlockedLeafReactivationHealed, treeTag, tenantTag);
                 (credited ??= []).Add(consumerId);
@@ -4777,16 +4754,14 @@ internal sealed class LatticeWalGcScheduler(
     /// between cycles grows.
     /// </para>
     /// <para>
-    /// Two signals gate the wait, and the choice between them is the substance
-    /// of issue #2783. The floor is elapsed time with an escalating backoff,
-    /// which is a bare timer and the weakest acceptable signal - but strictly
-    /// better than never retrying. Above it sits evidence: if any blocked leaf
-    /// in this process has healed since this consumer was abandoned, the
-    /// backoff collapses to <see cref="ReactivationRearmMinBackoff"/>. That is
-    /// preferred to a timer because it is a statement about the blocking
-    /// condition rather than about the clock - a completed capture means the
-    /// memory headroom and replay capacity a stranded leaf needs were available
-    /// moments ago.
+    /// The wait is elapsed time with the escalating backoff of
+    /// <see cref="RearmBackoff"/> (issue #2783): a bare timer, the weakest
+    /// acceptable signal, but strictly better than never retrying. A heal on
+    /// some other leaf used to collapse it to
+    /// <see cref="ReactivationRearmMinBackoff"/>; it no longer does (issue
+    /// #3605), because that evidence is about the other leaf, and on a busy
+    /// estate it arrived every cycle, so the escalation never took effect and a
+    /// consumer whose touches can never succeed re-armed every 15 minutes.
     /// </para>
     /// <para>
     /// <see cref="ConsumerReactivationBudget.Refunds"/> resets with the cycle,
@@ -4805,13 +4780,7 @@ internal sealed class LatticeWalGcScheduler(
             return null;
         }
 
-        var backoff = RearmBackoff(budget.Cycles);
-        if (_reactivationHealEpoch != budget.HealEpochAtAbandonment)
-        {
-            backoff = ReactivationRearmMinBackoff;
-        }
-
-        if (now - abandonedAt < backoff)
+        if (now - abandonedAt < RearmBackoff(budget.Cycles))
         {
             return null;
         }
@@ -4829,7 +4798,8 @@ internal sealed class LatticeWalGcScheduler(
     /// <summary>
     /// The backoff a consumer serves before its <paramref name="cycles"/>'th
     /// re-arm: <see cref="ReactivationRearmBaseBackoff"/> doubling per cycle
-    /// and saturating at <see cref="ReactivationRearmMaxBackoff"/>.
+    /// and saturating at <see cref="ReactivationRearmMaxBackoff"/>, never
+    /// shorter than <see cref="ReactivationRearmMinBackoff"/>.
     /// </summary>
     private static TimeSpan RearmBackoff(int cycles)
     {
@@ -4841,6 +4811,7 @@ internal sealed class LatticeWalGcScheduler(
             ticks *= 2;
         }
 
+        ticks = Math.Max(ticks, ReactivationRearmMinBackoff.Ticks);
         return ticks >= ceiling ? ReactivationRearmMaxBackoff : TimeSpan.FromTicks(ticks);
     }
 
@@ -7028,13 +6999,20 @@ internal sealed class LatticeWalGcScheduler(
             // and asserting a coverage hole over them asserted it in the one
             // population structurally guaranteed not to have one.
             //
-            // The same <= Zero predicate the floor uses is applied per-pin here,
-            // against the frontier already in hand. It is not a proxy for the
-            // floor's verdict but the identical test, which preserves the one
-            // case this arm CAN still prove: a floor-holding pin at <= Zero
-            // whose consumer is present in the live registry, which the floor
-            // skipped before ever evaluating it, is genuinely unusable and stays
-            // CheckpointedUncovered.
+            // The same predicate the floor uses is applied per-pin here, against
+            // the frontier and offset already in hand. It is not a proxy for the
+            // floor's verdict but the identical test, and it has two halves
+            // (issue #3605). A pin at <= Zero is unusable to the floor only when
+            // it ALSO reports no durable offset: the #3094 exemption in
+            // ApplyDurableMaterialiserFloorAsync treats a (<= Zero, offset >= 0)
+            // consumer as covered, because the offset floor already speaks for
+            // it. That pair is exactly what the #3453 never-written release
+            // publishes, so demoting on the frontier alone claimed a coverage
+            // hole over every released pin and drove a repair at a leaf the
+            // floor had already exempted. Only a (<= Zero, offset < 0) pin whose
+            // consumer is present in the live registry - which the floor skipped
+            // before ever evaluating it - is genuinely unusable, and it alone
+            // stays CheckpointedUncovered.
             //
             // Deliberately narrow. NeverCheckpointed, NoDurableState, Orphaned
             // and Unreadable are statements about the leaf or about the
@@ -7042,7 +7020,7 @@ internal sealed class LatticeWalGcScheduler(
             // touched. Only CheckpointedUncovered makes a compound claim whose
             // second conjunct was never read.
             if (state == WalGcBlockingPinState.CheckpointedUncovered
-                && candidate.Frontier > HybridLogicalClock.Zero)
+                && (candidate.Frontier > HybridLogicalClock.Zero || candidate.Offset >= 0))
             {
                 state = WalGcBlockingPinState.CheckpointedCoverageUnknown;
             }
@@ -7059,8 +7037,10 @@ internal sealed class LatticeWalGcScheduler(
             // discarded. The two cases have different remedies: an offset-
             // bearing pin is still driven for liveness when its offset equals
             // the tree offset floor (the branch below), while a pin reporting no
-            // offset can never satisfy that equality, and the frontier gate
-            // above has already promoted it out of the coverage repair. Primed
+            // offset can never satisfy that equality, and the gate above
+            // demoted it on its usable frontier alone (a no-offset pin at
+            // <= Zero stays CheckpointedUncovered and never reaches this
+            // split). Primed
             // on every classification rather than only on the recorded arm, so
             // an empty offset_absent slice is a measured absence.
             PrimeCoverageUnknownPinOffsets(partitionTag, treeTag, tenantTag);

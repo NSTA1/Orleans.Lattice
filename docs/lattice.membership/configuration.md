@@ -1,6 +1,6 @@
 # Orleans.Lattice.Membership configuration
 
-The package has four public options types. `LatticeMembershipOptions` and `LatticeIdentityDirectoryOptions` are both bound by the `AddLatticeMembership` registration extension (the directory options via standard `services.Configure<LatticeIdentityDirectoryOptions>(...)`). `JwtAuthenticatorOptions` is bound per issuer by `AddLatticeJwtAuthenticator`, and `StaticIdentityDirectoryOptions` is bound by `AddStaticIdentityDirectory`.
+The package documents the public options types for membership, identity-directory providers, JWT authenticators, and the static identity directory. `LatticeMembershipOptions` and `LatticeIdentityDirectoryOptions` are both bound by the `AddLatticeMembership` registration extension (the directory options via standard `services.Configure<LatticeIdentityDirectoryOptions>(...)`). `JwtAuthenticatorOptions` is bound per issuer by `AddLatticeJwtAuthenticator`, and `StaticIdentityDirectoryOptions` is bound by `AddStaticIdentityDirectory`.
 
 ## `LatticeMembershipOptions`
 

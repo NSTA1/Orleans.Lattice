@@ -223,7 +223,7 @@ it. [Tree storage](tree-storage.md)
 carries the per-provider limit table, the row-size formulas, and the sizing
 arithmetic for choosing `MaxLeafKeys` against a given provider.
 
-Two things this is *not*:
+This is *not*:
 
 - It is **not** `LatticeQuotaExceededException`. That is Lattice's own opt-in
   admission control (`LatticeOptions.MaxLiveKeys` / `MaxEstimatedBytes`, both
@@ -456,7 +456,7 @@ count is flat.
 
 ### Likely cause
 
-Four things dominate scan cost:
+Scan cost is dominated by:
 
 1. **Tombstone bloat.** A deleted key leaves a tombstone that a scan still
    walks. A shard at 50 percent `TombstoneRatio` does twice the work per live
@@ -604,7 +604,7 @@ Console.WriteLine($"authoritative bytes: {authoritative.Value?.Length ?? -1}");
 - **They disagree and `CacheTtl` is `TimeSpan.Zero`.** That is not ordinary
   cache staleness. Capture both results and treat it as a consistency issue.
 
-Two secondary checks:
+Secondary checks:
 
 - `orleans.lattice.cache.hits` and `orleans.lattice.cache.misses` in
   [Metrics](metrics.md) tell you whether the cache is answering at all.
@@ -652,7 +652,7 @@ Two secondary checks:
 
 ### Symptom
 
-One of three signals points at the write-ahead-log recovery path rather than at
+These signals point at the write-ahead-log recovery path rather than at
 ordinary scan or cache behaviour:
 
 - Silo startup logs `Lattice grain-storage fencing check: the 'lattice' grain storage provider accepted a write carrying a stale ETag...` or, in `Reject` mode, silo start fails with an `OrleansConfigurationException` containing that text.

@@ -158,7 +158,7 @@ grain. The self-contained plan means the drain never activates a grain.
 Because the retry replays the same plan under the same idempotency key, a
 redelivered batch is not double-applied.
 
-## The two onboarding routes converge
+## Onboarding routes converge
 
 | Route | Covers | Trigger |
 |---|---|---|

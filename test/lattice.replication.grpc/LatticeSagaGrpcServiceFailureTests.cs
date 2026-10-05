@@ -77,6 +77,9 @@ public class LatticeSagaGrpcServiceFailureTests
 
         public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
             => Task.FromResult(response);
+
+        public Task<SagaControlResponse> GetDecisionAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
+            => Task.FromResult(response);
     }
 
     private static LatticeSagaGrpcService CreateService(ILatticeSagaControlHandler handler)
@@ -150,7 +153,7 @@ public class LatticeSagaGrpcServiceFailureTests
     }
 
     [Test]
-    public async Task BindService_binds_all_four_control_rpcs_to_the_supplied_service_instance()
+    public async Task BindService_binds_all_five_control_rpcs_to_the_supplied_service_instance()
     {
         var saved = LatticeSagaGrpcMethodsHolder.Current;
         LatticeSagaGrpcMethodsHolder.Current = CreateMethods();
@@ -166,7 +169,7 @@ public class LatticeSagaGrpcServiceFailureTests
 
             LatticeSagaGrpcServiceBase.BindService(binder, service);
 
-            Assert.That(binder.UnaryHandlers, Has.Count.EqualTo(4));
+            Assert.That(binder.UnaryHandlers, Has.Count.EqualTo(5));
 
             // Every bound delegate must reach this instance, so drive each one
             // and require the stub handler's response back out.

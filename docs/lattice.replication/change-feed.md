@@ -6,7 +6,7 @@ The contract is deliberately neutral: there is no peer id, no per-call ack envel
 
 ## API
 
-The interface lives in `Orleans.Lattice.Replication` and has three members:
+The interface lives in `Orleans.Lattice.Replication` and exposes the subscription and cursor-capture members:
 
 ```text
 public interface IChangeFeed

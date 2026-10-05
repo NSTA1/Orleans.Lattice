@@ -42,12 +42,12 @@ internal sealed partial class LatticeGrain
         var ownsStamp = LatticeHlcOverrideContext.Current is null;
         using var hlcScope = ownsStamp
             ? LatticeHlcOverrideContext.With(key.Value.Timestamp)
-            : NullScope.Instance;
+            : NoOpDisposable.Instance;
         // Issue #4586: the key's stamp is minted for this operation, so a
         // replicated tree's WAL clock floor governs it, and a refusal - which
         // cannot be re-stamped without breaking the key's contract - surfaces as
         // a typed expiry.
-        using var freshScope = ownsStamp ? LatticeFreshStampContext.Begin() : NullScope.Instance;
+        using var freshScope = ownsStamp ? LatticeFreshStampContext.Begin() : NoOpDisposable.Instance;
         var keyStamp = key.Value.Timestamp;
         Func<CancellationToken, Task> guarded = ownsStamp
             ? ct => GuardIdempotencyKeyExpiryAsync(operation, keyStamp, ct)
@@ -83,8 +83,8 @@ internal sealed partial class LatticeGrain
         var ownsStamp = LatticeHlcOverrideContext.Current is null;
         using var hlcScope = ownsStamp
             ? LatticeHlcOverrideContext.With(key.Value.Timestamp)
-            : NullScope.Instance;
-        using var freshScope = ownsStamp ? LatticeFreshStampContext.Begin() : NullScope.Instance;
+            : NoOpDisposable.Instance;
+        using var freshScope = ownsStamp ? LatticeFreshStampContext.Begin() : NoOpDisposable.Instance;
         var keyStamp = key.Value.Timestamp;
         Func<CancellationToken, Task<T>> guarded = ownsStamp
             ? ct => GuardIdempotencyKeyExpiryAsync(operation, keyStamp, ct)
@@ -164,10 +164,4 @@ internal sealed partial class LatticeGrain
                 CancellationToken.None,
                 TaskCreationOptions.DenyChildAttach,
                 turn).Unwrap();
-
-    private sealed class NullScope : IDisposable
-    {
-        internal static readonly NullScope Instance = new();
-        public void Dispose() { }
-    }
 }

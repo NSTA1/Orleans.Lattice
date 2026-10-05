@@ -210,4 +210,14 @@ internal sealed class BootstrapCoordinatorState
     /// retry is not started (issue #4537).
     /// </summary>
     [Id(23)] public Dictionary<string, long> OwedRetryNotBeforeTicksBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The receiver tree frontier's epoch captured immediately before the
+    /// current drain's export was requested (issue #4586 part 2b). The
+    /// handoff pins the export's watermarks only if the epoch is unchanged, so
+    /// a drain that straddled a replacement of the tree's contents installs
+    /// nothing. State written before this slot decodes to
+    /// <see cref="Guid.Empty"/>, which pins nothing.
+    /// </summary>
+    [Id(24)] public Guid FrontierEpoch { get; set; }
 }

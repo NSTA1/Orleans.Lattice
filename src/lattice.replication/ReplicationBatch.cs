@@ -26,7 +26,7 @@ public readonly record struct ReplicationBatch
     /// <summary>
     /// Name of the local tree this batch was drawn from. Receivers that
     /// dispatch per-tree apply pipelines route on this id; the per-origin
-    /// high-water-mark dedup key is <c>(TreeName, OriginClusterId)</c>.
+    /// high-water-mark is keyed by <c>(TreeName, OriginClusterId)</c>.
     /// Required: must be non-<see langword="null"/> and non-empty.
     /// </summary>
     public string TreeName { get; init; }
@@ -133,4 +133,13 @@ public readonly record struct ReplicationBatch
     /// framing is unchanged.
     /// </summary>
     internal long? ReseedAfterEpoch { get; init; }
+
+    /// <summary>
+    /// The sender's applied low watermark for this batch's tree at the
+    /// receiver (issue #4586), or <see langword="null"/> when the sender has
+    /// none to vouch for. Carried out of band by the transport (the gRPC
+    /// transport sends it as a call header), so the batch framing is
+    /// unchanged and a receiver that predates it ignores it.
+    /// </summary>
+    internal ReplicationSourceFrontier? SourceFrontier { get; init; }
 }

@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 9 | 4 | 14 | 22 | 26 | 91,389 |
+| `WalDurability` | 10 | 4 | 18 | 31 | 31 | 111,154 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
@@ -35,8 +35,15 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 27 and
 `WalDurability` also has one variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
 invariant and both action properties with a budget of two faults instead of one:
-445,516 distinct states to depth 32. The liveness properties stay at one fault,
+680,122 distinct states to depth 32. The liveness properties stay at one fault,
 because at two the full configuration takes about ten minutes, past the TLC budget.
+
+Its second variant, `WalDurability.SnapshotLoss.cfg`, lets the environment destroy a
+leaf's durable snapshot (`SnapshotVanish`, issue #4634), at two faults so a snapshot can
+vanish and its leaf then stop. Destroyed data is outside the durability properties by
+construction, so it checks the properties that say the loss is never silent -
+`ReadPositionHonest` above all - with the other safety invariants that still apply:
+1,106,104 distinct states.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the
@@ -73,7 +80,7 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | `SnapshotCoverageMonotonic` | Action | Durable snapshot coverage never regresses. |
 | `PublishedPinWithinPersistedBelief` | Action | A newly published pin never exceeds the persisted checkpoint. |
 | `EveryAckedWriteMaterialised` | Liveness | Every acknowledged write is eventually held by its owner's projection. |
-| `ReclamationEventuallyAdvances` | Liveness | The WAL is eventually fully reclaimed. |
+| `ReclamationEventuallyAdvances` | Liveness | Everything appended is eventually reclaimed from storage, and no append or abandoned call is left outstanding. |
 
 `WalMove`:
 

@@ -17,7 +17,7 @@ snapshot. Each shard is unlocked individually after its entries have been copied
 so earlier shards become readable again while later shards are still being
 processed.
 
-Each shard follows a three-phase pattern:
+Each shard follows this phased pattern:
 
 1. **Lock** (once) - mark every source shard in the copied range (see
    [Requirements](#requirements)) as deleted. The intent is persisted
@@ -38,8 +38,11 @@ shard with the same index; a last-writer-wins merge on the destination
 reconciles a mirrored write with the drain's copy of the same key. Typed CRDT
 deltas (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync` and the typed accessors
 built on them) and bulk appends (`BulkAppendChunkAsync` and the streaming
-`BulkLoadAsync` extension) are not mirrored, so one that reaches a source shard
-after the copy has read past the key it writes does not reach the destination.
+`BulkLoadAsync` extension) are mirrored as the rows they left on the source.
+When a mirrored or drained CRDT row meets a CRDT row the destination holds of
+its own - one it folded from a mirrored saga terminal - the destination joins
+the two states rather than keeping only the last-writer-wins winner
+([#4618](https://github.com/NSTA1/Orleans.Lattice/issues/4618)).
 
 Atomic-write sagas are carried over whole. Once every source shard is
 mirroring, and before any entry is drained, the snapshot also copies the
@@ -118,7 +121,7 @@ await tree.SnapshotAsync("my-tree-compact", SnapshotMode.Offline,
 
 ## Crash Safety
 
-Snapshot progress is persisted in `TreeSnapshotState` after each phase
+Snapshot progress is persisted in the snapshot coordinator's state after each phase
 completion. For offline mode, the snapshot intent is persisted with a **Lock**
 phase *before* any source shards are marked as deleted. This ensures that a
 crash between intent and shard-marking can be recovered: on restart, the

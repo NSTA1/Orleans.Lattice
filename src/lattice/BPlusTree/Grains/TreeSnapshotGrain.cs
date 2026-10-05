@@ -795,7 +795,15 @@ internal sealed class TreeSnapshotGrain(
             var merge = new Dictionary<string, LwwValue<byte[]>>(entries.Count);
             foreach (var e in entries)
                 merge[e.Key] = e.ToLwwValue();
-            await destShard.MergeManyAsync(merge);
+
+            // Issue #4618: the destination may have folded a mirrored saga
+            // terminal of a CRDT key at its own stamp, so a drained source row
+            // below that stamp still carries contributions the fold lacks; join
+            // CRDT rows instead of keeping only the last-writer-wins winner.
+            using (LatticeCrdtJoinMergeContext.BeginScope())
+            {
+                await destShard.MergeManyAsync(merge);
+            }
         }
 
         return (walk.Completed, walk.ResumeFromInclusive);

@@ -178,6 +178,133 @@ public sealed class FileWalCompactionTelemetryTests
         });
     }
 
+    /// <summary>
+    /// The reclaimed-bytes counter must carry the trigger of the arm that ran
+    /// (issue #3226), exactly as <see cref="LatticeMetrics.WalCompactions"/>
+    /// does. Without it the two compaction counters cannot be joined on the
+    /// same labels, so "bytes reclaimed per ceiling compaction" is not
+    /// expressible and a dashboard cannot say which arm freed the space.
+    /// </summary>
+    [TestCase("ceiling")]
+    [TestCase("ratio")]
+    [TestCase("reconcile")]
+    public async Task Reclaimed_bytes_carry_the_trigger_of_the_arm_that_ran(string expectedTrigger)
+    {
+        var triggers = new List<string?>();
+
+        if (expectedTrigger == "reconcile")
+        {
+            using var writer = CreateProvider(compactionMinimumDeadBytes: 1024 * 1024);
+            await AppendAsync(writer, count: 20);
+            await writer.TrimAsync(TreeId, 0, throughOffsetInclusive: 4, CancellationToken.None);
+        }
+
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionReclaimedBytes,
+            l => l.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (measurement > 0 && MatchesTree(tags))
+                {
+                    var trigger = TriggerOf(tags);
+                    lock (triggers)
+                    {
+                        triggers.Add(trigger);
+                    }
+                }
+            }));
+
+        switch (expectedTrigger)
+        {
+            case "ceiling":
+                using (var sut = CreateProvider(
+                    compactionMinimumDeadBytes: 1024,
+                    compactionMaximumDeadBytes: 4 * PayloadBytes))
+                {
+                    await AppendAsync(sut, count: 50);
+                    await sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 4, CancellationToken.None);
+                }
+
+                break;
+            case "ratio":
+                using (var sut = CreateProvider(compactionMinimumDeadBytes: 1024))
+                {
+                    await AppendAsync(sut, count: 20);
+                    await sut.TrimAsync(TreeId, 0, throughOffsetInclusive: 14, CancellationToken.None);
+                }
+
+                break;
+            default:
+                using (var sut = CreateProvider(compactionMinimumDeadBytes: 1024 * 1024))
+                {
+                    await sut.ReconcileAsync(TreeId, 0, CancellationToken.None);
+                }
+
+                break;
+        }
+
+        listener.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(triggers, Is.Not.Empty, "The scenario must actually reclaim bytes, or the tag check is vacuous.");
+            Assert.That(
+                triggers,
+                Is.All.EqualTo(expectedTrigger),
+                "Every reclaimed-bytes measurement must name the arm that produced it.");
+        });
+    }
+
+    /// <summary>
+    /// The reclaimed-bytes counter is primed once per trigger arm (issue
+    /// #3226), matching <see cref="LatticeMetrics.WalCompactions"/>, so every
+    /// arm publishes a measured zero series that a per-trigger rate query can
+    /// read rather than an absent one.
+    /// </summary>
+    [Test]
+    public async Task Loading_a_shard_primes_reclaimed_bytes_on_every_trigger_arm_at_zero()
+    {
+        var armed = new HashSet<string>(StringComparer.Ordinal);
+        var untagged = 0;
+
+        using var listener = MeterListening.StartForInstrument(
+            LatticeMetrics.WalCompactionReclaimedBytes,
+            l => l.SetMeasurementEventCallback<long>((instrument, measurement, tags, _) =>
+            {
+                if (measurement != 0 || !MatchesTree(tags))
+                {
+                    return;
+                }
+
+                if (TriggerOf(tags) is { } trigger)
+                {
+                    lock (armed)
+                    {
+                        armed.Add(trigger);
+                    }
+                }
+                else
+                {
+                    Interlocked.Increment(ref untagged);
+                }
+            }));
+
+        using (var sut = CreateProvider())
+        {
+            await AppendAsync(sut, count: 1);
+        }
+
+        listener.Dispose();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                armed,
+                Is.EquivalentTo(new[] { "ratio", "ceiling", "reconcile" }),
+                "Every trigger arm of the reclaimed-bytes counter must be primed, as WalCompactions is.");
+            Assert.That(untagged, Is.Zero, "A trigger-less prime would mint a series no real measurement ever lands on.");
+        });
+    }
+
     [Test]
     public async Task Loading_a_shard_primes_every_trigger_arm_at_zero()
     {

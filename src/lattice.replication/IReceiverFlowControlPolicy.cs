@@ -11,14 +11,11 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="ReplicationAck.SuggestedBatchSize"/> and
 /// <see cref="ReplicationAck.PauseForMs"/> values.
 /// <para>
-/// The default registration is <see cref="NoOpReceiverFlowControlPolicy"/>,
-/// which always returns <see cref="ReceiverFlowControlHint.None"/> -
-/// the canonical "no preference" signal that preserves today's blind-
-/// push behaviour for hosts that have not opted in. Production hosts
-/// replace the registration via DI to surface back-pressure (e.g. queue
-/// depth on a downstream materialiser, CPU saturation under load) as
-/// concrete <see cref="ReplicationAck.SuggestedBatchSize"/> /
-/// <see cref="ReplicationAck.PauseForMs"/> hints.
+/// <see cref="LatticeReplicationServiceCollectionExtensions.AddLatticeReplication(Orleans.Hosting.ISiloBuilder, System.Action{LatticeReplicationOptions}, bool)"/>
+/// installs <see cref="WalSaturationReceiverFlowControlPolicy"/> by default.
+/// Hosts that want the old blind-push behaviour pre-register
+/// <see cref="NoOpReceiverFlowControlPolicy"/>, and gRPC-only compositions
+/// that do not call <c>AddLatticeReplication</c> receive the no-op fallback.
 /// </para>
 /// <para>
 /// Implementations must be safe for concurrent invocation across

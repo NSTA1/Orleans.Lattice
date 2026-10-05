@@ -59,7 +59,7 @@ internal static class SampleIdentities
     /// <summary>The first seeded tenant; the task board is installed in it at startup.</summary>
     public const string AcmeTenant = "acme";
 
-    /// <summary>The second seeded tenant; the walkthrough installs the task board in it.</summary>
+    /// <summary>The second seeded tenant; delegated tenant access is showcased in it.</summary>
     public const string GlobexTenant = "globex";
 
     /// <summary>The primary region: the Explorer connects to it by default.</summary>

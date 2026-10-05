@@ -56,6 +56,19 @@ internal static class HighWaterMarkTestGrains
             state ?? new FakePersistentState<ReplicationHighWaterMarkState>());
     }
 
+    /// <summary>
+    /// A tree-frontier substitute in degraded mode (issue #4586 part 2b): no
+    /// epoch, so a bootstrap pin installs nothing.
+    /// </summary>
+    public static IReplicationTreeFrontierGrain DegradedTreeFrontier()
+    {
+        var frontier = NSubstitute.Substitute.For<IReplicationTreeFrontierGrain>();
+        frontier.GetAsync(Arg.Any<CancellationToken>()).Returns(new ReplicationTreeFrontierSnapshot());
+        frontier.ObserveAsync(Arg.Any<string>(), Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>())
+            .Returns(Guid.Empty);
+        return frontier;
+    }
+
     /// <summary>A real origin-frontier grain for <paramref name="origin"/>.</summary>
     public static ReplicationOriginFrontierGrain Frontier(
         string origin,

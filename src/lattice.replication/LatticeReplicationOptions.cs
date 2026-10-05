@@ -130,7 +130,7 @@ public class LatticeReplicationOptions
     public Func<string, IWalStorageProvider>? WalStorageProvider { get; set; }
 
     /// <summary>
-    /// Maximum number of <see cref="WalEntry"/> records the per-shard WAL
+    /// Maximum number of <see cref="WalEntry"/> records the per-partition WAL
     /// grain will batch into a single <see cref="IWalStorageProvider.AppendBatchAsync"/>
     /// call. When the in-memory pending batch reaches this count, the
     /// next <c>Append</c> triggers a flush of the current batch before
@@ -153,7 +153,7 @@ public class LatticeReplicationOptions
     public long WalMaxBatchBytes { get; set; } = DefaultWalMaxBatchBytes;
 
     /// <summary>
-    /// Maximum number of in-flight + pending batches the per-shard WAL
+    /// Maximum number of in-flight + pending batches the per-partition WAL
     /// grain will hold before applying back-pressure to new
     /// <c>Append</c> callers. The single-in-flight-flush model in v1
     /// treats this as <c>(in-flight=1) + (pending=N-1)</c>; new
@@ -403,11 +403,11 @@ public class LatticeReplicationOptions
     /// (highest-HLC) entry, and elides the earlier same-key ones. Because
     /// each combine and the receiver-side apply are both commutative,
     /// associative, and idempotent, the merged entry converges to the
-    /// identical state as shipping the run individually. The generic
-    /// OR-Map mode is not combined (its value CRDT is type-erased on the
-    /// shipper); its entries ship individually, which is loss-free but
-    /// forgoes the bandwidth saving. A CRDT entry carrying no typed delta
-    /// (an opaque or legacy payload) also ships verbatim.
+    /// identical state as shipping the run individually. Registered
+    /// OR-Map shapes carry a combiner and coalesce like the closed
+    /// primitives; an unregistered OR-Map tree, another mode without a
+    /// combiner, or a CRDT entry carrying no typed delta (an opaque or
+    /// legacy payload) ships verbatim.
     /// </para>
     /// <para>
     /// Coalescing never elides a range delete, a saga terminal mark

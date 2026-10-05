@@ -211,7 +211,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 
@@ -315,8 +315,9 @@ public partial class BPlusLeafGrainTests
 
         await LeafActivationHarness.ActivateAsync(grain2, CancellationToken.None);
 
-        // Resumed strictly past the durable offset, never from zero.
-        await coord2.Received().ReadSliceAsync(4L, 13L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // Resumed strictly past the durable offset, never from zero. Head 13 is
+        // exclusive; the newest record is 12, the inclusive upper bound (#3489).
+        await coord2.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
         await coord2.DidNotReceive().ReadSliceAsync(-1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         for (var i = 1; i <= 12; i++)
@@ -349,7 +350,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0);
 
@@ -384,7 +385,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0,
             // Guards the NO-RECORD path (issue #2165). The comment above states

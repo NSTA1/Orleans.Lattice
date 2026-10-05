@@ -1,0 +1,18 @@
+# Pairs with LogPrefixApplied, and reproduces issue #4621 as production had it:
+# an append abandoned at its flush deadline (or by an expired drain) leaves the
+# in-flight window, so the watermark no longer stops at it; a reader passes the
+# offset, the abandoned provider call then lands, and the entry sits below the
+# reader's position for ever. The base bounds the watermark by every unsettled
+# abandoned append (WalAbandonedFlushRegistry).
+MODULE: LogPrefixAppliedWatermarkIgnoresAbandoned
+TARGET: LogPrefixApplied
+CLASS: Invariant
+SUMMARY: the watermark ignores an abandoned append, so it lands below a reader that passed it
+PERTURBS: ReadStep
+
+--- FIND
+    /\ ReadFrom(l) < Watermark
+--- REPLACE
+\* MUTATION: an abandoned append no longer bounds the reader's horizon.
+    /\ ReadFrom(l) < Min({next, RecoveredNext} \cup inflight)
+--- END

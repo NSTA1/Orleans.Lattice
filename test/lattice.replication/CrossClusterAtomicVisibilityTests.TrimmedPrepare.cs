@@ -1,6 +1,8 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication.Grains;
+using Orleans.Lattice.Replication.Tests.Fakes;
 using Orleans.Lattice.Replication.Tests.Grains;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -218,6 +220,66 @@ public partial class CrossClusterAtomicVisibilityTests
         });
     }
 
+    [TestCase(true, false, TestName = "Shipper_does_not_take_a_peer_off_the_log_for_a_hole_directly_above_the_trim_watermark")]
+    [TestCase(false, true, TestName = "Shipper_without_a_trusted_trim_watermark_treats_a_jump_as_a_trim")]
+    public async Task Shipper_tells_a_hole_above_the_trim_point_from_a_trim(bool reportsWatermark, bool reseedExpected)
+    {
+        // Issue #4621: offsets are not dense. A flush abandoned at its deadline
+        // that never lands leaves a permanent hole the allocator has moved past.
+        // Here offset 0 was trimmed and offset 1 is a hole, so the lowest stored
+        // offset (2) sits above the shipper's cursor (1) although nothing it needs
+        // was trimmed. Only the trim watermark (0) tells the two apart; without a
+        // trusted one the shipper must fail closed and treat the jump as a trim.
+        var tree = "ccv-shipper-hole-above-trim-" + reportsWatermark;
+        var ticks = DateTime.UtcNow.Ticks;
+        var walEncoder = new ReplicationShipperGrainTests.StubWalRecordEncoder();
+        var feeds = new[]
+        {
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+        };
+        for (var i = 0; i < 4; i++)
+        {
+            feeds[0].Append(new WalRecord
+            {
+                TreeId = tree,
+                Op = MutationKind.Set,
+                Key = $"hole-{i}",
+                Value = new byte[] { (byte)i },
+                Timestamp = Hlc(ticks, i + 1),
+                OriginClusterId = TwoSiteClusterFixture.SiteAClusterId,
+            });
+        }
+
+        feeds[0].TrimmedThrough = 1;
+        feeds[0].Holes.Add(1);
+        feeds[0].ReportsTrimWatermark = reportsWatermark;
+
+        var shipped = new List<string>();
+        var transport = Substitute.For<IReplicationTransport>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                var segments = call.Arg<ReplicationBatch>().EncodedEnvelope?.EncodedEntries.ToArray() ?? [];
+                shipped.AddRange(segments.Select(s => walEncoder.Decode(s.AsSpan()).Key));
+                return Task.FromResult(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+            });
+
+        // The shipper already delivered offset 0 before it was trimmed.
+        var state = new FakePersistentState<ReplicationShipperState>();
+        state.State.PartitionCursors[0] = 1;
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state);
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.EqualTo(reseedExpected),
+                reportsWatermark
+                    ? "a hole above the trim watermark is not a trim"
+                    : "without a trusted trim watermark every jump must be treated as a trim");
+            Assert.That(shipped, Is.SupersetOf(new[] { "hole-2", "hole-3" }), "every retained plain record ships");
+        });
+    }
     private static double? ReseedSeconds(ReplicationPeerStats stats, string tree) =>
         stats.ReadStatusPage(new ReplicationPeerStatusReadRequest { TreeId = tree, Limit = 10 })
             .Single(r => r.Direction == ReplicationContactDirection.Outbound)

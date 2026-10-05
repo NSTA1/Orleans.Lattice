@@ -102,8 +102,8 @@ internal sealed class ViewCheckpointState
     /// <summary>
     /// The physical tree id the view is currently bound to and tailing. A source
     /// tree's logical id (the projection's configured source) is resolved to a
-    /// physical id through the registry alias; a shadow-cutover restore, a tree
-    /// resize, or a reshard can repoint that alias at a new physical tree whose
+    /// physical id through the registry alias; a shadow-cutover restore or revert, a tree
+    /// resize or undo, schema remediation, or a set-alias operation can repoint that alias at a new physical tree whose
     /// write-ahead log is addressed under the new physical id. The maintainer
     /// records the physical identity it last bound to here and, on each drain,
     /// compares it against the freshly-resolved physical id: a mismatch means the

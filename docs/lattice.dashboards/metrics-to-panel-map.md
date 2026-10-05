@@ -404,7 +404,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.wal.entries_shipped` | counter (`{entry}`) | `tree`, `peer`, `tenant` | WAL throughput; Log-tailing producer: leaf WAL append vs ship rate |
 | `orleans.lattice.wal.entries_trimmed` | counter (`{entry}`) | `tree`, `shard`, `tenant` | WAL throughput; WAL GC trim stops by reason, whose second target keeps only the `offset_floor` stops on shards trimming nothing |
 | `orleans.lattice.wal.compactions` | counter (`{compaction}`) | `tree`, `shard`, `trigger`, `tenant` | WAL compactions by trigger over range |
-| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter (`By`) | `tree`, `shard`, `tenant` | WAL bytes reclaimed by compaction over range |
+| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter (`By`) | `tree`, `shard`, `trigger`, `tenant` | WAL bytes reclaimed by compaction over range |
 | `orleans.lattice.wal.compaction.eval.retained_bytes` | histogram (`By`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - bytes per shard |
 | `orleans.lattice.wal.compaction.eval.dead_bytes` | histogram (`By`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - bytes per shard |
 | `orleans.lattice.wal.compaction.eval.retained_entries` | histogram (`{entry}`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - entries per shard |
@@ -416,7 +416,6 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.apply.saga_deferred` | counter (`{entry}`) | `tree`, `origin`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.apply.saga_poisoned` | counter (`{saga}`) | `tree`, `origin`, `outcome`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.dead_letter.refused` | counter (`{entry}`) | `tree`, `reason`, `tenant` | Dead-letter queue churn. A park the full queue refused; the entry stays unacknowledged and the link is held back (issue #4603). Emitted only on a refusal, so it carries no `or vector(0)`. |
-| `orleans.lattice.replication.shipper.saga_poisoned` | counter (`{saga}`) | `tree`, `peer`, `outcome`, `tenant` | Dead-letter queue churn |
 | `orleans.lattice.replication.apply.fifo_violations` | counter (`{entry}`) | `tree`, `origin`, `tenant` | Apply correctness violations (rate). Diagnostic, not a correctness alarm: source HLCs are stamped per leaf, so a new write to a different key routinely applies below the highest HLC already applied for its origin (issue #1060), and a non-zero rate is expected; the entry is still applied |
 | `orleans.lattice.replication.apply.causal_violations_blocked` | counter (`{entry}`) | `tree`, `tenant` | Apply correctness violations (rate) |
 | `orleans.lattice.replication.peer.fell_off_log` | counter (`{event}`) | `tree`, `origin`, `tenant` | Peer fell-off-log events (count over range), grouped by `origin` and filtered by the `tree` selector; the instrument carries no `peer` label, so the `peer` selector does not apply |
@@ -451,6 +450,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.bootstrap.transient_retries` | counter (`{retry}`) | `tree`, `origin`, `tenant` | Bootstrap transient retries (rate) |
 | `orleans.lattice.replication.bootstrap.read_fence_force_lifted` | counter (`{lift}`) | `tree`, `tenant` | Bootstrap read fence force-lifted - issue #4526 |
 | `orleans.lattice.replication.bootstrap.reconcile` | counter (`{pass}`) | `tree`, `origin`, `outcome`, `tenant` | Bootstrap delete reconcile (rate by outcome) |
+| `orleans.lattice.replication.causal.frontier_origins` | up-down counter (`{origin}`) | `tree`, `origin`, `mode`, `tenant` | Causal frontier origins by mode - issue #4586 |
 | `orleans.lattice.replication.peer.fell_off_log_suppressed` | counter (`{event}`) | `tree`, `origin`, `tenant` | Fall-off-log suppressed events (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.triggered` | counter (`{fallback}`) | `tree`, `peer`, `tenant` | Bootstrap fallback triggered (rate) |
 | `orleans.lattice.replication.bootstrap_fallback.entries` | counter (`{entry}`) | `tree`, `peer`, `tenant` | Bootstrap fallback entries re-shipped (rate) |
@@ -475,6 +475,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.saga.participant.commits` | counter (`{commit}`) | `reason`, `tenant` | Coordinated restore: participant votes, commits and aborts (rate) |
 | `orleans.lattice.replication.saga.participant.aborts` | counter (`{abort}`) | `reason`, `tenant` | Coordinated restore: participant votes, commits and aborts (rate) |
 | `orleans.lattice.replication.saga.compensations` | counter (`{compensation}`) | `cause`, `tenant` | Coordinated restore: saga compensations (rate by cause) |
+| `orleans.lattice.replication.saga.participant.fence_held_age` | gauge (`s`) | `reason`, `tenant` | Coordinated restore: cutover fences held past their window (age, s). Recorded only while a prepared participant holds its fence past the window waiting for the coordinator's decision (`decision_pending`, `coordinator_unreachable`), so an empty panel is healthy |
 
 ## `orleans.lattice.auth` meter
 

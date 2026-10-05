@@ -14,9 +14,9 @@ namespace Orleans.Lattice.Replication;
 /// </summary>
 /// <remarks>
 /// <para>
-/// Replication transports that ship dense per-shard offsets can save
+/// Replication transports that ship dense per-partition offsets can save
 /// wire bytes by delta-encoding each entry's frontier against its
-/// predecessor on the same shard, then restoring the absolute frontier
+/// predecessor on the same WAL partition, then restoring the absolute frontier
 /// on the receiving side. To keep the trim-from-the-head invariant
 /// safe, callers must encode an <em>absolute</em> frontier on every
 /// batch boundary and on any entry whose predecessor was trimmed by

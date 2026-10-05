@@ -394,6 +394,45 @@ public interface IWalStorageProvider
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the shard's durable trim watermark: the highest offset any
+    /// <see cref="TrimAsync"/> has trimmed through, or <c>-1</c> when nothing has
+    /// been trimmed. Returns <see langword="null"/> when the provider does not
+    /// maintain one, which is the default.
+    /// <para>
+    /// Offsets are not dense: a flush abandoned at its deadline that never lands
+    /// leaves a hole the WAL grain has already allocated past. A hole directly
+    /// above a trim point is indistinguishable from a trim when judged by
+    /// <see cref="GetLowestOffsetAsync"/>, so a reader that infers a trim from
+    /// the lowest stored offset reports a spurious fall-off. The watermark is
+    /// what separates the two (issue #4621): an offset at or below it was
+    /// trimmed, and a missing offset above it is a hole.
+    /// </para>
+    /// <para>
+    /// A provider that returns a watermark must persist it durably
+    /// <i>before</i> it deletes any entry a trim removes, so a crash in between
+    /// leaves the watermark above entries that still exist rather than a
+    /// deleted range below a stale watermark, and must never return an entry at
+    /// or below it from <see cref="ReadAsync"/> or report one from
+    /// <see cref="GetLowestOffsetAsync"/>. A provider that returns
+    /// <see langword="null"/> keeps every reader on the conservative rule that
+    /// treats any jump in offsets as a trim.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1. Not a tree shard index: every shard of the tree shares these partitions.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
+    /// <returns>The trim watermark, <c>-1</c> when nothing was trimmed, or <see langword="null"/> when the provider keeps none.</returns>
+    Task<long?> GetTrimWatermarkAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<long?>(null);
+    }
+
+    /// <summary>
     /// Asks the provider to evaluate whether
     /// <paramref name="treeId"/> / <paramref name="shardIndex"/> is due for
     /// physical reclamation, and to perform it if its own policy says so.

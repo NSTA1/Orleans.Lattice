@@ -657,6 +657,12 @@ public static class LatticeServiceCollectionExtensions
                 sp.GetKeyedService<Orleans.Storage.IGrainStorage>(LatticeOptions.StorageProviderName),
                 optionsResolver: sp.GetService<LatticeOptionsResolver>()));
 
+        // Flush durable materialiser-pin advances the reporter's debounce
+        // coalesced but never wrote, at silo stop, after grain deactivation and
+        // before storage teardown (issue #3509).
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<ILifecycleParticipant<ISiloLifecycle>, BPlusTree.Grains.LeafCursorReporterShutdownFlushParticipant>());
+
         // Reusable per-shard WAL tailing loop shared by every log consumer
         // (materialised views, the replication producer, future change-feed /
         // audit sinks). It depends on both the commit-log reader (registered by

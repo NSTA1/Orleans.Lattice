@@ -25,8 +25,8 @@ namespace Orleans.Lattice.Replication;
 ///     and <see cref="TagPeer"/>.
 ///   </item>
 ///   <item>
-///     <b>Per-operation histograms</b> - <c>ship_duration</c>,
-///     <c>apply_duration</c>. Reported in milliseconds as <c>double</c>.
+///     <b>Per-operation histograms</b> - <c>orleans.lattice.replication.ship.duration</c>,
+///     <c>orleans.lattice.replication.apply.duration</c>. Reported in milliseconds as <c>double</c>.
 ///     Tagged with <see cref="TagTree"/>, <see cref="TagPeer"/>, and (for
 ///     terminal outcomes) <see cref="TagOutcome"/>.
 ///   </item>
@@ -855,39 +855,11 @@ public static class LatticeReplicationMetrics
             description: "Receiver-side poisoned sagas, tagged by tree, origin and outcome (timeout/operator/refused_decided/refused_full).");
 
     /// <summary>
-    /// Counter of sagas the outbound shipper poisoned for a peer because a
-    /// prepare of the saga was parked on the dead-letter queue instead of
-    /// shipped (#4494). Tagged by <see cref="TagTree"/>, <see cref="TagPeer"/>
-    /// and <see cref="TagOutcome"/>: <see cref="OutcomeSagaPoisoned"/> when the
-    /// saga is withheld from the peer (its other records are parked with
-    /// <see cref="ReasonPoisonedSaga"/>, and the peer serves the saga as never
-    /// written until it is re-bootstrapped), <see cref="OutcomeSagaPoisonRefused"/>
-    /// when the shipper's poison list is full and it stops advancing past the
-    /// failing batch instead (fail closed: the stream to that peer stalls until
-    /// an operator intervenes). Any increment needs operator attention; the
-    /// warning log names the transaction id.
-    /// </summary>
-    public static readonly Counter<long> ShipperSagaPoisoned =
-        Meter.CreateCounter<long>("orleans.lattice.replication.shipper.saga_poisoned", unit: "{saga}",
-            description: "Sagas withheld from a peer because a prepare was dead-lettered, tagged by tree, peer and outcome.");
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the saga
-    /// is withheld from the peer.
-    /// </summary>
-    public const string OutcomeSagaPoisoned = "poisoned";
-
-    /// <summary>
-    /// <see cref="TagOutcome"/> value on <see cref="ShipperSagaPoisoned"/>: the
-    /// poison list was full, so the shipper refused to advance past the batch.
-    /// </summary>
-    public const string OutcomeSagaPoisonRefused = "refused";
-
-    /// <summary>
     /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for a
-    /// later prepare or a terminal of a saga the shipper poisoned after one of
-    /// its prepares was dead-lettered (#4494). The record is parked rather than
-    /// shipped so the peer never commits the saga without the lost write.
+    /// record of a saga the receiver poisoned after a prepare of it stayed
+    /// unappliable past <c>SagaDeferralTimeout</c>, or an operator poisoned
+    /// (#4591). The record is parked rather than applied so the receiver never
+    /// commits the saga without the lost write.
     /// </summary>
     public const string ReasonPoisonedSaga = "poisoned_saga";
 
@@ -1067,6 +1039,25 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="WalEntriesShipped"/> counter.
     /// </summary>
     public const string WalEntriesShippedName = "orleans.lattice.replication.wal.entries_shipped";
+
+    // --- Causal frontier (issue #4586 part 2b) -----------------------------------
+
+    /// <summary>
+    /// UpDownCounter of (tree, origin) pairs on this silo's receiver tree
+    /// frontiers, tagged by <see cref="TagTree"/>, <see cref="TagOrigin"/> and
+    /// <see cref="TagMode"/>: <c>exact</c> (the origin ships an applied low
+    /// watermark the tree accepted), <c>pending</c> (the tree tracks a lineage
+    /// but the origin has shipped no watermark yet - an older sender, or its
+    /// clock floor is not enabled), <c>awaiting_reseed</c> (the tree's contents
+    /// were replaced and await a full bootstrap) or <c>degraded</c> (the tree
+    /// registry tracks no lineage for the tree). Every mode but <c>exact</c> is
+    /// sound: only an applied write's exact identity meets a dependency on it.
+    /// A pair that stays outside <c>exact</c> on a fully upgraded cluster is the
+    /// signal to investigate.
+    /// </summary>
+    public static readonly UpDownCounter<long> CausalFrontierOrigins =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.causal.frontier_origins", unit: "{origin}",
+            description: "Receiver tree-frontier (tree, origin) pairs by mode: exact, pending, awaiting_reseed or degraded.");
 
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
@@ -2140,12 +2131,19 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Tag key for the cause of a saga compensation carried by
     /// <see cref="SagaCompensations"/>. Values are
-    /// <see cref="SagaCauseVoteAbort"/> (a participant voted abort and the
-    /// coordinator drove a rollback) and <see cref="SagaCauseCoordinatorLoss"/>
-    /// (the cutover fence expired without a coordinator decision and the
-    /// participant auto-compensated).
+    /// <see cref="SagaCauseVoteAbort"/> (a rollback on the coordinator's abort
+    /// decision, delivered by the coordinator or learned by the participant on
+    /// fence expiry) and <see cref="SagaCauseCoordinatorLoss"/> (an operator
+    /// resolved the participant to abort while its coordinator was unreachable).
     /// </summary>
     public const string TagCause = "cause";
+
+    /// <summary>
+    /// Tag key for a receiver tree frontier's mode for one origin
+    /// (<see cref="CausalFrontierOrigins"/>): <c>exact</c>, <c>pending</c>,
+    /// <c>awaiting_reseed</c> or <c>degraded</c>.
+    /// </summary>
+    public const string TagMode = "mode";
 
     /// <summary><see cref="TagPhase"/> value: the unfenced, resumable prepare (shadow build) phase.</summary>
     public const string SagaPhasePrepare = "prepare";
@@ -2302,9 +2300,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of saga compensations, incremented once per participant grain that
     /// rolls back a prepared saga and tagged by <see cref="TagCause"/>
-    /// (<see cref="SagaCauseVoteAbort"/> for a coordinator-driven rollback after a
-    /// vote abort, or <see cref="SagaCauseCoordinatorLoss"/> for a fence-expiry
-    /// auto-compensation after the coordinator decision never arrived).
+    /// (<see cref="SagaCauseVoteAbort"/> for a rollback on the coordinator's abort
+    /// decision, delivered or learned on fence expiry, or
+    /// <see cref="SagaCauseCoordinatorLoss"/> for an operator resolution to abort
+    /// while the coordinator was unreachable).
     /// </summary>
     public static readonly Counter<long> SagaCompensations =
         Meter.CreateCounter<long>("orleans.lattice.replication.saga.compensations", unit: "{compensation}",

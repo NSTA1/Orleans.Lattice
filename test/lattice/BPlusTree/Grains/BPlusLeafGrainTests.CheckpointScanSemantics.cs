@@ -137,8 +137,9 @@ public partial class BPlusLeafGrainTests
         // of 3 means offsets 1 and 2 were persisted at that moment. Offsets 3
         // and 4 are appended AFTER the head was read, which is the only way an
         // entry at or beyond a read head can exist. The replay's read is
-        // bounded inclusively by that head, so the next append (offset 3) is
-        // admitted and offset 4 is not.
+        // bounded inclusively by the newest offset below that exclusive head
+        // (head - 1, issue #3489), so neither late append (offset 3 nor 4) is
+        // admitted.
         var coord = BuildCoordinatorWithLateAppends(
             head: 3,
             persisted:
@@ -161,10 +162,11 @@ public partial class BPlusLeafGrainTests
         {
             Assert.That(grain.EntriesForTest, Is.Empty);
             Assert.That(
-                state.State.ProjectionCheckpointOffset, Is.EqualTo(3),
-                "the checkpoint is bounded by the WAL head that replay actually read, "
-                + "so 'scanned through' cannot be read as 'assume everything ahead': offset 4, "
-                + "appended beyond that head, must not be scanned");
+                state.State.ProjectionCheckpointOffset, Is.EqualTo(2),
+                "the checkpoint is bounded by the newest offset below the exclusive WAL head "
+                + "that replay actually read, so 'scanned through' cannot be read as 'assume "
+                + "everything ahead': offsets 3 and 4, appended at or beyond that head, must "
+                + "not be scanned");
         });
     }
 

@@ -137,7 +137,7 @@ The background reconcile cadence (see [Background reconcile and change detection
 
 > **These interval variables are a matched set.** `LATTICE_FULL_WALK_INTERVAL_SECONDS` and `LATTICE_EMBEDDING_GAP_SCAN_INTERVAL_SECONDS` are wall-clock values that are converted once into **pass counts** by dividing by the reconcile spacing (`LATTICE_RECONCILE_INTERVAL_SECONDS` plus `LATTICE_RECONCILE_JITTER_SECONDS`). Changing the reconcile interval therefore silently re-denominates both. Raising it far enough that the full-walk interval floors to a single pass switches directory-modification-time pruning off entirely - no error, and the prune cache is written on every run but never read. If you raise the reconcile interval, restate both. The host logs the derived pass counts next to the configured seconds at startup (`full walk 120 s = 24 pass(es) ...; pruning can engage: True`), and warns when the arithmetic has disabled pruning or has collapsed the embedding gap scan to every pass, so the conversion never has to be worked out by hand.
 
-Two further variables tune the indexing role and per-file token counting, and two select the semantic-retrieval path and size the vector cache:
+The next variables tune the indexing role, per-file token counting, semantic retrieval path, and vector cache:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -147,7 +147,7 @@ Two further variables tune the indexing role and per-file token counting, and tw
 | `LATTICE_REPOCONTEXT_SEMANTIC_RETRIEVAL` | `approximate` | Which semantic retrieval path is bound: `approximate` routes semantic search through the persisted approximate nearest-neighbour index (bounded recall, sub-linear query cost, survives a restart), and `exact` routes it through the complete-recall brute-force scan instead, whose cost is proportional to the corpus. An absent or unrecognised value falls back to `approximate`. A host set to `exact` maintains no approximate index at all, so the build coordinator below is inert for it. Documented in full under [Semantic search](semantic-search.md#the-two-paths). |
 | `LATTICE_VECTOR_CACHE_TTL_SECONDS` | `30` | How long (in seconds) a warm decoded-vector candidate set is trusted before it is re-gathered from the store; `0` disables the cache. |
 
-Four variables govern the **adaptive indexing pacer** (issue #3447), the silo-wide controller that smooths the embedding drain so a large pass no longer lands as one sustained spike. It sits in front of every embedding batch and never changes what a pass embeds, only when each batch runs: a failed or slow batch (over 250 ms and over 2.5x the learned per-passage latency baseline), a throttled vector tree, or GC memory load at its high-load threshold doubles an inter-batch delay from 250 ms up to the ceiling, and each clean batch walks it back down. Only a batch at least half the size of the largest seen is judged slow or moves the baseline, so a small remainder batch is neither misread as congestion nor drags the baseline down, and the baseline is never lowered by a batch that ran under a backoff delay. A vector tree that stays throttled for 60 seconds while the delay is held at its ceiling is not moved by indexing (a materialiser drain-lag minimum is the usual cause), so it stops counting as congestion until it clears or worsens; the WAL still paces throttled appends itself (issue #3456). A saturated vector tree holds the next batch for up to 30 seconds, an in-flight `repocontext_search` or `repocontext_context` call holds it for up to 2 seconds, and after each work slice the drain rests. While a foreground request is open or the drain is backing off, the approximate-index build defers its slices (at most 15 phase ticks in a row) and the self-index grain postpones a due coverage-digest audit (at most 12 sweeps in a row), so both are slowed and never starved. What the pacer is doing is reported as `pacing` on `repocontext_index_status`; see [Adaptive pacing](tools.md#adaptive-pacing).
+The **adaptive indexing pacer** variables (issue #3447) govern the silo-wide controller that smooths the embedding drain so a large pass no longer lands as one sustained spike. It sits in front of every embedding batch and never changes what a pass embeds, only when each batch runs: a failed or slow batch (over 250 ms and over 2.5x the learned per-passage latency baseline), a throttled vector tree, or GC memory load at its high-load threshold doubles an inter-batch delay from 250 ms up to the ceiling, and each clean batch walks it back down. Only a batch at least half the size of the largest seen is judged slow or moves the baseline, so a small remainder batch is neither misread as congestion nor drags the baseline down, and the baseline is never lowered by a batch that ran under a backoff delay. A vector tree that stays throttled for 60 seconds while the delay is held at its ceiling is not moved by indexing (a materialiser drain-lag minimum is the usual cause), so it stops counting as congestion until it clears or worsens; the WAL still paces throttled appends itself (issue #3456). A saturated vector tree holds the next batch for up to 30 seconds, an in-flight `repocontext_search` or `repocontext_context` call holds it for up to 2 seconds, and after each work slice the drain rests. While a foreground request is open or the drain is backing off, the approximate-index build defers its slices (at most 15 phase ticks in a row) and the self-index grain postpones a due coverage-digest audit (at most 12 sweeps in a row), so both are slowed and never starved. What the pacer is doing is reported as `pacing` on `repocontext_index_status`; see [Adaptive pacing](tools.md#adaptive-pacing).
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -166,7 +166,7 @@ The next variables are the kill switches for the approximate index's own houseke
 
 > **The sweep cadence is deliberately not part of the matched set above.** It used to be: the sweep took its interval from `LATTICE_RECONCILE_INTERVAL_SECONDS`, so raising that variable to quiesce walk load - a reasonable action, with nothing in its name to suggest otherwise - throttled index arming by the same factor. That is worse than a slow sweep. Two things arm a coordinator, this sweep and the self-index grain finishing a vectorising pass; a converged repository whose index was never built has no vectorising pass to finish, so the sweep is its **only** arming path, and the vectorising pass was paced by the reconcile interval too. Raising it did not slow one path of two, it slowed the only two there are. The index then serves nothing while the retrieval counter records `state="bootstrapping"`, which at the metric is indistinguishable from a genuine index defect. `LATTICE_REPOCONTEXT_ANN_SWEEP_INTERVAL_SECONDS` defaults to 900 seconds, which is the reconcile interval's own default, so a host that configures neither variable sweeps at exactly the cadence it always did.
 
-Five more variables bound how long the approximate index may hold its build coordinator's turn while it opens and ingests. An absent or malformed value falls back to the default:
+The next variables bound how long the approximate index may hold its build coordinator's turn while it opens and ingests. An absent or malformed value falls back to the default:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -176,7 +176,7 @@ Five more variables bound how long the approximate index may hold its build coor
 | `LATTICE_REPOCONTEXT_ANN_OPEN_MAX_CONSECUTIVE_REFUSALS` | `12` | Consecutive admission refusals after which the open declares itself terminally saturated. Declaring does not stop retrying. `0` removes the count bound. |
 | `LATTICE_REPOCONTEXT_ANN_OPEN_REFUSAL_TERMINAL_SECONDS` | `600` | How long an unbroken run of admission refusals may last before the same terminal state is declared, whichever bound is reached first. `0` removes the elapsed bound. |
 
-Three further variables bound resources whose defaults come from a runtime fact or a fixed assumption rather than from the deployment's real limit, so a constrained container can state the limit it actually has:
+Further variables bound resources whose defaults come from a runtime fact or a fixed assumption rather than from the deployment's real limit, so a constrained container can state the limit it actually has:
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -600,7 +600,7 @@ RepoContext drain started with ... resident activations: ... The host shutdown b
 RepoContext drain complete in 33.9s, consuming 18.8% of the 180s host shutdown budget. ...
 ```
 
-There are three outcomes and the log distinguishes all three, which it did not before issue #2397.
+The log distinguishes the drain outcomes, which it did not before issue #2397.
 
 | What you see | What happened | What to do |
 | --- | --- | --- |
@@ -707,7 +707,7 @@ Two properties hold structurally since issue #3305, and both are pinned by `Repo
 
 Those lines also distinguish a **declared** grant from an **assumed** one, because the remedy differs. If the grace period was declared and the evidence contradicts it, the declaration is wrong and must be raised. If it was merely assumed because the variable is unset, the deployment may already grant enough and simply never said so. The same distinction is carried in the effective-configuration dump since issue #2593; before that fix a defaulted `120s` and a declared `120s` printed identically, which is how epic #2368's gate run 2 came to record a grace period nobody had actually set.
 
-Ten gauges expose the same state on `/metrics`, so this is alertable without log scraping:
+The gauges below expose the same state on `/metrics`, so this is alertable without log scraping:
 
 | Gauge | Meaning |
 |-------|---------|

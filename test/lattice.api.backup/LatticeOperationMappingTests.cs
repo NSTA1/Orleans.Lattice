@@ -96,6 +96,22 @@ public sealed class LatticeOperationMappingTests
         });
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public void ToHandle_of_a_launch_is_created_exactly_when_the_launch_started_the_work(bool started)
+    {
+        var launch = new LatticeOperationLaunch<int>(
+            Record(EngineState.Queued), started ? Task.FromResult(1) : null);
+
+        var handle = LatticeOperationMapping.ToHandle(launch);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handle.OperationId, Is.EqualTo("op-1"));
+            Assert.That(handle.Created, Is.EqualTo(started));
+        });
+    }
+
     [Test]
     public void Null_records_are_rejected()
     {

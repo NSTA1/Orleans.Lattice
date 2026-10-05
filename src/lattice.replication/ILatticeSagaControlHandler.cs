@@ -55,4 +55,22 @@ public interface ILatticeSagaControlHandler
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The participant's status response.</returns>
     Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Answers a participant's <c>GetDecision</c> query on the saga's
+    /// coordinator cluster (issue #4637): the durable decision of the saga
+    /// <see cref="SagaControlRequest.SagaId"/>, as
+    /// <see cref="SagaPhase.Committed"/>, <see cref="SagaPhase.Aborted"/>, or
+    /// <see cref="SagaPhase.Prepared"/> while it is still pending.
+    /// <see cref="SagaControlRequest.RequesterClusterId"/> carries the
+    /// authenticated origin the transport stamped; a requester that is not one
+    /// of the saga's participants is refused. The default implementation throws
+    /// <see cref="NotSupportedException"/>.
+    /// </summary>
+    /// <param name="request">The control request; its requester is set by the transport.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The decision, carried in <see cref="SagaControlResponse.Phase"/>.</returns>
+    Task<SagaControlResponse> GetDecisionAsync(SagaControlRequest request, CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            $"This {nameof(ILatticeSagaControlHandler)} implementation hosts no saga coordinator.");
 }
