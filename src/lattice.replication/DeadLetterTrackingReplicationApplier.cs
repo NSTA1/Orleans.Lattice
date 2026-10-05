@@ -279,6 +279,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var applied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         HashSet<Guid>? deferredSagas = null;
         for (var i = 0; i < unpoisonedEntries.Count; i++)
         {
@@ -307,12 +308,16 @@ internal sealed class DeadLetterTrackingReplicationApplier(
                     (deferredSagas ??= new HashSet<Guid>()).Add(unpoisonedEntries[i].TransactionId);
                 }
             }
+            if (result.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -483,7 +488,7 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var reasonTag = ClassifyFailure(failure);
         try
         {
-            await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken).ConfigureAwait(false);
+            await dlq.EnqueueAsync(entry, failure.Message ?? "<no message>", attempts, reasonTag, cancellationToken, ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
         }
         catch (ReplicationDeadLetterQueueFullException)
@@ -865,7 +870,8 @@ internal sealed class DeadLetterTrackingReplicationApplier(
                 failureReason,
                 retryCount,
                 LatticeReplicationMetrics.ReasonPoisonedSaga,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                ReplicationSourceLineageScope.Current).ConfigureAwait(false);
             peerStats?.RecordDeadLetterFull(entry.TreeId, entry.OriginClusterId ?? string.Empty, ReplicationContactDirection.Inbound, since: null);
         }
         catch (ReplicationDeadLetterQueueFullException)

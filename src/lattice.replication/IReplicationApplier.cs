@@ -92,6 +92,7 @@ public interface IReplicationApplier
 
         var applied = false;
         var deferred = false;
+        var lineageRefused = false;
         var highest = Orleans.Lattice.HybridLogicalClock.Zero;
         for (var i = 0; i < entries.Count; i++)
         {
@@ -105,11 +106,15 @@ public interface IReplicationApplier
             {
                 deferred = true;
             }
+            if (result.SourceLineageRefused)
+            {
+                lineageRefused = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = deferred };
+        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = deferred, SourceLineageRefused = lineageRefused };
     }
 }

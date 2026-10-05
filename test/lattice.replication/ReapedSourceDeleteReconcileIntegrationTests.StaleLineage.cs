@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.Logging.Abstractions;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.TestingHost;
@@ -13,26 +12,42 @@ namespace Orleans.Lattice.Replication.Tests;
 /// plants a source-origin row the new lineage never held, and the receiver,
 /// aligned with the new lineage, would fabricate its delete on the next
 /// reconcile. Each delayed batch is delivered the way the push path delivers
-/// it: the source lineage gate, then the real applier. Runs the real bootstrap
-/// coordinator, tree frontier and applier in two real clusters.
+/// it: under the sender's lineage stamp, into the real applier, whose admission
+/// seam runs the source lineage gate. Issue #4707: the same entry parked in the
+/// causal-apply buffer, or dead-lettered, before the realign is refused when the
+/// drain or a replay reaches it. Runs the real bootstrap coordinator, tree
+/// frontier, applier, causal buffer and dead-letter queue in two real clusters.
 /// </summary>
 public partial class ReapedSourceDeleteReconcileIntegrationTests
 {
-    /// <summary>Delivers <paramref name="record"/> as a push stamped with <paramref name="stamped"/>.</summary>
-    private static async Task<ReplicationSourceLineageGate.Verdict> PushStampedAsync(TestCluster receiver, WalRecord record, Guid? stamped)
+    /// <summary>
+    /// Delivers <paramref name="records"/> as one push stamped with
+    /// <paramref name="stamped"/>, the way the gRPC receive path does: the
+    /// sender's stamp rides into the applier on the lineage scope, with the
+    /// frontier epoch the ack would report.
+    /// </summary>
+    private static async Task<ReplicationSourceLineageGate.Verdict> PushStampedAsync(
+        TestCluster receiver,
+        IReadOnlyList<WalRecord> records,
+        Guid? stamped)
     {
-        var tree = record.TreeId!;
+        var tree = records[0].TreeId!;
         var epoch = await receiver.Client.GetGrain<IReplicationTreeFrontierGrain>(tree)
             .ObserveAsync(SiteAClusterId, null, CancellationToken.None);
-        var verdict = await ReplicationSourceLineageGate.CheckAsync(
-            receiver.Client, tree, SiteAClusterId, stamped, epoch, NullLogger.Instance);
-        if (verdict == ReplicationSourceLineageGate.Verdict.Apply)
+        ApplyResult result;
+        using (ReplicationSourceLineageScope.Enter(SiteAClusterId, stamped, epoch))
         {
-            await Applier(receiver).ApplyBatchAsync([record], CancellationToken.None);
+            result = await Applier(receiver).ApplyBatchAsync(records, CancellationToken.None);
         }
 
-        return verdict;
+        return result.SourceLineageRefused ? ReplicationSourceLineageGate.Verdict.RefuseLineage
+            : result.Deferred ? ReplicationSourceLineageGate.Verdict.RefuseTransient
+            : ReplicationSourceLineageGate.Verdict.Apply;
     }
+
+    /// <summary>Delivers <paramref name="record"/> as a one-entry push stamped with <paramref name="stamped"/>.</summary>
+    private static Task<ReplicationSourceLineageGate.Verdict> PushStampedAsync(TestCluster receiver, WalRecord record, Guid? stamped) =>
+        PushStampedAsync(receiver, [record], stamped);
 
     private async Task<Guid> RestampSourceLineageAsync(string tree)
     {
