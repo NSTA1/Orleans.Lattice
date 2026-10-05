@@ -192,7 +192,7 @@ trim and recovers.
 | Consumer | What a TTL trim can overtake | Detection | Recovery | Detector |
 |----------|------------------------------|-----------|----------|----------|
 | Leaf materialiser with a durable checkpoint | Nothing. The scan stops at the partition's durable materialiser offset floor, the minimum of every leaf's `min(checkpoint, coverage)`, before eligibility is evaluated (`LatticeWalGc.TrimShardAsync`), so the TTL arm never reaches an entry a leaf has not durably applied or snapshotted. | Not needed. | Not needed. | `LatticeWalGcRetentionLeafFloorTests.RunOnceAsync_retention_ttl_never_trims_past_a_leafs_durable_offset_floor` (red when the floor stop is dropped). |
-| Leaf materialiser with no durable checkpoint on the partition (a standing `Zero` block pin: a data-bearing leaf that has never checkpointed, present in the registry or not) | Nothing. Every durable pin at or below `Zero` that the offset floor does not cover holds the partition it names against every admitting arm, the TTL arm included (`DurableMaterialiserFloor.IsPartitionHeldByBlockPin`, issue #4622), because such a leaf replays from the `-1` sentinel on a cold activation and could not detect a trimmed prefix. | Not needed. | Not needed. | `WalRetentionBlockPinTests.A_retention_trim_keeps_an_acknowledged_write_a_never_checkpointed_leaf_owns` (real grains, silo lost; red when the TTL arm passes a block pin), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_does_not_trim_a_partition_a_standing_block_pin_holds` (red likewise) and `LatticeWalGcBlockPinHoldTests.A_registered_leafs_cursor_does_not_trim_a_partition_its_standing_block_pin_holds` (red when only registry-absent pins hold). |
+| Leaf materialiser with no durable checkpoint on the partition (a standing `Zero` block pin: a data-bearing leaf that has never checkpointed, present in the registry or not, including a tree none of whose leaves has checkpointed yet) | Nothing. Every durable pin at or below `Zero` that the offset floor does not cover holds the partition it names against every admitting arm, the TTL arm included (`DurableMaterialiserFloor.IsPartitionHeldByBlockPin`, issue #4622), because such a leaf replays from the `-1` sentinel on a cold activation and could not detect a trimmed prefix. | Not needed. | Not needed. | `WalRetentionBlockPinTests.A_retention_trim_keeps_an_acknowledged_write_a_never_checkpointed_leaf_owns` (real grains, silo lost; red when the TTL arm passes a block pin), `LatticeWalGcBlockPinHoldTests.A_retention_ceiling_does_not_trim_a_partition_a_standing_block_pin_holds` (red likewise) and `LatticeWalGcBlockPinHoldTests.A_registered_leafs_cursor_does_not_trim_a_partition_its_standing_block_pin_holds` (red when only registry-absent pins hold). |
 | Replication shipper | Entries it has not durably acknowledged. | A shipping read whose first sequence is above the one requested (`ReplicationShipperGrain.ForcedGap`). | The shipper withholds saga records and asks the peer to re-seed (`ReplicationBatch.ReseedAfterEpoch`); the receiver bootstraps from an export taken after the gap, and the shipper then rewinds every partition to its lowest retained entry (#4534, #4599). | `CrossClusterAtomicVisibilityTests.Saga_whose_prepare_was_trimmed_unshipped_is_never_delivered_torn`, `CrossClusterAtomicVisibilityTests.Shipper_asks_a_peer_it_took_off_the_log_to_reseed_and_resumes_once_it_has` and `SourceWalTrimFallOffIntegrationTests.Receiver_behind_a_source_wal_trim_is_re_seeded_and_converges`. |
 | View maintainer | Entries past its durable read position. | `WalLogSubscriber` reports a fall-off when the tail has passed the next offset it needs, probed before the read and again whenever a read jumps an offset. | The maintainer logs the warning `View '{ViewName}' fell off the WAL on source '{SourceTree}'; rebuilding.` (`ViewMaintainerGrain.DrainAsync`; the aggregation drain logs its own), rebuilds from current source state and resumes tailing from the heads it captured. An accumulative (history) view's rebuild collapses its timeline to one revision per key: that is its contract, since a history view's timeline is bounded by WAL retention (`docs/lattice/history-views.md`), and the warning makes the collapse observable. | `WalGcViewOffsetFloorTests.A_view_a_retention_trim_overtakes_falls_off_and_rebuilds_from_source_state` (red when the maintainer ignores the fall-off), `HistoryViewWalFallOffTests.A_history_view_a_retention_trim_overtakes_logs_the_fall_off_and_collapses_to_current_state` (asserts the warning and the collapse; red likewise), `WalLogSubscriberTests.DrainAsync_reports_fell_off_log_when_a_trim_lands_between_the_tail_probe_and_the_read` and `ViewMaintainerAggregationDrainTests.Aggregation_drain_rebuilds_when_the_source_WAL_trimmed_past_the_checkpoint`. |
 | Incremental backup capture | Its delta window (it is not a retention reader). | `LatticeBackupCaptureService.HasFallenOffAsync` before the drain, and `WalLogSubscriber` during it. | A full capture, whose cut is read from leaf state and is newer than the window it replaces. | `LatticeBackupIncrementalCaptureTests.CaptureIncrementalAsync_falls_back_to_a_full_when_the_base_resume_point_fell_off_the_wal` and `IncrementalDeltaCollectorTests.A_trim_landing_after_the_tail_probe_makes_the_capture_fall_back_rather_than_skip_entries`. |
@@ -253,25 +253,24 @@ from this specification.**
   That guard compares the trimmed tail with the persisted checkpoint, not with
   offset 0, so a cold start over a WAL trimmed through the persisted checkpoint
   passes it. No conclusion about either cell may be drawn from this specification.
-- **Flushes that land unacknowledged, or late.** The model's in-flight write is
-  either flushed and acknowledged, or lost with a shard crash. Production has two
-  more outcomes. `WalShardGrain.HandleFlushFailureAsync` faults the acknowledgements
-  of later slots even when their provider write succeeded, then resyncs the
-  allocator above the provider's highest offset, so a write can be durable and
-  unacknowledged. And a provider call abandoned by a crash or by an expired drain
-  (`ForceFaultRemainingSlotsForDrainBudgetExpiry`) can land after a new activation
-  has recovered its allocator below it (`WalOffsetAllocationCore.RecoveredNextOffset`
-  reads the provider's highest offset). The argument that no checked property is
-  affected: every WAL provider writes an offset create-only (the in-memory and file
-  providers throw on an existing offset, and the Azure Table provider uses a
-  transactional `Add`), so of a late write and a new append at the same offset one
-  fails and its acknowledgement is faulted; no acknowledged write is overwritten and
-  no offset carries two acknowledged writes (`OffsetContiguity`). A durable but
-  unacknowledged entry is outside `AckedWriteDurable`, `TrimCoveredBySnapshot` and
-  `EveryAckedWriteMaterialised`, which quantify over acknowledged writes, and it is
-  never in flight once the allocator has resynced above it, so `ShippingNeverSkips`
-  may show it to a reader. The argument rests on the providers' create-only write;
-  provider durability semantics beyond that are not modelled.- **Shard moves.** Specified in `WalMove.tla`, not here.
+- **Flushes that land unacknowledged, or late: an open defect, issue #4621.** The
+  model's in-flight write is either flushed and acknowledged, or lost with a shard
+  crash. Production has two more outcomes. `WalShardGrain.HandleFlushFailureAsync`
+  faults the acknowledgements of later slots even when their provider write
+  succeeded, then resyncs the allocator above the provider's highest offset, so a
+  write can be durable and unacknowledged. And a provider call abandoned at its
+  flush deadline, by an expired drain or by a crash can land after the allocator
+  has resynced above it. Every WAL provider writes an offset create-only, so no
+  acknowledged write is ever overwritten and no offset carries two acknowledged
+  writes (`OffsetContiguity`). But the review's argument that nothing else is
+  affected was wrong: the abandoned offset is a hole below the watermark, readers
+  advance past it, and when the write lands it sits below their cursors, so the
+  shipper, views and a warm leaf never see it while a cold rebuild applies it.
+  Reproduced on the real `WalShardGrain`, and by TLC at depth 7 with the model
+  extended by a late-landing action and the invariant that every readable owned
+  entry at or below a read position is in the projection. Until #4621 is fixed and
+  the model carries the late-landing action, no conclusion about late landings may
+  be drawn from this specification.- **Shard moves.** Specified in `WalMove.tla`, not here.
 - **Atomicity of a grain turn.** Each action is one atomic step. Production
   interleaves grain turns at await points (`[AlwaysInterleave]` methods, timers,
   the background replay task of #2909); the model's actions are coarser, so an

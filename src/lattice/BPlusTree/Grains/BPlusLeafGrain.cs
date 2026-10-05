@@ -4246,6 +4246,7 @@ internal sealed partial class BPlusLeafGrain(
         var maxIncoming = HybridLogicalClock.Zero;
         var appliedAny = false;
         Dictionary<string, LwwValue<byte[]>>? stranded = null;
+        List<(string Key, LatticeMergeMode Mode)>? joinedModes = null;
 
         // step 0 (filter + build) - first pass classifies each incoming
         // entry under the asymmetric migration-vs-foreground rule
@@ -4321,23 +4322,38 @@ internal sealed partial class BPlusLeafGrain(
             // Entries' HLCs. This guard handles the reverse ordering
             // (terminal-FIRST on a fresh leaf, migration-SECOND with
             // an inverted HLC).
+            LwwValue<byte[]> toStore;
             if (isCrossShardMigration
                 && Cache.TryGetRow(key, out var existing)
+                && TryJoinMigratedCrdtRow(key, existing, incoming, out var joined, out var joinedMode))
+            {
+                // Issue #4613: a CRDT key whose copy here took its own
+                // contribution (the saga terminal's fold, a backstop, a direct
+                // apply after the swap) is joined with the imported state, never
+                // replaced by it nor kept in its place - each copy can hold a
+                // contribution the other lacks.
+                toStore = joined;
+                (joinedModes ??= []).Add((key, joinedMode));
+            }
+            else if (isCrossShardMigration
+                && Cache.TryGetRow(key, out existing)
                 && !existing.IsMigrated)
             {
                 continue;
             }
+            else
+            {
+                // Stamp IsMigrated=true ONLY on the cross-shard migration
+                // callsite. Non-migration callers preserve the incoming entry's
+                // own IsMigrated flag verbatim - that flag is normally `false`
+                // for foreground writes on the source and `true` only when the
+                // source-side entry was itself a migration import being
+                // re-replicated / re-merged forward.
+                toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+            }
 
-            if (incoming.Timestamp > maxIncoming)
-                maxIncoming = incoming.Timestamp;
-
-            // Stamp IsMigrated=true ONLY on the cross-shard migration
-            // callsite. Non-migration callers preserve the incoming entry's
-            // own IsMigrated flag verbatim - that flag is normally `false`
-            // for foreground writes on the source and `true` only when the
-            // source-side entry was itself a migration import being
-            // re-replicated / re-merged forward.
-            var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+            if (toStore.Timestamp > maxIncoming)
+                maxIncoming = toStore.Timestamp;
             accepted?.Add(new KeyValuePair<string, LwwValue<byte[]>>(key, toStore));
 
             if (walEntries is not null)
@@ -4409,6 +4425,14 @@ internal sealed partial class BPlusLeafGrain(
                 {
                     StoreAdmittedEntry(accepted[i].Key, accepted[i].Value, ref stranded);
                     appliedAny = true;
+                }
+
+                // StoreEntry evicts a key's recorded merge mode; a joined row is
+                // still a CRDT row, so a later import of the key joins again.
+                if (joinedModes is not null)
+                {
+                    foreach (var (joinedKey, mode) in joinedModes)
+                        Cache.SetMergeMode(joinedKey, mode);
                 }
             }
         }

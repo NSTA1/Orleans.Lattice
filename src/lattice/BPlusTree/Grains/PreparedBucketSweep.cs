@@ -50,10 +50,9 @@ internal static class PreparedBucketSweep
     /// saga's backstop is applied under last-writer-wins at P, so a write
     /// acknowledged after the prepare survives on the target. Sound only when
     /// every write the target holds for the swept slots is stamped on the same
-    /// clock lineage as P - an adaptive split, whose shadow-forward ships each
-    /// plain write at its source stamp. An online resize copy mints its own
-    /// stamps for mirrored writes, which P does not order, so it passes
-    /// <see langword="false"/> and keeps the dominating backstop stamp.
+    /// clock lineage as P: an adaptive split, whose shadow-forward ships each
+    /// plain write at its source stamp, and an online resize copy, whose mirror
+    /// does the same. Both pass <see langword="true"/>.
     /// </param>
     internal static async Task RunAsync(
         IGrainFactory grainFactory,
