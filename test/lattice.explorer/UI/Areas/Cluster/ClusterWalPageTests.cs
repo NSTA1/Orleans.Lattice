@@ -9,6 +9,7 @@ using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Operations;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
+using Orleans.Lattice.Testing;
 using static Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript;
 
 // These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
@@ -29,6 +30,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 public sealed class ClusterWalPageTests : ClusterTestContext
 {
     private const string TreeId = "orders";
+    private const string PreviousTree = "ledger";
 
     [SetUp]
     public void Placement()
@@ -259,6 +261,91 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog").ClassList, Does.Contain("lt-dialog--end")));
     }
 
+    // The page stays mounted while its address moves to another tree (#4512), so a read of
+    // the previous tree can answer after the current tree's. Neither its audit, its plan nor
+    // its fault may then stand in for the current tree's.
+    [Test]
+    public async Task A_late_audit_for_the_previous_tree_does_not_replace_the_current_trees()
+    {
+        var previous = new TaskCompletionSource<TreeWalPlacementAudit>();
+        Admin.AuditWalPlacementAsync(PreviousTree, Arg.Any<CancellationToken>()).Returns(previous.Task);
+        var cut = RenderSupersededBy(TreeId);
+
+        previous.SetResult(new TreeWalPlacementAudit
+        {
+            TreeId = PreviousTree, Version = 9, PartitionCount = 1, AllResolvableOnThisSilo = true,
+            Partitions = [new TreeWalPartitionPlacement { Partition = 0, ProviderKey = "blob-z", ResolvableOnThisSilo = true }],
+            KnownProviderKeys = ["blob-z"],
+        });
+
+        Assert.That(await EverShows(cut, "blob-z"), Is.False, "the previous tree's audit is never shown");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Stage(cut), Does.Contain("Drift").And.Contain("2 partitions, placement version 5"));
+            Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task A_late_fault_for_the_previous_tree_does_not_replace_the_current_trees_audit()
+    {
+        var previous = new TaskCompletionSource<TreeWalPlacementAudit>();
+        Admin.AuditWalPlacementAsync(PreviousTree, Arg.Any<CancellationToken>()).Returns(previous.Task);
+        var cut = RenderSupersededBy(TreeId);
+
+        previous.SetException(new TimeoutException("The previous tree's audit timed out."));
+
+        Assert.That(await EverShows(cut, "audit timed out"), Is.False, "the previous tree's fault is never shown");
+        Assert.That(Stage(cut), Does.Contain("placement version 5"));
+    }
+
+    [Test]
+    public async Task A_late_plan_for_the_previous_tree_does_not_replace_the_current_trees()
+    {
+        var previous = new TaskCompletionSource<TreeWalMovePlan>();
+        Admin.PlanWalMoveAsync(PreviousTree, 1, "blob-b", Arg.Any<CancellationToken>()).Returns(previous.Task);
+        var cut = RenderSupersededBy(TreeId, partition: 1, target: "blob-b");
+        cut.WaitUntil(() => Assert.That(Plan(cut), Does.Contain("1,200")));
+
+        previous.SetResult(new TreeWalMovePlan
+        {
+            TreeId = PreviousTree, Partition = 1, FromProviderKey = "blob-y", ToProviderKey = "blob-b", EntriesToCopy = 987654,
+            SourceLowestOffset = 3, SourceHighestOffset = 987657, TargetResolvableOnThisSilo = true, PlacementVersion = 9,
+        });
+
+        Assert.That(await EverShows(cut, "987,654"), Is.False, "the previous tree's plan is never shown");
+        Assert.That(Plan(cut), Does.Contain("1,200").And.Contain("blob-x"));
+    }
+
+    /// <summary>
+    /// Renders the page for <see cref="PreviousTree"/>, whose reads are left as the test
+    /// arranged them, then moves it to <paramref name="current"/> and waits for that tree's audit.
+    /// </summary>
+    private IRenderedComponent<ClusterWalPage> RenderSupersededBy(string current, int? partition = null, string? target = null)
+    {
+        var cut = Render<ClusterWalPage>(parameters => parameters
+            .Add(page => page.TreeId, PreviousTree)
+            .Add(page => page.Partition, partition)
+            .Add(page => page.Target, target));
+        cut.Render(parameters => parameters.Add(page => page.TreeId, current));
+        cut.WaitUntil(() => Assert.That(Stage(cut), Does.Contain("placement version 5")));
+        return cut;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="text"/> shows within a second of the previous tree's late answer.
+    /// The page's waiting load resumes on a later turn of the renderer, which no single
+    /// barrier orders against, so a stale answer is looked for over a window: one that is
+    /// applied shows within tens of milliseconds.
+    /// </summary>
+    private static Task<bool> EverShows(IRenderedComponent<ClusterWalPage> cut, string text) =>
+        TestPoll.TryUntilAsync(() => cut.Markup.Contains(text, StringComparison.Ordinal), TimeSpan.FromSeconds(1));
+
+    private static string Stage(IRenderedComponent<ClusterWalPage> cut) =>
+        cut.Find("[aria-labelledby='lt-cluster-wal-audit'] .lt-cluster-stage").TextContent;
+
+    private static string Plan(IRenderedComponent<ClusterWalPage> cut) =>
+        cut.Find("[aria-labelledby='lt-cluster-wal-plan']").TextContent;
     private static Dictionary<string, string> MovedResult() => new()
     {
         [TreeAdminOperationResultKeys.TreeId] = TreeId,
