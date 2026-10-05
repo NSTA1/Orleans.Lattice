@@ -4610,7 +4610,24 @@ internal sealed partial class BPlusLeafGrain(
         // they cannot be computed at all. A pin left behind here is a permanent
         // WAL retention floor: the GC resolves the leaf, activates it, finds no
         // tree id bound, and gets NotDriven for the life of the deployment.
-        await UnregisterMaterialiserPinsAsync();
+        //
+        // A purge only NAMES the pins here and retires them last, once the row is
+        // gone (issue #4700). A purge interrupted between the two leaves the leaf
+        // marked but rowful, and recovery hands its data back: had its pins gone
+        // first, the WAL GC - floored by the tree's other leaves alone - could trim
+        // past its durable checkpoint, and the recovered leaf would latch
+        // LeafProjectionStaleException. Once the row is gone the pins protect
+        // nothing; one left by an interruption is retired by the GC's orphan sweep,
+        // which finds no tree id bound, or replaced by the block pin a re-create seeds.
+        MaterialiserPinRetirement? purgePins = null;
+        if (forPurge)
+        {
+            purgePins = await ResolveMaterialiserPinRetirementAsync();
+        }
+        else
+        {
+            await UnregisterMaterialiserPinsAsync();
+        }
 
         // Stop any new snapshot capture, and let one already under way land,
         // before the snapshot storage is deleted below (issue #4383). A capture
@@ -4666,6 +4683,10 @@ internal sealed partial class BPlusLeafGrain(
             if (!forPurge)
             {
                 await ClearRowRecordAsync();
+            }
+            else
+            {
+                await RetireMaterialiserPinsAsync(purgePins);
             }
         }
         finally

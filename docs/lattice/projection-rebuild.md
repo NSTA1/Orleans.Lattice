@@ -1154,7 +1154,10 @@ re-bound, a rowless leaf whose record carries the purge's mark is
 re-created empty (anything its interrupted clear left behind, such as
 its snapshot, is deleted first), and any other rowless leaf - one the
 purge never reached, whose row may have been lost - is not re-created
-and fails closed. The work is paged, so no leaf is skipped however
+and fails closed. The purge retires a leaf's write-ahead-log pins only
+after the leaf's row, snapshot and witness are gone, so a leaf whose
+purge was interrupted before its row was cleared still holds the log
+recovery needs to hand its data back. The work is paged, so no leaf is skipped however
 large the shard. A recovery that cannot read a leaf's record fails and
 can be retried. Once a shard is fully purged, the purge deletes the
 records it marked.

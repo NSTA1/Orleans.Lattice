@@ -45,7 +45,11 @@ public sealed class PurgeRecoveryIntegrationTests
     }
 
     [TearDown]
-    public void TearDown() => PurgeInterrupter.Disarm();
+    public void TearDown()
+    {
+        PurgeInterrupter.Disarm();
+        RowClearFaultStorage.Disarm();
+    }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
 
@@ -250,6 +254,149 @@ public sealed class PurgeRecoveryIntegrationTests
     }
 
     /// <summary>
+    /// The purge clear's ordering (#4700, confirmed against the WAL model). The purge
+    /// marks a leaf and is interrupted before the leaf's row is cleared, so the leaf
+    /// keeps its data and recovery hands it back. The leaf's materialiser pins must
+    /// still be standing at that point: had the clear retired them first, the WAL GC
+    /// would trim, floored only by the tree's other leaves, past the leaf's durable
+    /// checkpoint, and the recovered leaf would latch
+    /// <see cref="LeafProjectionStaleException"/> on its next activation.
+    /// <para>
+    /// This is the end-to-end guard: the WAL GC really trims past the leaf's
+    /// checkpoint here, and the recovered leaf must still serve its keys. In process,
+    /// the interrupted activation's own deactivation flush and the leaf's covering
+    /// snapshot also close the window, so the pins-first order needs a silo crash
+    /// between the two steps to latch; the ordering itself is pinned by the
+    /// <c>ClearGrainStateForPurge_*</c> leaf-grain tests.
+    /// </para>
+    /// </summary>
+    [Test]
+    public async Task A_marked_leaf_whose_purge_was_interrupted_before_its_row_clear_recovers_without_latching_stale()
+    {
+        var (tree, shard, leaves, keys) = await CreateMultiLeafTreeAsync("purge-pinorder", 16);
+        var physical = (await tree.GetRoutingAsync()).PhysicalTreeId;
+        var target = leaves[0];
+
+        // Every other leaf applies a write after the target's last one, so each of
+        // their cursors moves past the target's checkpoint.
+        foreach (var other in leaves.Skip(1))
+        {
+            await tree.SetAsync(keys[other][^1] + "~", Bytes("after"));
+        }
+
+        // Every other leaf's durable pin advances past the target's checkpoint: a
+        // deactivation captures a snapshot covering the leaf's checkpoint, and the
+        // next write's checkpoint flush publishes the pin that coverage licenses.
+        // The target's own pin is then all that floors the WAL GC at its checkpoint.
+        foreach (var other in leaves.Skip(1))
+        {
+            await _cluster.Client.GetGrain<IBPlusLeafGrain>(other).ForceDeactivateAsync();
+        }
+
+        await Task.Delay(200);
+        foreach (var other in leaves.Skip(1))
+        {
+            await tree.SetAsync(keys[other][^1] + "~~", Bytes("after"));
+        }
+
+        await tree.DeleteTreeAsync();
+        RowClearFaultStorage.FailRowClear(target);
+        var fault = Assert.CatchAsync(async () => await shard.PurgeAsync());
+        Assert.That(RowClearFaultStorage.Fired, Is.True, $"precondition: the purge was interrupted at the target's row clear; it threw {fault}");
+
+        var trimmed = await TrimWalAsync(physical);
+        TestContext.Out.WriteLine($"trimmed after the interrupted purge: {trimmed}");
+
+        await tree.RecoverTreeAsync();
+
+        foreach (var key in keys[target])
+        {
+            var (read, failure) = await TryGetAsync(tree, key);
+            TestContext.Out.WriteLine($"{key}: read={(read is null ? "null" : Encoding.UTF8.GetString(read))}; failure={failure?.GetType().Name}: {failure?.Message}");
+            Assert.That(failure, Is.Null,
+                $"{key}: the purge never cleared this leaf's row, so recovery must hand its data back intact; it "
+                + "fails instead, because the clear retired the leaf's pins before its row and the WAL GC trimmed "
+                + "past its checkpoint");
+            Assert.That(read, Is.Not.Null, $"{key} keeps its value");
+        }
+    }
+
+    private static async Task<long> TrimWalAsync(string treeId)
+    {
+        var registry = Services.GetRequiredService<IWalCursorRegistry>();
+        var deadline = Environment.TickCount64 + 15_000;
+        HybridLogicalClock? last = null;
+        var stable = 0;
+        while (Environment.TickCount64 < deadline)
+        {
+            var min = await registry.GetMinCursorAsync(treeId);
+            if (min is { } floor && floor.CompareTo(HybridLogicalClock.Zero) > 0)
+            {
+                if (last is { } prev && floor.CompareTo(prev) == 0)
+                {
+                    if (++stable >= 2) break;
+                }
+                else
+                {
+                    stable = 0;
+                }
+
+                last = floor;
+            }
+
+            await Task.Delay(100);
+        }
+
+        var report = await Services.GetRequiredService<ILatticeWalGc>().RunOnceAsync(treeId);
+        TestContext.Out.WriteLine($"gc: {report}");
+        return report.EntriesTrimmed;
+    }
+
+    /// <summary>
+    /// The fixture's grain storage: in memory, failing one leaf's row clear once
+    /// when armed, as a storage fault would interrupt a purge mid-clear.
+    /// </summary>
+    private sealed class RowClearFaultStorage : IGrainStorage
+    {
+        private static GrainId? _target;
+        private static int _fired;
+        private readonly EnumerableMemoryGrainStorage _inner = new();
+
+        public static bool Fired => Volatile.Read(ref _fired) != 0;
+
+        public static void FailRowClear(GrainId leaf)
+        {
+            Disarm();
+            _target = leaf;
+        }
+
+        public static void Disarm()
+        {
+            _target = null;
+            Volatile.Write(ref _fired, 0);
+        }
+
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+            => _inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+            => _inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            if (_target is { } target
+                && grainId == target
+                && stateName == "leaf"
+                && Interlocked.Exchange(ref _fired, 1) == 0)
+            {
+                throw new TimeoutException("test: the purge was interrupted at this leaf's row clear");
+            }
+
+            return _inner.ClearStateAsync(stateName, grainId, grainState);
+        }
+    }
+
+    /// <summary>
     /// Fails one call the shard's purge makes, once, so the purge is interrupted
     /// exactly where a test needs it.
     /// </summary>
@@ -309,8 +456,19 @@ public sealed class PurgeRecoveryIntegrationTests
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-            siloBuilder.ConfigureLattice(o => o.TombstoneGracePeriod = TimeSpan.Zero);
+            siloBuilder.AddLattice((silo, name) =>
+                silo.Services.AddKeyedSingleton<IGrainStorage>(name, (_, _) => new RowClearFaultStorage()));
+            siloBuilder.AddWalCursorRegistry();
+            siloBuilder.AddLatticeWalGc();
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.TombstoneGracePeriod = TimeSpan.Zero;
+                o.DigestCoalescingWindowMs = 0;
+                o.MaterialiserCheckpointInterval = TimeSpan.Zero;
+                // One WAL partition, so every leaf's pin covers the whole log and no
+                // unwritten partition holds a blocking pin.
+                o.WalPartitions = 1;
+            });
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.Services.AddSingleton<IOutgoingGrainCallFilter, PurgeInterrupter>();
             siloBuilder.Services.AddSingleton<SiloServiceProviderCaptureForWalTests>();
