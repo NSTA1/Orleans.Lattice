@@ -1,0 +1,13 @@
+# Pairs with TypeOK. The discard records a value outside the copies, which the
+# type invariant must reject.
+MODULE: TypeOkCutoverDiscardOutsideCopies
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the discard bookkeeping holds a non-copy
+
+--- FIND
+    /\ disc' = disc \cup {c}
+--- REPLACE
+    \* MUTATION: an undeclared value.
+    /\ disc' = disc \cup {c, "elsewhere"}
+--- END

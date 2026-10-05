@@ -72,9 +72,18 @@ Each item below is checked elsewhere, or argued here; none is an unchecked claim
   returns; a write admitted to the retained copy in that window is ordered
   before the restore and discarded with it.
 - **Writes, and atomic batches across a cutover.** Values and writers are not
-  modelled here. A saga bound to the previous copy across a cutover is the
-  shard-ownership modules' binding concern (#4369, `spec/shard-ownership/`), and
-  the chaos test `Cutovers_and_a_revert_of_a_resharded_tree_never_tear_an_atomic_batch`
-  exercises it there.
+  modelled here. A saga bound to the previous copy across this cutover and its
+  revert is checked by `ShardOwnershipCutover`
+  ([`spec/shard-ownership/RefinementCutover.md`](../shard-ownership/RefinementCutover.md)).
+  That module takes this one's four steps (`Swap`, `ArmRedirect`, `RevertSwap`,
+  `RevertRedirect`) as its environment, relying on `RestoreReturns` and
+  `RevertReturns` from here for the fairness of the two redirect steps. It adds
+  the saga's re-bind, the discard of the prepares the saga leaves on the previous
+  copy, and the redirect's admission of the saga's direct calls, and checks
+  `AtomicAcrossCutover`, `CommittedBatchOnBoundCopy` and `SagaSettles`. It found
+  #4689: a re-bound saga's prepares stay on the previous copy, and a revert serves
+  them torn. The chaos test
+  `ShadowCutoverAtomicVisibilityChaosTests.Cutovers_and_a_revert_of_a_resharded_tree_never_tear_an_atomic_batch`
+  is load coverage only. It does not reach that race.
 - **The ownership guard.** A refusal by `ITreeOwnershipGuard` is a failure
   before the swap, which `Crash` covers.

@@ -13,7 +13,10 @@ covers only what is particular to shard ownership. The area is specified by
 **two modules**, and the seam between them is part of what this README
 documents. A third, `ShardOwnershipCrdt`, checks the same ownership moves for a
 CRDT-mode key, whose copies must be joined rather than overwritten (see
-[`RefinementCrdt.md`](RefinementCrdt.md)).
+[`RefinementCrdt.md`](RefinementCrdt.md)). A fourth, `ShardOwnershipCutover`,
+checks a saga bound to the previous copy across a local shadow-cutover restore
+and its revert, the alias move the other modules do not make (see
+[`RefinementCutover.md`](RefinementCutover.md)).
 
 ## Files
 
@@ -34,6 +37,11 @@ CRDT-mode key, whose copies must be joined rather than overwritten (see
 | [`ShardOwnershipCrdt.manifest.json`](ShardOwnershipCrdt.manifest.json) | Its manifest. |
 | [`mutations-crdt/`](mutations-crdt/) | Its mutation catalogue. |
 | [`RefinementCrdt.md`](RefinementCrdt.md) | Its refinement note. |
+| [`ShardOwnershipCutover.tla`](ShardOwnershipCutover.tla) | Cutover: an atomic-write saga bound to the previous copy across a shadow-cutover restore and its revert, with stale routers, a straggling prepare, and the retained redirects. |
+| [`ShardOwnershipCutover.cfg`](ShardOwnershipCutover.cfg) | Its TLC model. |
+| [`ShardOwnershipCutover.manifest.json`](ShardOwnershipCutover.manifest.json) | Its manifest. |
+| [`mutations-cutover/`](mutations-cutover/) | Its mutation catalogue. |
+| [`RefinementCutover.md`](RefinementCutover.md) | Its refinement note. |
 | `README.md` | This file. |
 
 ## Two modules and the seam between them
@@ -161,11 +169,17 @@ Each loses no behaviour the instance can distinguish.
   non-atomic CRDT write, a leaf split that strands the saga's bucket, and one
   shard split or online resize whose forward, drains and terminal must join the
   key's copies.
+- **A shadow-cutover restore and its revert** (cutover module only): the swap,
+  the retained redirect, the swap back and the redirect fix-up, as the
+  environment of a saga bound to the previous copy that re-binds, records the
+  copy it leaves, and discards its prepares there before it decides (#4689). A
+  routed prepare can straggle and land late.
 
 Each module modelled the **intended** design while production had an open
-defect, with a mutation that reproduced production. Every such defect is now
-fixed, and each mutation stays as a regression check; the refinement notes list
-them with their issues.
+defect, with a mutation that reproduced production. Every such defect but one is
+now fixed, and each mutation stays as a regression check; the refinement notes
+list them with their issues. The open one is #4689, which the cutover module
+models as fixed while three of its mutations reproduce production.
 
 ## Properties checked
 
@@ -187,6 +201,9 @@ them with their issues.
 | `NoLiveBucketAfterForget` | invariant | retention | No copy that can still become the tree keeps a bucket of a saga whose registry row is retired (#4619). |
 | `NoLostContribution` | invariant | crdt | The owner's copy of a CRDT key holds every contribution acknowledged to a writer. |
 | `NoStrandedBucket` | liveness | retention | A decided saga's bucket on a copy that can still become the tree is eventually consumed, unless the registry retired the row first. |
+| `AtomicAcrossCutover` | invariant | cutover | No reader, fresh or stale, is served a copy holding a saga's batch on one key and not the other, across a shadow-cutover restore and its revert (#4689). |
+| `CommittedBatchOnBoundCopy` | invariant | cutover | Once committed, a saga holds prepared buckets only on its bound copy: every copy it re-bound away from was discarded. |
+| `SagaSettles` | liveness | cutover | A saga settles however a restore and its revert interleave with it. |
 
 Every liveness property can fail on a protocol defect under the fairness the
 spec asserts, shown by a mutation that leaves that fairness intact. Many of
@@ -209,8 +226,10 @@ The gaps the refinement notes list are classified there. A second saga
 contending for a key, a second split, and a split of the resized copy while the
 resize is still in flight are **bounded out** by the instance. The abandon of a
 split an alias move retargets (`AbandonRetargetedSplitAsync`) is modelled for
-the move an undo of a resize makes (`SplitAbandon`, #4478); the other alias
-cutovers are not modelled at all.
+the move an undo of a resize makes (`SplitAbandon`, #4478). A shadow-cutover
+restore and its revert are modelled against a bound saga by the cutover module;
+an explicit `SetTreeAliasAsync` and schema remediation, which move the alias the
+same way with no shadow to revert to, are not modelled.
 
 ## The bounded instance
 
@@ -242,6 +261,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4611 | A CRDT prepare applied by the terminal's backstop is installed last-writer-wins, losing contributions the row gained after staging (found while extending this area to CRDT keys; fixed, #4617) | `NoLostContributionBackstopInstallsLastWriterWins` |
 | #4613 | A split's import of a CRDT row is dropped over the destination's own fold, and CRDT writes were not forwarded during the split (fixed, #4626) | `NoLostContributionSplitImportDropsOverOwnRow` |
 | #4618 | A resize neither mirrors a CRDT write nor joins the rows it merges into the resized copy (fixed, #4665) | `NoLostContributionResizeWriteNotMirrored`, `NoLostContributionResizeDrainLastWriterWins` |
+| #4689 | A saga re-bound across a shadow-cutover restore leaves its prepares on the previous copy, which a stale reader before the redirect, or any reader after a revert, is served torn (found by the cutover module; **open**) | `AtomicAcrossCutoverDecideSkipsDiscard`, `AtomicAcrossCutoverRebindForgetsLeftCopy`, `CommittedBatchOnBoundCopyRebindBeforeDecisionForgets` |
 | #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
@@ -257,6 +277,7 @@ From this directory, with the toolchain described in
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnership.cfg ShardOwnership.tla
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipRetention.cfg ShardOwnershipRetention.tla
 java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -config ShardOwnershipCrdt.cfg ShardOwnershipCrdt.tla
+java -cp /path/to/tla2tools.jar tlc2.TLC -workers 2 -lncheck final -config ShardOwnershipCutover.cfg ShardOwnershipCutover.tla
 ```
 
 `-lncheck final` defers the liveness check to the end of the search, which is
@@ -275,6 +296,7 @@ includes JVM start-up):
 ShardOwnership:          100,666 distinct states, depth 26, clean, 1 min 32 s
 ShardOwnershipRetention: 142,980 distinct states, depth 24, clean, 1 min 18 s
 ShardOwnershipCrdt:        1,573 distinct states, depth 11, clean, 2 s
+ShardOwnershipCutover:     2,088 distinct states, depth 15, clean, 1 s
 ```
 
 The current specifications are model-checked in CI by
@@ -292,3 +314,4 @@ TLC's own state counts.
 | `ShardOwnership` | 7 | 5 | 28 | 44 | 38 | 100,666 |
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
 | `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
+| `ShardOwnershipCutover` | 3 | 1 | 14 | 15 | 16 | 2,088 |
