@@ -7,28 +7,26 @@ snapshot. Two seams collaborate to detect and react to this condition:
 
 | Seam | Side | Default | Purpose |
 |------|------|---------|---------|
-| `ILatticeWalIntrospection` | sender | Built-in | Returns the oldest still-available WAL entry HLC for a tree by reading the head of each of the tree's WAL partitions and taking the minimum head timestamp. |
-| `ILatticeFallOffLogDetector` | receiver | Built-in | Compares the receiver's per-origin high-water-mark against the sender's oldest-available HLC, records the `peer.fell_off_log` metric on detection, and (when configured) invokes `ILatticeBootstrapCoordinator.BootstrapAsync`. |
+| `ILatticeWalIntrospection` | receiver | Built-in | Returns the oldest local retained WAL entry HLC for a tree, either overall or grouped by the origin that authored the entries. The maintenance probe uses this local reading. |
+| `ILatticeFallOffLogDetector` | receiver | Built-in | Compares the receiver's per-origin high-water-mark against that receiver's local oldest retained HLC for the same origin, records the `peer.fell_off_log` metric on detection, and (when configured) invokes `ILatticeBootstrapCoordinator.BootstrapAsync`. |
+| Source shipper forced-gap detection | sender | Built-in | Detects that a shipping read returned a first sequence above the requested sequence because the source WAL was trimmed before the peer received those entries, then stamps `ReplicationBatch.ReseedAfterEpoch` so the receiver re-seeds fully. |
 
 ## Detection rule
 
-Fall-off is detected when, for a given `(treeName, sourceClusterId)`, the
-receiver's per-origin high-water-mark is **strictly less than** the sender's
-oldest still-available WAL entry HLC. Equality is intentionally not a
-fall-off - the receiver has applied exactly up to the sender's oldest entry
-and can resume incrementally from the next one.
+The receiver-side probe detects local fall-off when, for a given `(treeName, sourceClusterId)`, the receiver's per-origin high-water-mark is **strictly less than** the oldest local retained WAL entry that the receiver still has for that origin. Equality is intentionally not a fall-off - the receiver has applied exactly up to the oldest retained local entry and can resume incrementally from the next one.
+
+A different detector covers source-side WAL trims. When the source shipper reads from sequence `N` and the first retained shipping entry is above `N`, the source knows the peer missed entries that were trimmed before shipping. It records the current export epoch, withholds saga records, and stamps `ReplicationBatch.ReseedAfterEpoch` on pushes until the receiver echoes a completed bootstrap from a later export.
 
 ## Triggering a check
 
-Today the sender's oldest-available HLC is plumbed through the call shape as
-an explicit parameter:
+The local oldest-available HLC is plumbed through the call shape as an explicit parameter:
 
 ```csharp verify
 var detector = client.ServiceProvider.GetRequiredService<ILatticeFallOffLogDetector>();
 var introspection = client.ServiceProvider.GetRequiredService<ILatticeWalIntrospection>();
 
-var senderOldest = await introspection.GetOldestAvailableHlcAsync("tree-a");
-if (senderOldest is { } hlc)
+var localOldestByOrigin = await introspection.GetOldestAvailableHlcByOriginAsync("tree-a");
+if (localOldestByOrigin.TryGetValue("site-a", out var hlc))
 {
     var decision = await detector.CheckAndTriggerAsync("tree-a", "site-a", hlc);
     if (decision.FellOffLog && !decision.BootstrapTriggered)
@@ -38,9 +36,7 @@ if (senderOldest is { } hlc)
 }
 ```
 
-A future transport revision will fold the sender's oldest HLC into the batch
-envelope so each inbound apply naturally populates the parameter; until then,
-co-located callers can use `ILatticeWalIntrospection` directly.
+The built-in maintenance grain supplies this value from the receiver's local WAL. It is not the cross-cluster source trim path; source trims are detected by the shipper's sequence read as described below.
 
 The per-tree replication maintenance pass also runs the check on its own
 cadence, every `LatticeReplicationOptions.MaintenanceFallOffCheckInterval`
@@ -60,7 +56,9 @@ writes land in.
 
 ## Sender-requested re-seed
 
-The fall-off detector compares the receiver's high-water mark against its own local log, so it cannot see records the sender's `WalRetention` ceiling trimmed before shipping them. The sender detects that case itself (a forced gap, see [Replication drivers](replication-drivers.md#forced-gap-a-peer-taken-off-the-log)) and asks the receiver to re-seed on each push. The receiver starts the same `BootstrapAsync` the detector would, under the same `AutoBootstrapOnFallOffLog` switch, and only when no bootstrap is running and none from an export after the sender's request has completed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)).
+The fall-off detector compares the receiver's high-water mark against the receiver's own local log, so it cannot see records the sender's `WalRetention` ceiling trimmed before shipping them. The sender detects that case itself (a forced gap, see [Replication drivers](replication-drivers.md#forced-gap-a-peer-taken-off-the-log)): a shipping page whose first sequence is greater than the requested sequence means the source trimmed entries the peer never received. The shipper records the current export epoch, withholds saga records, and asks the receiver to re-seed on each push via `ReplicationBatch.ReseedAfterEpoch`. The receiver starts the same `BootstrapAsync` the detector would, under the same `AutoBootstrapOnFallOffLog` switch, and only when no bootstrap is running and none from an export after the sender's requested epoch has completed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)).
+
+A custom `IReplicationTransport` must carry `ReplicationBatch.ReseedAfterEpoch` to the receiver and echo `ReplicationAck.BootstrapEpoch` back, as the gRPC transport does with the `x-lattice-replication-reseed-after` header. A transport that drops the field fails closed: the source keeps withholding saga records, the peer status reads `Stalled`, and an operator must re-seed or fix the transport before saga traffic resumes.
 
 ## Configuration
 

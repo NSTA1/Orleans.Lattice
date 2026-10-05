@@ -119,18 +119,21 @@ internal sealed partial class BPlusLeafGrain
     /// Otherwise the stamp is minted as before and the prepare is unmarked.
     /// </description></item>
     /// </list>
+    /// <c>Carried</c> reports the first case: the stamp was minted on another
+    /// shard, so the value is on that shard's clock lineage and is stored
+    /// migrated (issue #4564).
     /// </summary>
-    private (HybridLogicalClock Stamp, bool Original) MintPreparedStamp(string key)
+    private (HybridLogicalClock Stamp, bool Original, bool Carried) MintPreparedStamp(string key)
     {
         if (LatticeOriginalPrepareStampContext.TryGetStamp(key, out var carried))
         {
             state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, carried);
-            return (carried, true);
+            return (carried, true, true);
         }
 
         var original = LatticeHlcOverrideContext.Current is null
             && IsPreparedRouteToThisShard();
-        return (AdvanceClockOrOverride(), original);
+        return (AdvanceClockOrOverride(), original, false);
     }
 
     /// <summary>
@@ -184,12 +187,16 @@ internal sealed partial class BPlusLeafGrain
     /// Installs <paramref name="value"/> for <paramref name="key"/> AT its own
     /// stamp under rule (d). The caller has established the row is stamped below
     /// it, so the last-writer-wins merge inside <see cref="StoreEntry"/> keeps
-    /// this value; <c>IsMigrated</c> is false on it, so the merge clears any
-    /// stale migration marker. Returns the stamp the value was stored at.
+    /// this value. The value keeps the migration provenance its prepare was
+    /// bucketed with: migrated when its original stamp was carried from another
+    /// shard, so a later migration import of a write acknowledged after the
+    /// prepare competes with it by last-writer-wins instead of being dropped
+    /// (issue #4564); otherwise not migrated, which clears any stale marker.
+    /// Returns the stamp the value was stored at.
     /// </summary>
     private HybridLogicalClock StoreAtOriginalStamp(string key, in LwwValue<byte[]> value)
     {
-        StoreEntry(key, value with { IsMigrated = false });
+        StoreEntry(key, value);
         return value.Timestamp;
     }
 
@@ -199,14 +206,19 @@ internal sealed partial class BPlusLeafGrain
     /// terminal delivery (a forwarder's <see cref="LatticeOriginalPrepareStampContext"/>
     /// map), else, for a stranded prepared key, its marked last-writer-wins
     /// bucket entry's own stamp. Called before the bucket's classification is
-    /// discarded by the drain.
+    /// discarded by the drain. <paramref name="migratedKeys"/> receives the keys
+    /// whose value is stored migrated (issue #4564): a stamp carried by the terminal
+    /// delivery was minted on another shard, and a stranded bucket entry keeps the
+    /// provenance it was bucketed with.
     /// </summary>
     private Dictionary<string, HybridLogicalClock>? CollectBackstopOriginalStamps(
         Guid transactionId,
         List<KeyValuePair<string, byte[]>>? missingKeys,
         Dictionary<string, LwwValue<byte[]>>? bucket,
-        HashSet<string>? strandedPrepared)
+        HashSet<string>? strandedPrepared,
+        out HashSet<string>? migratedKeys)
     {
+        migratedKeys = null;
         if (missingKeys is not { Count: > 0 })
             return null;
 
@@ -223,6 +235,7 @@ internal sealed partial class BPlusLeafGrain
             if (carried && LatticeOriginalPrepareStampContext.TryGetStamp(kvp.Key, out var stamp))
             {
                 (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[kvp.Key] = stamp;
+                (migratedKeys ??= new HashSet<string>(StringComparer.Ordinal)).Add(kvp.Key);
                 continue;
             }
 
@@ -233,7 +246,32 @@ internal sealed partial class BPlusLeafGrain
                 && IsMarkedLwwPrepare(transactionId, kvp.Key, deltaBucket))
             {
                 (stamps ??= new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal))[kvp.Key] = prepared.Timestamp;
+                if (prepared.IsMigrated)
+                    (migratedKeys ??= new HashSet<string>(StringComparer.Ordinal)).Add(kvp.Key);
             }
+        }
+
+        return stamps;
+    }
+
+    /// <inheritdoc />
+    public async Task<Dictionary<string, HybridLogicalClock?>?> GetOriginalPrepareStampsAsync(Guid transactionId)
+    {
+        await AwaitReplayBarrierAsync();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+
+        if (_pendingTx is null || !_pendingTx.TryGetValue(transactionId, out var bucket) || bucket.Count == 0)
+            return null;
+
+        Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
+        _pendingTxDeltas?.TryGetValue(transactionId, out deltaBucket);
+
+        var stamps = new Dictionary<string, HybridLogicalClock?>(bucket.Count, StringComparer.Ordinal);
+        foreach (var (key, prepared) in bucket)
+        {
+            stamps[key] = IsMarkedLwwPrepare(transactionId, key, deltaBucket)
+                ? prepared.Timestamp
+                : null;
         }
 
         return stamps;

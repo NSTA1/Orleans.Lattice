@@ -43,6 +43,39 @@ public sealed class ReplicationPeerStatsStatusReadTests
     }
 
     [Test]
+    public void ReadStatusPage_reports_a_full_dead_letter_queue_until_it_is_cleared()
+    {
+        // #4603: a full queue keeps an entry unacknowledged, so the link is
+        // reported (and classified) as stalled rather than quiet.
+        var stats = new ManualClockPeerStats();
+        stats.RecordDeadLetterFull("orders", "east", ReplicationContactDirection.Outbound, DateTimeOffset.UtcNow);
+
+        var whileFull = stats.ReadStatusPage(Read()).Single();
+        stats.RecordDeadLetterFull("orders", "east", ReplicationContactDirection.Outbound, since: null);
+        var afterClear = stats.ReadStatusPage(Read()).Single();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(whileFull.DeadLetterFullSeconds, Is.Not.Null);
+            Assert.That(afterClear.DeadLetterFullSeconds, Is.Null);
+        });
+    }
+
+    [Test]
+    public void RecordDeadLetterFull_never_creates_an_inbound_row()
+    {
+        // The inbound tree and origin come from the peer (#4021): only an
+        // existing inbound row may carry the marker.
+        var stats = new ManualClockPeerStats();
+        stats.RecordDeadLetterFull("orders", "west", ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+        Assert.That(stats.ReadStatusPage(Read()), Is.Empty);
+
+        stats.RecordInboundSuccess("orders", "west");
+        stats.RecordDeadLetterFull("orders", "west", ReplicationContactDirection.Inbound, DateTimeOffset.UtcNow);
+        Assert.That(stats.ReadStatusPage(Read()).Single().DeadLetterFullSeconds, Is.Not.Null);
+    }
+
+    [Test]
     public void ReadStatusPage_reports_NaN_for_a_link_never_contacted()
     {
         var stats = new ManualClockPeerStats();

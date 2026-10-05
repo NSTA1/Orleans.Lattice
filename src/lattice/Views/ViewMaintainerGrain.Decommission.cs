@@ -52,6 +52,26 @@ internal sealed partial class ViewMaintainerGrain
             }
         }
 
+        // Withdraw from every log this view is an offset consumer of (issue #4584),
+        // and answer that it reads none, so a registration a withdrawal missed
+        // holds nothing.
+        PublishNoReadPositions();
+        var readLogs = new HashSet<string>(_registeredReadLogs, StringComparer.Ordinal);
+        if (!string.IsNullOrEmpty(state.State.BoundPhysicalTreeId))
+        {
+            readLogs.Add(state.State.BoundPhysicalTreeId);
+        }
+
+        if (!string.IsNullOrEmpty(sourceTreeId))
+        {
+            readLogs.Add(sourceTreeId);
+        }
+
+        foreach (var readLog in readLogs)
+        {
+            await WithdrawReadRegistrationAsync(readLog);
+        }
+
         var highestDeletedGeneration = await DeleteBackingGenerationsAsync(cancellationToken);
 
         // Reset the durable checkpoint so a future view re-created under the same

@@ -8,6 +8,7 @@ TARGET: NoReflection
 CLASS: Invariant
 SUMMARY: drops the receiver-side cycle-break, so an echoed own write enters the apply pipeline
 PERTURBS: Deliver
+BOUNDS: MaxWrites = 1, MaxFaults = 0, MaxHlc = 1
 
 --- FIND
        /\ \/ /\ w.o = x

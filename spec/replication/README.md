@@ -150,6 +150,10 @@ lands as the check that reintroducing it is caught:
   receiver re-bootstrapped in place after the source trimmed its log past a
   delete kept the deleted key's old value
   (`EventualConvergenceSnapshotDropsDeletes`).
+- #4604 - the snapshot drain ignored a deferred apply, so a row the applier
+  deferred (a coordinated restore's receive fence, an in-flight duplicate) was
+  dropped and the handoff pinned past it
+  (`BootstrapHandoffLosesNothingDrainDropsDeferred`).
 
 [`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
 fixes.
@@ -196,6 +200,6 @@ This table is the one place this directory states them; see
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `Replication` | 4 | 3 | 11 | 18 | 16 | 241,332 |
+| `Replication` | 4 | 3 | 11 | 19 | 16 | 241,332 |
 | `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
 | `ReplicationReBootstrap` | 2 | 1 | 10 | 12 | 11 | 56,135 |

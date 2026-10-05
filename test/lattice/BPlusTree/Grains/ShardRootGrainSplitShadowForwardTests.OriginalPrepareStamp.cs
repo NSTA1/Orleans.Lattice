@@ -96,4 +96,91 @@ public partial class ShardRootGrainSplitShadowForwardTests
         Assert.That(capture.CarriedStamp, Is.True);
         Assert.That(capture.Stamp, Is.EqualTo(ForwardedP));
     }
+
+    // ---- Issue #4545: the shadow marker carries the marked P
+
+    private static async Task<ForwardCapture> PreparedForwardMarkerAsync(
+        bool localPrepareMarked, bool delete = false, LatticeMergeMode mode = LatticeMergeMode.LwwRegister, byte[]? delta = null)
+    {
+        var h = CreateHarness(NewSplit(ShardSplitPhase.BeginShadowWrite));
+        var txid = Guid.NewGuid();
+        h.Leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>()).Returns(new List<PendingMutationSnapshot>
+        {
+            new()
+            {
+                TransactionId = txid, Key = "k", Value = [1, 2], Timestamp = ForwardedP,
+                StampIsOriginal = localPrepareMarked, Mode = mode, Delta = delta,
+            },
+        });
+
+        var marked = false;
+        var carried = false;
+        HybridLogicalClock stamp = default;
+        string? route = null;
+        h.ShadowTarget.MarkSagaShadowAsync(txid, Arg.Any<IReadOnlyList<string>>()).Returns(_ =>
+        {
+            marked = true;
+            carried = LatticeOriginalPrepareStampContext.TryGetStamp("k", out stamp);
+            route = LatticeOriginalPrepareStampContext.PreparedRoute;
+            return Task.CompletedTask;
+        });
+
+        LatticeTransactionContext.Set(txid);
+        try
+        {
+            using (LatticePreparedContext.BeginScope())
+            {
+                LatticeOriginalPrepareStampContext.StampPreparedRoute($"{TreeId}/{SourceShardIndex}");
+                try
+                {
+                    if (delete)
+                        await h.Grain.DeleteAsync("k");
+                    else
+                        await h.Grain.SetAsync("k", [1, 2]);
+                }
+                finally
+                {
+                    Orleans.Runtime.RequestContext.Remove(LatticeEventConstants.PreparedRouteRequestContextKey);
+                }
+            }
+        }
+        finally
+        {
+            LatticeTransactionContext.Set(Guid.Empty);
+        }
+
+        return new ForwardCapture(marked, carried, stamp, route);
+    }
+
+    [Test]
+    public async Task A_prepared_shadow_forwards_marker_carries_the_local_prepares_marked_stamp_and_no_route(
+        [Values] bool delete)
+    {
+        var capture = await PreparedForwardMarkerAsync(localPrepareMarked: true, delete: delete);
+
+        Assert.That(capture.Forwarded, Is.True, "the forward installs the destination-side marker");
+        Assert.That(capture.CarriedStamp, Is.True);
+        Assert.That(capture.Stamp, Is.EqualTo(ForwardedP));
+        Assert.That(capture.Route, Is.Null);
+    }
+
+    [Test]
+    public async Task A_prepared_shadow_forwards_marker_for_an_unmarked_prepare_carries_no_stamp()
+    {
+        var capture = await PreparedForwardMarkerAsync(localPrepareMarked: false);
+
+        Assert.That(capture.Forwarded, Is.True);
+        Assert.That(capture.CarriedStamp, Is.False);
+    }
+
+    [Test]
+    public async Task A_prepared_shadow_forwards_marker_for_a_crdt_delta_carries_no_stamp()
+    {
+        var capture = await PreparedForwardMarkerAsync(
+            localPrepareMarked: true, mode: LatticeMergeMode.GCounter, delta: [1]);
+
+        Assert.That(capture.Forwarded, Is.True);
+        Assert.That(capture.CarriedStamp, Is.False,
+            "a delta folds at its terminal's stamp, so a row at or above P does not show the delta was applied");
+    }
 }

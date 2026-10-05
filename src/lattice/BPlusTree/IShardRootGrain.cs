@@ -1980,6 +1980,44 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<bool> IsWriteFencedAsync();
 
     /// <summary>
+    /// Every key this shard's leaves hold a prepare for under
+    /// <paramref name="transactionId"/> (issue #4522), mapped to its original
+    /// prepare stamp when the prepare is a marked last-writer-wins prepare, or
+    /// to <see langword="null"/> when it is not (see
+    /// <see cref="IBPlusLeafGrain.GetOriginalPrepareStampsAsync"/>). The saga
+    /// coordinator calls it after its prepares so its committed-values backstop
+    /// can be applied at each key's own stamp.
+    /// <para>
+    /// Without <paramref name="exhaustive"/> it reads the leaves this activation
+    /// recorded the saga's prepares reaching, an in-memory record a
+    /// reactivation loses, so a key can be missing from the answer. With
+    /// <paramref name="exhaustive"/> it reads every leaf of the shard's chain,
+    /// whose buckets are replayed from the write-ahead log, so a prepare that
+    /// landed on this shard is never missed. The coordinator escalates to it
+    /// only for keys the first pass did not find.
+    /// </para>
+    /// </summary>
+    /// <param name="transactionId">The saga whose prepares to read.</param>
+    /// <param name="exhaustive">Whether to read every leaf of the shard.</param>
+    Task<Dictionary<string, HybridLogicalClock?>> GetOriginalPrepareStampsAsync(Guid transactionId, bool exhaustive);
+
+    /// <summary>
+    /// Arms or lifts this shard's receiver bootstrap read fence (issue #4526),
+    /// durably. While armed, every read of the shard - the method set
+    /// <c>ShardRootGrain.IsBootstrapFencedMethod</c> names - is refused with
+    /// <see cref="LatticeTreeBootstrappingException"/>, and the shard refuses to
+    /// open a split or consolidation. Writes are unaffected. Idempotent.
+    /// </summary>
+    /// <param name="fenced"><see langword="true"/> to arm the fence, <see langword="false"/> to lift it.</param>
+    Task SetBootstrapReadFenceAsync(bool fenced);
+
+    /// <summary>
+    /// Reports whether this shard's receiver bootstrap read fence is armed
+    /// (issue #4526).
+    /// </summary>
+    Task<bool> IsBootstrapReadFencedAsync();
+
+    /// <summary>
     /// Test-only seam: requests that the grain runtime collect this
     /// activation by calling <c>DeactivateOnIdle</c> from inside the
     /// grain. Integration tests use this to exercise the post-restart

@@ -75,6 +75,13 @@ namespace Orleans.Lattice;
 ///     floor entry itself (the buffer's lowest staged entry) survives.
 ///   </item>
 /// </list>
+/// <para>
+/// <b>Offset-reader clause</b> (issue #4579), evaluated right after the
+/// entitlement clause: an entry at or above the lowest offset an
+/// offset-reading consumer (the replication shipper) has not durably consumed
+/// in its partition is refused unless the TTL ceiling admits it. The HLC cursor
+/// cannot express this, because a partition is not HLC-ordered in offset.
+/// </para>
 /// </remarks>
 internal static class WalGcTrimCore
 {
@@ -111,6 +118,14 @@ internal static class WalGcTrimCore
     /// admits nor refuses and the predicate is byte-identical to its pre-#3172
     /// behaviour.
     /// </param>
+    /// <param name="consumerOffsetFloor">
+    /// The lowest offset in the entry's partition that an offset-reading
+    /// consumer (an <see cref="BPlusTree.Grains.IWalOffsetConsumer"/>, such as
+    /// the replication shipper) has not durably consumed, or
+    /// <see langword="null"/> when no such consumer reads the partition. An
+    /// entry at or above it is refused unless the TTL ceiling admits it (issue
+    /// #4579).
+    /// </param>
     /// <returns>
     /// <see langword="true"/> when the entry may be trimmed; otherwise
     /// <see langword="false"/> (the scan stops at the first such entry).
@@ -123,7 +138,8 @@ internal static class WalGcTrimCore
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor,
-        WalGcOffsetAdmission? offsetAdmission)
+        WalGcOffsetAdmission? offsetAdmission,
+        long? consumerOffsetFloor = null)
         => ClassifyEntry(
             entryTimestamp,
             entryVectorClock,
@@ -132,7 +148,8 @@ internal static class WalGcTrimCore
             ttlCeiling,
             causalStable,
             blockedFloor,
-            offsetAdmission) == WalGcTrimEligibility.Eligible;
+            offsetAdmission,
+            consumerOffsetFloor) == WalGcTrimEligibility.Eligible;
 
     /// <summary>
     /// Decides whether a single WAL entry is eligible to be trimmed and, when it
@@ -191,6 +208,13 @@ internal static class WalGcTrimCore
     /// admits nor refuses and the predicate is byte-identical to its pre-#3172
     /// behaviour.
     /// </param>
+    /// <param name="consumerOffsetFloor">
+    /// The lowest offset in the entry's partition that an offset-reading
+    /// consumer has not durably consumed, or <see langword="null"/> when none
+    /// reads the partition. An entry at or above it is refused as
+    /// <see cref="WalGcTrimEligibility.CursorFloor"/> unless the TTL ceiling
+    /// admits it (issue #4579).
+    /// </param>
     /// <returns>
     /// <see cref="WalGcTrimEligibility.Eligible"/> when the entry may be trimmed;
     /// otherwise the clause that refused it.
@@ -203,7 +227,8 @@ internal static class WalGcTrimCore
         HybridLogicalClock? ttlCeiling,
         VersionVector? causalStable,
         HybridLogicalClock? blockedFloor,
-        WalGcOffsetAdmission? offsetAdmission)
+        WalGcOffsetAdmission? offsetAdmission,
+        long? consumerOffsetFloor = null)
     {
         // Entitlement clause, half one - the HLC axis: cursor OR TTL must accept
         // the entry (the legacy HLC-only behaviour).
@@ -268,6 +293,20 @@ internal static class WalGcTrimCore
         }
 
         if (!accepted)
+        {
+            return WalGcTrimEligibility.CursorFloor;
+        }
+
+        // Offset-reader clause (issue #4579). An offset-reading consumer (the
+        // replication shipper) has not durably consumed this entry, so it must
+        // stay however the HLC axis or the materialiser offset admission reads:
+        // a partition is not HLC-ordered in offset, so an entry the consumer has
+        // never read can carry a stamp at or below the cursor it already
+        // reported. It overrules every admitting arm but the TTL ceiling, for
+        // the same reason the durable offset refusal spares it: an operator
+        // retention window must stay a bound, and a consumer that falls behind
+        // it detects the trimmed gap on its next read.
+        if (consumerOffsetFloor is { } readFloor && entryOffset >= readFloor && !ttlAccepts)
         {
             return WalGcTrimEligibility.CursorFloor;
         }

@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// Per-tree dead-letter queue grain. See
 /// <see cref="IReplicationDeadLetterGrain"/> for the contract.
 /// <para>
-/// Storage, caching, monotonic-id assignment, and FIFO eviction are
+/// Storage, caching and monotonic-id assignment are
 /// delegated to the shared <see cref="LatticeQueueCore"/> engine bound to a
 /// reserved system tree named <c>_lattice_replog_dlq_{treeId}</c>
 /// (<see cref="LatticeConstants.WalTreePrefix"/> + <c>dlq_</c>). The grain
@@ -19,6 +19,17 @@ namespace Orleans.Lattice.Replication.Grains;
 /// pins the engine to its historical <c>e/</c> row-key scheme with the
 /// head-cursor row disabled so the on-disk format is preserved byte-for-byte
 /// across upgrades.
+/// </para>
+/// <para>
+/// The queue never evicts (#4603). Every parked entry was acknowledged without
+/// being applied, so it is the only copy of its write: a full queue refuses the
+/// next enqueue with <see cref="ReplicationDeadLetterQueueFullException"/> and
+/// the caller keeps that entry unacknowledged instead. Enqueue is idempotent by
+/// the entry's <c>(origin, timestamp, key, op)</c> identity, so a re-shipped
+/// copy of an already-parked entry does not take a second slot. Discarding a
+/// foreign-origin entry records its identity as lost on the tree's
+/// high-water-mark grain before the row is deleted, so an entry that depends on
+/// it is never released.
 /// </para>
 /// </summary>
 internal sealed class ReplicationDeadLetterGrain(
@@ -33,6 +44,13 @@ internal sealed class ReplicationDeadLetterGrain(
     private string _treeId = "";
     private LatticeQueueCore _core = null!;
     private bool _initialized;
+
+    /// <summary>
+    /// Identity of every parked entry, keyed by the entry's identity and mapped
+    /// to its queue id, so an enqueue is idempotent without deserializing the
+    /// queue. Rebuilt from the queue on activation.
+    /// </summary>
+    private readonly Dictionary<ParkedIdentity, long> _parked = new();
 
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
@@ -51,6 +69,7 @@ internal sealed class ReplicationDeadLetterGrain(
         var store = grainFactory.GetGrain<ISystemLattice>(BackingTreeId(_treeId));
         _core = CreateCore(store);
         await _core.InitializeAsync(cancellationToken).ConfigureAwait(true);
+        RebuildParkedIdentities();
         _initialized = true;
     }
 
@@ -71,11 +90,21 @@ internal sealed class ReplicationDeadLetterGrain(
         _treeId = treeId;
         _core = CreateCore(store);
         await _core.InitializeAsync(cancellationToken).ConfigureAwait(true);
+        RebuildParkedIdentities();
         _initialized = true;
     }
 
-    private LatticeQueueCore CreateCore(ISystemLattice store) =>
-        new(store, EntryKeyPrefix, persistHeadCursor: false, onEvicted: OnEvicted);
+    private static LatticeQueueCore CreateCore(ISystemLattice store) =>
+        new(store, EntryKeyPrefix, persistHeadCursor: false);
+
+    private void RebuildParkedIdentities()
+    {
+        _parked.Clear();
+        foreach (var (id, bytes) in _core.Snapshot())
+        {
+            _parked[ParkedIdentity.From(serializer.Deserialize(bytes).Entry)] = id;
+        }
+    }
 
     /// <inheritdoc />
     public async Task<long> EnqueueAsync(
@@ -90,7 +119,25 @@ internal sealed class ReplicationDeadLetterGrain(
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
+        var identity = ParkedIdentity.From(entry);
+        if (_parked.TryGetValue(identity, out var existing))
+        {
+            // A re-shipped copy of an entry already parked (the first delivery was
+            // parked but its batch was deferred for another entry). One slot each.
+            return existing;
+        }
+
         var capacity = optionsMonitor.Get(_treeId).DeadLetterQueueCapacity;
+        if (_core.Count >= capacity)
+        {
+            LatticeReplicationMetrics.DeadLetterRefused.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
+                new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, reasonTag),
+                LatticeTenantLabel.ForTree(_treeId));
+            throw new ReplicationDeadLetterQueueFullException(_treeId, capacity);
+        }
+
         var enqueuedAtTicks = DateTime.UtcNow.Ticks;
 
         var assigned = await _core.EnqueueAsync(
@@ -102,8 +149,9 @@ internal sealed class ReplicationDeadLetterGrain(
                 RetryCount = retryCount,
                 EnqueuedAtTicks = enqueuedAtTicks,
             }),
-            capacity,
+            capacity: null,
             cancellationToken).ConfigureAwait(true);
+        _parked[identity] = assigned;
 
         LatticeReplicationMetrics.DeadLetterEnqueued.Add(
             1,
@@ -138,8 +186,34 @@ internal sealed class ReplicationDeadLetterGrain(
     }
 
     /// <inheritdoc />
-    public Task<bool> DiscardAsync(long entryId, CancellationToken cancellationToken) =>
-        RemoveAsync(entryId, LatticeReplicationMetrics.ReasonDiscarded, cancellationToken);
+    public async Task<bool> DiscardAsync(long entryId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInitialized();
+
+        var bytes = _core.TryGet(entryId);
+        if (bytes is null)
+        {
+            return false;
+        }
+
+        // A discarded foreign-origin entry was acknowledged to its sender and is
+        // never applied: its write is lost on this cluster for good. Record that
+        // durably first, so an entry that depends on it is never released (#4603).
+        // A local-origin entry is one the outbound shipper parked; it was never
+        // applied here in the first place and is not a receiver-side loss.
+        var entry = serializer.Deserialize(bytes).Entry;
+        var localClusterId = optionsMonitor.Get(_treeId).ClusterId;
+        if (!string.IsNullOrEmpty(entry.OriginClusterId)
+            && !string.Equals(entry.OriginClusterId, localClusterId, StringComparison.Ordinal))
+        {
+            await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(_treeId)
+                .RecordLostAsync(entry.OriginClusterId, entry.Timestamp, cancellationToken)
+                .ConfigureAwait(true);
+        }
+
+        return await RemoveAsync(entryId, LatticeReplicationMetrics.ReasonDiscarded, cancellationToken).ConfigureAwait(true);
+    }
 
     /// <inheritdoc />
     public Task<bool> RemoveReplayedAsync(long entryId, CancellationToken cancellationToken) =>
@@ -167,10 +241,16 @@ internal sealed class ReplicationDeadLetterGrain(
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInitialized();
 
+        var bytes = _core.TryGet(entryId);
         var removed = await _core.RemoveAsync(entryId, cancellationToken).ConfigureAwait(true);
         if (!removed)
         {
             return false;
+        }
+
+        if (bytes is not null)
+        {
+            _parked.Remove(ParkedIdentity.From(serializer.Deserialize(bytes).Entry));
         }
 
         LatticeReplicationMetrics.DeadLetterRemoved.Add(
@@ -182,12 +262,24 @@ internal sealed class ReplicationDeadLetterGrain(
         return true;
     }
 
-    private void OnEvicted(long entryId) =>
-        LatticeReplicationMetrics.DeadLetterRemoved.Add(
-            1,
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeId),
-            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagReason, LatticeReplicationMetrics.ReasonEvicted),
-            LatticeTenantLabel.ForTree(_treeId));
+    /// <summary>The identity that makes a dead-letter enqueue idempotent.</summary>
+    private readonly record struct ParkedIdentity(
+        string OriginClusterId,
+        HybridLogicalClock Timestamp,
+        string Key,
+        string? EndExclusiveKey,
+        MutationKind Op,
+        Guid TransactionId)
+    {
+        public static ParkedIdentity From(WalRecord entry) =>
+            new(
+                entry.OriginClusterId ?? string.Empty,
+                entry.Timestamp,
+                entry.Key ?? string.Empty,
+                entry.EndExclusiveKey,
+                entry.Op,
+                entry.TransactionId);
+    }
 
     private void EnsureInitialized()
     {

@@ -738,6 +738,7 @@ internal sealed partial class ReplicationShipperGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        PublishActivationReadPositions();
         StartPhaseTimer();
         return Task.CompletedTask;
     }
@@ -1790,6 +1791,7 @@ internal sealed partial class ReplicationShipperGrain(
         await state.WriteStateAsync();
         _pendingCursorWrites = 0;
         _oldestPendingCursorWriteUtc = DateTime.MinValue;
+        PublishDurableReadPositions();
 
         var durableCursor = state.State.Cursor;
         if (durableCursor.CompareTo(_lastReportedCursor) <= 0)
@@ -2459,6 +2461,11 @@ internal sealed partial class ReplicationShipperGrain(
         // registry on the first bind or once the backstop interval has elapsed,
         // so an idle tree does not pay a registry read every tick.
         await MaybeRefreshSourceIdentityAsync(options, partitions);
+
+        // Hold every entry of the bound log this shipper has not durably
+        // acknowledged against the WAL GC on any silo, before the first read
+        // (issue #4579).
+        await EnsureReadPositionsPublishedAsync();
 
 
         // and _partitionPageIndex always reset (they're tick-scoped);
@@ -4124,13 +4131,14 @@ internal sealed partial class ReplicationShipperGrain(
     /// <summary>
     /// Routes every entry in the current drain buffer to the per-tree
     /// dead-letter queue, tagged with
-    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>. A
-    /// best-effort enqueue failure is logged and swallowed - the
-    /// cursor still advances past the batch so a deterministically-
-    /// failing DLQ does not pin the ship loop forever; the WAL
-    /// retains the originals until the GC pass trims them, so an
-    /// operator can still recover off the WAL even when the DLQ is
-    /// unavailable.
+    /// <see cref="LatticeReplicationMetrics.ReasonSchema"/>. Fails closed
+    /// (#4603): when any entry cannot be parked - the queue is full, or the
+    /// enqueue failed - it returns <see langword="false"/> so the caller does
+    /// not advance past the batch, and the next tick re-parks it (the enqueue
+    /// is idempotent, so entries already parked keep their one slot). Advancing
+    /// past an entry that is not parked would lose it for the peer for good.
+    /// A full queue marks the link stalled on the peer-status path until a
+    /// park succeeds.
     /// <para>
     /// The saga of every prepare in the batch is poisoned first (#4494), so its
     /// terminals are parked rather than shipped. Returns <see langword="false"/>,
@@ -4146,7 +4154,6 @@ internal sealed partial class ReplicationShipperGrain(
             return false;
         }
 
-        _pendingCursorWrites++;
         var dlq = _grainFactory.GetGrain<IReplicationDeadLetterGrain>(_treeName);
         foreach (var entry in _drainBuffer)
         {
@@ -4161,12 +4168,21 @@ internal sealed partial class ReplicationShipperGrain(
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
+                if (ex is ReplicationDeadLetterQueueFullException)
+                {
+                    _peerStats.RecordDeadLetterFull(
+                        _treeName, _peerClusterId, ReplicationContactDirection.Outbound, _cursorFlushClock.GetUtcNow());
+                }
+
                 Logger.LogWarning(ex,
-                    "Failed to park entry on DLQ for {Context} (key={Key}, hlc={Hlc}); proceeding with cursor advance",
+                    "Failed to park entry on DLQ for {Context} (key={Key}, hlc={Hlc}); not advancing past the batch",
                     LogContext, entry.Key, entry.Timestamp);
+                return false;
             }
         }
 
+        _peerStats.RecordDeadLetterFull(_treeName, _peerClusterId, ReplicationContactDirection.Outbound, since: null);
+        _pendingCursorWrites++;
         return true;
     }
 

@@ -801,6 +801,39 @@ recovered registry. Operators monitoring the WAL GC trim frontier
 should expect this lag to clear on the next post-outage ack rather
 than immediately when the registry recovers.
 
+### Per-partition read positions hold the WAL (issue #4579)
+
+The HLC cursor alone does not protect what the shipper has not read. It is
+the HLC of the last entry shipped in merge order, and a WAL partition is not
+HLC-ordered in offset: a silo whose clock trails, or a merge that keeps its
+source stamp, can put an entry the shipper
+has not read at an HLC at or below the cursor it has already reported. Once
+the owning leaf checkpoints past such an entry, nothing else holds it, so a
+GC pass could trim it unshipped.
+
+The shipper is therefore also an offset-reading WAL consumer:
+
+- Before its first read of a physical log it registers with that log's
+  durable consumer set, so a GC pass on any silo, and after a restart, asks
+  it where it is.
+- It answers with its durable `PartitionCursors`, which a held saga terminal
+  already caps. A position is raised only after the write that made it
+  durable. It is lowered before the next read when the in-memory cursors drop
+  (an alias rebind, a rewind).
+- A registered shipper that has acknowledged nothing answers 0 for every
+  partition, so it holds the whole log instead of racing the GC.
+- On an alias rebind it registers with the new physical log first and only
+  then withdraws from the old one. It answers nothing for a log it no longer
+  reads.
+
+The GC refuses every entry at or above the lowest position any registered
+consumer reports for that partition, however the HLC clauses read. Only the
+`WalRetention` TTL ceiling trims past it, and the shipper then sees the gap
+on its next read. A stalled or removed peer's shipper therefore holds the WAL
+at its last durable position until the TTL ceiling applies. A peer whose
+shipper has never activated is not yet a consumer; it starts from a snapshot
+bootstrap.
+
 ### Graceful deactivation
 
 `OnDeactivateCoreAsync` flushes any pending cursor advance before the
@@ -844,7 +877,9 @@ HLC and the sender advances its durable cursor to
 `ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
 the receiver's stored timestamp behind the sender's cursor and change
 LWW/HLC convergence against concurrent foreign-origin writes. Eliding
-safely requires the receiver to report which content it already holds.
+safely requires the receiver to report which writes it already holds -
+exactly, by content hash, origin and source HLC, with its leaf still at
+that version or newer (#4585), never by bytes alone.
 That is the separate opt-in `ContentHashDedupElisionEnabled` (default
 `false`, and it requires this master switch): before each batch ships
 the shipper runs a content-manifest exchange over the digest-probe
@@ -972,11 +1007,16 @@ last-run timestamps in persistent state:
   and, for each current topology peer that authored at least one
   entry in the window, calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
-  with that peer's own oldest HLC. A peer with no authored entry in the
-  window is skipped - probing it against another origin's entries was
-  the source of a false-positive re-bootstrap loop. On positive
-  detection, the detector drives the bootstrap kickoff itself -
-  the maintenance grain is a pure scheduler.
+  with that peer's own oldest local HLC. A peer with no authored entry
+  in the window is skipped - probing it against another origin's entries
+  was the source of a false-positive re-bootstrap loop. This probe only
+  compares local readings and guards local seal gaps; it is not the
+  cross-cluster source-WAL trim detector. Source trims are detected by
+  the sender shipper when a shipping read returns a first sequence above
+  the requested sequence, and the request is carried on
+  `ReplicationBatch.ReseedAfterEpoch`. On positive local detection, the
+  detector drives the bootstrap kickoff itself - the maintenance grain
+  is a pure scheduler.
 
 ### Failure handling
 
@@ -1055,12 +1095,13 @@ emits; the table shows which driver is the source of each.
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
 | `dead_letter.enqueued` (reason=poisoned_saga) | Shipper grain (poisoned saga) | A later prepare or a terminal of a saga whose prepare was dead-lettered, withheld from the peer. |
 | `shipper.saga_poisoned` | Shipper grain (poisoned saga) | A saga withheld from the peer (`outcome=poisoned`), or a full poison list refusing to advance (`outcome=refused`). |
-| `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
+| `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
+| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
 
 ---
 

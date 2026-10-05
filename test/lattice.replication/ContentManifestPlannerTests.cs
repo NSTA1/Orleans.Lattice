@@ -106,24 +106,27 @@ public sealed class ContentManifestPlannerTests
 
     // --- ComputeMissingSet ----------------------------------------------
 
+    private const string Sender = "site-a";
+
+    private static ContentManifestRequest RequestFor(IReadOnlyList<ContentManifestEntry> manifest, string origin = Sender) =>
+        new() { TreeName = "tree", OriginClusterId = origin, Entries = manifest };
+
     [Test]
     public void ComputeMissingSet_null_lookup_throws()
     {
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a" };
+        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = Sender };
 
         Assert.Throws<ArgumentNullException>(() =>
-            ContentManifestPlanner.ComputeMissingSet(in request, null!));
+            ContentManifestPlanner.ComputeMissingSet(in request, null!, HybridLogicalClock.Zero));
     }
 
     [Test]
     public void ComputeMissingSet_reports_unknown_keys_as_missing()
     {
-        var batch = new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(10)) };
-        var manifest = ContentManifestPlanner.BuildManifest(batch);
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>();
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(10)) });
+        var request = RequestFor(manifest);
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, new Dictionary<string, ReceiverHeldContent>(), HybridLogicalClock.Zero);
 
         Assert.Multiple(() =>
         {
@@ -136,79 +139,111 @@ public sealed class ContentManifestPlannerTests
     [Test]
     public void ComputeMissingSet_reports_different_hash_as_missing()
     {
-        var batch = new List<WalRecord> { Set("a", new byte[] { 9 }, Hlc(10)) };
-        var manifest = ContentManifestPlanner.BuildManifest(batch);
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 9 }, Hlc(10)) });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
         {
-            ["a"] = (manifest[0].ContentHash ^ 0x1UL, Hlc(5)),
+            ["a"] = new(manifest[0].ContentHash ^ 0x1UL, Sender, Hlc(10)),
         };
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, HybridLogicalClock.Zero);
 
         Assert.That(response.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
     }
 
     [Test]
-    public void ComputeMissingSet_elides_held_content_and_advances_on_newer_clock()
+    public void ComputeMissingSet_reports_the_same_bytes_at_a_newer_version_as_missing()
     {
-        var batch = new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) };
-        var manifest = ContentManifestPlanner.BuildManifest(batch);
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
-        // Receiver already holds the identical content but at an older clock.
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>
+        // #4585: last-writer-wins orders by version, not by bytes. The receiver
+        // holds V at 5; V at 20 is a different write and must ship, or a
+        // concurrent write between them wins here alone.
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
         {
-            ["a"] = (manifest[0].ContentHash, Hlc(5)),
+            ["a"] = new(manifest[0].ContentHash, Sender, Hlc(5)),
         };
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, HybridLogicalClock.Zero);
 
         Assert.Multiple(() =>
         {
-            Assert.That(response.MissingEntryIndices, Is.Empty, "identical content is not missing");
-            Assert.That(response.AdvancedHlc, Is.EqualTo(Hlc(20)),
-                "HWM advances to the newer manifest clock without shipping the payload");
+            Assert.That(response.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
+            Assert.That(response.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero));
         });
     }
 
     [Test]
-    public void ComputeMissingSet_does_not_advance_when_held_clock_is_newer_or_equal()
+    public void ComputeMissingSet_reports_the_same_bytes_and_version_from_another_origin_as_missing()
     {
-        var batch = new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) };
-        var manifest = ContentManifestPlanner.BuildManifest(batch);
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
         {
-            ["a"] = (manifest[0].ContentHash, Hlc(20)),
+            ["a"] = new(manifest[0].ContentHash, "site-b", Hlc(20)),
         };
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, HybridLogicalClock.Zero);
+
+        Assert.That(response.MissingEntryIndices, Is.EqualTo(new[] { 0 }));
+    }
+
+    [Test]
+    public void ComputeMissingSet_elides_exactly_the_held_write_and_advances_above_the_high_water_mark()
+    {
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
+        {
+            ["a"] = new(manifest[0].ContentHash, Sender, Hlc(20)),
+        };
+
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, Hlc(5));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(response.MissingEntryIndices, Is.Empty, "the receiver holds exactly this write");
+            Assert.That(response.AdvancedHlc, Is.EqualTo(Hlc(20)),
+                "a held write above the receiver's mark advances it without shipping the payload");
+        });
+    }
+
+    [Test]
+    public void ComputeMissingSet_does_not_advance_when_the_high_water_mark_is_at_or_above_the_held_write()
+    {
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord> { Set("a", new byte[] { 1 }, Hlc(20)) });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
+        {
+            ["a"] = new(manifest[0].ContentHash, Sender, Hlc(20)),
+        };
+
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, Hlc(20));
 
         Assert.Multiple(() =>
         {
             Assert.That(response.MissingEntryIndices, Is.Empty);
             Assert.That(response.AdvancedHlc, Is.EqualTo(HybridLogicalClock.Zero),
-                "no advance when receiver clock is not strictly older");
+                "no advance when the receiver's mark is not strictly older");
         });
     }
 
     [Test]
     public void ComputeMissingSet_advanced_hlc_is_the_max_across_elided_entries()
     {
-        var batch = new List<WalRecord>
+        var manifest = ContentManifestPlanner.BuildManifest(new List<WalRecord>
         {
             Set("a", new byte[] { 1 }, Hlc(30)),
             Set("b", new byte[] { 2 }, Hlc(40)),
-        };
-        var manifest = ContentManifestPlanner.BuildManifest(batch);
-        var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>
+        });
+        var request = RequestFor(manifest);
+        var receiver = new Dictionary<string, ReceiverHeldContent>
         {
-            ["a"] = (manifest[0].ContentHash, Hlc(5)),
-            ["b"] = (manifest[1].ContentHash, Hlc(6)),
+            ["a"] = new(manifest[0].ContentHash, Sender, Hlc(30)),
+            ["b"] = new(manifest[1].ContentHash, Sender, Hlc(40)),
         };
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, Hlc(5));
 
         Assert.Multiple(() =>
         {
@@ -274,9 +309,9 @@ public sealed class ContentManifestPlannerTests
     [Test]
     public void Round_trip_elides_duplicate_payloads_and_advances_hwm()
     {
-        // Duplicate-heavy batch: 4 keys, all re-set with values the receiver
-        // already holds, at clocks newer than the receiver's. Key "new" is a
-        // genuinely-new value the receiver is missing.
+        // Duplicate-heavy batch: three exact re-sends of writes the receiver
+        // already holds (a redelivery after a lost acknowledgement), and key
+        // "new", a write the receiver is missing.
         var batch = new List<WalRecord>
         {
             Set("dup1", new byte[] { 1 }, Hlc(100)),
@@ -287,15 +322,15 @@ public sealed class ContentManifestPlannerTests
         var manifest = ContentManifestPlanner.BuildManifest(batch);
         var request = new ContentManifestRequest { TreeName = "tree", OriginClusterId = "site-a", Entries = manifest };
 
-        var receiver = new Dictionary<string, (ulong, HybridLogicalClock)>
+        var receiver = new Dictionary<string, ReceiverHeldContent>
         {
-            ["dup1"] = (manifest[0].ContentHash, Hlc(1)),
-            ["dup2"] = (manifest[1].ContentHash, Hlc(2)),
+            ["dup1"] = new(manifest[0].ContentHash, "site-a", Hlc(100)),
+            ["dup2"] = new(manifest[1].ContentHash, "site-a", Hlc(101)),
             // "new" not held
-            ["dup3"] = (manifest[3].ContentHash, Hlc(3)),
+            ["dup3"] = new(manifest[3].ContentHash, "site-a", Hlc(103)),
         };
 
-        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver);
+        var response = ContentManifestPlanner.ComputeMissingSet(in request, receiver, Hlc(3));
         var elided = ContentManifestPlanner.ComputeElidedIndices(manifest, response.MissingEntryIndices);
 
         // Sender simulates dropping elided indices and summing shipped bytes.
@@ -318,7 +353,7 @@ public sealed class ContentManifestPlannerTests
             Assert.That(shippedKeys, Is.EqualTo(new[] { "new" }));
             Assert.That(shippedBytes, Is.EqualTo(1), "only the 1-byte new value is shipped");
             Assert.That(response.AdvancedHlc, Is.EqualTo(Hlc(103)),
-                "HWM advances to the newest elided duplicate clock");
+                "HWM advances to the newest elided write above it");
         });
     }
 

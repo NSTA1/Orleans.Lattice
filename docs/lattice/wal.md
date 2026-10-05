@@ -48,7 +48,9 @@ range delete matched, the cross-tree operation id and participants, and
 whether a prepared write's stamp is its prepare's original stamp (see
 [A commit applies each value at its prepare stamp](atomic-writes.md#a-commit-applies-each-value-at-its-prepare-stamp);
 the field is additive, so a record written before it existed reads as not
-original). The WAL
+original), and whether the stored value is migrated (see
+[A later write the split imports is not dropped over the saga's value](atomic-writes.md#a-later-write-the-split-imports-is-not-dropped-over-the-sagas-value);
+also additive, read as not migrated on an older record). The WAL
 stores each envelope as its durable twin, `WalRecord` - the shape that is
 encoded onto storage and shipped to replication peers, which also carries the
 causal+ dependency summary - and a storage provider or `IMutationObserver` sees
@@ -803,9 +805,9 @@ does.
 
 ### Predicate
 
-A WAL entry is trim-eligible only when three independent clauses all accept
-it: the **entitlement clause**, the **causal-stable clause**, and the
-**blocked-floor clause**.
+A WAL entry is trim-eligible only when four independent clauses all accept
+it: the **entitlement clause**, the **offset-reader clause**, the
+**causal-stable clause**, and the **blocked-floor clause**.
 
 The entitlement clause has two axes. On the HLC axis it is satisfied when
 **either** of the following holds:
@@ -840,6 +842,33 @@ lowest buffer pin any consumer reports (see
 can recover from its staging state; it is inert while no consumer reports a
 pin.
 
+A fourth clause bounds the trim by the **read position of every
+offset-reading consumer** (issues #4579, #4584). The replication shipper and
+every materialised-view maintainer read each partition by offset, so the HLC
+cursor they report cannot hold the entries they have not read: a WAL partition
+is not HLC-ordered in offset (a silo whose clock trails, a merge that keeps its
+source stamp), so an unread entry can carry an HLC at or below a cursor already
+reported. That cursor is also visible only to the GC pass on the silo the
+consumer runs on, while every silo runs a pass. Each offset-reading consumer
+registers with the tree's durable consumer set before it reads the log. On every pass the GC asks each registered consumer for the
+lowest offset per partition it has not durably consumed, and refuses any entry
+at or above it. The consumer's own persisted position is the answer, so the
+bound holds on every silo and across a restart. This clause overrules the
+cursor arm and the materialiser offset admission, but not the TTL ceiling,
+which stays a bound: a consumer that falls behind it detects the trimmed gap on
+its next read. A registered consumer that has read nothing holds the whole
+log, and a pass that cannot read the set or any member trims only past the TTL
+ceiling.
+
+An incremental backup capture is deliberately not an offset-reading consumer:
+the GC may trim past it, and the capture then falls back to a full backup. Its
+gap detection, like a view's, is exact by offset and made against what was
+actually read. The shared WAL subscriber probes the tail again whenever a read
+jumps an offset, so a trim that lands after its pre-read check is reported as a
+fall-off rather than read across. A jump the tail has not passed is a slot whose
+flush failed and was never acknowledged, and is read past as before (issue #4621
+tracks such a slot whose write lands after the reader has passed it).
+
 The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to
 over-trim past a consumer that is still pinning the HLC half.
@@ -860,7 +889,7 @@ path described in [`projection-rebuild.md`](projection-rebuild.md).
 
 The scan is conservative: the first non-eligible entry per shard stops the
 walk for that shard, as does the first entry above the partition's durable
-materialiser offset floor. WAL offsets are dense and append-only but HLC
+materialiser offset floor or at an offset-reading consumer's read position. WAL offsets are dense and append-only but HLC
 `WallClockTicks` is mostly-monotonic-with-skew, so a stop-at-first-miss walk
 preserves correctness while a more aggressive scan would risk trimming an
 entry younger than a still-pinned later entry.

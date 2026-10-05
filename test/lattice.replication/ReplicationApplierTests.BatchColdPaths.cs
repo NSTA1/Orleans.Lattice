@@ -38,9 +38,15 @@ public partial class ReplicationApplierTests
         CreateTwoTreeApplier(
             int applyMaxParallelRuns = 1,
             IReplicationReceiveGate? receiveGate = null,
-            ReplicationPeerStats? peerStats = null)
+            ReplicationPeerStats? peerStats = null,
+            IReplicationDeadLetterGrain? deadLetters = null)
     {
         var factory = Substitute.For<IGrainFactory>();
+        if (deadLetters is not null)
+        {
+            factory.GetGrain<IReplicationDeadLetterGrain>(Arg.Any<string>()).Returns(deadLetters);
+        }
+
         var apply = Substitute.For<IReplicationApplyGrain>();
         var apply2 = Substitute.For<IReplicationApplyGrain>();
         var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
@@ -237,7 +243,7 @@ public partial class ReplicationApplierTests
         var (applier, apply, _, hwm) = CreateTwoTreeApplier();
         // The local frontier has seen nothing from site-c, so the declared dependency
         // is unmet and the entry must wait rather than apply out of causal order.
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
+        CausalDependencyTestDouble.Wire(hwm, new VersionVector());
 
         var result = await applier.ApplyBatchAsync(new[]
         {
@@ -259,7 +265,7 @@ public partial class ReplicationApplierTests
     public async Task ApplyBatchAsync_applies_a_batched_entry_whose_causal_dependencies_are_met()
     {
         var (applier, apply, _, hwm) = CreateTwoTreeApplier();
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(Vector((OriginC, Hlc(500))));
+        CausalDependencyTestDouble.Wire(hwm, Vector((OriginC, Hlc(500))));
 
         var result = await applier.ApplyBatchAsync(new[]
         {
@@ -273,20 +279,48 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_reads_the_local_vector_clock_once_per_run_until_an_apply_dirties_it()
+    public async Task ApplyBatchAsync_dead_letters_a_batched_entry_whose_dependency_was_lost()
     {
-        var (applier, _, _, hwm) = CreateTwoTreeApplier();
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(Vector((OriginC, Hlc(500))));
+        // #4603: a dependency on a write the receiver discarded can never be
+        // met, so the dependent is dead-lettered as a terminal state, not parked.
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var (applier, apply, _, hwm) = CreateTwoTreeApplier(deadLetters: dlq);
+        var lost = CausalDependencyTestDouble.Wire(hwm, Vector((OriginC, Hlc(500))));
+        lost.Add((OriginC, Hlc(100)));
 
-        await applier.ApplyBatchAsync(new[]
+        var result = await applier.ApplyBatchAsync(new[]
         {
-            SetEntry("a", Hlc(10)) with { VectorClock = Vector((OriginC, Hlc(100))) },
-            SetEntry("b", Hlc(20)) with { VectorClock = Vector((OriginC, Hlc(200))) },
+            SetEntry("a", Hlc(10)),
+            SetEntry("b", Hlc(20)) with { VectorClock = Vector((OriginC, Hlc(100))) },
         });
 
-        // Both entries declare dependencies but neither applies before the end-of-run
-        // flush, so the cached frontier is still clean for the second check.
-        await hwm.Received(1).GetVectorAsync(Arg.Any<CancellationToken>());
+        Assert.That(result.Deferred, Is.False);
+        await dlq.Received(1).EnqueueAsync(
+            Arg.Is<WalRecord>(e => e.Key == "b"),
+            Arg.Any<string>(),
+            0,
+            LatticeReplicationMetrics.ReasonDependencyLost,
+            Arg.Any<CancellationToken>());
+        await apply.Received(1).ApplyMergeManyAsync(
+            Arg.Is<IReadOnlyList<ApplyMergeItem>>(items => items.Count == 1 && items[0].Key == "a"));
+    }
+
+    [Test]
+    public async Task ApplyBatchAsync_defers_the_run_when_a_lost_dependent_cannot_be_dead_lettered()
+    {
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        dlq.EnqueueAsync(default, default!, default, default!, default).ReturnsForAnyArgs(
+            Task.FromException<long>(new ReplicationDeadLetterQueueFullException(Tree, 1)));
+        var (applier, _, _, hwm) = CreateTwoTreeApplier(deadLetters: dlq);
+        CausalDependencyTestDouble.Wire(hwm, new VersionVector()).Add((OriginC, Hlc(100)));
+
+        var result = await applier.ApplyBatchAsync(new[]
+        {
+            SetEntry("a", Hlc(10)),
+            SetEntry("b", Hlc(20)) with { VectorClock = Vector((OriginC, Hlc(100))) },
+        });
+
+        Assert.That(result.Deferred, Is.True, "A full dead-letter queue must not let the run be acknowledged past b.");
     }
 
     // ---------------------------------------------------------------
@@ -323,10 +357,10 @@ public partial class ReplicationApplierTests
     public async Task A_fault_after_a_crdt_deferral_rolls_the_deferred_bucket_back()
     {
         var (applier, _, apply, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
-        // The vector-clock read happens before the per-entry classification, so faulting
+        // The dependency check happens before the per-entry classification, so faulting
         // it stops the run while an earlier CRDT deferral is still buffered - the exact
         // state the deferred-bucket rollback exists for.
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>())
+        hwm.CheckDependenciesAsync(Arg.Any<IReadOnlyList<VersionVector>>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("the high-water-mark grain is unreachable"));
         var entries = new[]
         {
@@ -338,7 +372,7 @@ public partial class ReplicationApplierTests
         Assert.That(async () => await applier.ApplyBatchAsync(entries), Throws.InvalidOperationException);
 
         apply.ClearReceivedCalls();
-        hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(Vector((OriginC, Hlc(500))));
+        CausalDependencyTestDouble.Wire(hwm, Vector((OriginC, Hlc(500))));
         var retry = await applier.ApplyBatchAsync(entries);
 
         Assert.That(retry.Applied, Is.True);

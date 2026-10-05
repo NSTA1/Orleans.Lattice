@@ -42,15 +42,15 @@ steps:
   - n: 5
     action: "Discard only after validating that the parked entry should never be applied."
     api: "ILatticeReplicationDeadLetters.DiscardAsync"
-    expects: "Returns true when the entry was removed and false when the id was already absent."
+    expects: "Returns true when the entry was removed and false when the id was already absent. A foreign-origin entry is first recorded as a lost write, so later entries that depend on it are dead-lettered with reason dependency_lost."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
 postconditions:
   - check: "Replay removes a parked entry on any non-throwing, non-deferred return, including Applied false."
     source: "docs/lattice.replication/dead-letter-queue.md"
   - check: "Replay that returns Deferred true applies nothing and leaves the entry parked for a later replay."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
-  - check: "Discard removes the entry without attempting to apply it."
-    source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
+  - check: "Discard removes the entry without attempting to apply it, after durably recording a foreign-origin entry as a lost write."
+    source: "docs/lattice.replication/dead-letter-queue.md"
 failure_modes:
   - id: mode-mismatch
     signal: "dead_letter.enqueued reason mode_mismatch or the FailureReason indicates receiver merge-mode disagreement."
@@ -72,10 +72,14 @@ failure_modes:
     signal: "ReplayAsync returns ApplyResult with Deferred true."
     effect: "The entry remains parked because a coordinated restore receive fence still blocks inbound apply."
     response: "Wait for the restore fence to lift and replay the same entry again."
-  - id: fifo-eviction
-    signal: "dead_letter.removed reason evicted rises while enqueuing new dead letters."
-    effect: "The oldest parked entry was removed to respect DeadLetterQueueCapacity."
-    response: "Increase capacity or triage faster; inspect remaining entries before further evictions."
+  - id: queue-full
+    signal: "dead_letter.refused rises and the replication link reports Stalled (DeadLetterFullSeconds is set on the peer-status row)."
+    effect: "The queue is at DeadLetterQueueCapacity and refuses further parks; the affected entries stay unacknowledged and the link is held back. Nothing is evicted."
+    response: "Replay or discard parked entries, or raise DeadLetterQueueCapacity for the tree; the held-back entries are re-shipped once a park succeeds."
+  - id: dependency-lost
+    signal: "dead_letter.enqueued reason dependency_lost."
+    effect: "The entry depends on a write an operator discarded from this queue, so it can never be applied in causal order."
+    response: "Decide whether the dependent write is still wanted; replaying it re-parks it as dependency_lost, so discard it or correct the data at the application level."
   - id: surface-not-available
     signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
     effect: "The operation cannot be carried out through that surface on this host."
@@ -92,7 +96,7 @@ concurrency:
     source: "docs/lattice.replication/dead-letter-queue.md"
   - rule: "A coordinated restore receive-fence deferral leaves the dead-letter entry parked instead of removing it."
     source: "docs/lattice.replication/dead-letter-queue.md"
-  - rule: "When the queue is at capacity, enqueue evicts the oldest entry first."
+  - rule: "When the queue is at capacity, enqueue is refused and the caller keeps the entry unacknowledged; the queue never evicts."
     source: "docs/lattice.replication/dead-letter-queue.md"
 sources:
   - "docs/lattice.replication/dead-letter-queue.md"

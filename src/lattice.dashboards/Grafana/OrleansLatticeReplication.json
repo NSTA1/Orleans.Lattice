@@ -319,6 +319,11 @@
           "legendFormat": "removed {{reason}}"
         },
         {
+          "refId": "Q",
+          "expr": "sum by (reason) (rate(orleans_lattice_replication_dead_letter_refused_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
+          "legendFormat": "refused (queue full) {{reason}}"
+        },
+        {
           "refId": "P",
           "expr": "sum by (outcome) (rate(orleans_lattice_replication_shipper_saga_poisoned_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))",
           "legendFormat": "saga poisoned {{outcome}}"
@@ -2050,6 +2055,18 @@
       "gridPos": { "h": 7, "w": 12, "x": 0, "y": 379 },
       "targets": [
         { "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, tree, shard) (rate(orleans_lattice_wal_gc_floor_head_distance_bucket{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])))", "legendFormat": "{{tree}} shard {{shard}}" }
+      ]
+    },
+    {
+      "id": 45261,
+      "title": "Bootstrap read fence force-lifted - issue #4526",
+      "description": "Totals (not a rate) of operator force-lifts of the read fence a failed snapshot bootstrap left over a partial import, per tree (orleans.lattice.replication.bootstrap.read_fence_force_lifted, issue #4526). While a receiver drains a snapshot, every read of the tree is refused so no reader sees a partial import; a drain that fails part-way keeps the fence and is re-driven automatically. A force-lift makes the tree readable at once but exposes the partial import - a committed atomic batch with some keys present and others missing or stale - until a later bootstrap completes. ANY NON-ZERO VALUE IS AN ALERT, NOT A TREND: each increment is a deliberate operator override with a reason recorded on the paired Warning audit log. Conditionally-emitted: the counter is recorded only when a lift happens, so the query carries no 'or vector(0)' zero-fill and an empty result is the healthy reading, not a measured zero (issue #2520).",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": { "defaults": { "unit": "short", "min": 0, "custom": { "spanNulls": false } }, "overrides": [] },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 379 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (tree) (increase(orleans_lattice_replication_bootstrap_read_fence_force_lifted_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[$__range]))", "legendFormat": "{{tree}}" }
       ]
     }
   ]

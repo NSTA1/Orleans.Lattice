@@ -1067,6 +1067,48 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Joins a full CRDT <paramref name="incomingState"/> into this leaf's current
+    /// visible state for <paramref name="key"/> under <paramref name="mode"/>,
+    /// returning the re-serialised joined state: the state-based complement of
+    /// <see cref="FoldPreparedCrdtDelta"/> for a caller that holds a whole state
+    /// rather than a typed delta. The existing value (or an empty primitive when
+    /// the key is absent or tombstoned) and the incoming state are both stripped
+    /// of any version envelope, deserialised through the registered
+    /// <see cref="CrdtShape"/>, and merged with <see cref="CrdtShape.MergeStates"/>,
+    /// which is commutative, associative and idempotent, so a re-delivered state
+    /// joins to the same bytes. The result is written back unenveloped, exactly as
+    /// the fold's output is. The caller chooses the stamp.
+    /// <para>
+    /// The terminal backstop uses it to install a saga's committed CRDT value
+    /// without discarding contributions the row gained after the stage-time
+    /// snapshot the value was computed from (issue #4611).
+    /// </para>
+    /// </summary>
+    private byte[] JoinCrdtStateIntoRow(string key, LatticeMergeMode mode, byte[] incomingState)
+    {
+        var treeId = RequireBoundTreeId(key, mode, "the CRDT state join");
+        var shape = ResolveCrdtShapeRegistry().TryGet(treeId, mode)
+            ?? throw new LatticeCrdtShapeNotRegisteredException(
+                "No CrdtShape is registered for tree '"
+                + treeId
+                + "' at mode '"
+                + mode
+                + "'. A committed CRDT value cannot be joined into the row without a "
+                + "shape descriptor; register the OR-Map pair via "
+                + "ISiloBuilder.AddOrMapShape<TKey, TValue>(treeName) for OR-Map trees "
+                + "(closed-shape modes resolve through the global fallback).",
+                treeId);
+
+        var joined = Cache.TryGetRow(key, out var existing)
+            && !existing.IsTombstone
+            && existing.Value is { Length: > 0 } existingBytes
+                ? shape.DeserializeState(StripStateForFold(existingBytes))
+                : shape.CreateEmpty();
+        shape.MergeStates(joined, shape.DeserializeState(StripStateForFold(incomingState)));
+        return shape.SerializeState(joined);
+    }
+
+    /// <summary>
     /// Drops every pending-tx entry under <paramref name="transactionId"/>
     /// without ever making it visible to readers - the saga's
     /// prepare-phase writes are undone in a single linearization step.
@@ -2112,19 +2154,15 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether a stranded prepared value with no committed-values payload can
     /// be re-delivered to the leaf that declares its key through the
-    /// cross-migration backstop, which installs a plain live value. A
-    /// tombstone, an expiring value, or a CRDT typed delta cannot be expressed
-    /// that way, so such a key keeps the pre-#4335 local drain.
+    /// cross-migration backstop. A tombstone or an expiring value cannot be
+    /// expressed that way, so such a key keeps the pre-#4335 local drain. A
+    /// CRDT-delta prepare can: its bucketed value is the staged full state, and
+    /// the declaring leaf, which inherits this leaf's tree binding and so resolves
+    /// the same merge mode, joins it into its row (issue #4611). A delta is
+    /// recorded only when that mode resolves to a CRDT.
     /// </summary>
-    private bool IsForwardablePreparedValue(Guid transactionId, string key, in LwwValue<byte[]> prepared)
-    {
-        if (prepared.Value is null || prepared.IsTombstone || prepared.ExpiresAtTicks != 0)
-            return false;
-
-        return _pendingTxDeltas is null
-            || !_pendingTxDeltas.TryGetValue(transactionId, out var deltas)
-            || !deltas.ContainsKey(key);
-    }
+    private static bool IsForwardablePreparedValue(in LwwValue<byte[]> prepared) =>
+        prepared.Value is not null && !prepared.IsTombstone && prepared.ExpiresAtTicks == 0;
 
     /// <inheritdoc />
     public async Task ApplyTxTerminalAsync(
@@ -2205,7 +2243,7 @@ internal sealed partial class BPlusLeafGrain
                 if (DeclaresKey(key))
                     continue;
                 var hasCommittedValue = committedValues is not null && committedValues.ContainsKey(key);
-                if (!hasCommittedValue && !IsForwardablePreparedValue(transactionId, key, prepared))
+                if (!hasCommittedValue && !IsForwardablePreparedValue(prepared))
                     continue;
                 (strandedPrepared ??= new HashSet<string>(StringComparer.Ordinal)).Add(key);
             }
@@ -2244,7 +2282,7 @@ internal sealed partial class BPlusLeafGrain
         // last-writer-wins at that stamp, so a write acknowledged after the
         // prepare survives; a key without one keeps the pre-#4522 fresh stamp.
         // Captured before the drain below discards the bucket's classification.
-        var missingStamps = CollectBackstopOriginalStamps(transactionId, missingKeys, bucket, strandedPrepared);
+        var missingStamps = CollectBackstopOriginalStamps(transactionId, missingKeys, bucket, strandedPrepared, out var missingMigrated);
 
         // Hot-path short-circuit: a duplicate terminal delivery with
         // nothing new to do. The flip side already ran (alreadyFlipped),
@@ -2463,10 +2501,18 @@ internal sealed partial class BPlusLeafGrain
             // Pre-advance baseClock past any existing entry for the
             // missing keys before Ticking so the backstop strictly
             // dominates the migrated pre-saga value.
+            // Issue #4611: on a tree whose merge mode resolves to a CRDT, a
+            // backstop value is a full CRDT state computed from a stage-time
+            // snapshot, so it is joined into the row rather than installed
+            // last-writer-wins, which would discard every contribution the row
+            // gained after that snapshot. The drain folds the delta under the
+            // same condition. Every such key is stamped above its row below.
+            var backstopMode = ResolveMergeMode();
+            var joinCrdtState = backstopMode != LatticeMergeMode.LwwRegister;
             var baseClock = state.State.Clock;
             foreach (var kvp in missingKeys)
             {
-                if (missingStamps is not null && missingStamps.ContainsKey(kvp.Key))
+                if (!joinCrdtState && missingStamps is not null && missingStamps.ContainsKey(kvp.Key))
                     continue;
                 if (Cache.TryGetRow(kvp.Key, out var preExisting)
                     && preExisting.Timestamp.CompareTo(baseClock) > 0)
@@ -2490,11 +2536,22 @@ internal sealed partial class BPlusLeafGrain
                 // A row at or above P is a write acknowledged after the prepare
                 // and stands; the key is still recorded as backstopped below.
                 var keyStamp = stamp;
-                if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
+                var migrated = false;
+                var installed = kvp.Value;
+                if (joinCrdtState)
+                {
+                    // A join cannot overwrite a later write, so no original stamp
+                    // applies; it is stored at the fresh stamp, which strictly
+                    // dominates the row it already contains (StoreEntry is LWW).
+                    installed = JoinCrdtStateIntoRow(kvp.Key, backstopMode, kvp.Value);
+                    anyFreshStamp = true;
+                }
+                else if (missingStamps is not null && missingStamps.TryGetValue(kvp.Key, out var originalStamp))
                 {
                     if (IsRowAtOrAboveOriginalStamp(kvp.Key, originalStamp))
                         continue;
                     keyStamp = originalStamp;
+                    migrated = missingMigrated is not null && missingMigrated.Contains(kvp.Key);
                     state.State.Clock = Orleans.Lattice.HybridLogicalClock.Merge(state.State.Clock, originalStamp);
                 }
                 else
@@ -2509,7 +2566,7 @@ internal sealed partial class BPlusLeafGrain
                         TreeId = treeId,
                         Op = MutationKind.Set,
                         Key = kvp.Key,
-                        Value = kvp.Value,
+                        Value = installed,
                         Timestamp = keyStamp,
                         IsTombstone = false,
                         ExpiresAtTicks = 0,
@@ -2520,6 +2577,10 @@ internal sealed partial class BPlusLeafGrain
                         IsPrepared = false,
                         IsBackstop = true,
                         ShardIndex = shardIndex,
+                        IsMigrated = migrated,
+                        // A joined state carries no delta, so the encoder keeps its
+                        // Value and replay installs the joined state at this stamp.
+                        Mode = joinCrdtState ? backstopMode : LatticeMergeMode.LwwRegister,
                     };
 
                     // Emit the WAL append on the LeafWriteDuration
@@ -2549,17 +2610,24 @@ internal sealed partial class BPlusLeafGrain
 
                 var value = new Primitives.LwwValue<byte[]>
                 {
-                    Value = kvp.Value,
+                    Value = installed,
                     Timestamp = keyStamp,
                     OriginClusterId = origin,
                     VectorClock = vc,
+                    IsMigrated = migrated,
                 };
                 StoreEntry(kvp.Key, value);
-                // Backstop is a non-migration write: any prior
-                // migration-provenance marker for this key is now
-                // stale and must be cleared so a subsequent saga's
-                // orphan-drain guard does not mistake the backstop
-                // write for a migration import.
+                if (joinCrdtState)
+                    Cache.SetMergeMode(kvp.Key, backstopMode);
+                // A backstop at a fresh stamp, or at an original stamp minted
+                // on this shard, is a non-migration write: any prior
+                // migration-provenance marker for this key is now stale and
+                // must be cleared so a subsequent saga's orphan-drain guard
+                // does not mistake it for a migration import. One stored at
+                // an original stamp carried from another shard is on that
+                // shard's clock lineage, so it stays migrated and a later
+                // migration import competes with it by last-writer-wins
+                // (issue #4564).
             }
 
             if (anyFreshStamp)
@@ -2659,6 +2727,19 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private Dictionary<string, HashSet<Guid>>? _shadowedSagas;
 
+    /// <summary>
+    /// The marked original prepare stamp P of each shadow marker that was
+    /// installed with one, per key then per saga (issue #4545). A marker absent
+    /// from this map has no known P and keeps the pre-#4545 read gate; one
+    /// present here is released by the read gate once the row it guards is
+    /// stamped at or above P (<see cref="ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare"/>),
+    /// so a marker this leaf will never see a terminal for - carried here by a
+    /// leaf split, or installed after a reactivation forgot the terminal - can
+    /// no longer gate the key until the decision ages out. Activation-scoped and
+    /// cleared alongside <see cref="_shadowedSagas"/>.
+    /// </summary>
+    private Dictionary<string, Dictionary<Guid, HybridLogicalClock>>? _shadowMarkerStamps;
+
     /// <inheritdoc />
     public async Task MarkSagaShadowAsync(Guid transactionId, IReadOnlyList<string> keys)
     {
@@ -2671,6 +2752,15 @@ internal sealed partial class BPlusLeafGrain
         if (keys.Count == 0)
             return;
 
+        // A marker installed after this leaf already applied the saga's terminal
+        // guards nothing here, and it would no longer be cleared: the terminal
+        // that clears it has come and gone. Left in place it is copied by the
+        // next leaf split onto a sibling that never sees the terminal, where it
+        // gates the key until the decision ages out (issue #4545).
+        if (_recentlyTerminal is not null && _recentlyTerminal.Contains(transactionId))
+            return;
+
+        var carriesStamps = LatticeOriginalPrepareStampContext.HasStamps;
         _shadowedSagas ??= new Dictionary<string, HashSet<Guid>>(StringComparer.Ordinal);
         foreach (var key in keys)
         {
@@ -2682,8 +2772,48 @@ internal sealed partial class BPlusLeafGrain
                 _shadowedSagas[key] = sagas;
             }
             sagas.Add(transactionId);
+
+            if (carriesStamps && LatticeOriginalPrepareStampContext.TryGetStamp(key, out var prepareStamp))
+            {
+                RecordShadowMarkerStamp(key, transactionId, prepareStamp);
+            }
         }
     }
+
+    /// <summary>
+    /// Records the marked prepare stamp <paramref name="prepareStamp"/> for the
+    /// marker on <paramref name="key"/> under <paramref name="transactionId"/>,
+    /// and merges this leaf's clock past it, so every write this leaf
+    /// acknowledges from now on is stamped above it (property H) and releases
+    /// the marker. Two installs naming different stamps keep the higher one,
+    /// which can only make the release later.
+    /// </summary>
+    private void RecordShadowMarkerStamp(string key, Guid transactionId, HybridLogicalClock prepareStamp)
+    {
+        _shadowMarkerStamps ??= new Dictionary<string, Dictionary<Guid, HybridLogicalClock>>(StringComparer.Ordinal);
+        if (!_shadowMarkerStamps.TryGetValue(key, out var bySaga))
+        {
+            bySaga = new Dictionary<Guid, HybridLogicalClock>();
+            _shadowMarkerStamps[key] = bySaga;
+        }
+
+        bySaga[transactionId] = bySaga.TryGetValue(transactionId, out var existing) && existing.CompareTo(prepareStamp) > 0
+            ? existing
+            : prepareStamp;
+        state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, prepareStamp);
+    }
+
+    /// <summary>
+    /// The marked prepare stamp of the marker on <paramref name="key"/> under
+    /// <paramref name="transactionId"/>, or <see langword="null"/> when it was
+    /// installed without one.
+    /// </summary>
+    private HybridLogicalClock? ShadowMarkerStamp(string key, Guid transactionId) =>
+        _shadowMarkerStamps is not null
+            && _shadowMarkerStamps.TryGetValue(key, out var bySaga)
+            && bySaga.TryGetValue(transactionId, out var stamp)
+            ? stamp
+            : null;
 
     /// <summary>
     /// Removes <paramref name="transactionId"/> from every key's
@@ -2694,6 +2824,23 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private void ClearSagaShadow(Guid transactionId)
     {
+        if (_shadowMarkerStamps is not null)
+        {
+            List<string>? emptyStampKeys = null;
+            foreach (var (key, bySaga) in _shadowMarkerStamps)
+            {
+                if (bySaga.Remove(transactionId) && bySaga.Count == 0)
+                    (emptyStampKeys ??= new List<string>()).Add(key);
+            }
+            if (emptyStampKeys is not null)
+            {
+                foreach (var key in emptyStampKeys)
+                    _shadowMarkerStamps.Remove(key);
+            }
+            if (_shadowMarkerStamps.Count == 0)
+                _shadowMarkerStamps = null;
+        }
+
         if (_shadowedSagas is null || _shadowedSagas.Count == 0) return;
 
         List<string>? emptyKeys = null;
@@ -2768,8 +2915,15 @@ internal sealed partial class BPlusLeafGrain
     ///     and without it the read gates.
     ///   </description></item>
     /// </list>
+    /// <para>
+    /// A committed or indeterminate saga whose terminal has not landed here is
+    /// still served when its marker carries the saga's marked original prepare
+    /// stamp P and <paramref name="rowStamp"/> is at or above it (issue #4545):
+    /// the row is then the saga's own value or a later write, never the pre-saga
+    /// value the gate exists to hide.
+    /// </para>
     /// </summary>
-    private async ValueTask<bool> IsShadowedReadSafeAsync(HashSet<Guid> sagas)
+    private async ValueTask<bool> IsShadowedReadSafeAsync(string key, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
         foreach (var txid in sagas)
         {
@@ -2777,10 +2931,14 @@ internal sealed partial class BPlusLeafGrain
             // Per-saga safety is the shared, dependency-free
             // ShadowedMigrationReadGuard rule (see #1591): a committed saga is safe
             // only once its terminal has landed here (_recentlyTerminal is the
-            // single source of truth for that), otherwise the migrated pre-saga
-            // value would tear atomic visibility against a backstopped sibling.
+            // single source of truth for that), or once the row is known to
+            // incorporate its marked prepare (#4545); otherwise the migrated
+            // pre-saga value would tear atomic visibility against a backstopped
+            // sibling.
             var terminalApplied = _recentlyTerminal is not null && _recentlyTerminal.Contains(txid);
-            if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied))
+            var incorporated = ShadowedMigrationReadGuard.RowIncorporatesMarkedPrepare(
+                rowStamp, ShadowMarkerStamp(key, txid));
+            if (!ShadowedMigrationReadGuard.IsSagaSafe(status, terminalApplied, incorporated))
                 return false;
         }
         return true;

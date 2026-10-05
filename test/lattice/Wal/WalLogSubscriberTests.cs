@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Tests.Wal;
 /// </summary>
 [TestFixture]
 [Category("Unit")]
-public sealed class WalLogSubscriberTests
+public sealed partial class WalLogSubscriberTests
 {
     private const string Tree = "src-tree";
     private const string Consumer = "view:test";

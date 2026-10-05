@@ -10,6 +10,7 @@ CLASS: Temporal
 SUMMARY: parking does not re-check the buffer, so an entry whose dependency was met mid-park is stranded
 PERTURBS: Park
 DEADLOCK: off
+BOUNDS: MaxFaults = 0, MaxHlc = 1
 
 --- FIND
     /\ wake' = [wake EXCEPT ![x] = TRUE]

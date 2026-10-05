@@ -118,10 +118,13 @@ Each loses no behaviour the instance can distinguish.
 
 ## What is modelled
 
-- **The split** (`SplitBegin`, `SplitSweep`, `SplitFreeze`, `SplitCommit`): an
-  adaptive split of `k2`'s slot from `s1` to `s2` on the copy the tree resolves
-  to, with its shadow-write window, retroactive sweep, Reject freeze and final
-  drain before the map moves.
+- **The split** (`SplitBegin`, `SplitSweep`, `SplitFreeze`, `SplitCommit`,
+  `SplitAbandon`): an adaptive split of `k2`'s slot from `s1` to `s2` on the
+  copy the tree resolves to, with its shadow-write window, retroactive sweep,
+  Reject freeze and final drain before the map moves. It may run on the resized
+  copy once the resize completed, while the old copy still mirrors into it: the
+  mirror chases a refusal to the slot's current owner, a mirrored terminal
+  reaches the split closure, and an undo abandons the split (#4478).
 - **The reshard** (`ReshardStart`, `ReshardFinish`; ownership module only): a
   reshard that drives the split, interlocked with resize in both directions.
 - **The resize** (`ResizeBegin`, `SnapCopy`, `ResizeFence`, `ResizeFlip`,
@@ -137,7 +140,8 @@ Each loses no behaviour the instance can distinguish.
   write of `k1` and `k2` bound to one physical copy, with its prepares, its
   re-binds, its decision and its terminal broadcast.
 - **Retention** (retention module only): `RegistryMask`, `RegistryForget`,
-  `DeliverLate` and `Reactivate`.
+  `DeliverLate` and `Reactivate`, and a leaf split of the split destination's
+  leaf (`LeafSplit`) that moves a shadow marker to a fresh sibling (#4545).
 - **A later write** (`LaterWrite`) of `k2`, which gives `NoResurrection` a newer
   value to protect.
 - **Stamps and migrated rows** (ownership module only): a row holds a version of
@@ -166,17 +170,18 @@ notes list each one with its issue.
 | `ResizeCompletes` | liveness | both | A resize that started is purged or undone. |
 | `SagaCompletes` | liveness | both | A saga that started completes. |
 | `RoutingConverges` | liveness | ownership | Eventually the registry's own pair serves every key. |
+| `ReadableOnceComplete` | invariant | retention | Once a saga has completed, and while its row is neither retired nor masked, no read at the owner is gated (#4545). |
 | `NoStrandedBucket` | liveness | retention | A decided saga's bucket on a copy that can still become the tree is eventually consumed, unless the registry retired the row first. |
 
 Every liveness property can fail on a protocol defect under the fairness the
 spec asserts, shown by a mutation that leaves that fairness intact. Many of
 those mutations are a step that records nothing (`SplitCompletesSweepStalls`),
-but some are real protocol defects: `SplitCompletesSplitDuringResize` is the
-#4452 shape, the split/resize interlock removed with every fairness condition
-kept, and the split is stranded; `SagaCompletesDiscardedCopyRefusesTerminal`,
+but some are real protocol defects: `SplitCompletesUndoWithoutAbandon` is a
+split of the resized copy an undo retargets, never abandoned, with every
+fairness condition kept; `SagaCompletesDiscardedCopyRefusesTerminal`,
 `SagaCompletesPurgedCopyRefusesTerminal` and
-`NoStrandedBucketTerminalNotMirrored` are a broadcast production does not
-finish.
+`NoStrandedBucketTerminalNotMirrored` are a broadcast production did not
+finish before its fix.
 
 ### Classification
 
@@ -185,14 +190,12 @@ that perturbs an action the specification already has and makes it fire, and
 none needs an action added. None is unreached, bounded-out or inexpressible in
 that sense.
 
-The gaps the refinement notes list are classified there. The one that is
-**blindly inexpressible** is worth naming here: production can abandon a split
-when an alias move retargets it (`AbandonRetargetedSplitAsync`), and neither
-module has that action, because their interlock makes it unreachable. The
-mutations that break the interlock therefore let a stranded split count as
-finished, standing in for the abandon rather than adding it; each says so in its
-header. A second saga contending for a key, a second split and a split of the
-resized copy during the resize are **bounded out** by the instance.
+The gaps the refinement notes list are classified there. A second saga
+contending for a key, a second split, and a split of the resized copy while the
+resize is still in flight are **bounded out** by the instance. The abandon of a
+split an alias move retargets (`AbandonRetargetedSplitAsync`) is modelled for
+the move an undo of a resize makes (`SplitAbandon`, #4478); the other alias
+cutovers are not modelled at all.
 
 ## The bounded instance
 
@@ -210,16 +213,17 @@ standing mutation. The refinement notes record which are fixed.
 
 | Issue | Defect | Mutation |
 |-------|--------|----------|
-| #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map (fixed, #4466) | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostSplitInSoftDeleteWindow` |
+| #4452 | A split in flight across a resize: the resize neither captures nor fences the split target, and an undo restores a pre-split map (fixed, #4466; relaxed for a split by #4478, which made the mirror and the terminal follow it) | `UniqueOwnerSplitDuringResize`, `NoKeyLostResizeDuringSplit`, `NoKeyLostRetainedSplitDuringResize`, `NoKeyLostSplitInSoftDeleteWindow` |
 | #4453 | The undo cleared the old copy's fence before the swap and armed the resized copy after it (fixed, #4457) | `UniqueOwnerUndoClearsBeforeSwap` |
 | #4454 | The mid-dispatch re-bind ignores the bound copy's mirror (fixed, #4521) | `SagaBatchOnOneCopyRebindIgnoresMirror` |
 | #4455 | The online snapshot does not copy prepared buckets (fixed, #4506) | `OwnerMonotonicSnapshotSkipsBuckets`, `OwnerMonotonicRetainedSnapshotDropsBuckets` |
-| #4473 | The split's sweep treats Indeterminate as InFlight | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
-| #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
-| #4475 | A saga bound to a purged old copy never completes | `SagaCompletesPurgedCopyRefusesTerminal` |
-| #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
-| #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design) | `NoKeyLostMigrationImportDropped` |
-| #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
+| #4473 | The split's sweep treats Indeterminate as InFlight (fixed, #4561) | `OwnerMonotonicSweepIndeterminateLeavesMarker` |
+| #4474 | A saga bound to the copy an undo discarded never completes: the discarded copy refuses its terminals and the broadcast does not follow the refusal. Following it to the old copy, the naive fix, lands part of the batch there (fixed, #4516) | `SagaCompletesDiscardedCopyRefusesTerminal`, `AtomicOnOwnerDiscardedCopyTerminalRedirects` |
+| #4475 | A saga bound to a purged old copy never completes (fixed, #4531 and #4581) | `SagaCompletesPurgedCopyRefusesTerminal` |
+| #4522 | A saga value installed at a stamp other than its own prepare stamp overwrites a later acknowledged write: the backstop's and the drain's fresh stamps, the resize mirror's re-minted prepare, and the snapshot's fresh-stamp resolution (found while confirming #4475's design; the drain fixed, #4566) | `NoKeyLostFreshStampBackstop`, `NoKeyLostRetainedFreshStampBackstop`, `NoKeyLostFreshStampDrainOverMigratedRow`, `NoKeyLostResizeMirrorUnmarkedPrepare`, `NoKeyLostSnapshotResolvesAtFreshStamp` |
+| #4564 | A cross-shard migration import is dropped over a non-migrated destination row, so a later write the split carries is lost (found while confirming #4522's design; fixed, #4600) | `NoKeyLostMigrationImportDropped` |
+| #4545 | A shadow marker installed after its terminal is copied by a leaf split to a sibling that never sees the terminal, gating the key after the saga completed (found by 10238ade's CI triage) | `ReadableOnceCompleteDeadMarkerTransferred`, `ReadableOnceCompleteMarkerWithoutSelfCheck` |
+| #4503 | A router that cached the old copy reads empty and loses writes once that copy is purged (found by review #4435, which showed the purge's timing assumption false; fixed, #4528) | `NoResurrectionPurgedCopyServesEmpty`, `NoKeyLostPurgedCopyAcceptsWrites`, `NoResurrectionRetainedPurgedCopyServesEmpty` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -247,8 +251,8 @@ workers, liveness checked at the end, deadlock checking on, on a 16-core
 workstation (wall clock includes JVM start-up):
 
 ```
-ShardOwnership:          80,612 distinct states, depth 26, clean, 1 min 03 s
-ShardOwnershipRetention: 82,155 distinct states, depth 24, clean, 1 min 36 s
+ShardOwnership:          100,666 distinct states, depth 26, clean, 1 min 32 s
+ShardOwnershipRetention: 160,365 distinct states, depth 25, clean, 1 min 41 s
 ```
 
 The current specifications are model-checked in CI by
@@ -263,5 +267,5 @@ TLC's own state counts.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `ShardOwnership` | 7 | 5 | 27 | 44 | 37 | 80,612 |
-| `ShardOwnershipRetention` | 5 | 4 | 25 | 27 | 32 | 82,155 |
+| `ShardOwnership` | 7 | 5 | 28 | 44 | 38 | 100,666 |
+| `ShardOwnershipRetention` | 6 | 4 | 27 | 31 | 35 | 160,365 |
