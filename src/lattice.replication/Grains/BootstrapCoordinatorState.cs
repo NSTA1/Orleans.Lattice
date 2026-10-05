@@ -164,12 +164,26 @@ internal sealed class BootstrapCoordinatorState
     [Id(19)] public Dictionary<string, bool> ReconcileOwedBySource { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>
-    /// Whether the receiver tree held no rows at all, tombstones included, when
-    /// the current import began (issue #4537). Recorded before the import's first
-    /// entry is applied and kept across a resume or re-drive of a partial import,
-    /// so a first bootstrap into an empty tree still records its aligned lineage
-    /// after a crash. Legacy state decodes to <see langword="false"/>, which skips
-    /// alignment fail-safe.
+    /// Whether the receiver tree held no row of the source's origin at all,
+    /// tombstones and expiring rows included, when the current import began (issue
+    /// #4537). Recorded before the import's first entry is applied and kept across
+    /// a resume or re-drive of a partial import, so a first bootstrap still records
+    /// its aligned lineage after a crash. Legacy state decodes to
+    /// <see langword="false"/>, which skips alignment fail-safe.
     /// </summary>
-    [Id(20)] public bool ReceiverEmptyAtImportStart { get; set; }
+    [Id(20)] public bool HeldNoSourceRowsAtImportStart { get; set; }
+
+    /// <summary>
+    /// Per source cluster, how many owed delete-reconcile retries have been
+    /// started since the last decision that owed nothing (issue #4537). Drives the
+    /// retry backoff, so a sender that never reports its generation does not
+    /// re-bootstrap the tree on every maintenance tick.
+    /// </summary>
+    [Id(21)] public Dictionary<string, int> OwedRetryAttemptsBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the UTC tick before which an owed delete-reconcile
+    /// retry is not started (issue #4537).
+    /// </summary>
+    [Id(22)] public Dictionary<string, long> OwedRetryNotBeforeTicksBySource { get; set; } = new(StringComparer.Ordinal);
 }

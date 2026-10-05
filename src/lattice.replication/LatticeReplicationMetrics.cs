@@ -1326,6 +1326,13 @@ public static class LatticeReplicationMetrics
     public const string BootstrapReconcileOutcomeOwedRetry = "owed_retry";
 
     /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="BootstrapReconcile"/>: a receiver
+    /// that could not prove its copy derives from the source's lineage adopted it,
+    /// because the whole-tree export carried every source-origin key it held.
+    /// </summary>
+    public const string BootstrapReconcileOutcomeAligned = "aligned";
+
+    /// <summary>
     /// Counter incremented every time the receiver-side bootstrap
     /// coordinator classifies an exception thrown by its snapshot
     /// drain as transient and consumes one slot of the configured

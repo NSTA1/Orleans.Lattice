@@ -4,7 +4,8 @@ internal sealed class BootstrapReceiverPreCapture
 {
     public Dictionary<string, BootstrapCapturedEntry> SourceEntries { get; } = new(StringComparer.Ordinal);
 
-    public int RawEntryCount { get; set; }
+    /// <summary>Source-origin rows of any kind, tombstones and expiring rows included.</summary>
+    public int SourceRowCount { get; set; }
 
-    public bool IsEmpty => RawEntryCount == 0;
+    public bool HeldNoSourceRows => SourceRowCount == 0;
 }

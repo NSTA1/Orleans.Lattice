@@ -39,6 +39,9 @@ public class ReapedSourceDeleteReconcileIntegrationTests
     /// </summary>
     private static Func<Task>? _onDrainStarted;
 
+    /// <summary>While set, the receiver's transport behaves as a sender that predates source generations.</summary>
+    private static volatile bool _legacySender;
+
     private TestCluster _siteA = null!;
     private TestCluster _siteB = null!;
     private LatticeSnapshotProvider _siteAProvider = null!;
@@ -327,16 +330,17 @@ public class ReapedSourceDeleteReconcileIntegrationTests
         var siteB = _siteB.Client.GetGrain<ILattice>(tree);
         await siteA.SetAsync(key, new byte[] { 1 });
 
-        // The receiver already holds a row before its first bootstrap, so its copy
-        // can never be proven to derive from the source's lineage.
+        // Before its first bootstrap the receiver holds a source-origin row the
+        // source's export never carries, so its copy cannot be proven to derive
+        // from the source's lineage.
         await Applier(_siteB).ApplyAsync(new WalRecord
         {
             TreeId = tree,
             Op = MutationKind.Set,
-            Key = "receiver-seed",
+            Key = "stray-source-row",
             Value = new byte[] { 5 },
             Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
-            OriginClusterId = SiteCClusterId,
+            OriginClusterId = SiteAClusterId,
         });
         await BootstrapSiteBAsync(tree);
 
@@ -353,8 +357,156 @@ public class ReapedSourceDeleteReconcileIntegrationTests
         {
             Assert.That(await siteB.GetAsync(key), Is.EqualTo(new byte[] { 1 }),
                 "an unaligned receiver must not infer deletes from absence");
+            Assert.That(await siteB.GetAsync("stray-source-row"), Is.EqualTo(new byte[] { 5 }));
             Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedNeverAligned));
             Assert.That(outcomes, Has.No.Member(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled));
+        });
+    }
+
+    [Test]
+    public async Task A_receiver_holding_only_its_own_and_third_origin_rows_aligns_on_its_first_bootstrap()
+    {
+        const string tree = "rsdr-local-rows-align";
+        const string deleted = "deleted-and-reaped";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync(deleted, new byte[] { 2 });
+
+        // Rows the reconcile never touches do not stop the receiver aligning.
+        await siteB.SetAsync("receiver-local", new byte[] { 7 });
+        await Applier(_siteB).ApplyAsync(new WalRecord
+        {
+            TreeId = tree,
+            Op = MutationKind.Set,
+            Key = "third-origin",
+            Value = new byte[] { 3 },
+            Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+            OriginClusterId = SiteCClusterId,
+        });
+        var first = new ConcurrentBag<string>();
+        using (ListenForOutcomes(tree, first))
+        {
+            await BootstrapSiteBAsync(tree);
+        }
+
+        Assert.That(first, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled),
+            "holding no source-origin row, the receiver is aligned by its first import and reconciles in it");
+
+        await siteA.DeleteAsync(deleted);
+        await ReapSourceTombstonesAsync(tree);
+        var outcomes = new ConcurrentBag<string>();
+        using (ListenForOutcomes(tree, outcomes))
+        {
+            await BootstrapSiteBAsync(tree);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled));
+            Assert.That(await siteB.GetAsync(deleted), Is.Null);
+            Assert.That(await siteB.GetAsync("receiver-local"), Is.EqualTo(new byte[] { 7 }));
+            Assert.That(await siteB.GetAsync("third-origin"), Is.EqualTo(new byte[] { 3 }));
+        });
+    }
+
+    [Test]
+    public async Task A_source_lineage_change_that_orphans_nothing_realigns_the_receiver()
+    {
+        const string tree = "rsdr-realign";
+        const string copy = "rsdr-realign-copy";
+        const string kept = "kept";
+        const string deleted = "deleted-and-reaped";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync(kept, new byte[] { 1 });
+        await siteA.SetAsync(deleted, new byte[] { 2 });
+        await BootstrapSiteBAsync(tree);
+
+        // The source rebinds the tree to a copy holding the same keys: a new lineage.
+        var registry = _siteA.Client.GetLatticeRegistry();
+        var before = (await registry.GetEntryAsync(tree))!.Lineage;
+        var siteACopy = _siteA.Client.GetGrain<ILattice>(copy);
+        await siteACopy.SetAsync(kept, new byte[] { 1 });
+        await siteACopy.SetAsync(deleted, new byte[] { 2 });
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await registry.SetAliasAsync(tree, copy);
+        }
+
+        Assert.That((await registry.GetEntryAsync(tree))!.Lineage, Is.Not.EqualTo(before), "PRECONDITION: the lineage changed");
+
+        var outcomes = new ConcurrentBag<string>();
+        using (ListenForOutcomes(tree, outcomes))
+        {
+            await BootstrapSiteBAsync(tree);
+        }
+
+        Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeAligned),
+            "every source-origin key the receiver held was carried, so it adopts the new lineage");
+
+        await siteA.DeleteAsync(deleted);
+        await ReapSourceTombstonesAsync(tree);
+        outcomes = new ConcurrentBag<string>();
+        using (ListenForOutcomes(tree, outcomes))
+        {
+            await BootstrapSiteBAsync(tree);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled));
+            Assert.That(await siteB.GetAsync(deleted), Is.Null, "a realigned receiver reconciles the next reaped delete");
+            Assert.That(await siteB.GetAsync(kept), Is.EqualTo(new byte[] { 1 }));
+        });
+    }
+
+    [Test]
+    public async Task An_unknown_source_generation_owes_a_retry_that_reconciles_once_the_sender_upgrades()
+    {
+        const string tree = "rsdr-unknown-owed";
+        const string deleted = "deleted-and-reaped";
+
+        var siteA = _siteA.Client.GetGrain<ILattice>(tree);
+        var siteB = _siteB.Client.GetGrain<ILattice>(tree);
+        await siteA.SetAsync(deleted, new byte[] { 2 });
+        await BootstrapSiteBAsync(tree);
+        await siteA.DeleteAsync(deleted);
+        await ReapSourceTombstonesAsync(tree);
+
+        var outcomes = new ConcurrentBag<string>();
+        _legacySender = true;
+        try
+        {
+            using (ListenForOutcomes(tree, outcomes))
+            {
+                await BootstrapSiteBAsync(tree);
+            }
+        }
+        finally
+        {
+            _legacySender = false;
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedUnknown));
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeOwedRetry),
+                "an unknown generation is owed, not a permanent skip");
+            Assert.That(await siteB.GetAsync(deleted), Is.EqualTo(new byte[] { 2 }));
+        });
+
+        outcomes = new ConcurrentBag<string>();
+        using (ListenForOutcomes(tree, outcomes))
+        {
+            await DriveSiteBAsync(tree, c => c.RetryOwedReconcileAsync(SiteAClusterId));
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled));
+            Assert.That(await siteB.GetAsync(deleted), Is.Null, "the upgraded sender's retry reconciles the reaped delete");
         });
     }
 
@@ -422,9 +574,12 @@ public class ReapedSourceDeleteReconcileIntegrationTests
     /// <summary>Delegates to the source's transport and runs <see cref="_onDrainStarted"/> before the first item.</summary>
     private sealed class DrainHookTransport(IRemoteSnapshotItemTransport inner) : IRemoteSnapshotItemTransport
     {
-        public Task<RemoteSnapshotMetadata> GetMetadataAsync(
-            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default) =>
-            inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+        public async Task<RemoteSnapshotMetadata> GetMetadataAsync(
+            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)
+        {
+            var metadata = await inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+            return _legacySender ? metadata with { OpenGeneration = null } : metadata;
+        }
 
         public IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
             string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default) =>
@@ -443,6 +598,11 @@ public class ReapedSourceDeleteReconcileIntegrationTests
 
             await foreach (var item in inner.RequestSnapshotItemsAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken))
             {
+                if (_legacySender && item.CloseGeneration is not null)
+                {
+                    continue;
+                }
+
                 yield return item;
             }
         }

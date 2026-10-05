@@ -10,6 +10,7 @@ internal enum BootstrapReconcileOutcome
     SkippedLineageMismatch,
     SkippedNeverAligned,
     SkippedNotLww,
+    Aligned,
 }
 
 internal readonly record struct BootstrapReconcileDecision(
@@ -25,7 +26,8 @@ internal static class BootstrapDeleteReconcile
         SnapshotSourceGeneration? openGeneration,
         SnapshotSourceGeneration? closeGeneration,
         Guid? alignedLineage,
-        bool receiverWasEmpty,
+        bool heldNoSourceRowsAtImportStart,
+        bool anyCapturedKeyAbsentFromExport,
         LatticeMergeMode mergeMode)
     {
         if (isScopedExport)
@@ -38,14 +40,16 @@ internal static class BootstrapDeleteReconcile
             return new(BootstrapReconcileOutcome.SkippedNotLww, false, false, false);
         }
 
+        // Unknown is owed, not permanent: a sender that predates the generation
+        // reconciles on the first retry after it upgrades.
         if (openGeneration is not { } open || closeGeneration is not { } close)
         {
-            return new(BootstrapReconcileOutcome.SkippedUnknown, false, false, false);
+            return new(BootstrapReconcileOutcome.SkippedUnknown, false, true, false);
         }
 
         if (HasUnknown(open) || HasUnknown(close))
         {
-            return new(BootstrapReconcileOutcome.SkippedUnknown, false, false, false);
+            return new(BootstrapReconcileOutcome.SkippedUnknown, false, true, false);
         }
 
         if (open.IsDeleted == true || close.IsDeleted == true)
@@ -63,21 +67,37 @@ internal static class BootstrapDeleteReconcile
 
         if (alignedLineage is null)
         {
-            if (!receiverWasEmpty)
+            // The reconcile only touches source-origin keys, so a receiver that
+            // held none of them when the import began is aligned by this import,
+            // whatever local or third-origin rows it holds.
+            if (heldNoSourceRowsAtImportStart)
             {
-                return new(BootstrapReconcileOutcome.SkippedNeverAligned, false, false, false);
+                return new(BootstrapReconcileOutcome.Reconciled, true, false, true);
             }
 
-            return new(BootstrapReconcileOutcome.Reconciled, true, false, true);
+            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedNeverAligned, anyCapturedKeyAbsentFromExport);
         }
 
         if (alignedLineage != open.Lineage)
         {
-            return new(BootstrapReconcileOutcome.SkippedLineageMismatch, false, false, false);
+            return AlignWhenNothingIsOrphaned(BootstrapReconcileOutcome.SkippedLineageMismatch, anyCapturedKeyAbsentFromExport);
         }
 
         return new(BootstrapReconcileOutcome.Reconciled, true, false, false);
     }
+
+    /// <summary>
+    /// A receiver that cannot prove its copy derives from the export's lineage
+    /// adopts it only when every source-origin key it held was carried by this
+    /// whole-tree export: there is then nothing it could wrongly delete, and every
+    /// source-origin key it holds is one the lineage carries. Otherwise it skips.
+    /// </summary>
+    private static BootstrapReconcileDecision AlignWhenNothingIsOrphaned(
+        BootstrapReconcileOutcome skipped,
+        bool anyCapturedKeyAbsentFromExport) =>
+        anyCapturedKeyAbsentFromExport
+            ? new(skipped, false, false, false)
+            : new(BootstrapReconcileOutcome.Aligned, false, false, true);
 
     private static bool HasUnknown(SnapshotSourceGeneration generation) =>
         generation.PhysicalTreeId is null

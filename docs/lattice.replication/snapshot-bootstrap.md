@@ -81,13 +81,24 @@ before calling `AddLatticeReplication`.
   last-writer-wins exports whose open and close generation match, whose
   source was not deleted or purging at either end, and whose lineage
   matches the receiver's durable aligned-lineage record for that source.
-  The aligned lineage is recorded only by a bootstrap into an empty
-  receiver tree, where empty means the receiver leaf scan found zero raw
-  rows, including tombstones. Legacy or otherwise unknown generation
-  values skip reconciliation. A generation mismatch or a deleted/purging
-  source records a durable owed retry; maintenance re-enters the normal
-  full bootstrap path later, with a fresh pre-capture and all gates run
-  again. A lineage mismatch is permanent and is not owed. Source-origin
+  A bootstrap records that alignment when the receiver held no row of the
+  source's origin when the import began (tombstones and expiring rows
+  included; the receiver's own and third-origin rows do not count), and it
+  reconciles in that same import. A receiver that cannot prove alignment
+  that way - it was never aligned, or the source's lineage has since
+  changed (a restore, a revert, or an alias moved to another tree) -
+  adopts the export's lineage when every source-origin key it held was
+  carried by the export, because there is then nothing it could wrongly
+  delete; otherwise it skips, counted as `skipped_never_aligned` or
+  `skipped_lineage_mismatch`, and keeps every key.
+
+  An unknown generation (a sender that predates generations), a generation
+  that moved during the export, or a deleted or purging source records a
+  durable owed retry. Maintenance re-enters the normal full bootstrap path
+  with a fresh pre-capture and every gate run again, so an upgraded sender
+  reconciles on its first retry. Owed retries back off exponentially from
+  one minute to a six-hour cap, so a sender that never reports a
+  generation does not re-bootstrap the tree on every tick. Source-origin
   keys carrying an expiry are not captured because they expire on their
   own, and receiver-local or third-origin stale keys remain the residual
   tracked by #4549.

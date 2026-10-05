@@ -74,33 +74,73 @@ public class BootstrapDeleteReconcileTests
     }
 
     [Test]
-    public void Decide_unknown_generation_skips_reconcile()
+    public void Decide_unknown_generation_skips_and_owes_retry()
     {
-        var decision = Decide(openGeneration: Generation(lineage: null, useLineage: false));
+        var unknownOpen = Decide(openGeneration: Generation(lineage: null, useLineage: false));
+        var missingClose = BootstrapDeleteReconcile.Decide(
+            false, Generation(), null, Lineage, false, false, LatticeMergeMode.LwwRegister);
 
-        Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedUnknown));
-        Assert.That(decision.ShouldReconcile, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(unknownOpen.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedUnknown));
+            Assert.That(unknownOpen.ShouldReconcile, Is.False);
+            Assert.That(unknownOpen.OweRetry, Is.True, "an older sender must reconcile once it upgrades");
+            Assert.That(missingClose.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedUnknown));
+            Assert.That(missingClose.OweRetry, Is.True);
+        });
     }
 
     [Test]
-    public void Decide_never_aligned_on_populated_receiver_skips_reconcile()
+    public void Decide_never_aligned_with_an_orphaned_source_key_skips_reconcile()
     {
-        var decision = Decide(alignedLineage: null, receiverWasEmpty: false, useAlignedLineage: false);
+        var decision = Decide(useAlignedLineage: false, heldNoSourceRows: false, orphaned: true);
 
-        Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedNeverAligned));
-        Assert.That(decision.ShouldReconcile, Is.False);
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedNeverAligned));
+            Assert.That(decision.ShouldReconcile, Is.False);
+            Assert.That(decision.RecordAlignedLineage, Is.False);
+        });
     }
 
     [Test]
-    public void Decide_lineage_mismatch_skips_without_owed_retry()
+    public void Decide_never_aligned_with_no_orphaned_source_key_aligns_without_deleting()
     {
-        var decision = Decide(alignedLineage: Guid.Parse("33333333-3333-3333-3333-333333333333"));
+        var decision = Decide(useAlignedLineage: false, heldNoSourceRows: false, orphaned: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.Aligned));
+            Assert.That(decision.ShouldReconcile, Is.False);
+            Assert.That(decision.RecordAlignedLineage, Is.True);
+            Assert.That(decision.OweRetry, Is.False);
+        });
+    }
+
+    [Test]
+    public void Decide_lineage_mismatch_with_an_orphaned_source_key_skips_without_owed_retry()
+    {
+        var decision = Decide(alignedLineage: Guid.Parse("33333333-3333-3333-3333-333333333333"), orphaned: true);
 
         Assert.Multiple(() =>
         {
             Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.SkippedLineageMismatch));
             Assert.That(decision.ShouldReconcile, Is.False);
             Assert.That(decision.OweRetry, Is.False);
+            Assert.That(decision.RecordAlignedLineage, Is.False);
+        });
+    }
+
+    [Test]
+    public void Decide_lineage_mismatch_with_no_orphaned_source_key_realigns()
+    {
+        var decision = Decide(alignedLineage: Guid.Parse("33333333-3333-3333-3333-333333333333"), orphaned: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.Outcome, Is.EqualTo(BootstrapReconcileOutcome.Aligned));
+            Assert.That(decision.ShouldReconcile, Is.False);
+            Assert.That(decision.RecordAlignedLineage, Is.True);
         });
     }
 
@@ -114,9 +154,9 @@ public class BootstrapDeleteReconcileTests
     }
 
     [Test]
-    public void Decide_empty_receiver_records_aligned_lineage()
+    public void Decide_receiver_with_no_source_rows_records_aligned_lineage_and_reconciles()
     {
-        var decision = Decide(alignedLineage: null, receiverWasEmpty: true, useAlignedLineage: false);
+        var decision = Decide(useAlignedLineage: false, heldNoSourceRows: true, orphaned: true);
 
         Assert.Multiple(() =>
         {
@@ -131,14 +171,16 @@ public class BootstrapDeleteReconcileTests
         SnapshotSourceGeneration? closeGeneration = null,
         Guid? alignedLineage = null,
         bool useAlignedLineage = true,
-        bool receiverWasEmpty = false,
+        bool heldNoSourceRows = false,
+        bool orphaned = true,
         LatticeMergeMode mergeMode = LatticeMergeMode.LwwRegister) =>
         BootstrapDeleteReconcile.Decide(
             isScopedExport,
             openGeneration ?? Generation(),
             closeGeneration ?? Generation(),
             useAlignedLineage ? alignedLineage ?? Lineage : null,
-            receiverWasEmpty,
+            heldNoSourceRows,
+            orphaned,
             mergeMode);
 
     private static SnapshotSourceGeneration Generation(
