@@ -17,7 +17,7 @@ internal sealed class RegistryTreeLineageSource(IGrainFactory grainFactory) : IT
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         cancellationToken.ThrowIfCancellationRequested();
-        var entry = await _grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+        var entry = await _grainFactory.GetLatticeRegistry()
             .GetEntryAsync(treeId)
             .ConfigureAwait(false);
         return entry?.Lineage;
