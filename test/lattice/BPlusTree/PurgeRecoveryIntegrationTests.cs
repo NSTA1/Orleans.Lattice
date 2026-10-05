@@ -254,6 +254,41 @@ public sealed class PurgeRecoveryIntegrationTests
     }
 
     /// <summary>
+    /// Mixed versions (#4700). A purge begun on a silo built before per-leaf purge
+    /// marks clears its leaves with the plain clear, which deletes the row record and
+    /// leaves no mark, and records only the retired shard-wide flag. Recovery on a
+    /// current silo must not re-create such a leaf empty: it has no evidence the purge
+    /// cleared it, so it fails closed, while the leaves that purge never reached keep
+    /// their data.
+    /// </summary>
+    [Test]
+    public async Task Recovery_after_a_purge_begun_by_a_silo_without_purge_marks_fails_closed_on_the_leaves_it_cleared()
+    {
+        var (tree, shard, leaves, keys) = await CreateMultiLeafTreeAsync("purge-mixed", 16);
+        var cleared = leaves[0];
+
+        await tree.DeleteTreeAsync();
+
+        // The older silo's purge clear: the row, the snapshot and the record go, no mark.
+        await _cluster.Client.GetGrain<IBPlusLeafGrain>(cleared).ClearGrainStateAsync();
+        Assert.That(await _cluster.Client.GetGrain<ILeafRowRecordGrain>(cleared.GetGuidKey()).GetAsync(), Is.Null,
+            "precondition: the pre-#4700 clear leaves no row record, so no mark");
+
+        await tree.RecoverTreeAsync();
+
+        var key = keys[cleared][0];
+        var (read, failure) = await TryGetAsync(tree, key);
+        TestContext.Out.WriteLine($"{key}: read={(read is null ? "null" : Encoding.UTF8.GetString(read))}; failure={failure?.GetType().Name}");
+        Assert.That(failure, Is.InstanceOf<ILatticeLeafUnavailable>(),
+            "a leaf an older silo's purge cleared carries no mark, so recovery must fail it closed, not re-create it empty");
+        Assert.That(await tree.GetAsync(keys[leaves[^1]][0]), Is.Not.Null, "a leaf that purge never reached keeps its data");
+
+        // The documented way out: delete and purge again, which marks and clears every leaf.
+        await tree.DeleteTreeAsync();
+        Assert.DoesNotThrowAsync(async () => await shard.PurgeAsync(), "a fresh purge completes over the unmarked cleared leaf");
+    }
+
+    /// <summary>
     /// The purge clear's ordering (#4700, confirmed against the WAL model). The purge
     /// marks a leaf and is interrupted before the leaf's row is cleared, so the leaf
     /// keeps its data and recovery hands it back. The leaf's materialiser pins must

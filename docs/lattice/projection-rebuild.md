@@ -1162,6 +1162,14 @@ large the shard. A recovery that cannot read a leaf's record fails and
 can be retried. Once a shard is fully purged, the purge deletes the
 records it marked.
 
+**Upgrading across issue #4700.** A purge that was begun and
+interrupted on a silo built before per-leaf purge marks left its
+cleared leaves with no mark. Recovering that tree on a current silo
+fails closed on those leaves (they read as unavailable, never as
+empty), while the leaves that purge never reached keep their data.
+Finish the deletion instead (delete and purge the tree again, which
+marks and clears every leaf), or restore the tree from a backup.
+
 The write-path re-bind of issue #1744 still repairs a leaf that keeps
 its row but lost its tree id. A leaf deliberately cleared while routing
 still names it, outside a purge, fails closed like a lost one.

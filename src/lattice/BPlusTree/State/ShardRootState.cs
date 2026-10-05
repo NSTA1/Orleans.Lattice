@@ -393,6 +393,9 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(26)] public List<GrainId>? PurgeClearedLeafRecords { get; set; }
+
+    // [Id(25)] RESERVED: the retired shard-wide LeafClearsBegun flag (issue #4700).
+    // State persisted by an older silo still carries it; never reuse this slot.
 }
 
 /// <summary>
