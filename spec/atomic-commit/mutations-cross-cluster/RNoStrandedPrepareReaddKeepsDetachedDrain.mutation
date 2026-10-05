@@ -1,0 +1,21 @@
+# Pairs with RNoStrandedPrepare. The peer is re-added without the shipper
+# re-marking its re-seed, so an export the receiver drained while the shipper was
+# detached settles it. Decision purges were not held then: a saga that export
+# carried as prepared rows can be purged before the rewind, whose replay filter
+# then withholds it whole and strands its restaged buckets. #4534-B's
+# EnsureActiveAsync re-marks at the current export epoch.
+MODULE: RNoStrandedPrepareReaddKeepsDetachedDrain
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: a re-added peer's re-seed is settled by an export drained while its shipper was detached
+PERTURBS: Readd
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ detached' = FALSE
+    /\ rs' = "marked"
+--- REPLACE
+    /\ detached' = FALSE
+\* MUTATION: the re-add does not re-mark the re-seed.
+    /\ rs' = rs
+--- END

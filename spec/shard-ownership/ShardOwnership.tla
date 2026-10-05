@@ -133,8 +133,8 @@ Owner(k) == <<alias, MapOf(rmap, k)>>
 RegistryView == IF dec = "none" THEN "inflight" ELSE dec
 
 \* The version a saga bucket on copy c carries: marked with the saga's prepare
-\* stamp P wherever it lands (intended design, #4522 PR2: the resize mirror
-\* carries P to R).
+\* stamp P wherever it lands: the resize mirror carries P to R (#4522, fixed by
+\* #4629).
 BVal(c) == SagaV
 
 \* Whether shard s of copy c has seen the saga's stamp P: its leaf clock has
@@ -144,7 +144,7 @@ KnowsP(c, s) == \E k \in Keys : Stamp(row[c][s][k]) >= Stamp(SagaV) \/ pend[c][s
 \* The version of the later write accepted at (c, s): stamped above the saga's
 \* prepare when its leaf has seen P, and below it otherwise. Every forward of
 \* it carries this stamp (the split's shadow-forward ships the source stamp, and
-\* the resize mirror forwards plain writes at T's stamp: intended design).
+\* the resize mirror forwards plain writes at T's stamp, #4629).
 WVal(c, s) == IF KnowsP(c, s) THEN LaterV ELSE LaterLowV
 
 \* The leaf read gate: a bucket of a committed saga surfaces unless the
@@ -208,7 +208,7 @@ BoundMirrors == bound = T /\ alias = R /\ ResizeMirrors(T, s1)
 
 \* The copy the terminal broadcast addresses: the bound copy, or once a purge
 \* has cleared it, the copy it mirrored into, which the tree resolves to by
-\* then (intended design; production fails the broadcast, #4475).
+\* then (#4475, fixed by #4531 and #4581).
 TermCopy == IF Gone(bound) THEN alias ELSE bound
 
 \* The shards of that copy the broadcast must visit: the owners of the batch's
@@ -387,8 +387,8 @@ ResizeBegin ==
     /\ UNCHANGED <<alias, rmap, published, row, pend, term, sp, spCopy, rs, fence, redir, refusals, sg, bound, prepped, told, dec, wDone, mig>>
 
 \* The online snapshot copies T's committed entries index-for-index, keeping an
-\* entry only on the shard the copy's map routes it to. The intended design also
-\* carries T's prepared buckets; production copies committed entries only.
+\* entry only on the shard the copy's map routes it to, and carries T's prepared
+\* buckets at their stamps (#4455, fixed by #4506; #4522, fixed by #4629).
 SnapCopy ==
     /\ rz = "snap"
     /\ row' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
@@ -520,9 +520,8 @@ SagaPrepare(k, p) ==
 
 \* TryRebindToResolvedCopyAsync: the routing tier refused part of the batch
 \* because the tree moved off the bound copy; re-bind and re-dispatch it all.
-\* The intended design stays bound while the bound copy mirrors into the copy
-\* the tree resolves to, as the pre-decision check does (#4369); production
-\* re-binds unconditionally (see Refinement.md).
+\* It stays bound while the bound copy mirrors into the copy the tree resolves
+\* to, as the pre-decision check does (#4369; #4454, fixed by #4521).
 SagaRebindOnRefusal ==
     /\ sg = "exec"
     /\ ~BoundMirrors
@@ -555,12 +554,11 @@ SagaDecide ==
 
 \* One shard of the terminal broadcast to the bound copy, mirrored to R when
 \* that shard forwards. A direct terminal passes a resize fence (#4369).
-\* The intended design modelled here delivers a terminal a purged old copy
-\* refuses to the copy it mirrored into, at the same shard (the split interlock
-\* keeps the layouts equal), where production fails the broadcast (#4475); and
-\* it counts one a resized copy an undo discarded refuses as delivered, since
-\* that copy's batch is discarded with it, where production re-sends it to the
-\* old copy (#4474).
+\* A terminal a purged old copy refuses is delivered to the copy it mirrored
+\* into, at the same shard (the split interlock keeps the layouts equal) (#4475,
+\* fixed by #4531 and #4581); one a resized copy an undo discarded refuses counts
+\* as delivered, since that copy's batch is discarded with it (#4474, fixed by
+\* #4516).
 SagaTerminal(s) ==
     /\ sg = "decided"
     /\ s \in TermTargets \ told

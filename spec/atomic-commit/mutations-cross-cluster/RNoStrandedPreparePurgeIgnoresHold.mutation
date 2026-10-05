@@ -1,0 +1,19 @@
+# Pairs with RNoStrandedPrepare. The registry purges a saga's decision while the
+# peer is off the log: the export carried the saga as prepared rows, and the
+# rewind's filter, reading it purged, withholds it whole. #4533's replay hold and
+# #4534-B's forced-trim hold suspend every purge until the replay clears.
+MODULE: RNoStrandedPreparePurgeIgnoresHold
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the registry purges a decision while a re-seed or its replay holds purges
+PERTURBS: OriginPurge
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+       ELSE /\ ~Held
+
+--- REPLACE
+\* MUTATION: no hold.
+       ELSE /\ TRUE
+
+--- END

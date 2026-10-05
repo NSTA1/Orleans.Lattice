@@ -120,7 +120,16 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             metadata.AsOfHlc);
 
         SnapshotStream? stream = null;
-        var entries = DrainAsync(treeName, sourceClusterId, asOfHlc, generation => stream!.CloseGeneration = generation, cancellationToken);
+        var entries = DrainAsync(
+            treeName,
+            sourceClusterId,
+            asOfHlc,
+            trailer =>
+            {
+                stream!.CloseGeneration = trailer.CloseGeneration;
+                stream.SourceFrontier = trailer.SourceFrontier;
+            },
+            cancellationToken);
         stream = new SnapshotStream(
             treeName,
             metadata.AsOfHlc,
@@ -128,6 +137,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             entries)
         {
             OpenGeneration = metadata.OpenGeneration,
+            OpenFrontier = metadata.SourceFrontier,
             ExportEpoch = metadata.ExportEpoch,
         };
         return stream;
@@ -137,7 +147,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
         string treeName,
         string sourceClusterId,
         HybridLogicalClock asOfHlc,
-        Action<SnapshotSourceGeneration?> setCloseGeneration,
+        Action<RemoteSnapshotStreamItem> setTrailer,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (_transport is IRemoteSnapshotItemTransport itemTransport)
@@ -147,9 +157,9 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
                 .WithCancellation(cancellationToken)
                 .ConfigureAwait(false))
             {
-                if (item.CloseGeneration is { } close)
+                if (item.CloseGeneration is not null)
                 {
-                    setCloseGeneration(close);
+                    setTrailer(item);
                     continue;
                 }
 

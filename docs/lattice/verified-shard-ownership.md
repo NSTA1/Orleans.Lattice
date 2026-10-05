@@ -36,6 +36,8 @@ reader is most likely to over-read are these.
   modules included, and is clean in this instance; it costs about ten minutes
   of TLC, which is why it is not a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
+  A third module, `ShardOwnershipCrdt`, checks that the same moves join a
+  CRDT-mode key's copies rather than overwrite them.
 - **Alias moves other than a resize are not modelled.** A shadow-cutover
   restore, an explicit alias change and schema remediation move the alias too;
   none is covered here.
@@ -61,10 +63,13 @@ reader is most likely to over-read are these.
 | `SplitCompletes`, `ReshardCompletes`, `ResizeCompletes`, `SagaCompletes` | Each operation that started finishes, under fair scheduling of the steps its coordinator takes on its own. | both, `ReshardCompletes` in `ShardOwnership` |
 | `RoutingConverges` | Eventually the registry's own routing pair serves every key: no fence or redirect outlives the operation that set it. | `ShardOwnership` |
 | `NoStrandedBucket` | A decided atomic write's prepared bucket on a copy that can still become the tree is eventually consumed. | `ShardOwnershipRetention` |
+| `ReadableOnceComplete` | Once an atomic write has completed, no read of its keys is held back by a leftover shadow marker. | `ShardOwnershipRetention` |
+| `NoLiveBucketAfterForget` | No copy that can still become the tree keeps a prepared bucket of an atomic write the registry has forgotten. | `ShardOwnershipRetention` |
+| `NoLostContribution` | A CRDT-mode key keeps every acknowledged contribution across a leaf split, a shard split and an online resize. | `ShardOwnershipCrdt` |
 
 Every property has a mutation that breaks it, run as a two-arm experiment: the
 property holds on the unmutated module and fails on the mutant. Every action in
-each module is perturbed by at least one mutation. Both run in CI through
+each module is perturbed by at least one mutation. All three run in CI through
 `TlcModelCheckTests`.
 
 ## Defects the coverage found
@@ -77,11 +82,14 @@ drops prepared buckets (#4455, fixed), a split sweep that treats an undeterminab
 registry answer as in flight (#4473, fixed), a saga that never completes once the
 copy it is bound to is discarded by an undo (#4474, fixed) or, as an old copy,
 purged (#4475, fixed), saga values installed at a stamp that overwrites a later
-write (#4522, the drain fixed), a
+write (#4522, fixed), a
 migration import dropped over a destination row the saga already resolved
 (#4564, fixed), a shadow marker a leaf split strands on a sibling that never sees the
-terminal (#4545), and, found by the review of this coverage, a router that cached the
-old copy reading empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+terminal (#4545, fixed), a late forward of an atomic write the registry has forgotten
+left stranded (#4619, fixed), CRDT copies overwritten rather than joined by the
+terminal's backstop, a split or a resize (#4611, #4613, #4618, all fixed), and,
+found by the review of this coverage, a router that cached the old copy reading
+empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

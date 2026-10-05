@@ -276,6 +276,48 @@ internal sealed class ReplicationOriginFrontierGrain(
     }
 
     /// <inheritdoc />
+    public Task<HybridLogicalClock[]> GetHeldForTreeAsync(string treeId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var held = new HashSet<HybridLogicalClock>(state.State.Lost);
+        foreach (var source in new[] { BufferSource(treeId), DeadLetterSource(treeId), ExportSource(treeId) })
+        {
+            if (state.State.HeldBySource.TryGetValue(source, out var identities))
+            {
+                held.UnionWith(identities);
+            }
+        }
+
+        return Task.FromResult(held.ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<int> DropExportHeldBelowAsync(string treeId, HybridLogicalClock below, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+        var source = ExportSource(treeId);
+        if (!state.State.HeldBySource.TryGetValue(source, out var identities))
+        {
+            return 0;
+        }
+
+        var dropped = identities.RemoveWhere(identity => identity < below);
+        if (identities.Count == 0)
+        {
+            state.State.HeldBySource.Remove(source);
+        }
+
+        if (dropped > 0)
+        {
+            await WriteStateAsync().ConfigureAwait(true);
+        }
+
+        return identities.Count;
+    }
+
+    /// <inheritdoc />
     public async Task<CausalDependencyVerdict[]> CheckAsync(IReadOnlyList<HybridLogicalClock> required, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(required);

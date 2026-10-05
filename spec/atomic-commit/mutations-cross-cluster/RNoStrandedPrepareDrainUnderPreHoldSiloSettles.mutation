@@ -1,0 +1,17 @@
+# Pairs with RNoStrandedPrepare. An export drained while a silo still predates
+# the purge hold settles the re-seed (issue #4664): that silo's registry purges a
+# saga the export carried as prepared rows, and the rewind's filter withholds it
+# whole. #4666 re-marks once every silo honours the hold.
+MODULE: RNoStrandedPrepareDrainUnderPreHoldSiloSettles
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: an export drained while a silo predates the purge hold settles the re-seed
+PERTURBS: ReseedDrain
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+
+--- FIND
+    /\ rs' = IF preguard THEN rs ELSE "drained"
+--- REPLACE
+\* MUTATION: any drain settles the re-seed.
+    /\ rs' = "drained"
+--- END

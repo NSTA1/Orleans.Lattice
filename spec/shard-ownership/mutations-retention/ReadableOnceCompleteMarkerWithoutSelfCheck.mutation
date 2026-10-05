@@ -1,21 +1,27 @@
-# Pairs with ReadableOnceComplete. The #4545 fix without its self-verifying
-# marker: the marker is installed, and transferred, only while the leaf has not
-# applied the saga's terminal, but the gate does not check the row against the
-# saga's prepare stamp. A leaf that lost its terminal memory (a reactivation,
-# or a fresh sibling after a leaf split) accepts a late replay's marker for a
-# saga whose terminal already applied there, and no terminal comes again. The
-# row already holds the saga's value, which the self-check would serve. The
-# edit lies in LeafGated, the read gate's leaf operator, so the mutation
-# declares no PERTURBS.
+# Pairs with ReadableOnceComplete. Reproduces production after #4545's first
+# fix (#4608) and before its second (#4644): a shadow marker without a prepare
+# stamp (an unmarked prepare's, the resize sweep's, a CRDT delta's) has no
+# self-check, and the leaf's only memory of the saga's terminal is per
+# activation. A leaf that lost it (a reactivation, or a fresh sibling after a
+# leaf split) accepts a late replay's marker for a saga whose terminal already
+# settled the key there, and no terminal comes again to clear it.
 MODULE: ReadableOnceCompleteMarkerWithoutSelfCheck
 TARGET: ReadableOnceComplete
 CLASS: Invariant
-SUMMARY: without the self-check, a leaf that lost its terminal memory takes a late marker that gates the key after the saga completed
+SUMMARY: an unstamped marker on a leaf with no durable witness of the terminal gates the key after the saga completed
+PERTURBS: DeliverLate
 
 --- FIND
-    /\ lk /\ ~term[c][s]
+    /\ lk /\ ~term[c][s] /\ ~wit
     /\ row[c][s][k] < SagaV
 --- REPLACE
-\* MUTATION: the gate does not check the row against the saga's prepare stamp.
+\* MUTATION: an unstamped marker, and no durable witness of the terminal.
     /\ lk /\ ~term[c][s]
+--- END
+
+--- FIND
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] /\ ~wit THEN TRUE ELSE lk
+--- REPLACE
+\* MUTATION: the install consults only the activation's memory.
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
 --- END
