@@ -40,7 +40,7 @@ public partial class LatticeReplicationLocalVcSeederTests
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(LatticeMergeMode.LwwRegister);
 
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwmGrain);
 
         // The pinned count is 1, but the routing map reaches the restored

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication.Grains;
@@ -7,10 +8,24 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <see cref="IReplicationHighWaterMarkGrain"/> for the contract.
 /// </summary>
 internal sealed class ReplicationHighWaterMarkGrain(
+    IGrainContext context,
+    IGrainFactory grainFactory,
+    IOptionsMonitor<LatticeReplicationOptions> options,
     [PersistentState("replication-hwm", LatticeOptions.StorageProviderName)]
     IPersistentState<ReplicationHighWaterMarkState> state)
-    : IReplicationHighWaterMarkGrain
+    : IReplicationHighWaterMarkGrain, IGrainBase
 {
+    /// <summary>
+    /// The applied write identities this tree remembers (issue #4586): the fast
+    /// path of the dependency check. In memory only.
+    /// </summary>
+    private readonly CausalAppliedIdentityRecord _applied = new();
+
+    /// <inheritdoc />
+    public IGrainContext GrainContext => context;
+
+    private string TreeId => context.GrainId.Key.ToString() ?? string.Empty;
+
     /// <inheritdoc />
     public Task<HybridLogicalClock> GetAsync(string originClusterId, CancellationToken cancellationToken)
     {
@@ -152,67 +167,102 @@ internal sealed class ReplicationHighWaterMarkGrain(
     }
 
     /// <inheritdoc />
-    public async Task RecordLostAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken)
+    public async Task<bool> AdvanceAppliedAsync(
+        string originClusterId,
+        HybridLogicalClock highest,
+        IReadOnlyList<HybridLogicalClock> applied,
+        bool advanceHighWaterMark,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        ArgumentNullException.ThrowIfNull(applied);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var capacity = options.Get(TreeId).CausalAppliedIdentityCapacity;
+        foreach (var identity in applied)
+        {
+            _applied.Record(originClusterId, identity, capacity);
+        }
+
+        return advanceHighWaterMark
+            && await TryAdvanceAsync(originClusterId, highest, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    public Task RecordLostAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         cancellationToken.ThrowIfCancellationRequested();
 
-        var lost = state.State.Lost;
-        if (!lost.TryGetValue(originClusterId, out var identities))
-        {
-            identities = new HashSet<HybridLogicalClock>();
-            lost[originClusterId] = identities;
-        }
-
-        if (!identities.Add(timestamp))
-        {
-            return;
-        }
-
-        try
-        {
-            await state.WriteStateAsync();
-        }
-        catch
-        {
-            identities.Remove(timestamp);
-            if (identities.Count == 0)
-            {
-                lost.Remove(originClusterId);
-            }
-            throw;
-        }
+        // Issue #4586: a dependency names an origin's write, not a tree, so lost
+        // marks live on the origin's frontier where every tree's check reads them.
+        return grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+            .RecordLostAsync([timestamp], cancellationToken);
     }
 
     /// <inheritdoc />
-    public Task<CausalDependencyVerdict[]> CheckDependenciesAsync(IReadOnlyList<VersionVector> dependencies, CancellationToken cancellationToken)
+    public async Task<CausalDependencyVerdict[]> CheckDependenciesAsync(IReadOnlyList<VersionVector> dependencies, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dependencies);
         cancellationToken.ThrowIfCancellationRequested();
 
+        // Fast path: a dependency whose exact identity this tree applied is met.
+        // The rest are decided per origin by its frontier, one call per origin.
         var verdicts = new CausalDependencyVerdict[dependencies.Count];
+        Dictionary<string, List<(int Vector, HybridLogicalClock Required)>>? misses = null;
         for (var i = 0; i < dependencies.Count; i++)
         {
-            var verdict = CausalDependencyVerdict.Met;
+            verdicts[i] = CausalDependencyVerdict.Met;
             foreach (var (origin, required) in dependencies[i].Entries)
             {
-                if (state.State.Lost.TryGetValue(origin, out var lost) && lost.Contains(required))
+                if (_applied.Contains(origin, required))
                 {
-                    verdict = CausalDependencyVerdict.Lost;
-                    break;
+                    continue;
                 }
 
-                if (state.State.Vector.GetClock(origin) < required)
+                misses ??= new Dictionary<string, List<(int, HybridLogicalClock)>>(StringComparer.Ordinal);
+                if (!misses.TryGetValue(origin, out var list))
                 {
-                    verdict = CausalDependencyVerdict.Unmet;
+                    list = new List<(int, HybridLogicalClock)>();
+                    misses[origin] = list;
                 }
+
+                list.Add((i, required));
             }
-
-            verdicts[i] = verdict;
         }
 
-        return Task.FromResult(verdicts);
+        if (misses is null)
+        {
+            return verdicts;
+        }
+
+        foreach (var (origin, list) in misses)
+        {
+            var required = new HybridLogicalClock[list.Count];
+            for (var j = 0; j < list.Count; j++)
+            {
+                required[j] = list[j].Required;
+            }
+
+            var decided = await grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                .CheckAsync(required, cancellationToken).ConfigureAwait(true);
+            for (var j = 0; j < list.Count && j < decided.Length; j++)
+            {
+                var vector = list[j].Vector;
+                verdicts[vector] = Worse(verdicts[vector], decided[j]);
+            }
+        }
+
+        return verdicts;
     }
+
+    /// <summary>Combines two dependency verdicts: Lost over Unmet over Met.</summary>
+    private static CausalDependencyVerdict Worse(CausalDependencyVerdict left, CausalDependencyVerdict right) =>
+        left == CausalDependencyVerdict.Lost || right == CausalDependencyVerdict.Lost
+            ? CausalDependencyVerdict.Lost
+            : left == CausalDependencyVerdict.Unmet || right == CausalDependencyVerdict.Unmet
+                ? CausalDependencyVerdict.Unmet
+                : CausalDependencyVerdict.Met;
 
     private static bool VectorsEqual(VersionVector left, VersionVector right)
     {

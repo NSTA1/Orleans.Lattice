@@ -151,11 +151,38 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Records that the writes of <paramref name="originClusterId"/> at each HLC
+    /// in <paramref name="applied"/> were merged into this tree, and - when
+    /// <paramref name="advanceHighWaterMark"/> is set - advances the origin's
+    /// high-water mark to <paramref name="highest"/> as <see cref="TryAdvanceAsync"/>
+    /// does, in one call (issue #4586). A recorded identity meets every
+    /// dependency that names it at once. The record is in memory only and
+    /// bounded by <see cref="LatticeReplicationOptions.CausalAppliedIdentityCapacity"/>
+    /// per origin; a forgotten identity is decided by the origin's frontier
+    /// instead. Call it only after the writes were merged at the leaf; never for a
+    /// saga prepare, which is not visible until its terminal.
+    /// </summary>
+    /// <param name="originClusterId">The origin of the applied writes. Must be non-null and non-empty.</param>
+    /// <param name="highest">The highest HLC applied, for the high-water-mark advance.</param>
+    /// <param name="applied">The applied writes' source HLCs. Must be non-null.</param>
+    /// <param name="advanceHighWaterMark">Whether to advance the high-water mark as well.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Whether the high-water mark moved.</returns>
+    Task<bool> AdvanceAppliedAsync(
+        string originClusterId,
+        HybridLogicalClock highest,
+        IReadOnlyList<HybridLogicalClock> applied,
+        bool advanceHighWaterMark,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Durably records that the write of <paramref name="originClusterId"/> at
-    /// <paramref name="timestamp"/> was acknowledged by this tree and then lost
-    /// for good - an operator discarded it from the dead-letter queue (#4603).
-    /// From then on <see cref="CheckDependenciesAsync"/> reports any entry that
-    /// depends on it as <see cref="CausalDependencyVerdict.Lost"/>. Idempotent.
+    /// <paramref name="timestamp"/> was acknowledged and then lost for good - an
+    /// operator discarded it from the dead-letter queue (#4603). The mark lives on
+    /// the origin's <see cref="IReplicationOriginFrontierGrain"/>, because a
+    /// dependency names an origin's write and not a tree (#4586); from then on
+    /// <see cref="CheckDependenciesAsync"/> on any tree reports a dependent of it
+    /// as <see cref="CausalDependencyVerdict.Lost"/>. Idempotent.
     /// </summary>
     /// <param name="originClusterId">The lost write's origin. Must be non-null and non-empty.</param>
     /// <param name="timestamp">The lost write's source HLC.</param>
@@ -165,11 +192,15 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// <summary>
     /// Checks each dependency vector in <paramref name="dependencies"/> (as
     /// produced by <see cref="CausalApplyBuffer.RequiredDependencies"/>) and
-    /// returns one verdict per vector, in order:
-    /// <see cref="CausalDependencyVerdict.Lost"/> when it names a write recorded
-    /// by <see cref="RecordLostAsync"/>, otherwise
-    /// <see cref="CausalDependencyVerdict.Met"/> when the local vector clock
-    /// dominates it, otherwise <see cref="CausalDependencyVerdict.Unmet"/>.
+    /// returns one verdict per vector, in order (issue #4586). A dependency
+    /// <c>(o, t)</c> names exactly one write. It is met when this tree recorded
+    /// that write as applied (<see cref="AdvanceAppliedAsync"/>); otherwise the
+    /// origin's <see cref="IReplicationOriginFrontierGrain"/> decides it, by
+    /// <see cref="CausalFrontierCore.Decide"/>. The high-water mark is never
+    /// consulted: a per-origin maximum HLC is not downward-closed (#1060).
+    /// A vector is <see cref="CausalDependencyVerdict.Lost"/> when any dependency
+    /// is lost, otherwise <see cref="CausalDependencyVerdict.Unmet"/> when any is
+    /// unmet, otherwise <see cref="CausalDependencyVerdict.Met"/>.
     /// </summary>
     /// <param name="dependencies">The dependency vectors to check. Must be non-null.</param>
     /// <param name="cancellationToken">Cancellation token.</param>

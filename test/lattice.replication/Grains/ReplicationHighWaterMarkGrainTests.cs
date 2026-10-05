@@ -14,7 +14,7 @@ public partial class ReplicationHighWaterMarkGrainTests
         FakePersistentState<ReplicationHighWaterMarkState>? state = null)
     {
         state ??= new FakePersistentState<ReplicationHighWaterMarkState>();
-        return new ReplicationHighWaterMarkGrain(state);
+        return HighWaterMarkTestGrains.Real(state);
     }
 
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>

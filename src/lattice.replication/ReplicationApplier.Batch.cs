@@ -733,6 +733,11 @@ internal sealed partial class ReplicationApplier
         var advancedAtAll = false;
         var highestApplied = hwm;
 
+        // Issue #4586: the identities this run applied, recorded on the tree's
+        // high-water-mark grain in the end-of-run call so a dependent of one is
+        // released at once. Saga prepares are not visible until their terminal.
+        List<HybridLogicalClock>? appliedIdentities = null;
+
         // Set when an entry in this run duplicates an identity whose
         // reservation another, still-running delivery holds (#4465). The
         // run then reports Deferred so the transport returns a
@@ -836,6 +841,11 @@ internal sealed partial class ReplicationApplier
                 {
                     highestApplied = deferredEntry.Timestamp;
                 }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
+                }
             }
 
             anyApplied = true;
@@ -906,6 +916,11 @@ internal sealed partial class ReplicationApplier
                 if (deferredEntry.Timestamp.CompareTo(highestApplied) > 0)
                 {
                     highestApplied = deferredEntry.Timestamp;
+                }
+
+                if (!deferredEntry.IsPrepared)
+                {
+                    (appliedIdentities ??= new List<HybridLogicalClock>()).Add(deferredEntry.Timestamp);
                 }
             }
 
@@ -1162,6 +1177,11 @@ internal sealed partial class ReplicationApplier
                     {
                         highestApplied = entry.Timestamp;
                     }
+
+                    if (!entry.IsPrepared)
+                    {
+                        (appliedIdentities ??= new List<HybridLogicalClock>()).Add(entry.Timestamp);
+                    }
                     anyApplied = true;
                     advancedAtAll = true;
                     outcome = LatticeReplicationMetrics.OutcomeSuccess;
@@ -1297,13 +1317,20 @@ internal sealed partial class ReplicationApplier
 
         if (advancedAtAll && !bootstrapMode)
         {
-            var advanced = await hwmGrain.TryAdvanceAsync(origin!, highestApplied, cancellationToken)
+            var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    origin!,
+                    highestApplied,
+                    (IReadOnlyList<HybridLogicalClock>?)appliedIdentities ?? Array.Empty<HybridLogicalClock>(),
+                    advanceHighWaterMark: true,
+                    cancellationToken)
                 .ConfigureAwait(false);
             var newHwm = advanced
                 ? highestApplied
                 : await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
 
-            if (advanced)
+            // A recorded identity may meet a parked dependency whether or not the
+            // high-water mark moved (issue #4586).
+            if (advanced || appliedIdentities is { Count: > 0 })
             {
                 await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
@@ -1474,6 +1501,14 @@ internal sealed partial class ReplicationApplier
             "Rejected inbound replication run of {Count} entries for tree '{Tree}' from origin '{Origin}': "
             + "the tree is not enrolled for replication on this receiver.",
             endExclusive - startInclusive, treeId, origin);
+
+        var dropped = new HybridLogicalClock[endExclusive - startInclusive];
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            dropped[k - startInclusive] = entries[k].Timestamp;
+        }
+
+        await RecordNotEnrolledLostAsync(origin, dropped, cancellationToken).ConfigureAwait(false);
 
         for (var k = startInclusive; k < endExclusive; k++)
         {
