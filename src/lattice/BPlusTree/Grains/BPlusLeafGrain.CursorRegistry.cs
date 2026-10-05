@@ -931,6 +931,9 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task UnregisterMaterialiserPinsAsync()
     {
+        // Retiring the pins drops their override holds too (issue #4641), so
+        // nothing this activation raised may be assumed to stand afterwards.
+        _overrideHoldRaised = null;
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {

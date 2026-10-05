@@ -127,6 +127,9 @@ public partial class BPlusLeafGrainTests
         public Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports) => Reject();
         public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() => Reject()
             .ContinueWith<IReadOnlyDictionary<string, HybridLogicalClock>>(_ => null!);
+        public Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
+            Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
         public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() => Reject()
             .ContinueWith<IReadOnlyDictionary<string, long>>(_ => null!);
         public Task RemoveAsync(string consumerId) => Reject();
