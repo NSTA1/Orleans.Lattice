@@ -1182,6 +1182,52 @@ been over its byte ceiling, with a usable cursor floor, reclaiming nothing,
 for ten consecutive passes, the point at which `over_ceiling` has stopped
 being a transient.
 
+## Clock floor (replicated trees)
+
+Each WAL partition of a replicated tree keeps a durable **clock floor** ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)).
+
+**How it moves.** A replication shipper reads the partition through `ReadShippingAsync`. Each time it reads, the partition checks its floor against `now - ReplicationClockFloorLag`. Once the floor has fallen half a lag behind that target:
+
+1. The partition raises the floor to the target.
+2. It persists the new floor in its own grain state (`wal-floor`).
+3. Only then does it return the floor to the shipper, paired with its next offset.
+
+That keeps the floor between one and one and a half lags behind the wall clock, at the cost of at most two storage writes per lag per partition while it is being shipped.
+
+**What it refuses.** From then on, the partition refuses any freshly authored local write stamped below the floor, with `WalStampBelowFloorException` (counted on `orleans.lattice.wal.append.floor_refusals`). The check runs under the same state gate that assigns the offset, so a refused write is never assigned one.
+
+**Why.** The floor-and-offset pair is a promise: every fresh local write at or above that offset carries a stamp at or above the floor. So once a peer has acknowledged everything below the offset, it holds every write of this cluster, in that partition, that is stamped below the floor. That is a low watermark that is downward-closed, which the max-HLC high-water mark is not ([#1060](https://github.com/NSTA1/Orleans.Lattice/issues/1060)). The replication package's causal low watermark is built on this promise.
+
+### Which writes the floor governs
+
+The floor governs a stamp minted on this cluster for the write being appended. A **carried** stamp is exempt, because the identity it names was first appended fresh, at a lower offset. The carried stamps are:
+
+- a replicated write of another origin;
+- a merge or backstop copy;
+- a migrated row, including a saga prepare carried at its original stamp from another shard;
+- a record stamped under an HLC override, such as a shadow-forward or a prepared-bucket sweep (`WalRecord.IsCarriedStamp`);
+- a tombstone-reap envelope;
+- a record with a zero stamp.
+
+Two overrides are minted for the operation itself, so the floor governs them: a range delete's issue stamp, and a caller-supplied idempotency key.
+
+### What a writer sees when its stamp is refused
+
+| Write | On a refusal |
+|---|---|
+| Single-key `SetAsync` or `DeleteAsync` | The leaf merges its clock past the floor and re-stamps, then commits once in the same grain turn. The caller sees nothing. |
+| Typed CRDT delta, or a multi-key batch | Not re-run in the turn, because the fold or another partition may already hold part of it. The leaf merges its clock past the floor, and the caller sees a transient error whose retry is admitted. |
+| `DeleteRangeAsync` | The call re-issues a fresh dominating stamp for the remainder of the range. The keys already tombstoned keep theirs, so the delete lands as one HLC per uninterrupted run. A nested range delete keeps its owner's stamp and the refusal propagates to the owner. |
+| A write under a `LatticeIdempotencyKey` | Fails with `LatticeIdempotencyKeyExpiredException`. The key's stamp cannot be renewed without breaking its contract (see [Retry Policy](retry-policy.md#key-lifetime-on-replicated-trees)). |
+
+### Rolling upgrades and trees that are not replicated
+
+A partition advances its floor only while every active silo's grain manifest advertises `IWalClockFloorCapable`. That marker is the capability of a build that both enforces the floor and re-stamps a refused write. So during a rolling upgrade, no floor moves until the last older silo has left; the gate opens by itself, and there is no option to forget to enable.
+
+A floor already published stays enforced, because it is durable. If the gate closes again, the floor only stops moving. Downgrading to a build without the marker after a floor was published is unsupported.
+
+A tree that is not replicated is never read by a shipper. Its floor stays zero, and it never refuses a write.
+
 ## Relationship to replication
 
 Cross-cluster replication is an **additional consumer** of the same WAL - not
@@ -1216,6 +1262,7 @@ the [Options Reference](configuration.md#options-reference).
 | `WalRetention` | `null` (disabled) | Wall-clock hard ceiling on retention: entries older than `now - WalRetention` fall off the log even if a consumer still pins them. The only knob that trims past a stuck consumer - set it where unbounded growth is unacceptable. See [How the retention bounds interact](#how-the-retention-bounds-interact). |
 | `WalMaxRetainedBytes` | `null` (disabled) | Advisory per-tree byte ceiling that schedules byte-pressure trim work, but only within the safe consumer frontier. See [Tree Storage](tree-storage.md#advisory-byte-pressure-wal-retention). |
 | `WalBytePressureReclaimTarget` | `0.8` | Low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the byte-pressure policy after a trim. Inert unless `WalMaxRetainedBytes` is set. |
+| `ReplicationClockFloorLag` | 60 seconds | How far a replicated tree's [clock floor](#clock-floor-replicated-trees) trails the wall clock. It is also the shortest time an idempotency key stays usable on a replicated tree. Must be between one second and one day. |
 
 The WAL provider itself is registered separately - through a storage package's
 helper such as `AddAzureTableWalStorage` or `AddFileWalStorage`, or `siloBuilder.AddWalStorage(...)`
@@ -1233,6 +1280,7 @@ catalogued in [Metrics](metrics.md), complete the picture.
 
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
+| `orleans.lattice.wal.append.floor_refusals` | counter (`{entry}`) | `tree`, `shard`, `tenant` | Fresh local writes a replicated tree's partition refused below its [clock floor](#clock-floor-replicated-trees). A sustained rate points at silo clock skew or a write pipeline stalled for longer than `ReplicationClockFloorLag`. |
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` (one of `wal`, `apply`, `digest`, `observer`) | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is the in-memory merge plus any relocation or split it triggers; `digest` hands the write's projection-digest change to the parent internal node - with the default `DigestCoalescingWindowMs` it schedules, or joins, a publish sent when the window elapses, so it includes the cross-grain publish itself only when the window is `0`; `observer` is the publish under the commit-log scope. |
 
 The bundled Grafana dashboards consume these instruments directly; see

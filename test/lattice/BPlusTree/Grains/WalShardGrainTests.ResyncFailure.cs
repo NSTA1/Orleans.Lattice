@@ -27,7 +27,9 @@ public partial class WalShardGrainTests
             TestOptionsResolver.Create(baseOptions: options),
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
-            CreateDefaultEncoder());
+            CreateDefaultEncoder(),
+            new FakePersistentState<WalShardFloorState>(),
+            new TestWalClockFloorGate());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None, 0);
         return (grain, grainContext);
     }

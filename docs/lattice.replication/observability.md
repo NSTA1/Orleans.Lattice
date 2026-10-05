@@ -25,7 +25,7 @@ The `peer` tag carries the entry's `OriginClusterId` - i.e. the **authoring** cl
 
 The histogram is intentionally not recorded for:
 
-- **`MutationKind.DeleteRange`** - a range delete applies through the range path, which records no lag sample: its single issue HLC stamps a whole key range rather than one point write (and a legacy range-delete entry written before that HLC was pinned carries `HybridLogicalClock.Zero`, which would read as a multi-decade lag).
+- **`MutationKind.DeleteRange`** - a range delete applies through the range path, which records no lag sample: its issue HLC stamps a whole key range rather than one point write (and a legacy range-delete entry written before that HLC was pinned carries `HybridLogicalClock.Zero`, which would read as a multi-decade lag).
 - **Deduplicated or deferred deliveries** - an entry suppressed by the shadow-forward identity cache or deferred by a restore saga's receive fence never reaches the merge step, so reporting lag would conflate "applied" and "filtered" samples.
 - **Local-origin entries** - the apply path short-circuits at the local-origin no-op gate before touching the receiver-side merge.
 - **Source HLC equal to `Zero`** - protects against a malformed entry that would otherwise publish a garbage "now - 0" sample.
@@ -287,7 +287,7 @@ Operators monitor them together:
 The canonical applier records the highest source HLC applied so far per `(treeId, originClusterId)` in process-local memory and increments `apply.fifo_violations` when a successfully applied entry's HLC is **strictly less** than the prior recorded value for the same pair. The counter is recorded:
 
 - **After a successful apply** (direct or drained from the causal-apply buffer) - never on park. The invariant tracks "what has been merged" rather than "what has been observed", so a transient park of a higher-HLC entry that drains after a lower-HLC arrival does not falsely register a violation.
-- **For point operations only** (`Set` / `Delete`). `DeleteRange` is excluded, because its single issue HLC covers a whole key range rather than a point write - it neither records a violation nor overwrites the recorded HLC.
+- **For point operations only** (`Set` / `Delete`). `DeleteRange` is excluded, because its issue HLC covers a whole key range rather than a point write - it neither records a violation nor overwrites the recorded HLC.
 
 A violation **does not change apply behaviour**: the entry is still applied, and the high-water-mark advance is a monotonic no-op for it because the running maximum is already higher. Read the counter as a rate against `wal.entries_shipped` rather than alerting on `rate > 0`: a steady low rate reflects ordinary per-leaf interleaving, while a step change on one `(tree, origin)` pair points at a sender or transport path that has started reordering deliveries. Operators triage by joining the `tree` and `origin` tags against the producer-side topology.
 

@@ -310,6 +310,9 @@ internal sealed class WalCommitLogWriter(
         // caller token. The conservative rule "no OCE counts toward
         // provider failure" is both simpler and correct.
         if (ex is OperationCanceledException) return true;
+        // A clock-floor refusal (issue #4586) is the partition rejecting a
+        // stale stamp before any provider work, not a provider failure.
+        if (ex is WalStampBelowFloorException) return true;
         return false;
     }
 
@@ -1401,6 +1404,12 @@ internal sealed class WalCommitLogWriter(
             OriginClusterId = resolvedOrigin,
             VectorClock = capturedFrontier,
             DependencySummary = capturedFrontier,
+            // Issue #4586: a stamp taken from an HLC override names a write that
+            // was already appended (a shadow-forward, a prepared-bucket sweep, a
+            // replicated apply), unless the override was minted for this
+            // operation - a range delete's issue stamp or an idempotency key.
+            IsCarriedStamp = entry.IsCarriedStamp
+                || (LatticeHlcOverrideContext.Current is not null && !LatticeFreshStampContext.IsActive),
         };
 
         // Record the live WAL head wall clock for the drain-lag signal. Done

@@ -27,7 +27,9 @@ public partial class WalShardGrainTests
         IWalStorageProvider? provider = null,
         LatticeOptions? options = null,
         IWalRecordEncoder? encoder = null,
-        long placementVersion = 0)
+        long placementVersion = 0,
+        IPersistentState<WalShardFloorState>? floorState = null,
+        IWalClockFloorGate? floorGate = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
@@ -44,7 +46,9 @@ public partial class WalShardGrainTests
             TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
-            encoder ?? CreateDefaultEncoder());
+            encoder ?? CreateDefaultEncoder(),
+            floorState ?? new FakePersistentState<WalShardFloorState>(),
+            floorGate ?? new TestWalClockFloorGate());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None, placementVersion);
         return grain;
     }
@@ -698,7 +702,7 @@ public partial class WalShardGrainTests
     {
         var grainContext = Substitute.For<IGrainContext>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder(), new FakePersistentState<WalShardFloorState>(), new TestWalClockFloorGate());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(null!, 0, new InMemoryWalStorageProvider(), CancellationToken.None),
@@ -710,7 +714,7 @@ public partial class WalShardGrainTests
     {
         var grainContext = Substitute.For<IGrainContext>();
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
-        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder());
+        var grain = new WalShardGrain(grainContext, monitor, TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)), CreatePermissiveResolver(), CreatePermissiveClusterIdResolver(), CreateDefaultEncoder(), new FakePersistentState<WalShardFloorState>(), new TestWalClockFloorGate());
 
         Assert.That(
             async () => await grain.InitializeForTestingAsync(TreeId, 0, null!, CancellationToken.None),
@@ -748,7 +752,9 @@ public partial class WalShardGrainTests
             TestOptionsResolver.Create(baseOptions: monitor.Get(string.Empty)),
             CreatePermissiveResolver(),
             CreatePermissiveClusterIdResolver(),
-            CreateDefaultEncoder());
+            CreateDefaultEncoder(),
+            new FakePersistentState<WalShardFloorState>(),
+            new TestWalClockFloorGate());
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None);
 
         monitor.ClearReceivedCalls();

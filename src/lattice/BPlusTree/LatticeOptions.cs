@@ -4574,6 +4574,40 @@ public class LatticeOptions
     public static readonly TimeSpan DefaultWalThrottledAdmissionPace = TimeSpan.FromMilliseconds(25);
 
     /// <summary>
+    /// How far a replicated tree's per-partition WAL clock floor trails the
+    /// partition's wall clock (issue #4586). A replication shipper reading a
+    /// partition raises the partition's durable floor to at most
+    /// <c>now - ReplicationClockFloorLag</c>, and from then on the partition
+    /// refuses a freshly authored local write whose HLC stamp is below the
+    /// floor. That is what lets the shipper publish a low watermark that is
+    /// downward-closed: every write of this cluster below it has already been
+    /// acknowledged by the peer, so a receiver can decide a causal dependency
+    /// without waiting for the exact write it names.
+    /// <para>
+    /// A refused single-key write is re-stamped and retried in the same grain
+    /// turn, so a caller only observes a refusal when a stamp could not be
+    /// renewed: a write carrying a caller-supplied
+    /// <see cref="LatticeIdempotencyKey"/> fails with
+    /// <see cref="LatticeIdempotencyKeyExpiredException"/> once the key is older
+    /// than this lag, and a multi-key batch fails with a transient error its
+    /// caller retries. A larger value widens the window an idempotency key stays
+    /// usable for and tolerates more clock skew between silos; a smaller one
+    /// lets a receiver release a dependent whose exact dependency it no longer
+    /// remembers sooner. Trees that are not replicated never advance their
+    /// floor, so the lag has no effect on them.
+    /// </para>
+    /// <para>
+    /// Defaults to <see cref="DefaultReplicationClockFloorLag"/> (60 seconds).
+    /// The registered options validator rejects a value below one second or
+    /// above one day.
+    /// </para>
+    /// </summary>
+    public TimeSpan ReplicationClockFloorLag { get; set; } = DefaultReplicationClockFloorLag;
+
+    /// <summary>Default value for <see cref="ReplicationClockFloorLag"/> (60 seconds).</summary>
+    public static readonly TimeSpan DefaultReplicationClockFloorLag = TimeSpan.FromSeconds(60);
+
+    /// <summary>
     /// Optional caller-controlled retry policy applied at the boundary
     /// of the single-key and range <see cref="ILattice"/> mutations -
     /// <c>SetAsync</c> (with and without a TTL), <c>SetIfVersionAsync</c>,
