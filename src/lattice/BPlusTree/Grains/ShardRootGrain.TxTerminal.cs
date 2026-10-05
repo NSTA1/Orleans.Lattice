@@ -493,20 +493,6 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Computes the terminal-mark HLC for this shard. When
-    /// <see cref="LatticeHlcOverrideContext.Current"/> is set (the
-    /// receiver-side relay path), the override is returned verbatim so
-    /// the receiver's local WAL record matches the authoring cluster's
-    /// HLC bit-identically. Otherwise fans out
-    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetClockAsync"/> across the chain in
-    /// parallel, takes the max, and ticks once - guaranteeing the
-    /// returned HLC is strictly greater than every prepare's stamp on
-    /// this shard during the saga. Empty chains return
-    /// <c>Tick(Zero)</c> so a non-Zero HLC always lands on the WAL even
-    /// when the saga touches no leaves on this shard (e.g. a degenerate
-    /// abort path on an empty tree).
-    /// </summary>
-    /// <summary>
     /// The consumers this activation has already held for a carried-stamp
     /// terminal (issue #4641). A raise that landed protects its consumer for
     /// good - the hold stands until the store drops it for a real offset, which
@@ -555,6 +541,20 @@ internal sealed partial class ShardRootGrain
         held.UnionWith(needed);
     }
 
+    /// <summary>
+    /// Computes the terminal-mark HLC for this shard. When
+    /// <see cref="LatticeHlcOverrideContext.Current"/> is set (the
+    /// receiver-side relay path), the override is returned verbatim so
+    /// the receiver's local WAL record matches the authoring cluster's
+    /// HLC bit-identically. Otherwise fans out
+    /// <see cref="Orleans.Lattice.BPlusTree.IBPlusLeafGrain.GetClockAsync"/> across the chain in
+    /// parallel, takes the max, and ticks once - guaranteeing the
+    /// returned HLC is strictly greater than every prepare's stamp on
+    /// this shard during the saga. Empty chains return
+    /// <c>Tick(Zero)</c> so a non-Zero HLC always lands on the WAL even
+    /// when the saga touches no leaves on this shard (e.g. a degenerate
+    /// abort path on an empty tree).
+    /// </summary>
     private static async Task<HybridLogicalClock> ComputeTerminalHlcAsync(IReadOnlyList<IBPlusLeafGrain> leaves)
     {
         var ovr = LatticeHlcOverrideContext.Current;
