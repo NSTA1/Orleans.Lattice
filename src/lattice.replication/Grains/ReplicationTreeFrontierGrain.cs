@@ -32,6 +32,9 @@ internal sealed class ReplicationTreeFrontierGrain(
     // contents were not replaced.
     private readonly HashSet<string> _capConfirmed = new(StringComparer.Ordinal);
 
+    // The mode each origin currently contributes to the frontier-origins gauge.
+    private readonly Dictionary<string, string> _published = new(StringComparer.Ordinal);
+
     private bool _settledThisActivation;
     private bool _watermarksDirty;
     private long _persistedAt = Environment.TickCount64;
@@ -62,6 +65,7 @@ internal sealed class ReplicationTreeFrontierGrain(
             || frontier.ReceiverLineage != epoch
             || entry.AwaitingPin)
         {
+            PublishModes();
             return epoch;
         }
 
@@ -94,6 +98,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         }
 
         await MaybePersistWatermarksAsync().ConfigureAwait(true);
+        PublishModes();
         return epoch;
     }
 
@@ -104,6 +109,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         await RestampAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
         state.State.Unsettled = true;
         await WriteStateAsync().ConfigureAwait(true);
+        PublishModes();
     }
 
     /// <inheritdoc />
@@ -166,6 +172,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         }
 
         await WriteStateAsync().ConfigureAwait(true);
+        PublishModes();
         return true;
     }
 
@@ -198,6 +205,13 @@ internal sealed class ReplicationTreeFrontierGrain(
     /// <inheritdoc />
     public async Task OnDeactivateAsync(DeactivationReason reason, CancellationToken token)
     {
+        // Withdraw this activation's contribution; the next one republishes it.
+        foreach (var (origin, mode) in _published)
+        {
+            LatticeReplicationMetrics.CausalFrontierOrigins.Add(-1, ModeTags(origin, mode));
+        }
+
+        _published.Clear();
         if (!_watermarksDirty)
         {
             return;
@@ -302,6 +316,41 @@ internal sealed class ReplicationTreeFrontierGrain(
             throw;
         }
     }
+
+    /// <summary>The mode <paramref name="entry"/> contributes to the frontier-origins gauge.</summary>
+    internal static string ModeOf(Guid epoch, ReplicationTreeOriginFrontier entry) =>
+        epoch == Guid.Empty ? "degraded"
+        : entry.AwaitingPin ? "awaiting_reseed"
+        : entry.LowWatermark == HybridLogicalClock.Zero ? "pending"
+        : "exact";
+
+    private void PublishModes()
+    {
+        foreach (var (origin, entry) in state.State.Origins)
+        {
+            var mode = ModeOf(state.State.Epoch, entry);
+            if (_published.TryGetValue(origin, out var previous))
+            {
+                if (string.Equals(previous, mode, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                LatticeReplicationMetrics.CausalFrontierOrigins.Add(-1, ModeTags(origin, previous));
+            }
+
+            LatticeReplicationMetrics.CausalFrontierOrigins.Add(1, ModeTags(origin, mode));
+            _published[origin] = mode;
+        }
+    }
+
+    private System.Diagnostics.TagList ModeTags(string origin, string mode) => new()
+    {
+        { LatticeReplicationMetrics.TagTree, TreeId },
+        { LatticeReplicationMetrics.TagOrigin, origin },
+        { LatticeReplicationMetrics.TagMode, mode },
+        LatticeTenantLabel.ForTree(TreeId),
+    };
 
     private async Task MaybePersistWatermarksAsync()
     {

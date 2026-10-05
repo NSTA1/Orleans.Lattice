@@ -57,6 +57,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     : CoordinatorGrain<LatticeBootstrapCoordinatorGrain>(context, reminderRegistry, logger),
       ILatticeBootstrapCoordinatorGrain
 {
+    private static readonly IReadOnlyDictionary<string, HybridLogicalClock> EmptyFrontierWatermarks =
+        new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+
+    private static readonly IReadOnlyDictionary<string, HybridLogicalClock[]> EmptyFrontierHeld =
+        new Dictionary<string, HybridLogicalClock[]>(StringComparer.Ordinal);
+
     /// <summary>
     /// Number of snapshot entries applied between
     /// <c>WriteStateAsync</c> calls
@@ -845,6 +851,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // which can sit above them, so the incremental stream dedupes them
         // as already covered. Re-applying the overlap is a no-op under
         // per-key LWW.
+        // Capture the tree frontier's epoch before the export is requested
+        // (#4586 part 2b): the handoff pins the export only if no replacement
+        // of the tree's contents happened in between.
+        var frontierEpoch = (await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+            .GetAsync(cancellationToken)
+            .ConfigureAwait(true)).Epoch;
+
         var snapshot = await _snapshotProvider
             .ExportAsync(treeName, sourceClusterId, HybridLogicalClock.Zero, cancellationToken)
             .ConfigureAwait(true);
@@ -858,6 +871,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.SnapshotAsOfHlc = snapshot.AsOfHlc;
         state.State.CausalStableFrontier = snapshot.CausalStableFrontier;
         state.State.SnapshotExportEpoch = snapshot.ExportEpoch;
+        state.State.FrontierEpoch = frontierEpoch;
         // Recorded before the first entry is applied: from here on the tree may
         // hold a partial import, so a failure keeps the read fence up (#4526).
         state.State.ImportApplied = true;
@@ -1265,6 +1279,28 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         await hwm
             .MergeBootstrapFrontierAsync(asOfHlc, frontier, CancellationToken.None)
             .ConfigureAwait(true);
+
+        // Install the export on the tree frontier (#4586 part 2b): the tree now
+        // reflects the source's contents, which ends a re-seed the tree was
+        // awaiting after a replacement of its contents. The export carries no
+        // per-origin watermark yet, so every origin starts again from zero and
+        // rises on the watermarks its own sender ships from here on. Refused
+        // when the contents were replaced during the drain; the replacement's
+        // own forced gap brings a fresh bootstrap.
+        var pinned = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+            .PinAsync(
+                state.State.FrontierEpoch,
+                EmptyFrontierWatermarks,
+                EmptyFrontierHeld,
+                CancellationToken.None)
+            .ConfigureAwait(true);
+        if (!pinned)
+        {
+            Logger.LogInformation(
+                "Bootstrap of tree {Tree} from {Source} completed, but the tree frontier did not install it: its contents were replaced during the drain or it is in degraded mode.",
+                treeName,
+                sourceClusterId);
+        }
 
         // Re-arm the causal-apply buffer: the merge can satisfy a parked
         // entry's dependencies, and a later apply of the dependency itself no

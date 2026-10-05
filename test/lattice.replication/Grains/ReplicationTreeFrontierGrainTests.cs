@@ -3,6 +3,7 @@ using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Replication.Grains;
 using Orleans.Lattice.Replication.Tests.Fakes;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
@@ -267,6 +268,74 @@ public sealed class ReplicationTreeFrontierGrainTests
 
         Assert.That(() => grain.OnContentsReplacingAsync(CancellationToken.None), Throws.InstanceOf<InvalidOperationException>());
         h.Context.Received().Deactivate(Arg.Any<DeactivationReason>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task The_frontier_origins_gauge_follows_each_pair_through_its_modes_and_is_withdrawn_at_deactivation()
+    {
+        const string tree = "tf-gauge-tree";
+        var h = new Harness(RegistryLineage);
+        h.Context.GrainId.Returns(GrainId.Create("replication-tree-frontier", tree));
+        h.Lineage.GetLineageAsync(tree, Arg.Any<CancellationToken>()).Returns(RegistryLineage);
+        h.Factory.GetGrain<IReplicationHighWaterMarkGrain>(tree, Arg.Any<string?>()).Returns(h.Hwm);
+        var net = new Dictionary<string, long>(StringComparer.Ordinal);
+        using var listener = MeterListening.StartForInstrument(
+            LatticeReplicationMetrics.CausalFrontierOrigins,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                string? mode = null;
+                string? taggedTree = null;
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeReplicationMetrics.TagMode) mode = tag.Value?.ToString();
+                    if (tag.Key == LatticeReplicationMetrics.TagTree) taggedTree = tag.Value?.ToString();
+                }
+
+                if (taggedTree == tree && mode is not null)
+                {
+                    lock (net)
+                    {
+                        net[mode] = net.GetValueOrDefault(mode) + value;
+                    }
+                }
+            }));
+        Dictionary<string, long> Snapshot()
+        {
+            lock (net)
+            {
+                return net.Where(kv => kv.Value != 0).ToDictionary(kv => kv.Key, kv => kv.Value);
+            }
+        }
+
+        var grain = h.Activate();
+        var epoch = await grain.ObserveAsync(OriginA, shipped: null, CancellationToken.None);
+        var pending = Snapshot();
+        await grain.ObserveAsync(OriginA, Shipped(epoch, 50, 40), CancellationToken.None);
+        var exact = Snapshot();
+        await grain.OnContentsReplacingAsync(CancellationToken.None);
+        var awaiting = Snapshot();
+        await grain.OnDeactivateAsync(new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"), CancellationToken.None);
+        var withdrawn = Snapshot();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pending, Is.EqualTo(new Dictionary<string, long> { ["pending"] = 1 }));
+            Assert.That(exact, Is.EqualTo(new Dictionary<string, long> { ["exact"] = 1 }));
+            Assert.That(awaiting, Is.EqualTo(new Dictionary<string, long> { ["awaiting_reseed"] = 1 }));
+            Assert.That(withdrawn, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void A_tree_with_no_registry_lineage_reports_its_origins_as_degraded()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ReplicationTreeFrontierGrain.ModeOf(Guid.Empty, new ReplicationTreeOriginFrontier { LowWatermark = Hlc(5) }), Is.EqualTo("degraded"));
+            Assert.That(ReplicationTreeFrontierGrain.ModeOf(Guid.NewGuid(), new ReplicationTreeOriginFrontier { AwaitingPin = true }), Is.EqualTo("awaiting_reseed"));
+            Assert.That(ReplicationTreeFrontierGrain.ModeOf(Guid.NewGuid(), new ReplicationTreeOriginFrontier()), Is.EqualTo("pending"));
+            Assert.That(ReplicationTreeFrontierGrain.ModeOf(Guid.NewGuid(), new ReplicationTreeOriginFrontier { LowWatermark = Hlc(5) }), Is.EqualTo("exact"));
+        });
     }
 
     [Test]
