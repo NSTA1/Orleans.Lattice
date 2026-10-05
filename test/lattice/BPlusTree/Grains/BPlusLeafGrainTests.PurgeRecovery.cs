@@ -90,7 +90,7 @@ public partial class BPlusLeafGrainTests
         await grain.RecoverBindingAsync(MaterialiserTreeId, 2);
 
         var firstWrite = events.FindIndex(e => e.StartsWith("state-write:", StringComparison.Ordinal));
-        var reset = events.FindLastIndex(e => e.StartsWith("record:", StringComparison.Ordinal));
+        var reset = events.FindIndex(e => e.StartsWith("record:", StringComparison.Ordinal));
         Assert.Multiple(() =>
         {
             Assert.That(state.State.TreeId, Is.EqualTo(MaterialiserTreeId));
@@ -102,6 +102,42 @@ public partial class BPlusLeafGrainTests
         });
         await snapshot.Received().ClearAsync(Arg.Any<CancellationToken>());
         Assert.That(await grain.GetAsync("k0"), Is.Null, "the re-created leaf serves, empty");
+    }
+
+    [Test]
+    public async Task Recovery_whose_first_row_write_fails_keeps_the_purge_mark_and_a_retry_re_creates_the_leaf()
+    {
+        // The window between the mark reset and the row write. Were the mark reset
+        // first, a re-create whose row write then failed (or whose silo crashed)
+        // would leave the leaf rowless and unmarked: failed closed for ever, its key
+        // range stranded. The mark must survive until the row is durable.
+        var record = new FakeRowRecord
+        {
+            Recorded = new LeafRowRecordState { TreeId = MaterialiserTreeId, PurgeCleared = true },
+        };
+        var (grain, state, _) = CreateRowlessLeafWithSnapshotStore(record);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        state.ThrowOnWrite = new TimeoutException("storage fault on the re-create's first row write");
+
+        Assert.CatchAsync(async () => await grain.RecoverBindingAsync(MaterialiserTreeId, 2));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.RecordExists, Is.False, "precondition: the row write failed");
+            Assert.That(record.Recorded?.PurgeCleared, Is.True,
+                "the purge's mark must outlive a failed re-create, or the leaf can never be recovered");
+        });
+
+        // A retried recovery, on a fresh activation, still finds the mark and re-creates the leaf.
+        var (retry, retryState, _) = CreateRowlessLeafWithSnapshotStore(record);
+        await LeafActivationHarness.ActivateAsync(retry, CancellationToken.None);
+        await retry.RecoverBindingAsync(MaterialiserTreeId, 2);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(retryState.State.TreeId, Is.EqualTo(MaterialiserTreeId));
+            Assert.That(record.Recorded?.PurgeCleared, Is.False);
+        });
     }
 
     [TestCase(false, TestName = "Recovery_refuses_a_rowless_leaf_whose_record_no_purge_marked")]
