@@ -13,10 +13,12 @@ PERTURBS: RevertBegin
     /\ ~reserved
     /\ reserved' = TRUE
     /\ rp' = "revertBegun"
+    /\ UNCHANGED <<alias, map, route, redir, deleted, crashed>>
 --- REPLACE
     /\ rp = "committed"
     /\ ~deleted
     /\ ~reserved
     \* MUTATION: the reservation is not taken.
     /\ rp' = "revertBegun"
+    /\ UNCHANGED <<alias, map, route, redir, deleted, crashed, reserved>>
 --- END
