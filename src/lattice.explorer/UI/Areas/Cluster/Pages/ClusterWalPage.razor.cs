@@ -164,11 +164,22 @@ public partial class ClusterWalPage : IDisposable
             ? ClusterLoad<TreeWalMovePlan>.RunAsync(ct => Facades.RequireTreeAdmin().PlanWalMoveAsync(tree, partition, target, ct), token)
             : null;
 
-        _access = (await access).Value ?? ClusterTreeAccess.None(tree);
-        _audit = await audit;
-        if (plan is not null)
+        var accessLoad = await access;
+        var auditLoad = await audit;
+        var planLoad = plan is null ? null : await plan;
+
+        // The next address's load renews the token: a read that answered, or faulted,
+        // after that belongs to the previous address and must not be shown for this one.
+        if (token.IsCancellationRequested)
         {
-            _plan = await plan;
+            return;
+        }
+
+        _access = accessLoad.Value ?? ClusterTreeAccess.None(tree);
+        _audit = auditLoad;
+        if (planLoad is not null)
+        {
+            _plan = planLoad;
         }
 
         if (Partition is { } movePartition && TreeAdminOperationsAccess.Of(Facades.TreeAdmin) is { } operations)

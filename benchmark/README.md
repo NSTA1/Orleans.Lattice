@@ -66,7 +66,7 @@ benchmark/
 |                                    # run time from src/lattice.dashboards/Grafana/.
 |-- history/                         # Long-lived run-over-run history stack.
 |   |-- docker-compose.history.yml   # VictoriaMetrics + Grafana on :8428 / :3001.
-|   |-- Generate-Dashboards.ps1      # Regenerates the overview + seven persona-trend
+|   |-- Generate-Dashboards.ps1      # Regenerates the overview + persona-trend
 |   |                                # dashboards.
 |   |-- README.md                    # Data model, label schema, ad-hoc query path.
 |   `-- grafana/                     # Provisioning + BenchmarkHistory.*.json (generated,
@@ -124,7 +124,7 @@ flowchart TB
 ```
 
 The replication overlay (`docker-compose.replication.yml`) is layered on top of the
-base `docker-compose.yml` for the seven scenarios that need a second cluster
+base `docker-compose.yml` for scenarios that need a second cluster
 (every `.env` that sets `BENCH_REPLICATION_OVERLAY=true`):
 `current-state-single-peer`, `replication-backpressure`, `receiver-crash`,
 `bidirectional-replication`, `bidirectional-replication-azuretable`,
@@ -133,7 +133,7 @@ runs against the base topology only.
 
 ## Scenarios
 
-Twenty scenarios live under `scenarios/<slug>.env`. They span the
+Scenarios live under `scenarios/<slug>.env`. They span the
 lattice-usage profiles below plus a micro-benchmark control.
 
 | Profile             | Scenario id                       | Description                                              | Replication | Chaos |
@@ -165,7 +165,7 @@ intent: each scenario pins the read driver's rate while writes follow the fleet
 with the calibrated fleet size - see
 [`benchmark-scenarios.md`](./benchmark-scenarios.md).
 
-The two chaos rows likewise describe what the scenarios were designed to
+The chaos rows likewise describe what the scenarios were designed to
 measure. As shipped, a run starts the pause or kill after its measurement
 window has closed and stops the chaos step before its `unpause` or restart, so
 the receiver stays paused or down until teardown and the captured scalars cover
@@ -242,7 +242,7 @@ The initialisation script:
    (the cheapest write-heavy scenario; replication and chaos add noise that
    would distort the saturation signal). Default ladder: `500, 1000, 2000,
    4000, 8000, 16000`.
-3. After each rung, classifies it against three saturation signals:
+3. After each rung, classifies it against the saturation signals:
    - **Sink drops** - `sink_dropped_combined_increase > 0` marks the rung as
      past the producer-side knee. With the sink's default `DropOnFull=true`,
      though, a full channel evicts its oldest sample and the write still
@@ -473,7 +473,7 @@ invocation.
 
 Then visit <http://localhost:3001>; the dashboards are provisioned into its
 `Orleans.Lattice` folder. The history Grafana hosts an
-**Overview dashboard** plus **seven generated persona dashboards** - one per
+**Overview dashboard** plus **generated persona dashboards** - one per
 lattice-usage profile - and a hand-maintained atomic-writes dashboard, so each
 dashboard answers a single regression
 question without templating-var juggling:
@@ -500,9 +500,9 @@ that persona's scenarios) so a regression in any workload class is visible
 without flipping dashboards. Its tiles carry no drill-down links, so open the
 matching persona dashboard for trend strips and per-run barcharts.
 
-Each persona dashboard has the same **3-band** layout, top-to-bottom:
+Each persona dashboard has the same layout, top-to-bottom:
 
-1. **Headline KPIs** - three or four stat tiles with threshold-coloured
+1. **Headline KPIs** - stat tiles with threshold-coloured
    backgrounds, most binding to short, stable aliases (e.g. `bench_lattice_commit_p99_ms`,
    `bench_replication_ship_p95_ms`) and the read-driver, leaf-write and microbench
    tiles to auto-discovered or harness keys. The stable-alias layer is curated in
@@ -560,8 +560,8 @@ silo exports these meters to Prometheus (`host/Bench.Silo/Program.cs`):
 | `vehicle_fleet_simulator.atomic_saga_driver` | `LatticeAtomicSagaDriver` (atomic-write scenarios) |
 
 None of the embedded dashboards reads a `vehicle_fleet_simulator.*` series: those
-four meters feed the `results.json` capture and can be queried in Prometheus
-directly. Five of the synced dashboards - Identity & Authorization, Backup &
+meters feed the `results.json` capture and can be queried in Prometheus
+directly. The synced dashboards for Identity & Authorization, Backup &
 Restore, Replication Transport (gRPC), Autoscaling Signal and Per-Tenant
 Observability - bind only to meters the benchmark silo does not export, so they
 render empty on this stack. The Grain Index and Materialised Views dashboards read

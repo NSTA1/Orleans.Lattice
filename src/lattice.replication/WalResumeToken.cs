@@ -2,24 +2,23 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Internal opaque resume token shape for transport-side seams that need to
-/// resume from a precise per-shard offset rather than a
+/// resume from a precise per-WAL-partition offset rather than a
 /// hybrid-logical-clock cursor.
 /// <para>
 /// <b>Cursor-shape decision.</b> The public
-/// <see cref="IChangeFeed"/> contract is HLC-cursor-shaped - that
-/// preserves transitive replication HLC fidelity, aligns with the
-/// per-origin high-water-mark dedup table, and matches the
-/// shape a future cross-tree materialiser needs (no notion of per-shard
-/// offset). HLC cursors are therefore the canonical resume shape on
-/// every public surface.
+/// <see cref="IChangeFeed"/> still keeps an HLC overload for source
+/// compatibility, but the HLC cursor is not applied there; the
+/// <see cref="ChangeFeedCursor"/> overload is the public offset-based
+/// resume shape. This token remains the internal transport-side
+/// equivalent for seams that persist WAL partition positions directly.
 /// </para>
 /// <para>
-/// Per-shard offsets are exposed only on the internal transport-side
-/// seam where they trivially are monotonic per shard, match the WAL
+/// Per-partition offsets are exposed on the internal transport-side
+/// seam where they trivially are monotonic per partition, match the WAL
 /// <see cref="WalEntry.Offset"/> shape 1:1, and remove HLC-skew edge
 /// cases at reconnect time. Receivers store this token alongside their
-/// per-origin HWM purely as a diagnostic fast-path; the HWM remains the
-/// authoritative dedup key.
+/// per-origin HWM as resume/progress state; the HWM is not an
+/// incremental-write dedup threshold.
 /// </para>
 /// </summary>
 [GenerateSerializer]
@@ -27,7 +26,7 @@ namespace Orleans.Lattice.Replication;
 [Immutable]
 internal readonly record struct WalResumeToken
 {
-    /// <summary>The per-tree shard index this token resumes against.</summary>
+    /// <summary>The per-tree WAL partition index this token resumes against.</summary>
     [Id(0)] public int ShardIndex { get; init; }
 
     /// <summary>

@@ -39,7 +39,7 @@ await tree.OrSet("cart:42").AddAsync(new byte[] { 1 }, "cluster-A", TimeSpan.Fro
 Task<HybridLogicalClock> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, TimeSpan ttl, CancellationToken cancellationToken = default);
 ```
 
-The TTL overload is available on the primary write of all thirteen accessors: `GCounter.IncrementAsync`, `GSet.AddAsync`, `MaxRegister.SetAsync`, `MinRegister.SetAsync`, `MvRegister.SetAsync`, `OrFlag.EnableAsync`, `OrMap.SetAsync`, `OrSet.AddAsync`, `PnCounter.IncrementAsync`, `Sequence.InsertAtAsync`, `RwFlag.EnableAsync`, `RwSet.AddAsync`, and `VersionVector.TickAsync`.
+The TTL overload is available on each accessor's primary write: `GCounter.IncrementAsync`, `GSet.AddAsync`, `MaxRegister.SetAsync`, `MinRegister.SetAsync`, `MvRegister.SetAsync`, `OrFlag.EnableAsync`, `OrMap.SetAsync`, `OrSet.AddAsync`, `PnCounter.IncrementAsync`, `Sequence.InsertAtAsync`, `RwFlag.EnableAsync`, `RwSet.AddAsync`, and `VersionVector.TickAsync`.
 
 Behavior:
 

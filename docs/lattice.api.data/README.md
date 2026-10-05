@@ -6,7 +6,7 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 
 `Orleans.Lattice.Api.Data` is the **outward-facing read-write surface** of a lattice cluster. The core library is reached through .NET grain interfaces; this package adds the external data plane a non-.NET service, a language-agnostic worker, or an edge component needs to mutate and read tree entries over the wire - without embedding the Orleans client.
 
-It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same way, in two layers:
+It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same layered way:
 
 - **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap or reuse the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
@@ -158,7 +158,7 @@ if (read.Found)
 
 This is a write-capable external surface, so its default posture is closed:
 
-- **Two independent gates.** A coarse transport-level authorizer (`ILatticeDataApiAuthorizer`, default `DenyAllDataApiAuthorizer`) runs first and rejects the whole call before it reaches the facade; then the per-tree / per-key core gate authorizes every leg of the actual operation. The coarse gate is the endpoint-level on/off switch; the core gate is the fine-grained rights check. Both must pass.
+- **Independent gates.** A coarse transport-level authorizer (`ILatticeDataApiAuthorizer`, default `DenyAllDataApiAuthorizer`) runs first and rejects the whole call before it reaches the facade; then the per-tree / per-key core gate authorizes every leg of the actual operation. The coarse gate is the endpoint-level on/off switch; the core gate is the fine-grained rights check. Both must pass.
 - **Anonymous is denied.** With `Orleans.Lattice.Auth` registered, a call with no resolvable credential is default-denied by the core gate (writes and reads alike), because the anonymous subject has no grant. This is verified by tests rather than by a bespoke check in this package. Without that add-on the core no-op gate admits every call, so only the transport authorizer stands in front of the data plane.
 - **Denial carries no value.** When the core gate denies a call, the gRPC service maps it to `PermissionDenied` and attaches only the non-sensitive fields of the denial - the tree id, the operation, the subject, and the reason - as response trailers. The entry value is never included in a denial. The binding's [status mapping](../lattice.api.data.grpc/README.md#status-mapping) lists every outcome.
 - **Identity bridge.** The caller identity is lifted from request metadata by `ILatticeDataApiCredentialBridge`. The default is header-based: it reads the `authorization` header and strips a leading `Bearer` prefix case-insensitively. Replace the seam to source identity differently.

@@ -1,6 +1,6 @@
 # Orleans.Lattice.Explorer configuration
 
-The Explorer rewrite exposes five public options types in the core web packages:
+The Explorer rewrite exposes these public options types in the core web packages:
 `ExplorerConfigStoreOptions`, `LatticeExplorerWebOptions`,
 `ExplorerReauthOptions`, `ExplorerSignOutOptions`, and
 `ExplorerContentSecurityPolicyOptions`. The UI sign-in chrome uses an internal

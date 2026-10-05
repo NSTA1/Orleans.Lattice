@@ -95,9 +95,9 @@ services.AddTelemetryTools(o =>
 });
 ```
 
-Wildcard patterns are precompiled once when the policy is built, so a per-call admission check never recompiles a pattern. See [Security](security.md) for how the allow-list is enforced across the four tools.
+Wildcard patterns are precompiled once when the policy is built, so a per-call admission check never recompiles a pattern. See [Security](security.md) for how the allow-list is enforced across the telemetry tools.
 
 ## Next
 
-- [Tools](tools.md) - the four telemetry tools and their arguments and results.
+- [Tools](tools.md) - the telemetry tools and their arguments and results.
 - [Security](security.md) - the dual-credential trust boundary and the metric-access allow-list.

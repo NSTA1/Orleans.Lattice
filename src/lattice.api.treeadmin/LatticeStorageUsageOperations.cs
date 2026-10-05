@@ -66,7 +66,7 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
         string? operationId = null,
         CancellationToken cancellationToken = default)
     {
-        var id = ResolveOperationId(operationId);
+        var id = LatticeOperationKey.ValidateOrGenerate(operationId);
         await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
 
         var tenant = await ResolveActiveTenantAsync(cancellationToken).ConfigureAwait(false);
@@ -82,7 +82,7 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
             static summary => LatticeOperationCompletion.Succeeded(
                 null, StorageUsageRefreshResults.ToResultMap(summary))).ConfigureAwait(false);
 
-        return LatticeOperationMapping.ToHandle(launch.Record, created: launch.Completion is not null);
+        return LatticeOperationMapping.ToHandle(launch);
     }
 
     /// <inheritdoc />
@@ -256,16 +256,5 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
             ? warm
             : await _tenantResolver.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
         return tenant.Value ?? throw new LatticeTenantAccessDeniedException();
-    }
-
-    private static string ResolveOperationId(string? operationId)
-    {
-        if (operationId is null)
-        {
-            return LatticeOperationKey.NewId();
-        }
-
-        LatticeOperationKey.ThrowIfInvalid(operationId, nameof(operationId));
-        return operationId;
     }
 }

@@ -80,10 +80,9 @@ Sources are registered as keyed singletons under the index name, so each index
 has its own. Overloads accept an instance or a factory when the source needs
 construction the container cannot do.
 
-### The three contract requirements
+### Contract requirements
 
-The crawl's resumability rests on these, so an implementation must satisfy all
-three:
+The crawl's resumability rests on these requirements:
 
 1. **Keys are the *encoded* grain keys the index stores**, as
    `IGrainKeyCodec.Encode(GrainId)` produces them - not the grain's raw primary
@@ -196,4 +195,4 @@ state.
 
 - [Configuration](configuration.md) - backfill options and drift policy.
 - [Queries](queries.md#consistency) - what an incomplete backfill means for a query.
-- [Architecture](architecture.md) - how the two onboarding routes converge.
+- [Architecture](architecture.md) - how onboarding routes converge.

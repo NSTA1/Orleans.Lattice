@@ -29,7 +29,7 @@ cache: the default ONNX embedder bakes its weights into its image and mounts no
 volume, so a host that has never run that override has no such volume. The rig
 still refuses the name, and still keeps its own `lattice-coldstart-hf` cache.
 
-On top of the naming, five structural properties:
+On top of the naming, these structural properties hold:
 
 - **The stack is never built.** `docker-compose.rig.yml` has no `build:` section
   anywhere, and the guard refuses a resolved document that declares one. What a
@@ -225,7 +225,7 @@ Two supporting habits, both free:
 |------|---------|
 | `docker-compose.rig.yml` | The isolated stack. No build sections, external volumes, rig-only image tags, non-8080 host port. |
 | `census-expectations.json` | Known-answer figures for the offline census, quoted by the epic from a specific backup. |
-| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. `inspect-state.ps1` runs four of them (grain state by type, leaf counts, leaf snapshots by prefix, checkpoints by partition); the healing and shard-root queries are standalone, run by hand. The adoption report's F-A and F-B findings came from `healing-bootstrap.sql`, `healing-decisions.sql` and `shard-root-count-by-tree.sql`; `shard-root-topology-integrity.sql`, added after it, checks that each shard root's persisted leaf flag agrees with the root node it names. |
+| `sql/*.sql` | The offline grain-state census queries. Committed files, never shell-assembled SQL. `inspect-state.ps1` runs the grain state by type, leaf counts, leaf snapshots by prefix, and checkpoints by partition queries; the healing and shard-root queries are standalone, run by hand. The adoption report's F-A and F-B findings came from `healing-bootstrap.sql`, `healing-decisions.sql` and `shard-root-count-by-tree.sql`; `shard-root-topology-integrity.sql`, added after it, checks that each shard root's persisted leaf flag agrees with the root node it names. |
 | `scripts/parameters.ps1` | Default parameters and the isolation contract. |
 | `scripts/parameters.local.ps1` | **Gitignored** operator overrides. |
 | `scripts/_rig-helpers.ps1` | Pure helpers: config, the isolation guard, the file-WAL framing walk, statistics, log counters. |
@@ -287,7 +287,7 @@ image tags alone when only the durable state needs refreshing.
 ./run-cohort.ps1 -Runs 2 -CohortId baseline
 ```
 
-Each run clones the master to a fresh working volume, then walks three restart
+Each run clones the master to a fresh working volume, then walks the restart
 scenarios in order. They differ materially, so a rig that tested only one would
 mislead:
 
@@ -297,7 +297,7 @@ mislead:
 | `graceful-restart` | `compose stop` (SIGTERM plus a drain window), then `start` | A planned restart, where shutdown captured a snapshot |
 | `sigkill-restart` | `docker kill -s KILL`, then `start` | Container recreation and out-of-memory: no drain, so the snapshot is whatever the last periodic capture left |
 
-Those three are only distinguishable because a drain window exists.
+The scenarios are only distinguishable because a drain window exists.
 `docker-compose.rig.yml` sets `init: true` so PID 1 is an init process that
 forwards `SIGTERM` and reaps orphans, and `stop_grace_period: 120s` so a drain
 is allowed to finish. The live sample carries the same pair for the same
@@ -380,7 +380,7 @@ measurement.
 
 Every timing is measured from the container's own `State.StartedAt` as reported
 by the Docker daemon, never from when a compose CLI call returned, so CLI
-overhead never lands in a headline number and all three scenarios share one zero
+overhead never lands in a headline number and all scenarios share one zero
 point.
 
 ### Background indexing is quiesced by default
@@ -460,7 +460,7 @@ Diff two cohorts by comparing `summary[].firstQuerySecondsMean` for the same
 scenario, and only call a change real when the delta exceeds
 `firstQueryRelativeSpreadPct`.
 
-### Two headline numbers, not one
+### Headline query timings
 
 `repocontext_search` answers with `mode: keyword` when the semantic path
 **throws**, and on a cold, shattered vector tree the exact-kNN prefix scan can

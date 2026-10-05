@@ -1,13 +1,13 @@
 # Observability
 
-`Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The instruments fall into four shapes:
+`Orleans.Lattice.Replication` publishes every replication-side instrument on a single meter, `orleans.lattice.replication`. An OpenTelemetry pipeline (or any `MeterListener`) subscribes once and receives every replication metric. The headline instrument families are:
 
 - **Per-peer gauges** - `entries_behind`, `bytes_behind`, `ship_in_flight`, `consecutive_errors`, `last_contact_seconds`. Owned by `ReplicationPeerStats`. Tagged `tree` + `peer`. The `consecutive_errors` and `last_contact_seconds` gauges are **bidirectional** and additionally carry a `direction` tag (`outbound` from the local sender's ship loop, `inbound` from the local receiver's apply loop). `entries_behind`, `bytes_behind`, and `ship_in_flight` remain outbound-only (the receiver does not track a per-peer backlog into itself, nor does it pipeline into itself).
 - **Per-operation histograms** - `ship.duration`, `apply.duration`, `apply.lag`, `apply.parallel_runs`, `ship.effective_batch_size`, `ship.ack_latency`. Reported in milliseconds except `apply.parallel_runs` (unit `{run}`) and `ship.effective_batch_size` (unit `{entry}`).
 - **Throughput counters** - `wal.entries_shipped`. Counts entries the producer durably ships to each peer; correlate it against WAL retention / GC to confirm the sender keeps pace with the log. The companion `wal.entries_trimmed` counter belongs to the core library and is published on the `orleans.lattice` meter (`LatticeMetrics.WalEntriesTrimmed`); subscribe to both meters when correlating ship-rate against trim-rate. The `ship.redundant_payloads` / `ship.redundant_payload_bytes` counters (see below) ride on the same meter and emit in a default build because content-hash dedup measurement is on by default; the `coalesce.entries_elided` / `coalesce.bytes_elided` / `coalesce.deltas_merged` counters likewise emit by default because pre-ship coalescing is on by default. Each set falls silent only when its option (`ContentHashDedupEnabled` / `PreShipCoalescingEnabled`) is explicitly set to `false`.
 - **DLQ counters** - `dead_letter.enqueued`, `dead_letter.removed`, `dead_letter.refused`. Tagged `tree` + `reason`.
 
-These four shapes are the headline families, not the full set: the [instrument index](#instrument-index) at the end of this page lists every instrument on the meter with its kind, unit, and tags, and points at the page that documents it.
+These are headline families, not the full set: the [instrument index](#instrument-index) at the end of this page lists every instrument on the meter with its kind, unit, and tags, and points at the page that documents it.
 
 Every instrument also carries the repository-wide derived `tenant` tag (`LatticeTenantLabel.TagTenant`), computed from the `tree` value, or fixed to the platform sentinel `_platform_` on the instruments that carry no `tree` tag. The Tags columns on this page list the replication-specific dimensions and leave `tenant` implicit.
 
@@ -330,7 +330,7 @@ Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}'
 Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {PreviousPhase} -> Failed (LastAppliedHlc={LastAppliedHlc})
 ```
 
-covering the five transitions:
+covering these transitions:
 
 - `Idle -> RequestingSnapshot` (kickoff persist).
 - `RequestingSnapshot -> ApplyingSnapshot` (snapshot stream opened, pivot persisted). Suppressed on crash-resume when the persisted phase is already `ApplyingSnapshot`.

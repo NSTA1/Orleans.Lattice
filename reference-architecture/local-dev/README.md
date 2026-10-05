@@ -97,7 +97,7 @@ explorer); the sibling region reuses them.
 | Tear down (keep data) | `docker compose down` | Removes containers and networks; the per-region Azurite volumes survive, so grain state, clustering, reminders, and the WAL persist to the next standup. |
 | Tear down and wipe data | `docker compose down -v` | Also deletes the Azurite volumes (each region's primary plus the one shared backup sink) for a clean slate. |
 | Wipe data only, then restart | `docker compose down -v; docker compose up --build -d` | Clean-slate restart: drops the storage volumes, then rebuilds and starts both regions. |
-| Stand up with multi-tenancy enabled | PowerShell: `$env:TENANCY_ENABLED = "true"; docker compose up --build -d` <br> bash: `TENANCY_ENABLED=true docker compose up --build -d` | Turns on the opt-in multi-tenancy feature in **both** silos and MCP heads together. The silos register the tenant registry + admin API and seed the demo tenants from [`identities.json`](identities.json)'s `tenants` section; the heads dial the silo's tenant-admin facade and advertise the tenant self-awareness tools (`lattice_tenant_current` / `_list` / `_get`). Add `$env:TENANCY_CONTROL = "true"` (bash `TENANCY_CONTROL=true`) to also advertise the mutating tenant-administration tools. Off by default - with `TENANCY_ENABLED` unset the stack is byte-for-byte the single-tenant cluster. |
+| Stand up with multi-tenancy enabled | PowerShell: `$env:TENANCY_ENABLED = "true"; docker compose up --build -d` <br> bash: `TENANCY_ENABLED=true docker compose up --build -d` | Turns on the opt-in multi-tenancy feature in **both** silos and MCP heads together. The silos register the tenant registry + admin API and seed the demo tenants from [`identities.json`](identities.json)'s `tenants` section; the heads dial the silo's tenant-admin facade and advertise the tenant self-awareness tools (`lattice_tenant_current` / `_list` / `_get`). Add `$env:TENANCY_CONTROL = "true"` (bash `TENANCY_CONTROL=true`) to also advertise the tenant lifecycle, residency, and delegated-access administration tools. Off by default - with `TENANCY_ENABLED` unset the stack is byte-for-byte the single-tenant cluster. |
 
 ## Ports
 
@@ -311,15 +311,12 @@ The silos seed two demo tenants from [`identities.json`](identities.json)'s
 1. `tools/list` on region A's MCP (9090). The tenant tools are **grant-gated per
    identity**, exactly like every other tool group, so different identities see
    different subsets (with tenancy off they are absent for everyone):
-   - `platform-admin` and `region-operator` see all eleven - the three
-     self-awareness tools (`lattice_tenant_current`, `lattice_tenant_list`,
-     `lattice_tenant_get`) plus the eight administration tools
-     (`lattice_tenant_create` / `_suspend` / `_resume` / `_delete` /
-     `_set_quotas` / `_authorize_regions` / `_set_residency`, all mutating, and
-     the read-only `_region_status`), which are advertised only when
-     `TENANCY_CONTROL=true`.
-   - `data-reader` sees only the three read/self-awareness tools - no
-     administration tools.
+   - `platform-admin` and `region-operator` see the self-awareness tools
+     (`lattice_tenant_current`, `lattice_tenant_list`, `lattice_tenant_get`) and,
+     when `TENANCY_CONTROL=true`, the tenant lifecycle, residency, and
+     delegated-access administration tools.
+   - `data-reader` sees only the read/self-awareness tools - no administration
+     tools.
    - `auditor` (telemetry-only) sees **no** tenant tools at all.
 2. Call `lattice_tenant_list` as `platform-admin` - it returns **both** `acme` and
    `globex` (it administers both). As `region-operator` - only `acme`. As
@@ -379,7 +376,7 @@ environment or a `.env` file next to this compose file:
 | `STORAGE_CONNECTION_STRING_A` / `_B` | Azurite emulator string | Per-region primary storage. |
 | `BACKUP_BLOB_CONNECTION_STRING` | Azurite emulator string | The one shared backup Blob sink, identical in both regions (region A is backup-primary and owns the scheduler; region B is DR standby). |
 | `TENANCY_ENABLED` | `false` | Opt-in multi-tenancy. When `true`, both silos register the tenant registry + tenant-admin API and seed the demo tenants from `identities.json`, and both MCP heads dial the tenant-admin facade and advertise the tenant self-awareness tools. Off leaves the stack byte-for-byte single-tenant. |
-| `TENANCY_CONTROL` | `false` | When `true` (and `TENANCY_ENABLED=true`), the MCP heads also advertise the mutating tenant-administration tools. Ignored when tenancy is off. |
+| `TENANCY_CONTROL` | `false` | When `true` (and `TENANCY_ENABLED=true`), the MCP heads also advertise the tenant lifecycle, residency, and delegated-access administration tools. Ignored when tenancy is off. |
 | `NUGET_CONFIG_FILE` | `./nuget.config` | The `NuGet.Config` the image builds restore with (the `nugetcfg` build secret). Point it at your own for a private or offline feed; it never lands in an image layer. |
 
 Two per-region values are deliberately **not** `.env` knobs, because pointing either

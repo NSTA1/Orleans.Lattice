@@ -12,7 +12,8 @@ signing-key, and lifetime checks and only layers on the Entra-specific concerns:
 - Single- and multi-tenant issuer validation against a configured tenant
   allow-list and the templated Entra v2.0 issuer.
 - Entra v2.0 claim conventions: subject from `oid`, tenant from `tid`, groups
-  from `groups`, and app roles from `roles`.
+  from `groups`, and app roles from `roles`; unusable or reserved subject ids
+  resolve to anonymous.
 - Groups-overage handling through a pluggable resolver abstraction (opt in with
   `GroupResolutionMode = EntraGroupResolutionMode.ResolveOnOverage`), with a
   dependency-free token-only fallback when the mode is left at its `TokenOnly`

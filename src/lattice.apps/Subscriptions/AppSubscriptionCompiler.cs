@@ -110,7 +110,7 @@ public static class AppSubscriptionCompiler
                 var scope = subscription.KeyPrefix is null
                     ? new LatticeScope(LatticeScopeKind.Tree, localTreeId)
                     : new LatticeScope(LatticeScopeKind.Prefix, localTreeId, subscription.KeyPrefix);
-                if (!AppTreeIds.IsGrantable(localTreeId) || !AppSubscriptionScopeCoverage.IsCovered(scope, exceptions))
+                if (!AppTreeIds.IsGrantable(localTreeId) || !AppScopeCoverage.IsCovered(scope, exceptions))
                 {
                     (denials ??= []).Add(new(subscription.Name, observed, scope, DenialMessage(slug, subscription, observed, scope)));
                     continue;

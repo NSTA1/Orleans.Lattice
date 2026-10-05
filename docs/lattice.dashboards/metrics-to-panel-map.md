@@ -404,7 +404,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.wal.entries_shipped` | counter (`{entry}`) | `tree`, `peer`, `tenant` | WAL throughput; Log-tailing producer: leaf WAL append vs ship rate |
 | `orleans.lattice.wal.entries_trimmed` | counter (`{entry}`) | `tree`, `shard`, `tenant` | WAL throughput; WAL GC trim stops by reason, whose second target keeps only the `offset_floor` stops on shards trimming nothing |
 | `orleans.lattice.wal.compactions` | counter (`{compaction}`) | `tree`, `shard`, `trigger`, `tenant` | WAL compactions by trigger over range |
-| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter (`By`) | `tree`, `shard`, `tenant` | WAL bytes reclaimed by compaction over range |
+| `orleans.lattice.wal.compaction.reclaimed_bytes` | counter (`By`) | `tree`, `shard`, `trigger`, `tenant` | WAL bytes reclaimed by compaction over range |
 | `orleans.lattice.wal.compaction.eval.retained_bytes` | histogram (`By`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - bytes per shard |
 | `orleans.lattice.wal.compaction.eval.dead_bytes` | histogram (`By`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - bytes per shard |
 | `orleans.lattice.wal.compaction.eval.retained_entries` | histogram (`{entry}`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - entries per shard |

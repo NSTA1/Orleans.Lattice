@@ -2,7 +2,7 @@
 
 `IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes of a replication batch. It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.
 
-The seam covers two payload shapes. The **typed envelope** (`Encode` / `Decode`) is the versioned `ReplicationBatchEnvelope`, carried in [`ReplicationBatch.Payload`](transport.md) or `ReplicationBatch.Envelope`. The **framing layout** (`EncodeFraming` / `TryDecodeFraming`), carried in `ReplicationBatch.EncodedEnvelope`, is a fixed 32-byte `EncodedBatchHeader`, the length-prefixed tree name and origin cluster id, and then one length-prefixed, pre-encoded `WalRecord` segment per entry. The built-in shipper always ships the framing layout and leaves `Payload` empty; the gRPC receiver recognises a framing payload by its magic prefix and falls back to the typed decode for anything else.
+The seam covers these payload shapes. The **typed envelope** (`Encode` / `Decode`) is the versioned `ReplicationBatchEnvelope`, carried in [`ReplicationBatch.Payload`](transport.md) or `ReplicationBatch.Envelope`. The **framing layout** (`EncodeFraming` / `TryDecodeFraming`), carried in `ReplicationBatch.EncodedEnvelope`, is a fixed 32-byte `EncodedBatchHeader`, the length-prefixed tree name and origin cluster id, and then one length-prefixed, pre-encoded `WalRecord` segment per entry. The built-in shipper always ships the framing layout and leaves `Payload` empty; the gRPC receiver recognises a framing payload by its magic prefix and falls back to the typed decode for anything else.
 
 The default registration is a binary encoder that uses the Orleans serializer for the typed envelope and writes the framing layout itself, with optional tail compression. Hosts that need a different framing - JSON for HTTP-transport debuggability, a custom envelope for compatibility with an external pipeline, content-hash-prefixed framing for deduplication - replace the registration via standard DI.
 
@@ -92,7 +92,7 @@ The anti-entropy and auxiliary RPC DTOs serialize these fields:
 
 The fixed framing header is not Orleans-serialized. Its 32 bytes are: bytes `0..3` magic `OLRF` (`0x46524C4F` little-endian), `4..7` `WireVersion`, `8..15` `OriginClusterIdHash`, `16..19` `EntryCount`, `20..27` `BatchSequence`, and `28..31` a packed word containing low 16 bits `AtomicBatchSpanCount`, bits 16-23 `Mode`, and bits 24-31 `Compression`. `DictionaryId` is not part of the fixed header; when present, it is carried in the variable-length compressed tail for `ZstdDictionary` frames.
 
-`TryDecodeFraming` returns `false` rather than throwing when the payload is shorter than the fixed header or its magic prefix does not match, so a caller can fall back to `Decode`; it throws `NotSupportedException` for a framing wire version newer than `EncodedBatchHeader.CurrentWireVersion`, and `ArgumentException` for a negative, impossible, or truncated entry layout. The two version numbers are independent: `ReplicationBatchEnvelope.CurrentVersion` (currently `1`) versions the typed envelope only, while the framing header carries its own `EncodedBatchHeader.WireVersion` (`EncodedBatchHeader.CurrentWireVersion`, currently `5`) - the version that [wire-version capability negotiation](#wire-version-capability-negotiation) reasons about.
+`TryDecodeFraming` returns `false` rather than throwing when the payload is shorter than the fixed header or its magic prefix does not match, so a caller can fall back to `Decode`; it throws `NotSupportedException` for a framing wire version newer than `EncodedBatchHeader.CurrentWireVersion`, and `ArgumentException` for a negative, impossible, or truncated entry layout. The version numbers are independent: `ReplicationBatchEnvelope.CurrentVersion` (currently `1`) versions the typed envelope only, while the framing header carries its own `EncodedBatchHeader.WireVersion` (`EncodedBatchHeader.CurrentWireVersion`, currently `5`) - the version that [wire-version capability negotiation](#wire-version-capability-negotiation) reasons about.
 
 ## Why a versioned envelope
 
@@ -131,7 +131,7 @@ application/x-orleans-lattice-replog+binary
 
 The Orleans serializer is roughly 33% more compact than naive JSON for `byte[]` payloads (which is the common case for replication - every value committed through `ILattice.SetAsync` is a `byte[]`), and avoids JSON's base64 round-trip overhead. The encoder unit tests pin a regression floor on this with a "binary is smaller than `System.Text.Json.JsonSerializer.SerializeToUtf8Bytes`" assertion against a representative payload-heavy batch.
 
-The encoder also enforces four invariants on encode:
+The encoder also enforces these invariants on encode:
 
 - `writer` must be non-`null` (`ArgumentNullException` otherwise).
 - `TreeName` and `OriginClusterId` must be non-empty (`ArgumentException` otherwise).
@@ -140,7 +140,7 @@ The encoder also enforces four invariants on encode:
 
 The encode path appends bytes to the supplied writer via the standard `IBufferWriter<byte>` contract (`GetSpan` / `Advance`); it never resets, rewinds, or otherwise mutates bytes the caller already wrote. Callers that expect a single-batch buffer supply a fresh writer per call.
 
-And two on decode:
+And on decode:
 
 - An empty payload throws `ArgumentException`; a malformed payload throws `ArgumentException` wrapping the underlying serializer exception.
 - A `WireVersion > CurrentWireVersion` payload throws `NotSupportedException` with the offending version embedded in the message.
@@ -253,7 +253,7 @@ if (result.DowngradeActive)
 
 Down-stamping to version 4 is consequently exact when - and only when - the batch's merge mode is `LwwRegister` and the framing tail is uncompressed. A version-4 receiver reading the version-5 header's trailing packed 32-bit slot interprets bits 16-23 as part of its 24-bit `AtomicBatchSpanCount`; those bits are zero precisely when `Mode` is the `LwwRegister` default, so the header bytes are then fully version-4-compatible.
 
-The helper refuses (with `NotSupportedException`, the same fail-fast posture as a below-floor peer) to down-stamp the two genuinely un-down-encodable shapes:
+The helper refuses (with `NotSupportedException`, the same fail-fast posture as a below-floor peer) to down-stamp these genuinely un-down-encodable shapes:
 
 - **A CRDT-mode tree** - its per-entry merge dispatch depends on the hoisted header mode a pre-version-5 receiver cannot read, so down-stamping would silently mis-apply the entries.
 - **A compressed framing tail** - compression rides the header without a wire-version bump, so a pre-version-5 receiver is not guaranteed to carry the matching `ILatticeCompressor`. The encoder therefore refuses a compressed down-stamp; the shipper resolves this case by dropping compression for the down-stamped peer's batch (see the down-encodable matrix below) so a compressed last-writer-wins tree keeps replicating uncompressed rather than pausing.

@@ -27,7 +27,7 @@ else
 {
     <LtEmptyState Title="@(failure.Kind == AccessFailureKind.Denied ? "Not permitted" : "The group could not be read")">
         <ChildContent>@failure.Message</ChildContent>
-        <Actions><LtButton OnClick="LoadAsync">Try again</LtButton></Actions>
+        <Actions><LtButton OnClick="RetryAsync">Try again</LtButton></Actions>
     </LtEmptyState>
 }
 else if (_group is null || _members is null)

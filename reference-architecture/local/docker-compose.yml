@@ -229,15 +229,16 @@ services:
       # Dev bypass: plaintext h2c to the silo, no Entra sign-in.
       LATTICE_EXPLORER_INSECURE_DEV: "true"
       Entra__Enabled: "false"
-      # Dev bypass: seed bootstrap administrator credentials when explicitly enabled. With
-      # Entra off the console would otherwise connect ANONYMOUSLY, which the silo's
-      # state-visibility filter fail-closes (empty tree catalog, denied Access
-      # area). The host's DevBypassExplorerAuthMethod (registered only when Entra is
-      # off) forwards this username to the silo as `Bearer <username>`, which the
-      # silo trusts because it is a configured Auth__BootstrapAdministrators id - so
-      # the console is served as the admin, exactly like the MCP head. Must match
-      # the silo's bootstrap admin (and the MCP head's Mcp__DevSubjectId). The
-      # password is required by the sign-in seed but ignored by the dev bypass.
+      # Dev bypass sign-in. With Entra off the console would otherwise connect
+      # ANONYMOUSLY, which the silo's state-visibility filter fail-closes (empty
+      # tree catalog, denied Access area). The host's DevBypassExplorerAuthMethod
+      # (registered only when Entra is off) replaces the Basic sign-in: you sign in
+      # at the console's dialog as the bootstrap administrator, and it forwards that
+      # username to the silo as a bearer subject, which the silo trusts because it
+      # is a configured Auth__BootstrapAdministrators id - so the console is served
+      # as the admin, exactly like the MCP head. The two variables below are INERT:
+      # the web Explorer applies this credential seed only when a host opts in with
+      # LatticeExplorerWebOptions.AllowEnvironmentCredentialSeed, and this host does not.
       LATTICE_EXPLORER_USERNAME: "local-dev-admin"
       LATTICE_EXPLORER_PASSWORD: "local-dev-unused"
 

@@ -315,8 +315,9 @@ public partial class BPlusLeafGrainTests
 
         await LeafActivationHarness.ActivateAsync(grain2, CancellationToken.None);
 
-        // Resumed strictly past the durable offset, never from zero.
-        await coord2.Received().ReadSliceAsync(4L, 13L, Arg.Any<int>(), Arg.Any<CancellationToken>());
+        // Resumed strictly past the durable offset, never from zero. Head 13 is
+        // exclusive; the newest record is 12, the inclusive upper bound (#3489).
+        await coord2.Received().ReadSliceAsync(4L, 12L, Arg.Any<int>(), Arg.Any<CancellationToken>());
         await coord2.DidNotReceive().ReadSliceAsync(-1L, Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(12L));
         for (var i = 1; i <= 12; i++)

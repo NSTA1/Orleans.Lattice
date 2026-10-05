@@ -18,7 +18,8 @@ signing-key, and lifetime checks and only layers on the OIDC-specific concerns:
   `id_token_signing_alg_values_supported` otherwise; an empty set rejects every
   token instead of accepting any.
 - Standard OIDC claim conventions: subject from `sub`, groups from `groups`,
-  `roles`, and `role`, all configurable per issuer.
+  `roles`, and `role`, all configurable per issuer; unusable or reserved
+  subject ids resolve to anonymous.
 
 This package is an additive sibling to `Orleans.Lattice.Membership.Entra`.
 Neither depends on the other, and both can be registered together.

@@ -5,8 +5,9 @@ namespace Orleans.Lattice;
 /// that routes byte payloads through <see cref="ILatticeCompressor"/>.
 /// The replication batch framing layer carries this value in the
 /// fixed plaintext header so receivers can read the algorithm tag
-/// before allocating an inflate buffer; future layers (WAL segment
-/// compression, snapshot compression) will reuse the same enum so
+/// before allocating an inflate buffer; Azure Table WAL storage already
+/// reuses the same enum for stored row-payload compression, and future
+/// layers (for example snapshot compression) can do the same so
 /// host-side DI registrations are not duplicated.
 /// <para>
 /// The on-wire representation is a single <see cref="byte"/>. The
@@ -21,10 +22,11 @@ namespace Orleans.Lattice;
 ///       <c>0x01</c>, <see cref="ZstdDictionary"/> = <c>0x02</c>).
 ///       Only types declared in the core
 ///       <c>Orleans.Lattice</c> assembly may claim a tag in this
-///       range; host-defined compressors (including alternative
-///       implementations of a core algorithm) are rejected at
-///       registration time and must use the host-defined range
-///       below.
+///       range. Consumers that enforce the core-reserved partition
+///       (for example the replication batch encoder) reject
+///       host-defined compressors claiming it; host-defined compressors
+///       (including alternative implementations of a core algorithm)
+///       must use the host-defined range below.
 ///     </description>
 ///   </item>
 ///   <item>

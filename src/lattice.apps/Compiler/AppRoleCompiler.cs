@@ -154,7 +154,7 @@ public static class AppRoleCompiler
             for (var i = 0; i < scopes.Length; i++)
             {
                 var local = ResolveLocalScope(slug, role.Scopes[i], adopted, out var structural, out var crossApp);
-                if (!structural && (!AppTreeIds.IsGrantable(local.TreeId) || !IsCovered(local, exceptions)))
+                if (!structural && (!AppTreeIds.IsGrantable(local.TreeId) || !AppScopeCoverage.IsCovered(local, exceptions)))
                 {
                     // No exception can approve a non-data tree; the failed compilation needs no
                     // composed scope, and composing a reserved id could itself throw.
@@ -408,28 +408,6 @@ public static class AppRoleCompiler
         }
 
         return new(template.Kind, treeId, template.KeyOrPrefix);
-    }
-
-    private static bool IsCovered(LatticeScope requested, IReadOnlyList<LatticeScope> exceptions)
-    {
-        foreach (var exception in exceptions)
-        {
-            if (exception is null || !string.Equals(exception.TreeId, requested.TreeId, StringComparison.Ordinal))
-                continue;
-            var covered = exception.Kind switch
-            {
-                LatticeScopeKind.Tree => true,
-                LatticeScopeKind.Prefix => requested.Kind != LatticeScopeKind.Tree
-                    && requested.KeyOrPrefix!.StartsWith(exception.KeyOrPrefix!, StringComparison.Ordinal),
-                LatticeScopeKind.Key => requested.Kind == LatticeScopeKind.Key
-                    && string.Equals(requested.KeyOrPrefix, exception.KeyOrPrefix, StringComparison.Ordinal),
-                _ => false,
-            };
-            if (covered)
-                return true;
-        }
-
-        return false;
     }
 
     private readonly record struct CompiledRole(LatticeOperation Operations, LatticeScope[] Scopes);

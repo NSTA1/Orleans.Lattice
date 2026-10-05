@@ -52,6 +52,17 @@ internal static class LatticeOperationMapping
         };
     }
 
+    /// <summary>
+    /// Maps a launch to the handle a start verb returns. The start call created
+    /// the operation exactly when the launch carries a completion to observe; a
+    /// launch that joined an existing operation carries none.
+    /// </summary>
+    /// <typeparam name="TResult">The operation's result type.</typeparam>
+    /// <param name="launch">The launch the operation runner returned.</param>
+    /// <returns>The handle.</returns>
+    internal static LatticeOperationHandle ToHandle<TResult>(LatticeOperationLaunch<TResult> launch) =>
+        ToHandle(launch.Record, created: launch.Completion is not null);
+
     private static LatticeOperationScope ToScope(LatticeOperationRecord record) =>
         new() { TenantId = record.TenantId, TreeIds = record.TreeIds };
 }

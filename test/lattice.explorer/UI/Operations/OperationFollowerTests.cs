@@ -187,6 +187,78 @@ public sealed class OperationFollowerTests
         Assert.That(() => follower.StartAsync(null!, CancellationToken.None), Throws.ArgumentNullException);
     }
 
+    // A follow is replaced while its first read is still out (#4513): that read runs on the
+    // caller's token, not the poller's, so nothing cancels it. Whatever it answers belongs
+    // to the operation no longer followed and must not stand in for the current one's.
+    [Test]
+    public async Task A_late_answer_from_a_replaced_follow_does_not_overwrite_the_current_status()
+    {
+        var time = new ManualTimeProvider();
+        using var follower = new OperationFollower(time);
+        var earlier = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var replaced = follower.StartAsync(_ => earlier.Task, CancellationToken.None);
+        await follower.StartAsync(_ => Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Running)), CancellationToken.None);
+        var changes = 0;
+        follower.Changed += () => Interlocked.Increment(ref changes);
+
+        earlier.SetResult(OperationTestStatus.Of(LatticeOperationState.Succeeded));
+        await replaced;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Running));
+            Assert.That(follower.NotFound, Is.False);
+            Assert.That(follower.IsFollowing, Is.True, "the current operation is still followed");
+            Assert.That(time.ArmedTimers, Is.EqualTo(1), "only the current follow reads on");
+            Assert.That(Volatile.Read(ref changes), Is.Zero, "a superseded read raises no change");
+        });
+    }
+
+    [Test]
+    public async Task A_late_miss_or_fault_from_a_replaced_follow_does_not_touch_the_current_status()
+    {
+        var time = new ManualTimeProvider();
+        using var follower = new OperationFollower(time);
+        var missing = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failing = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var first = follower.StartAsync(_ => missing.Task, CancellationToken.None);
+        var second = follower.StartAsync(_ => failing.Task, CancellationToken.None);
+        await follower.StartAsync(_ => Task.FromResult<LatticeOperationStatus?>(OperationTestStatus.Of(LatticeOperationState.Running)), CancellationToken.None);
+
+        missing.SetResult(null);
+        failing.SetException(new TimeoutException("the cluster did not answer"));
+        await first;
+        await second;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.Status!.State, Is.EqualTo(LatticeOperationState.Running));
+            Assert.That(follower.NotFound, Is.False, "the replaced follow's miss is not the current operation's");
+            Assert.That(follower.LastError, Is.Null, "the replaced follow's fault is not the current operation's");
+        });
+    }
+
+    [Test]
+    public async Task A_read_that_answers_after_disposal_changes_nothing()
+    {
+        var follower = new OperationFollower(new ManualTimeProvider());
+        var late = new TaskCompletionSource<LatticeOperationStatus?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var start = follower.StartAsync(_ => late.Task, CancellationToken.None);
+        var changes = 0;
+        follower.Changed += () => Interlocked.Increment(ref changes);
+
+        follower.Dispose();
+        late.SetResult(OperationTestStatus.Of(LatticeOperationState.Running));
+        await start;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(follower.Status, Is.Null);
+            Assert.That(follower.IsFollowing, Is.False);
+            Assert.That(Volatile.Read(ref changes), Is.Zero);
+        });
+    }
+
     private static void ReadsReach(Func<int> reads, int expected) =>
         FollowBarriers.ReadsReach(reads, expected);
 

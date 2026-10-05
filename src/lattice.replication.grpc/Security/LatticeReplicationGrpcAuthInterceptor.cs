@@ -147,7 +147,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
             return;
         }
 
-        var presented = ReadHeader(context, LatticeReplicationGrpcMetadataNames.SecretHeader);
+        var presented = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SecretHeader);
         if (string.IsNullOrEmpty(presented))
         {
             _logger.LogWarning(
@@ -195,7 +195,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
     /// </remarks>
     private async Task EnforceOriginBindingAsync(ServerCallContext context, string presented)
     {
-        var origin = ReadHeader(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
+        var origin = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
         var bound = false;
 
         if (!string.IsNullOrWhiteSpace(origin))
@@ -237,17 +237,5 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         return fullMethodName.StartsWith(PushServicePrefix, StringComparison.Ordinal)
             || fullMethodName.StartsWith(SnapshotServicePrefix, StringComparison.Ordinal)
             || fullMethodName.StartsWith(SagaServicePrefix, StringComparison.Ordinal);
-    }
-
-    private static string? ReadHeader(ServerCallContext context, string key)
-    {
-        foreach (var entry in context.RequestHeaders)
-        {
-            if (string.Equals(entry.Key, key, StringComparison.OrdinalIgnoreCase))
-            {
-                return entry.Value;
-            }
-        }
-        return null;
     }
 }

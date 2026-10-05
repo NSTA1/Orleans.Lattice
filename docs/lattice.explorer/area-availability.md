@@ -1,6 +1,6 @@
 # Area availability
 
-The Explorer compiles in nine native areas, but you only see the ones you can
+The Explorer compiles in its native areas, but you only see the ones you can
 use. Each area decides for itself, on every navigation, whether you may see it.
 This page explains the three answers an area can give, why the Explorer fails
 closed, and what each area checks.
@@ -65,7 +65,7 @@ against a placeholder name that is never read or written.
 |---|---|---|
 | Data | The host has no state connection, or the catalogue read is refused. | The Explorer is disconnected ("Connect to a cluster to browse its data." or "Sign in to browse this cluster's data."), or the catalogue read failed for another reason. |
 | Apps | The caller has neither a workspace, catalogue access nor permission to list installed apps. | Never. |
-| Access | The auth control facade is not served, a signed-in caller is refused, or the probe faults. | An anonymous caller is refused: "Sign in to administer access on this cluster." |
+| Access | Neither cluster access administration nor delegated tenant access administration is served, or the caller is signed in and admitted by neither probe. | An anonymous caller is refused by the cluster-wide access probe: "Sign in to administer access on this cluster." |
 | Schema | The schema facade is not served, a signed-in caller holds no schema capability, or the probe faults. | An anonymous caller holds no schema capability: "Sign in to manage schema on this cluster." |
 | Tenancy | Tenancy is off, the tenant self-service facade is not served, a signed-in caller has no tenant standing, or the probe faults. | An anonymous caller has no tenant standing: "Sign in to see the tenants you administer." |
 | Replication | Neither replication facade is served, or the peer status read fails and there is no replication configuration with at least one tree. | Never. |

@@ -83,12 +83,11 @@ Read both now, before you do anything else.
 Orleans.Lattice's own overrides are working examples:
 [`backlog-worker.agent.md`](../../../.github/agents/backlog-worker.agent.md) and
 [`backlog-pm.agent.md`](../../../.github/agents/backlog-pm.agent.md). Each is
-roughly 90 to 135 lines, which is the whole point: that is the complete
-deviation from the base.
+small, which is the whole point: that is the complete deviation from the base.
 
 ## 4. Add the always-on memory rules
 
-Two protocol rules bind **every** agent that touches memory, not only backlog
+These protocol rules bind **every** agent that touches memory, not only backlog
 agents, because an agent auditing or tidying memory will not have read the
 protocol. Put them in a file that always applies (for Copilot, an
 `.instructions.md` with `applyTo: "**"`):

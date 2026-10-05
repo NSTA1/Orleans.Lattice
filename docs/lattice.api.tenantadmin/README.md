@@ -141,7 +141,7 @@ lifecycle, quota, and region-residency verbs and the
   burst allowance in one platform-operator action. Each ceiling (`MaxBytes`,
   `MaxKeys`, `MaxMemoryBytes`, `MaxTreeCount`, `MaxOpsPerSecond`) is `null` for
   unbounded on that dimension; passing `TenantQuotasDescriptor.Unbounded` lifts every
-  resource cap again. The four delegated access caps (`MaxGroups`,
+  resource cap again. The delegated access caps (`MaxGroups`,
   `MaxMembershipEdges`, `MaxMemberSubjects`, `MaxTenantRules`) are different: `null`
   means their defaults (500, 10000, 5000 and 1000), never unbounded, and
   `Unbounded` does not lift them. A bounded ceiling must be non-negative, and so must `BurstPercent`, the
@@ -518,7 +518,7 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
 | `ReservedTenantOperationException` | The tenant is the reserved `default` tenant, which has no tenant groups, members or tenant-tier rules. |
 | `TenantAccessConfinementException` | The request breaks a confinement rule. An `ArgumentException` carrying `TenantId` and `Rule`: `GroupNesting`, `ForeignTenantGroup`, `RuleTree`, `RuleOperations` or `ReservedRuleId`. |
 | `TenantLastAdminSubjectException` | Removing a group would remove the tenant's last admin-set entry. |
-| `LatticeQuotaExceededException` | An addition would exceed one of the four access caps. Its `Dimension` is `tenant-groups`, `tenant-membership-edges`, `tenant-member-subjects` or `tenant-rules`. |
+| `LatticeQuotaExceededException` | An addition would exceed one of the access caps. Its `Dimension` is `tenant-groups`, `tenant-membership-edges`, `tenant-member-subjects` or `tenant-rules`. |
 | `ArgumentException` | A malformed tenant id, local name or rule, or a named tenant group that does not exist. |
 
 ### `ILatticeTenantDirectoryAdmin`
@@ -641,8 +641,9 @@ public constructor, keeps the exact-id check.
 ### Transport bindings
 
 The [gRPC binding](../lattice.api.tenantadmin.grpc/README.md#delegated-tenant-access-rpcs)
-serves both facades as eighteen RPCs, and `LatticeTenantAdminApiGrpcClient` implements
-both interfaces directly. The MCP server exposes them as the
+serves both facades as delegated tenant access RPCs, and
+`LatticeTenantAdminApiGrpcClient` implements both interfaces directly. The MCP server
+exposes them as the
 [delegated tenant access tools](../lattice.api.mcp/tools.md#delegated-tenant-access-tools),
 behind `EnableTenantAdminControlTools`.
 
@@ -681,7 +682,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantStatusReport` | result | One tenant's read-only lifecycle status, authored `Quotas`, and per-region residency rows. |
 | `TenantStatusChangeResult` | result | Suspend/resume outcome; `Changed` reports whether state moved. |
 | `TenantDeletionResult` | result | Deletion outcome, including the count of trees cascaded. |
-| `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate; and the four delegated access caps (`null` = the default, never unbounded). |
+| `TenantQuotasDescriptor` | model | A tenant's per-dimension resource ceilings (`null` = unbounded) and `BurstPercent`; `Unbounded` sentinel and `IsUnbounded` predicate; and the delegated access caps (`null` = the default, never unbounded). |
 | `TenantQuotasUpdateResult` | result | The tenant id and the quotas now in effect after authoring. |
 | `TenantLifecycleStatus` | enum | `Active` / `Suspended`. |
 | `TenantRegionAuthorizationResult` | result | The resulting allowed region set. |
@@ -725,7 +726,7 @@ Results and exceptions live in `Orleans.Lattice.Api.Abstractions` under
 | `TenantRuleScopeKind` | enum | `Tree` / `Key` / `Prefix` / `TenantWide`. |
 | `TenantExplanation` | result | A layer-aware explanation of one decision on a tenant's tree. |
 | `TenantEffectivePermissions` | result | The rules of both layers that apply to a subject on a tenant's trees. |
-| `TenantAccessPosture` | result | Whether the feature is enabled, the caller's standing, and the four access caps with usage. |
+| `TenantAccessPosture` | result | Whether the feature is enabled, the caller's standing, and the access caps with usage. |
 | `TenantAccessAdministrationDisabledException` | exception | Delegated tenant access administration is off. |
 | `TenantAccessConfinementException` | exception | A delegated tenant access request broke a confinement rule; an `ArgumentException` carrying `Rule`. |
 | `TenantAccessConfinementRule` | enum | `GroupNesting` / `ForeignTenantGroup` / `RuleTree` / `RuleOperations` / `ReservedRuleId`. |

@@ -21,7 +21,8 @@ All host tests are grouped under the `Host/` folder here.
   validation, readiness-state transitions, health-check reporting, data-path
   guard, compaction constants, trusted-access constants, SQLite schema
   round-trip and incremental auto-vacuum, durability-selector factory registration,
-  startup-service seeding.
+  startup-service seeding, and the opt-in startup sweep that classifies and deletes
+  stranded leaf-snapshot rows in the SQLite grain store.
 - **Integration** (`[Category("Integration")]`): `RepoContextHostIntegrationTests`
   brings up the real host over a `TestServer` and asserts restart durability
   (WAL replay across a rebuilt host on the same data root), the health-probe
