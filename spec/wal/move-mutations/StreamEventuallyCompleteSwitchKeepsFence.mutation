@@ -13,9 +13,9 @@ DEADLOCK: off
 
 --- FIND
     /\ afence' = FALSE
-    /\ UNCHANGED <<next, inflight, tail, acked, cons, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, tail, acked, cons, crashes, coordCrashes>>
 --- REPLACE
 \* MUTATION: the flip leaves the source activation fenced.
     /\ afence' = TRUE
-    /\ UNCHANGED <<next, inflight, tail, acked, cons, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, tail, acked, cons, crashes, coordCrashes>>
 --- END

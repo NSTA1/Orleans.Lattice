@@ -11,10 +11,10 @@ PERTURBS: LeaseLapse
 
 --- FIND
     /\ lapsed' = TRUE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, afence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, afence, crashes, coordCrashes>>
 --- REPLACE
 \* MUTATION: the activation serves unfenced as soon as the lease lapses.
     /\ lapsed' = TRUE
     /\ afence' = FALSE
-    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, moves, crashes, coordCrashes>>
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, move, moveCopy, dfence, crashes, coordCrashes>>
 --- END

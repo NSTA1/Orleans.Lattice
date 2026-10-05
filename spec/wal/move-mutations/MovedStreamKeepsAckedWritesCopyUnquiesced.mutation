@@ -11,10 +11,10 @@ PERTURBS: MoveCopy
 
 --- FIND
     /\ inflight = {}
-    /\ dfence
-    /\ moveCopy' = durable
+    /\ dfence = m
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = durable]
 --- REPLACE
 \* MUTATION: no quiesce before the copy.
-    /\ dfence
-    /\ moveCopy' = durable
+    /\ dfence = m
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = durable]
 --- END
