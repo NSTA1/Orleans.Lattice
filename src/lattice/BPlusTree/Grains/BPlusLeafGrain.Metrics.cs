@@ -125,6 +125,10 @@ internal sealed partial class BPlusLeafGrain
                 $"Leaf {context.GrainId} was cleared; refusing the write from {caller}, which would re-create its row.");
         }
 
+        // The applied-terminal witness rides every state write (issue #4545), so
+        // it is atomic with the projection checkpoint the write may carry.
+        MaterialiseTerminalWitnessForPersist();
+
         if (_tracePersist)
         {
             var etag = state.Etag is null

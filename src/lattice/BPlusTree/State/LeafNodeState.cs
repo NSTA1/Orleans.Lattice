@@ -455,4 +455,15 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     /// </para>
     /// </summary>
     [Id(23)] public long SnapshotLoadHintBytes { get; set; }
+
+    /// <summary>
+    /// The keys each saga's terminal settled on this leaf (issue #4545): see
+    /// <see cref="AppliedTerminalWitness"/>. Refreshed from the activation's
+    /// index on every write of this state, so it is persisted atomically with
+    /// the projection checkpoint and covers every terminal that checkpoint has
+    /// scanned past; replay rebuilds the terminals after it. Carried to a split
+    /// sibling for the keys that move, and pruned once the registry no longer
+    /// reports the saga. <see langword="null"/> when no terminal is recorded.
+    /// </summary>
+    [Id(25)] public List<AppliedTerminalWitness>? AppliedTerminalWitnesses { get; set; }
 }

@@ -761,6 +761,12 @@ internal static class TypeAliases
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
 
+    /// <summary>
+    /// Alias for one leaf's durable record of the keys a saga's terminal settled
+    /// on it (issue #4545).
+    /// </summary>
+    internal const string AppliedTerminalWitness = "ol.atw";
+
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 

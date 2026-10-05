@@ -145,6 +145,49 @@ public sealed class UnstampedShadowMarkerIntegrationTests
     }
 
     /// <summary>
+    /// The reactivation half of the retention model's depth-13 trace: the saga's
+    /// terminal settles the key on its leaf, the source's post-saga row arrives
+    /// as a migration import, the leaf is deactivated - dropping its
+    /// activation-scoped memory of the terminal - and only then does the
+    /// delayed, unstamped marker arrive. The read must be served.
+    /// </summary>
+    [Test]
+    public async Task An_unstamped_marker_arriving_after_a_reactivation_does_not_hide_a_key_the_terminal_settled()
+    {
+        var (tree, shard, treeId) = await CreateSingleShardTreeAsync("unstamped-react");
+        const string participantKey = "k-a";
+        const string key = "k-z";
+        var sagaValue = Bytes("saga");
+
+        var txid = Guid.NewGuid();
+        await PrepareAsync(shard, txid, participantKey, Bytes("prepared"));
+        await TxRegistryRouting.GetRegistry(_cluster.Client, treeId, txid).MarkCommittedAsync(txid);
+        await shard.AppendTxTerminalAsync(
+            txid, committed: true, new Dictionary<string, byte[]> { [key] = sagaValue });
+        await shard.MergeManyAsync(
+            new Dictionary<string, LwwValue<byte[]>>
+            {
+                [key] = LwwValue<byte[]>.Create(
+                    sagaValue,
+                    new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.AddSeconds(1).Ticks, Counter = 0 }),
+            },
+            isCrossShardMigration: true);
+
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        Assert.That(leafId, Is.Not.Null);
+        var leaf = _cluster.Client.GetGrain<IBPlusLeafGrain>(leafId!.Value.GetGuidKey());
+        await leaf.ForceDeactivateAsync();
+
+        await shard.MarkSagaShadowAsync(txid, [key]);
+
+        var (failure, read, elapsed) = await TimedReadAsync(tree, key);
+        Assert.That(failure, Is.Null,
+            $"the read failed after {elapsed.TotalSeconds:N1} s with {failure?.GetType().Name}: the reactivated leaf "
+            + "forgot that the terminal settled the key and installed the delayed marker");
+        Assert.That(read, Is.EqualTo(sagaValue));
+    }
+
+    /// <summary>
     /// The control: while the saga has decided but not completed, a migrated
     /// row under an unstamped marker on a leaf that has not applied the
     /// terminal may still be the pre-saga value, so the gate must hold.
