@@ -168,6 +168,58 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         }
     }
 
+    /// <inheritdoc />
+    public Task<bool> IsReseedPendingAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        return Task.FromResult(state.State.ReseedAfterEpochs.ContainsKey(sourceClusterId));
+    }
+
+    /// <inheritdoc />
+    public async Task BootstrapForReseedAsync(string sourceClusterId, long reseedAfterEpoch, bool start, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (state.State.InProgress
+            && !string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            && state.State.Phase != LatticeBootstrapState.Failed)
+        {
+            throw new InvalidOperationException(
+                $"A bootstrap is already in progress for tree '{TreeName}' from source cluster "
+                + $"'{state.State.SourceClusterId}'; cannot re-seed from '{sourceClusterId}'.");
+        }
+
+        var requests = state.State.ReseedAfterEpochs;
+        var had = requests.TryGetValue(sourceClusterId, out var recorded);
+        if (!had || recorded < reseedAfterEpoch)
+        {
+            requests[sourceClusterId] = reseedAfterEpoch;
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                if (had)
+                {
+                    requests[sourceClusterId] = recorded;
+                }
+                else
+                {
+                    requests.Remove(sourceClusterId);
+                }
+
+                throw;
+            }
+        }
+
+        if (start)
+        {
+            await BootstrapAsync(sourceClusterId, cancellationToken).ConfigureAwait(true);
+        }
+    }
+
     /// <summary>
     /// Persists kickoff intent and returns whether the caller should
     /// register the keepalive reminder + phase timer. Returns
@@ -231,6 +283,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         var prevEntriesApplied = state.State.EntriesApplied;
         var prevRedriveAttempts = state.State.RedriveAttempts;
         var prevNextRedriveAt = state.State.NextRedriveAtUtcTicks;
+        var prevPoisonSettleOrigin = state.State.PoisonSettleOriginClusterId;
+        var prevPoisonSettleTxids = state.State.PoisonSettleTransactionIds;
 
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
@@ -246,6 +300,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         state.State.EntriesApplied = 0;
         state.State.RedriveAttempts = 0;
         state.State.NextRedriveAtUtcTicks = 0;
+        state.State.PoisonSettleOriginClusterId = "";
+        state.State.PoisonSettleTransactionIds = new List<Guid>();
         try
         {
             await state.WriteStateAsync().ConfigureAwait(true);
@@ -262,6 +318,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.EntriesApplied = prevEntriesApplied;
             state.State.RedriveAttempts = prevRedriveAttempts;
             state.State.NextRedriveAtUtcTicks = prevNextRedriveAt;
+            state.State.PoisonSettleOriginClusterId = prevPoisonSettleOrigin;
+            state.State.PoisonSettleTransactionIds = prevPoisonSettleTxids;
             throw;
         }
 
@@ -859,12 +917,41 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // dedup primitives.
         using var bootstrapScope = LatticeBootstrapApplyContext.BeginScope();
 
+        await CapturePoisonedSagasBeforeDrainAsync(treeName, sourceClusterId).ConfigureAwait(true);
+        HashSet<Guid>? shippedPrepared = null;
+
+        // The sagas the export carries, as prepared rows or decision rows: a
+        // re-seed clears every other pending bucket from the source (#4533).
+        // Collected on every drain, because a re-seed request can be recorded
+        // while the drain runs.
+        var carriedSagas = new HashSet<Guid>();
+        var decidedSagas = new Dictionary<Guid, bool>();
+
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
+            if (entry.TransactionId != Guid.Empty)
+            {
+                if (entry.SettledDecision is { } settled)
+                {
+                    decidedSagas[entry.TransactionId] = settled;
+                }
+                else if (entry.IsPrepared || entry.Value is null)
+                {
+                    // A prepared row, or a value-less row naming a saga the
+                    // source knows but cannot settle.
+                    carriedSagas.Add(entry.TransactionId);
+                }
+            }
+
             if (entry.IsDecision)
             {
                 await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
                 continue;
+            }
+
+            if (entry.IsPrepared && entry.TransactionId != Guid.Empty)
+            {
+                (shippedPrepared ??= new HashSet<Guid>()).Add(entry.TransactionId);
             }
 
             if (ToSnapshotWalRecord(entry, treeName, sourceClusterId, mergeMode) is not { } record)
@@ -922,6 +1009,37 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             }
         }
 
+        // Settle the poisoned sagas this re-seed was asked for (#4591). A saga
+        // the export shipped as prepared rows was still in flight at the source:
+        // its staged buckets (the receiver's own pre-poison ones and the export's)
+        // are kept, and its terminal - withheld while the poison held - arrives
+        // once the poison retires and commits it whole. Any other poisoned saga
+        // is decided (the export shipped its outcome as committed rows and its
+        // decision row) or gone from the source, so the buckets the receiver
+        // staged before the poison can never be drained and are discarded. Done
+        // before the phase moves on, so a crash re-runs the whole drain.
+        await DiscardSettledPoisonedSagasAsync(treeName, sourceClusterId, shippedPrepared).ConfigureAwait(true);
+
+        // A re-seed the export postdates: the sender has withheld every saga
+        // record since before the export, so every pending bucket from it is
+        // either carried by the export or stale. Still behind the read fence.
+        if (state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter) && snapshot.ExportEpoch > reseedAfter)
+        {
+            var cleared = await StalePendingClearer
+                .ClearAsync(_grainFactory, treeName, sourceClusterId, carriedSagas, decidedSagas, cancellationToken)
+                .ConfigureAwait(true);
+            if (cleared > 0)
+            {
+                Logger.LogWarning(
+                    "Re-seed of tree '{TreeName}' from '{SourceClusterId}' settled {Count} leftover pending saga(s): each decided "
+                    + "one by its decision, and each the source purged discarded, its committed values carried by the export.",
+                    treeName, sourceClusterId, cleared);
+            }
+
+            // Consumed; persisted with the phase transition below.
+            state.State.ReseedAfterEpochs.Remove(sourceClusterId);
+        }
+
         // Every snapshot entry is applied: the import is whole, so lift the read
         // fence before leaving the drain (issue #4526). Lifted before the phase
         // is persisted: a crash in between resumes the drain, which re-arms the
@@ -933,6 +1051,100 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         Logger.LogInformation(
             "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': ApplyingSnapshot -> IncrementalHandoff (LastAppliedHlc={LastAppliedHlc})",
             treeName, sourceClusterId, state.State.LastAppliedHlc);
+    }
+
+    private async Task CapturePoisonedSagasBeforeDrainAsync(string treeName, string sourceClusterId)
+    {
+        if (string.IsNullOrEmpty(sourceClusterId))
+        {
+            return;
+        }
+
+        if (!string.Equals(state.State.PoisonSettleOriginClusterId, sourceClusterId, StringComparison.Ordinal))
+        {
+            state.State.PoisonSettleOriginClusterId = "";
+            state.State.PoisonSettleTransactionIds = new List<Guid>();
+        }
+
+        if (state.State.PoisonSettleTransactionIds.Count == 0)
+        {
+            var poisoned = await _grainFactory.GetGrain<IReceiverSagaPoisonGrain>(treeName)
+                .GetPoisonedAsync(sourceClusterId)
+                .ConfigureAwait(true);
+            if (poisoned.Count == 0)
+            {
+                return;
+            }
+
+            state.State.PoisonSettleOriginClusterId = sourceClusterId;
+            state.State.PoisonSettleTransactionIds = poisoned.Distinct().ToList();
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+    }
+
+    private async Task DiscardSettledPoisonedSagasAsync(
+        string treeName,
+        string sourceClusterId,
+        HashSet<Guid>? shippedPrepared)
+    {
+        if (state.State.PoisonSettleTransactionIds.Count == 0
+            || !string.Equals(state.State.PoisonSettleOriginClusterId, sourceClusterId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        var settled = shippedPrepared is null
+            ? state.State.PoisonSettleTransactionIds
+            : state.State.PoisonSettleTransactionIds.Where(t => !shippedPrepared.Contains(t)).ToList();
+        await DiscardPendingTransactionsFromLeavesAsync(treeName, settled).ConfigureAwait(true);
+    }
+
+    private async Task DiscardPendingTransactionsFromLeavesAsync(
+        string treeName,
+        IReadOnlyCollection<Guid> transactionIds)
+    {
+        if (transactionIds.Count == 0)
+        {
+            return;
+        }
+
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                foreach (var transactionId in transactionIds)
+                {
+                    await leaf.DiscardPendingTransactionAsync(transactionId).ConfigureAwait(true);
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+    }
+
+    private async Task RetireSettledPoisonedSagasAsync(string treeName, string sourceClusterId)
+    {
+        if (state.State.PoisonSettleTransactionIds.Count == 0
+            || !string.Equals(state.State.PoisonSettleOriginClusterId, sourceClusterId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        await _grainFactory.GetGrain<IReceiverSagaPoisonGrain>(treeName)
+            .RetireAsync(sourceClusterId, state.State.PoisonSettleTransactionIds)
+            .ConfigureAwait(true);
+        state.State.PoisonSettleOriginClusterId = "";
+        state.State.PoisonSettleTransactionIds = new List<Guid>();
     }
 
     /// <summary>
@@ -1061,10 +1273,18 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             .DrainAsync()
             .ConfigureAwait(true);
 
+        await RetireSettledPoisonedSagasAsync(treeName, sourceClusterId).ConfigureAwait(true);
+
         state.State.Phase = LatticeBootstrapState.LiveIncremental;
         state.State.InProgress = false;
         // Record the completed full re-seed for the sender's ack echo (#4534).
-        if (state.State.SnapshotExportEpoch > 0 && !string.IsNullOrEmpty(state.State.SourceClusterId))
+        // Not while a re-seed request the drain did not consume is outstanding
+        // (recorded after the drain finished): the echo would release the
+        // sender's saga records over stale pending buckets (#4533). The sender's
+        // next request starts the bootstrap that consumes it.
+        if (state.State.SnapshotExportEpoch > 0
+            && !string.IsNullOrEmpty(state.State.SourceClusterId)
+            && !state.State.ReseedAfterEpochs.ContainsKey(state.State.SourceClusterId))
         {
             var source = state.State.SourceClusterId;
             if (!state.State.CompletedExportEpochs.TryGetValue(source, out var previous)

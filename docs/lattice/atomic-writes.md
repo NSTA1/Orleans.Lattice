@@ -418,6 +418,11 @@ write and the drain.
   shard's backstop keys, so a leaf that holds no bucket for a key - the
   sibling a leaf split moved the key's range to, say - applies the saga's
   value at `P` and never over a write acknowledged after the prepare.
+- An online resize's mirror forwards each prepare to the resized copy
+  carrying `P`, and every other write as the row it stored, at that row's
+  own stamp, so the resized copy never re-stamps a write on its own clock.
+  Its prepared-bucket sweep and the terminals it mirrors carry `P` too, so
+  the resized copy orders every write exactly as the source does.
 - A leaf split hands its new sibling the donor's clock, so the sibling
   stamps later writes above every prepare the donor minted.
 - The write-ahead log records whether a prepare's stamp is original, so
@@ -438,10 +443,11 @@ aborts, so a saga never commits without its stamps. The
 records each read-back that leaves the fast path (see
 [Metrics](metrics.md)).
 
-`P` is carried only to a shard of the copy whose clocks minted it. A
-terminal re-resolved to another copy, redelivered to a resized copy after
-the old one was purged, or mirrored by a shard root to a resize destination
-carries none.
+`P` is carried only to a shard of the copy whose clocks minted it, or to a
+resized copy its mirror keeps on the same clock lineage. A terminal the
+coordinator re-resolves to another copy, or redelivers to a resized copy
+after the old one was purged, carries none, and carries no committed-values
+backstop either.
 
 A prepare without that evidence is applied as before, at a fresh dominating
 stamp, with the migrated-row exception that lets a saga beat a pre-saga
@@ -449,12 +455,12 @@ value a split migrates in above the destination's clock. That covers:
 
 - a prepare written by a silo that predates this change, which keeps a
   rolling upgrade safe;
-- a prepare an online resize copies;
 - a CRDT-delta prepare, which folds into the key's current value at the
   terminal stamp rather than replacing it.
 
-A resize copy stamps its mirrored writes with its own clock, which does not
-order them against `P`.
+Before [#4522](https://github.com/NSTA1/Orleans.Lattice/issues/4522) the
+resize mirror forwarded each write as the operation itself, so the resized
+copy stamped it on its own clock, which does not order it against `P`.
 
 ### A later write the split imports is not dropped over the saga's value
 
@@ -656,7 +662,14 @@ the snapshot export. After a forget, the registry samples every
 partition's next sequence (at most once per half retention, up to 30 s)
 and purges the tombstone once every partition's oldest retained entry is
 at or past that sample. It fails closed: a failed read or a changed
-partition layout keeps the tombstone. On such a host
+partition layout keeps the tombstone. A replication shipper can also hold
+every purge on the tree through a per-tree purge hold: while any hold is
+outstanding no decision on the tree is purged. A shipper takes one before
+it takes its peer off the log for a re-seed, and keeps it until the
+replay that follows has passed its horizon, so a saga in flight at the
+re-seed's export keeps its decision while the replay may still read it
+([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A failed
+read of the holds holds too. On such a host
 `TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
 (masked at once) rather than dropping it.
 
@@ -737,11 +750,16 @@ matters most for the cross-cluster bootstrap export built from that
 snapshot - see
 [Snapshot Bootstrap](../lattice.replication/snapshot-bootstrap.md).
 
-The masked row remains readable to the one caller that legitimately
-needs it: the leaf's activation-time self-terminalisation sweep, which
-is finishing a prepare it already owns rather than disclosing an
-outcome to a caller, reads past the mask through a deliberately narrow
-registry bypass. Read paths never do.
+The masked row remains readable to the callers that finish a prepare
+rather than disclose an outcome to a reader, through a deliberately
+narrow registry bypass: the leaf's activation-time self-terminalisation
+sweep, a split's or a resize copy's prepared-bucket sweep, and a
+snapshot capture. A capture resolves a still-pending bucket against the
+decision the registry records, masked or not, because a capture is
+permanent: hiding the key would leave it absent from every restore while
+another key of the same committed batch, whose terminal already landed,
+is held post-saga ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)).
+Read paths never read past the mask.
 
 `TxStatus.Indeterminate` is additive by value, so a mixed-version
 cluster stays wire-compatible: a node that predates the case takes the

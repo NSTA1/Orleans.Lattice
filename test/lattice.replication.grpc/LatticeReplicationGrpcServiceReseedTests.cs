@@ -112,7 +112,52 @@ public class LatticeReplicationGrpcServiceReseedTests
         var ack = await CreateService(factory).Push(EmptyBox(), new TestServerCallContext(reseedAfter: 0));
 
         Assert.That(ack.Value.BootstrapEpoch, Is.Null);
-        await coordinator.Received(1).BootstrapAsync("remote", Arg.Any<CancellationToken>());
+        await coordinator.Received(1).BootstrapForReseedAsync("remote", 0, true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Push_of_a_saga_record_while_the_sender_awaits_a_reseed_is_refused_and_plain_records_apply()
+    {
+        // A saga record from a sender this receiver is re-seeding was pushed
+        // before the sender's re-seed marker; applying it after the drain's
+        // stale-bucket clear could stage a prepare nothing settles (#4533).
+        var (factory, coordinator) = Coordinator(completed: null);
+        coordinator.IsReseedPendingAsync("remote").Returns(Task.FromResult(true));
+        var saga = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries =
+                [
+                    new WalRecord
+                    {
+                        TreeId = "tree", Op = MutationKind.Set, Key = "k", Value = [1],
+                        IsPrepared = true, TransactionId = Guid.NewGuid(), AtomicBatchSize = 1, OriginClusterId = "remote",
+                    },
+                ],
+            },
+        };
+        var plain = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = "tree",
+                OriginClusterId = "remote",
+                Entries = [new WalRecord { TreeId = "tree", Op = MutationKind.Set, Key = "k", Value = [1], OriginClusterId = "remote" }],
+            },
+        };
+        var service = CreateService(factory);
+
+        var refused = await service.Push(saga, new TestServerCallContext(reseedAfter: null));
+        var applied = await service.Push(plain, new TestServerCallContext(reseedAfter: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused.Value.Accepted, Is.False, "the straggler saga record is refused");
+            Assert.That(applied.Value.Accepted, Is.True, "plain records keep applying");
+        });
     }
 
     [Test]

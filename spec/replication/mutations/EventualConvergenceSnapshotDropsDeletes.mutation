@@ -9,7 +9,6 @@ TARGET: EventualConvergence
 CLASS: Temporal
 SUMMARY: the snapshot omits tombstoned rows, so a delete behind the trim point never reaches a re-bootstrapped receiver
 PERTURBS: Bootstrap
-BOUNDS: MaxFaults = 0
 
 --- FIND
     /\ val' = [val EXCEPT ![BootTarget] = [k \in Keys |-> @[k] \cup val[BootSource][k]]]

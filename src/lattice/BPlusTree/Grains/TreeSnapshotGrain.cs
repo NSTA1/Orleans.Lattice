@@ -982,8 +982,12 @@ internal sealed class TreeSnapshotGrain(
             if (await source.GetLeftmostLeafIdAsync() is not { } firstLeaf) return;
 
             var target = grainFactory.GetGrain<IShardRootGrain>($"{destinationTreeId}/{shardIndex}");
+            // The resize mirror ships every write at the source copy's own stamps
+            // (issue #4522), so the destination is on the source's clock lineage
+            // and each swept prepare carries its original stamp.
             await PreparedBucketSweep.RunAsync(
-                grainFactory, decisionTreeId, firstLeaf, target, slots.ToArray(), virtualShardCount, shardProgress);
+                grainFactory, decisionTreeId, firstLeaf, target, slots.ToArray(), virtualShardCount, shardProgress,
+                carryOriginalStamps: true);
         }
     }
 

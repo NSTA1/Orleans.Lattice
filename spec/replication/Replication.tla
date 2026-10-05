@@ -93,10 +93,12 @@ VARIABLES
     wake,        \* wake[x]: a drain of x's buffer is pending
     dlq,         \* dlq[x]: x's dead-letter queue
     faults,      \* environment fault budget (the fairness ceiling)
-    booted       \* BootTarget has bootstrapped from BootSource
+    booted,      \* BootTarget has bootstrapped from BootSource
+    skipped,     \* BootSource's WAL positions BootEdge's cursor passed undelivered
+    requested    \* a re-bootstrap of BootTarget has been requested
 
 vars == <<authored, wal, cursor, val, hwm, pinned, cache, parking,
-          buf, wake, dlq, faults, booted>>
+          buf, wake, dlq, faults, booted, skipped, requested>>
 
 Range(s) == {s[i] : i \in 1..Len(s)}
 
@@ -166,6 +168,8 @@ TypeOK ==
     /\ dlq \in [Clusters -> SUBSET Writes]
     /\ faults \in 0..MaxFaults
     /\ booted \in BOOLEAN
+    /\ skipped \subseteq 1..MaxWrites
+    /\ requested \in BOOLEAN
 
 Init ==
     /\ authored = {}
@@ -181,6 +185,8 @@ Init ==
     /\ dlq = [x \in Clusters |-> {}]
     /\ faults = 0
     /\ booted = FALSE
+    /\ skipped = {}
+    /\ requested = FALSE
 
 (***************************************************************************)
 (* Author(o, k, h, d): cluster o commits a local write to k. Its HLC is    *)
@@ -202,7 +208,7 @@ Author(o, k, h, d) ==
        IN /\ authored' = authored \cup {w}
           /\ val' = [val EXCEPT ![o][k] = @ \cup {w}]
           /\ wal' = [wal EXCEPT ![o] = Append(@, w)]
-    /\ UNCHANGED <<cursor, hwm, pinned, cache, parking, buf, wake, dlq, faults, booted>>
+    /\ UNCHANGED <<cursor, hwm, pinned, cache, parking, buf, wake, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* ShipSkip(e): the shipper's merge consumes the next entry of its        *)
@@ -219,7 +225,7 @@ ShipSkip(e) ==
     IN /\ i <= Len(wal[s])
        /\ ~ShouldShip(s, wal[s][i])
        /\ cursor' = [cursor EXCEPT ![e] = i]
-       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, dlq, faults, booted>>
+       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Deliver(e, i): the shipper sends entry i of its source's WAL - any      *)
@@ -305,7 +311,7 @@ Deliver(e, i) ==
              /\ wake' = [wake EXCEPT ![x] = @ \/ (w.h > hwm[x][w.o] /\ buf[x] # {})]
              /\ cursor' = acked
              /\ UNCHANGED parking
-       /\ UNCHANGED <<authored, pinned, buf, dlq, faults, booted>>
+       /\ UNCHANGED <<authored, pinned, buf, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Park(x, p): the parked entry lands in the causal buffer and the call    *)
@@ -324,7 +330,7 @@ Park(x, p) ==
                  THEN cursor
                  ELSE [cursor EXCEPT ![p.t[1]] = p.t[2]]
     /\ wake' = [wake EXCEPT ![x] = TRUE]
-    /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, dlq, faults, booted>>
+    /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Drain(x): DrainBufferAsync, one released entry per step. While a drain  *)
@@ -344,14 +350,17 @@ Drain(x) ==
                /\ UNCHANGED wake
        ELSE /\ wake' = [wake EXCEPT ![x] = FALSE]
             /\ UNCHANGED <<buf, val, wal, hwm>>
-    /\ UNCHANGED <<authored, cursor, pinned, cache, parking, dlq, faults, booted>>
+    /\ UNCHANGED <<authored, cursor, pinned, cache, parking, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* ApplyFails(e, i): delivering entry i, the merge throws until         *)
 (* DeadLetterTrackingReplicationApplier exhausts its retry budget and      *)
 (* parks the entry on the dead-letter queue, acknowledging it. The         *)
 (* identity-cache reservation was rolled back by ReplicationApplier's      *)
-(* catch, so the cache is unchanged.                                       *)
+(* catch, so the cache is unchanged. On the park the decorator advances    *)
+(* the origin's high-water mark past the entry it never applied, as        *)
+(* DeadLetterTrackingReplicationApplier does; the mark is not a drop       *)
+(* threshold, so that only relaxes dependency checks (#4586).              *)
 (***************************************************************************)
 ApplyFails(e, i) ==
     LET x == e[2]
@@ -367,7 +376,9 @@ ApplyFails(e, i) ==
        /\ dlq' = [dlq EXCEPT ![x] = @ \cup {w}]
        /\ cursor' = IF i = cursor[e] + 1 THEN [cursor EXCEPT ![e] = i] ELSE cursor
        /\ faults' = faults + 1
-       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, booted>>
+       /\ hwm' = Advanced(x, w)
+       /\ wake' = [wake EXCEPT ![x] = @ \/ (w.h > hwm[x][w.o] /\ buf[x] # {})]
+       /\ UNCHANGED <<authored, wal, val, pinned, cache, parking, buf, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Evict(x, w): the bounded causal buffer displaces an entry to the        *)
@@ -383,7 +394,7 @@ Evict(x, w) ==
     /\ dlq' = [dlq EXCEPT ![x] = @ \cup {w}]
     /\ cache' = [cache EXCEPT ![x] = @ \ {Ident(w)}]
     /\ faults' = faults + 1
-    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, parking, wake, booted>>
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, parking, wake, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Replay(x, r): an operator replays a dead letter                         *)
@@ -416,7 +427,7 @@ Replay(x, r) ==
           /\ hwm' = Advanced(x, r)
           /\ wake' = [wake EXCEPT ![x] = @ \/ (r.h > hwm[x][r.o] /\ buf[x] # {})]
           /\ UNCHANGED <<parking>>
-    /\ UNCHANGED <<authored, cursor, pinned, buf, faults, booted>>
+    /\ UNCHANGED <<authored, cursor, pinned, buf, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Restart(x): the receiving silo restarts. Volatile state is lost: the    *)
@@ -435,7 +446,7 @@ Restart(x) ==
     /\ dlq' = [dlq EXCEPT ![x] = @ \cup {p.w : p \in {q \in parking[x] : q.replay}}]
     /\ wake' = [wake EXCEPT ![x] = buf[x] # {}]
     /\ faults' = faults + 1
-    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, buf, booted>>
+    /\ UNCHANGED <<authored, wal, cursor, val, hwm, pinned, buf, booted, skipped, requested>>
 
 (***************************************************************************)
 (* Bootstrap: BootTarget bootstraps from a snapshot of BootSource. The     *)
@@ -451,7 +462,9 @@ Restart(x) ==
 (* LatticeBootstrapCoordinatorGrain.PinAndCompleteAsync pins the handoff: *)
 (* the source's coordinate is sealed at the cut (the highest coordinate in *)
 (* the frontier and the highest row HLC applied) and the HWM vector takes  *)
-(* the result. Optional and at most once, so not fair.                     *)
+(* the result. At most once. An operator may request it at any time        *)
+(* (RequestSnapshotAsync), so it is not fair on its own; once a trim or  *)
+(* an encode dead letter has requested a re-seed, it is (see Trim).       *)
 (*                                                                         *)
 (* Production reads the frontier first and each row at its own instant     *)
 (* before the pin; here all of it happens at once. With no drop floor that *)
@@ -474,11 +487,9 @@ Restart(x) ==
 (* EventualConvergencePinSkipsDrain).                                      *)
 (*                                                                         *)
 (* The bootstrap may run in place over a copy BootTarget already holds,    *)
-(* and BootSource may have trimmed its log past BootTarget's cursor first: *)
-(* that is what makes LatticeFallOffLogDetector request it. The stream    *)
-(* then resumes at the trim point t, any position from the cursor to the   *)
-(* log's end, and the entries in between reach BootTarget only through the *)
-(* snapshot. So the snapshot must carry every row BootSource holds,        *)
+(* after BootSource trimmed its log past BootTarget's cursor (Trim), so the *)
+(* entries the trim skipped reach BootTarget only through the snapshot.    *)
+(* So the snapshot must carry every row BootSource holds,                  *)
 (* tombstones included. Until #4544 (the fix for #4504) production's      *)
 (* export skipped a tombstoned key, and the drain does not clear the       *)
 (* receiver's copy, so a delete behind the trim point was never delivered  *)
@@ -497,8 +508,91 @@ Bootstrap ==
        IN /\ hwm' = [hwm EXCEPT ![BootTarget] = [o \in Writers |-> Max({@[o], front[o]})]]
           /\ pinned' = [pinned EXCEPT ![BootTarget] = [o \in Writers |-> 0]]
     /\ wake' = [wake EXCEPT ![BootTarget] = @ \/ buf[BootTarget] # {}]
-    /\ \E t \in cursor[BootEdge]..Len(wal[BootSource]) : cursor' = [cursor EXCEPT ![BootEdge] = t]
-    /\ UNCHANGED <<authored, wal, parking, buf, dlq, faults>>
+    /\ UNCHANGED <<authored, wal, cursor, parking, buf, dlq, faults, skipped, requested>>
+
+(***************************************************************************)
+(* Trim: BootSource trims its WAL past BootTarget's cursor, under a        *)
+(* WalRetention policy that does not wait for a slow peer, so its shipper  *)
+(* resumes at the trim point and the entries it skipped are never sent.    *)
+(* The trim reaches the log's end: a later write still ships, so a shorter *)
+(* trim adds no behaviour. At most once, and before the bootstrap, and it  *)
+(* spends the fault budget, so it is the one environment fault of its      *)
+(* behaviour. The shipper detects the fall-off when it reads past its      *)
+(* cursor and the page starts above the sequence it asked for, and         *)
+(* requests a re-seed: it persists the export epoch, withholds saga        *)
+(* records and carries the request on every push, and the receiver runs a  *)
+(* full bootstrap from an export opened after that epoch (since #4599, the *)
+(* fix for #4587). The model makes the request at the trim, because the    *)
+(* cursor cannot pass the trim point without the read that detects it.     *)
+(* Before #4599 the only probe read the receiver's own WAL and never saw a *)
+(* source trim (EventualConvergenceTrimNeverRebootstraps).                 *)
+(***************************************************************************)
+Trim ==
+    /\ faults < MaxFaults
+    /\ ~booted
+    /\ cursor[BootEdge] < Len(wal[BootSource])
+    /\ cursor' = [cursor EXCEPT ![BootEdge] = Len(wal[BootSource])]
+    /\ skipped' = (cursor[BootEdge] + 1)..Len(wal[BootSource])
+    /\ requested' = TRUE
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, dlq, booted>>
+
+(***************************************************************************)
+(* ShipDeadLetter: BootSource's shipper cannot encode the batch at the     *)
+(* head of BootEdge's line, parks it on BootSource's own dead-letter queue *)
+(* and advances past it, so the entry is never sent. A replay on the       *)
+(* source is an own-origin no-op, so the source's queue is not modelled.   *)
+(* The design treats the skip as a gap and requests a re-seed, as a trim   *)
+(* does; production requests nothing, so the peer never receives the write *)
+(* (#4614, mutation EventualConvergenceShipDeadLetterNeverReseeds). At     *)
+(* most once and before the bootstrap: it spends the fault budget, as Trim *)
+(* does.                                                                   *)
+(***************************************************************************)
+ShipDeadLetter ==
+    LET i == cursor[BootEdge] + 1
+    IN /\ faults < MaxFaults
+       /\ ~booted
+       /\ i <= Len(wal[BootSource])
+       /\ ShouldShip(BootSource, wal[BootSource][i])
+       /\ cursor' = [cursor EXCEPT ![BootEdge] = i]
+       /\ skipped' = skipped \cup {i}
+       /\ requested' = TRUE
+       /\ faults' = faults + 1
+       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, dlq, booted>>
+
+(***************************************************************************)
+(* Elide(e, i): content-hash payload elision, the opt-in alternative to    *)
+(* Deliver. Before shipping, the sender exchanges a manifest and the       *)
+(* receiver reports the entries it already holds; an elided entry is not   *)
+(* sent and its acknowledgement moves the cursor. Production also advances *)
+(* the receiver's high-water mark, which is not a drop threshold, so that  *)
+(* only relaxes dependency checks (#4586) and is left out to keep the      *)
+(* instance small. Only a last-writer-wins Set is elision-eligible:        *)
+(* ReplicationApplier.RecordAppliedContentForIndex records no CRDT-mode    *)
+(* write. Since #4602 (the fix for #4585) the receiver's index records the *)
+(* exact write it merged (content hash, origin, source HLC), and the       *)
+(* exchange elides an entry only when that write is recorded and a leaf    *)
+(* read shows the key at that version or newer, with the same bytes at an  *)
+(* equal version, which under last-writer-wins is Subsumed. Before #4602   *)
+(* it elided on the content hash alone, recorded even for a merge that     *)
+(* lost (DedupNeverDropsNewElidesByContent). Not fair: delivery is the     *)
+(* fair path. Elision is decided for the batch at the head of the line,    *)
+(* and only at the receive-only cluster, which keeps the instance small.   *)
+(***************************************************************************)
+Elide(e, i) ==
+    LET s == e[1]
+        x == e[2]
+        w == wal[s][i]
+    IN /\ x = FaultSite
+       /\ i = cursor[e] + 1
+       /\ i <= Len(wal[s])
+       /\ ShouldShip(s, w)
+       /\ w.o # x
+       /\ ~InFlight(x, w)
+       /\ Mode(w.k) = "lww"
+       /\ Subsumed(x, w)
+       /\ cursor' = [cursor EXCEPT ![e] = i]
+       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, dlq, faults, booted, skipped, requested>>
 
 (***************************************************************************)
 (* A fully quiesced state has an explicit stuttering successor so natural  *)
@@ -521,6 +615,9 @@ Next ==
     \/ \E x \in Clusters : \E w \in buf[x] : Evict(x, w)
     \/ \E x \in Clusters : \E r \in dlq[x] : Replay(x, r)
     \/ \E x \in Clusters : Restart(x)
+    \/ Trim
+    \/ ShipDeadLetter
+    \/ \E e \in Peers, i \in 1..MaxWrites : Elide(e, i)
     \/ Bootstrap
     \/ Stutter
 
@@ -529,10 +626,10 @@ Next ==
 (* filtered entry is skipped; every entry beyond a cursor is eventually    *)
 (* delivered, per (edge, partition, index) so no entry starves another;    *)
 (* parks complete; a pending drain runs; an  *)
-(* operator eventually replays a dead letter; a started bootstrap          *)
-(* completes. Authoring, faults and starting a bootstrap are environment   *)
-(* events and are not fair: every safety property must hold whether or    *)
-(* not they happen.                                                        *)
+(* operator eventually replays a dead letter; a requested re-bootstrap     *)
+(* runs. Authoring, faults, trims, elision and an operator's bootstrap are *)
+(* environment events and are not fair: every safety property must hold    *)
+(* whether or not they happen.                                             *)
 (***************************************************************************)
 Fairness ==
     /\ \A e \in Peers : WF_vars(ShipSkip(e))
@@ -540,6 +637,7 @@ Fairness ==
     /\ \A x \in Clusters : WF_vars(\E p \in parking[x] : Park(x, p))
     /\ \A x \in Clusters : WF_vars(Drain(x))
     /\ \A x \in Clusters : WF_vars(\E r \in dlq[x] : Replay(x, r))
+    /\ WF_vars(requested /\ Bootstrap)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -563,14 +661,18 @@ NoRelay ==
 NoReflection == \A x \in Clusters : \A id \in cache[x] : id[1] # x
 
 (* CursorNeverSkipsUnshipped: every ship-worthy entry at or below a       *)
-(* shipper's acknowledged cursor has been absorbed by the destination.    *)
+(* shipper's acknowledged cursor has been absorbed by the destination,    *)
+(* except an entry a trim or an encode dead letter skipped, which is owed *)
+(* by the re-seed it requested until that runs.                           *)
 CursorNeverSkipsUnshipped ==
     \A e \in Peers :
         \A i \in 1..cursor[e] :
-            ShouldShip(e[1], wal[e[1]][i]) => Absorbed(e[2], wal[e[1]][i])
+            ShouldShip(e[1], wal[e[1]][i]) =>
+                (Absorbed(e[2], wal[e[1]][i]) \/ (e = BootEdge /\ i \in skipped /\ ~booted))
 
 (* DedupNeverDropsNew: a receiver drops an entry as a duplicate - by the  *)
-(* pinned floor or the identity cache - only if, once dropped, it is still *)
+(* pinned floor, the identity cache or elision - only if, once dropped,  *)
+(* it is still                                                             *)
 (* absorbed. A drop is a pipeline step that leaves the receiver's replica, *)
 (* its identity cache and its parking untouched for a foreign entry. The   *)
 (* #1060 class.                                                            *)
@@ -581,7 +683,9 @@ DedupNeverDropsNew ==
              (Deliver(e, i) /\ DropStep(e[2], wal[e[1]][i]))
                  => Absorbed(e[2], wal[e[1]][i])'
        /\ \A x \in Clusters, r \in Writes :
-             (Replay(x, r) /\ DropStep(x, r)) => Absorbed(x, r)']_vars
+             (Replay(x, r) /\ DropStep(x, r)) => Absorbed(x, r)'
+       /\ \A e \in Peers, i \in 1..MaxWrites :
+             Elide(e, i) => Absorbed(e[2], wal[e[1]][i])']_vars
 
 (* BootstrapHandoffLosesNothing: once the handoff is pinned, every write  *)
 (* BootTarget did not author is either absorbed there or still on its     *)

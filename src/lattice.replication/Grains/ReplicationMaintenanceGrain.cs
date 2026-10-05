@@ -208,6 +208,7 @@ internal sealed class ReplicationMaintenanceGrain(
             var prevFallOffTicks = state.State.LastFallOffCheckTicks;
             try
             {
+                await RetryReceiverSagaPoisonReseedsAsync().ConfigureAwait(true);
                 await ProbeFallOffAsync().ConfigureAwait(true);
                 state.State.LastFallOffCheckTicks = nowTicks;
                 await state.WriteStateAsync().ConfigureAwait(true);
@@ -221,6 +222,24 @@ internal sealed class ReplicationMaintenanceGrain(
                     "Fall-off-log probe pass failed for {Context}; will retry on next phase tick",
                     LogContext);
             }
+        }
+    }
+
+    private async Task RetryReceiverSagaPoisonReseedsAsync()
+    {
+        var owed = await _grainFactory.GetGrain<IReceiverSagaPoisonGrain>(TreeName)
+            .GetReseedOwedOriginsAsync()
+            .ConfigureAwait(true);
+        foreach (var origin in owed)
+        {
+            await ReceiverSagaPoisonReseed.TryStartOrMarkOwedAsync(
+                    _grainFactory,
+                    _optionsMonitor,
+                    TreeName,
+                    origin,
+                    Logger,
+                    CancellationToken.None)
+                .ConfigureAwait(true);
         }
     }
 

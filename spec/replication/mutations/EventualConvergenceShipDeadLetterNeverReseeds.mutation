@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence. Reproduces current production (#4614): a
+# batch the shipper cannot encode is parked on the source's own dead-letter
+# queue and the cursor advances past it. A replay there is an own-origin no-op,
+# and nothing requests a re-seed, so the peer never receives the write.
+MODULE: EventualConvergenceShipDeadLetterNeverReseeds
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: an encode dead letter skips the entry and requests no re-seed, so the peer never receives it
+PERTURBS: ShipDeadLetter
+
+--- FIND
+       /\ skipped' = skipped \cup {i}
+       /\ requested' = TRUE
+--- REPLACE
+       /\ skipped' = skipped \cup {i}
+\* MUTATION: no re-seed is requested.
+       /\ requested' = requested
+--- END

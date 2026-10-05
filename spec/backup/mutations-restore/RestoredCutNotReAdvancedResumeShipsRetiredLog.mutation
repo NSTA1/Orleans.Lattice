@@ -13,9 +13,9 @@ SUMMARY: shipping resumes from the retired copy's log when the rebind push was l
 PERTURBS: Ship
 
 --- FIND
-    /\ recvOn[Peer(c)]
+    /\ seen[Peer(c)].open
     /\ bound[c] = alias[c]
 --- REPLACE
-    /\ recvOn[Peer(c)]
+    /\ seen[Peer(c)].open
     \* MUTATION: no re-resolve before shipping.
 --- END
