@@ -23,14 +23,25 @@ public sealed class WalFallOffCoreTests
     }
 
     [Test]
-    public void A_checkpoint_at_or_below_zero_is_never_reported_lost()
+    public void The_nothing_read_sentinel_is_never_reported_lost()
+    {
+        Assert.That(WalFallOffCore.IsPrefixLost(checkpoint: -1, tail: 100), Is.False,
+            "-1 is the nothing-read sentinel");
+    }
+
+    /// <summary>
+    /// Issue #4433 (review finding F17): a checkpoint of 0 is a real read position,
+    /// because every caller resolves the unassigned scalar 0 to -1 first (#2703).
+    /// </summary>
+    [Test]
+    public void A_zero_checkpoint_still_needs_offset_one_issue_4433()
     {
         Assert.Multiple(() =>
         {
-            Assert.That(WalFallOffCore.IsPrefixLost(checkpoint: -1, tail: 100), Is.False,
-                "-1 is the nothing-read sentinel");
-            Assert.That(WalFallOffCore.IsPrefixLost(checkpoint: 0, tail: 100), Is.False,
-                "neither site has ever fired at a zero checkpoint");
+            Assert.That(WalFallOffCore.IsPrefixLost(checkpoint: 0, tail: 1), Is.False,
+                "only the already-read offset 0 was trimmed");
+            Assert.That(WalFallOffCore.IsPrefixLost(checkpoint: 0, tail: 2), Is.True,
+                "offset 1, the first one still needed, was trimmed");
         });
     }
 }

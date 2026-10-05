@@ -32,21 +32,24 @@ internal static class ReplicationReseedResponder
         {
             var coordinator = grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(treeName);
             var completed = await coordinator.GetCompletedExportEpochAsync(sourceClusterId).ConfigureAwait(false);
-            if ((completed ?? 0) > reseedAfterEpoch || !autoBootstrap)
+            if ((completed ?? 0) > reseedAfterEpoch)
             {
                 return completed;
             }
 
             var status = await coordinator.GetStatusAsync().ConfigureAwait(false);
-            if (status.SourceClusterId is null)
+            if (status.SourceClusterId is null && autoBootstrap)
             {
                 logger.LogWarning(
                     "Tree '{TreeName}': sender '{Source}' lost records to a WAL trim before shipping them and withholds saga "
                     + "records until this receiver re-seeds past export epoch {Epoch}; starting a bootstrap.",
                     treeName, sourceClusterId, reseedAfterEpoch);
-                _ = StartBootstrapAsync(coordinator, treeName, sourceClusterId, logger);
             }
 
+            // Records the request even when no bootstrap starts here (one already
+            // running from the sender, or automatic bootstrap off), so the drain
+            // that serves it clears the stale pending buckets (#4533).
+            _ = StartBootstrapAsync(coordinator, treeName, sourceClusterId, reseedAfterEpoch, autoBootstrap, logger);
             return completed;
         }
         catch (Exception ex)
@@ -58,12 +61,60 @@ internal static class ReplicationReseedResponder
         }
     }
 
+    /// <summary>
+    /// <see langword="true"/> when <paramref name="entries"/> carries a saga
+    /// record and <paramref name="sourceClusterId"/> has a re-seed request this
+    /// receiver has not yet drained and cleared past (issue #4533): such a
+    /// record was pushed before the sender's re-seed marker, and applying it
+    /// after the stale-bucket clear could stage a purged saga's prepare that
+    /// nothing settles. The caller refuses the batch with a not-accepted ack.
+    /// A failed lookup refuses too (fail closed).
+    /// </summary>
+    public static async Task<bool> RefusesStragglerAsync(
+        IGrainFactory grainFactory,
+        string treeName,
+        string sourceClusterId,
+        IReadOnlyList<WalRecord> entries,
+        ILogger logger)
+    {
+        var carriesSaga = false;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            if (entry.IsPrepared || entry.Op is MutationKind.TxCommit or MutationKind.TxAbort)
+            {
+                carriesSaga = true;
+                break;
+            }
+        }
+
+        if (!carriesSaga)
+        {
+            return false;
+        }
+
+        try
+        {
+            return await grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(treeName)
+                .IsReseedPendingAsync(sourceClusterId)
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex,
+                "Tree '{TreeName}': could not tell whether sender '{Source}' awaits a re-seed; its saga records are refused "
+                + "until it can.",
+                treeName, sourceClusterId);
+            return true;
+        }
+    }
+
     private static async Task StartBootstrapAsync(
-        ILatticeBootstrapCoordinatorGrain coordinator, string treeName, string sourceClusterId, ILogger logger)
+        ILatticeBootstrapCoordinatorGrain coordinator, string treeName, string sourceClusterId, long reseedAfterEpoch, bool start, ILogger logger)
     {
         try
         {
-            await coordinator.BootstrapAsync(sourceClusterId).ConfigureAwait(false);
+            await coordinator.BootstrapForReseedAsync(sourceClusterId, reseedAfterEpoch, start).ConfigureAwait(false);
         }
         catch (Exception ex)
         {

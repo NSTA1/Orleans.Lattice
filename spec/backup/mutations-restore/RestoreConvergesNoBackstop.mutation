@@ -6,7 +6,6 @@ TARGET: RestoreConverges
 CLASS: Temporal
 SUMMARY: the shipper never re-resolves a source whose push was lost
 PERTURBS: Rebind
-DEADLOCK: off
 
 --- FIND
     /\ bound[c] # alias[c]

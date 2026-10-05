@@ -66,6 +66,7 @@ public partial class PublicReplicationApiContractTests
             Assert.That(defaults.WalMaxBatchBytes, Is.EqualTo(LatticeReplicationOptions.DefaultWalMaxBatchBytes));
             Assert.That(defaults.WalMaxPendingBatches, Is.EqualTo(LatticeReplicationOptions.DefaultWalMaxPendingBatches));
             Assert.That(defaults.MaxApplyRetries, Is.EqualTo(LatticeReplicationOptions.DefaultMaxApplyRetries));
+            Assert.That(defaults.SagaDeferralTimeout, Is.EqualTo(LatticeReplicationOptions.DefaultSagaDeferralTimeout));
             Assert.That(defaults.DeadLetterQueueCapacity, Is.EqualTo(LatticeReplicationOptions.DefaultDeadLetterQueueCapacity));
             Assert.That(defaults.CausalBufferMaxEntries, Is.EqualTo(LatticeReplicationOptions.DefaultCausalBufferMaxEntries));
             Assert.That(defaults.CausalBufferMaxBytes, Is.EqualTo(LatticeReplicationOptions.DefaultCausalBufferMaxBytes));
@@ -109,6 +110,7 @@ public partial class PublicReplicationApiContractTests
             Assert.That(LatticeReplicationOptions.DefaultWalMaxBatchBytes, Is.EqualTo(4L * 1024L * 1024L));
             Assert.That(LatticeReplicationOptions.DefaultWalMaxPendingBatches, Is.EqualTo(4));
             Assert.That(LatticeReplicationOptions.DefaultMaxApplyRetries, Is.EqualTo(5));
+            Assert.That(LatticeReplicationOptions.DefaultSagaDeferralTimeout, Is.EqualTo(TimeSpan.FromMinutes(15)));
             Assert.That(LatticeReplicationOptions.DefaultDeadLetterQueueCapacity, Is.EqualTo(1000));
             Assert.That(LatticeReplicationOptions.DefaultCausalBufferMaxEntries, Is.EqualTo(1024));
             Assert.That(LatticeReplicationOptions.DefaultCausalBufferMaxBytes, Is.EqualTo(16L * 1024L * 1024L));

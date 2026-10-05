@@ -20,7 +20,7 @@ PERTURBS: ApplyFails
 --- END
 
 --- FIND
-       /\ UNCHANGED <<authored, wal, val, hwm, pinned, cache, parking, buf, wake, booted>>
+       /\ UNCHANGED <<authored, wal, val, pinned, cache, parking, buf, booted, skipped, requested>>
 --- REPLACE
-       /\ UNCHANGED <<authored, wal, val, hwm, pinned, parking, buf, wake, booted>>
+       /\ UNCHANGED <<authored, wal, val, pinned, parking, buf, booted, skipped, requested>>
 --- END

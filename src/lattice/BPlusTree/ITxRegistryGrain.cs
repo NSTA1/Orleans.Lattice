@@ -369,6 +369,14 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// entry so the persisted footprint stays bounded by in-flight +
     /// recently-completed sagas.
     /// </para>
+    /// <para>
+    /// A forwarded prepare's registration (one carrying the forwarded-prepare
+    /// marker for this registry's tree, for a saga this cluster authored) joins
+    /// an existing row but never creates one (issue #4632): the saga's
+    /// coordinator holds the row from before its first prepare until
+    /// <see cref="ForgetAsync"/>, so an absent row means the saga was forgotten,
+    /// and a late forward must not make it read as live again.
+    /// </para>
     /// </summary>
     [AlwaysInterleave]
     Task RegisterParticipantAsync(Guid txid, int shardIndex);

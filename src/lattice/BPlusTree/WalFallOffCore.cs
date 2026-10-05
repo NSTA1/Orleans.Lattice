@@ -11,9 +11,12 @@ namespace Orleans.Lattice.BPlusTree;
 /// The boundary is <c>tail &gt; checkpoint + 1</c>, not <c>tail &gt; checkpoint</c>:
 /// the checkpoint is the last offset already read, so the first offset still
 /// needed is <c>checkpoint + 1</c>, and the coverage-gated GC routinely trims the
-/// checkpoint entry itself. A checkpoint of <c>0</c> or below is never reported
-/// as lost: <c>-1</c> is the "nothing read" sentinel, and the guard has never
-/// fired at <c>0</c>.
+/// checkpoint entry itself. A checkpoint of <c>-1</c>, the "nothing read"
+/// sentinel, is never reported as lost. A checkpoint of <c>0</c> is a real read
+/// position (issue #4433): every caller reads it through
+/// <c>BPlusLeafGrain.GetPersistedCheckpointForPartition</c>, which reports an
+/// unassigned scalar <c>0</c> as <c>-1</c> (issue #2703), so a <c>0</c> that
+/// reaches here was durably recorded and offset <c>1</c> is still needed.
 /// </para>
 /// <para>
 /// What this predicate proves is bounded by the checkpoint its caller passes. It
@@ -33,5 +36,5 @@ internal static class WalFallOffCore
     /// <param name="tail">The oldest offset the WAL can still return.</param>
     /// <returns><see langword="true"/> when the first needed offset has been trimmed.</returns>
     public static bool IsPrefixLost(long checkpoint, long tail) =>
-        checkpoint > 0 && tail > checkpoint + 1;
+        checkpoint >= 0 && tail > checkpoint + 1;
 }

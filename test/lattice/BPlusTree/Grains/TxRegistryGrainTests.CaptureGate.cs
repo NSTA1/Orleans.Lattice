@@ -113,6 +113,38 @@ public partial class TxRegistryGrainTests
     }
 
     [Test]
+    public async Task Gate_captures_an_expired_but_stored_tombstone_at_its_recorded_verdict()
+    {
+        // Issue #4619: a live read reports an expired tombstone Indeterminate so
+        // the reader hides the key until the leaf settles it. A capture is
+        // permanent, and the sweeps settle such a bucket from the same stored
+        // verdict, so the capture must carry that verdict: hiding the key would
+        // leave a committed batch's still-pending key absent from every restore.
+        var clock = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        var retention = TimeSpan.FromSeconds(30);
+        var (grain, _) = CreateGrain(retention: retention, timeProvider: clock);
+        var committed = Guid.NewGuid();
+        var aborted = Guid.NewGuid();
+        await grain.MarkCommittedAsync(committed);
+        await grain.MarkAbortedAsync(aborted);
+        await grain.ForgetAsync(committed);
+        await grain.ForgetAsync(aborted);
+        clock.Advance(retention + TimeSpan.FromSeconds(1));
+        Assert.That(await grain.GetStatusAsync(committed), Is.EqualTo(TxStatus.Indeterminate),
+            "PRECONDITION: the tombstone has expired but its row is still stored");
+        var token = Guid.NewGuid();
+        await grain.AcquireCaptureGateAsync(token, TxRegistryCaptureGateMode.Gate, GateLease);
+
+        var statuses = await grain.GetCaptureGateStatusManyAsync(token, [committed, aborted]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(statuses[committed], Is.EqualTo(TxStatus.Committed));
+            Assert.That(statuses[aborted], Is.EqualTo(TxStatus.Aborted));
+        });
+    }
+
+    [Test]
     public async Task Gate_remembers_only_the_txids_its_status_lookups_answered_undecided()
     {
         var (grain, _) = CreateGrain();

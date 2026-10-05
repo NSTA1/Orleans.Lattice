@@ -36,7 +36,14 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
     /// parked is a no-op. Returns the number of entries still parked.
     /// </summary>
     /// <param name="entry">The record to park.</param>
-    Task<int> ParkAsync(WalRecord entry);
+    /// <param name="admissionEpoch">
+    /// The tree's receive-fence epoch, read uncached while the fence was not
+    /// paused (issue #4593). The drain stamps the entry's apply with it, so a
+    /// restored copy refuses - and the drain then discards - an entry parked
+    /// before its restore paused receiving. A re-park of an already parked entry
+    /// keeps the epoch it was first parked under.
+    /// </param>
+    Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0);
 
     /// <summary>
     /// Applies, in FIFO order and to a fixed point, every parked entry whose

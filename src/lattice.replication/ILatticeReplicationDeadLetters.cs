@@ -51,4 +51,20 @@ public interface ILatticeReplicationDeadLetters
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator escape hatch for a permanently wedged receiver-side
+    /// saga. Records receiver poison for <paramref name="transactionId"/> on
+    /// <paramref name="treeId"/> from <paramref name="originClusterId"/>, then
+    /// starts (or records as owed) a full re-seed from that origin. The request
+    /// is refused and returns <see langword="false"/> when the receiver's own
+    /// transaction registry has already recorded a terminal decision for the
+    /// transaction, or when the bounded poison set is full. No receiver
+    /// registry decision is written.
+    /// </summary>
+    Task<bool> PoisonSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
 }
