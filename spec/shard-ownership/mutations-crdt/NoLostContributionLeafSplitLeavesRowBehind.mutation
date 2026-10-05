@@ -1,0 +1,18 @@
+# Pairs with NoLostContribution. A leaf split narrows the leaf that declares
+# the key without moving the key's row to the new sibling, so the sibling
+# that now declares the key starts empty.
+MODULE: NoLostContributionLeafSplitLeavesRowBehind
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: a leaf split does not move the key's row to the sibling that now declares it
+PERTURBS: LeafSplit
+
+--- FIND
+    /\ leaf' = "L2"
+    /\ UNCHANGED <<row, stamp, clk, migd, owner, sg, staged, pend, bleaf, told, mg, kind, aAck, bAck>>
+--- REPLACE
+\* MUTATION: the sibling starts without the key's row.
+    /\ leaf' = "L2"
+    /\ row' = [row EXCEPT !["src"] = {}]
+    /\ UNCHANGED <<stamp, clk, migd, owner, sg, staged, pend, bleaf, told, mg, kind, aAck, bAck>>
+--- END

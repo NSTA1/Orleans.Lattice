@@ -1,0 +1,19 @@
+# Pairs with AtomicOnOwner. #4632's guard with the coordinator's participant
+# row registered best-effort, as the bulk pre-registration was before the fix
+# made it a precondition of the first dispatch: the row may be missing while
+# the saga is live, so a live saga's hot-path forward during the split window
+# is refused silently at the destination, and once the split moves the key
+# the owner serves the pre-saga value next to the committed other key. The
+# edit lies in PRow, the operator the guard reads, so the mutation declares no
+# PERTURBS.
+MODULE: AtomicOnOwnerParticipantRowBestEffort
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: with a best-effort participant row the guard refuses a live saga's forward, tearing the batch
+
+--- FIND
+PRow == sg # "idle" /\ ~forgotten
+--- REPLACE
+\* MUTATION: the row exists only once the decision is recorded.
+PRow == dec # "none" /\ ~forgotten
+--- END

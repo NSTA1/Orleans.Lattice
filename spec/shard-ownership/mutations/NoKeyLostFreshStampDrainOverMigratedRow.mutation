@@ -1,4 +1,5 @@
-# Pairs with NoKeyLost. Reproduces current production (#4522): the terminal
+# Pairs with NoKeyLost. Reproduces production before #4522's drain fix (#4566):
+# the terminal
 # drains a prepared bucket by skipping a key whose row is newer than the
 # bucket and not migrated, and otherwise installs the saga's value at a fresh
 # dominating stamp. A later write the split's shadow-forward imported onto the

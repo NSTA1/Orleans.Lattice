@@ -1,4 +1,5 @@
-# Pairs with SagaCompletes. Reproduces current production (#4474): a saga bound
+# Pairs with SagaCompletes. Reproduces production before #4474 was fixed
+# (#4516): a saga bound
 # to the resized copy R, whose resize is undone after the swap, sends its
 # terminals to R directly. The routed-logical stamp is stripped, so R's undo
 # redirect does not refuse them, and R takes them until the undo discards it;
