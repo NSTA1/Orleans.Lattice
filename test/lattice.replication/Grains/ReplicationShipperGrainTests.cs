@@ -248,6 +248,13 @@ public partial class ReplicationShipperGrainTests
         public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
             Task.FromResult(ReportsTrimWatermark ? TrimmedThrough - 1 : (long?)null);
 
+        /// <summary>
+        /// Models the partition's published clock floor (issue #4586): every
+        /// shipping read returns it paired with the next offset, as the real
+        /// shard does once it has persisted the floor.
+        /// </summary>
+        public HybridLogicalClock ClockFloor { get; set; }
+
         public void Append(WalRecord entry) => Entries.Add(entry);
 
         /// <summary>
@@ -288,6 +295,8 @@ public partial class ReplicationShipperGrainTests
                 {
                     Entries = Array.Empty<WalShardShippingEntry>(),
                     NextSequence = fromSequence,
+                    ClockFloor = ClockFloor,
+                    ClockFloorOffset = ClockFloor == HybridLogicalClock.Zero ? 0 : Entries.Count,
                 };
             }
             // Like a provider read, a hole is skipped and the page still holds up
@@ -312,6 +321,8 @@ public partial class ReplicationShipperGrainTests
             {
                 Entries = entries,
                 NextSequence = endExclusive,
+                ClockFloor = ClockFloor,
+                ClockFloorOffset = ClockFloor == HybridLogicalClock.Zero ? 0 : Entries.Count,
             };
         }
 
