@@ -105,4 +105,29 @@ public partial class PublicReplicationApiContractTests
                 Throws.InstanceOf<ArgumentException>());
         });
     }
+
+    [Test]
+    public async Task ILatticeReplicationDeadLetters_release_quarantined_saga_validates_arguments_and_refuses_a_saga_not_quarantined()
+    {
+        var treeId = NextTreeId("dlq-release-args");
+        await CreateReplicatedTreeAsync(treeId);
+
+        var dlq = PublicReplicationApiClusterFixture
+            .ServicesFor(PublicReplicationApiClusterFixture.SiteBClusterId)
+            .GetRequiredService<ILatticeReplicationDeadLetters>();
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(
+                async () => await dlq.ReleaseQuarantinedSagaAsync(string.Empty, "site-a", Guid.NewGuid()),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(
+                async () => await dlq.ReleaseQuarantinedSagaAsync(treeId, string.Empty, Guid.NewGuid()),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(
+                async () => await dlq.ReleaseQuarantinedSagaAsync(treeId, "site-a", Guid.Empty),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(await dlq.ReleaseQuarantinedSagaAsync(treeId, "site-a", Guid.NewGuid()), Is.False);
+        });
+    }
 }

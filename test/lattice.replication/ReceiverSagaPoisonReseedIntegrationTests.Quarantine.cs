@@ -75,8 +75,9 @@ public partial class ReceiverSagaPoisonReseedIntegrationTests
             acked = await PushAsync(failing);
         }
 
-        var parked = await _siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services
-            .GetRequiredService<ILatticeReplicationDeadLetters>().ListAsync(tree);
+        var deadLetters = _siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services
+            .GetRequiredService<ILatticeReplicationDeadLetters>();
+        var parked = await deadLetters.ListAsync(tree);
         var after = new WalRecord
         {
             TreeId = tree,
@@ -104,7 +105,16 @@ public partial class ReceiverSagaPoisonReseedIntegrationTests
         });
 
         // A later copy of the quarantined saga's terminal is parked at once.
+        // A copy identical to one already parked is deduplicated by the queue,
+        // so a later terminal with its own identity is what proves the copy is
+        // parked rather than acknowledged without a trace.
         Assert.That(await PushAsync(failing), Is.True, "a quarantined saga's records are parked without waiting out the bound");
+        var later = failing with { Timestamp = HybridLogicalClock.Tick(failing.Timestamp) };
+        Assert.That(await PushAsync(later), Is.True, "a later terminal of a quarantined saga is parked at once");
+        Assert.That(
+            (await deadLetters.ListAsync(tree)).Count(e => e.Entry.TransactionId == txid && e.Entry.Timestamp == later.Timestamp),
+            Is.EqualTo(1),
+            "the later terminal is parked, not acknowledged without a trace");
     }
 
     private async Task<(string KeyA, string KeyB, Guid TxId)> StageCommittedSagaAsync(string tree, string prefix, long ticks)
@@ -145,5 +155,61 @@ public partial class ReceiverSagaPoisonReseedIntegrationTests
         var abort = Terminal(tree, txid, MutationKind.TxAbort, 41_100, shardIndex: shard,
             key: shard.ToString(System.Globalization.CultureInfo.InvariantCulture));
         await AssertQuarantinedAfterTheReseedSettledTheSagaAsync(tree, keyA, keyB, txid, abort);
+    }
+
+    [Test]
+    public async Task Releasing_a_quarantine_applies_the_sagas_records_again_and_one_that_still_fails_is_quarantined_again_not_re_seeded()
+    {
+        const string tree = "rspr-quarantine-release";
+        var (keyA, keyB, txid) = await StageCommittedSagaAsync(tree, "rspq-r", 42_000);
+        var malformed = Terminal(tree, txid, MutationKind.TxCommit, 42_100, shardIndex: 0, key: "not-a-shard");
+        await AssertQuarantinedAfterTheReseedSettledTheSagaAsync(tree, keyA, keyB, txid, malformed);
+
+        // The operator resolution: discard the redundant parked records, then
+        // release the quarantine on the host-trusted seam.
+        var deadLetters = _siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services
+            .GetRequiredService<ILatticeReplicationDeadLetters>();
+        foreach (var entry in (await deadLetters.ListAsync(tree)).Where(e => e.Entry.TransactionId == txid))
+        {
+            Assert.That(await deadLetters.DiscardAsync(tree, entry.EntryId), Is.True);
+        }
+
+        var poison = _siteB.Client.GetGrain<IReceiverSagaPoisonGrain>(tree);
+        var outcomes = new ConcurrentBag<string>();
+        using (ListenForSagaPoison(tree, outcomes))
+        {
+            Assert.That(await deadLetters.ReleaseQuarantinedSagaAsync(tree, SiteAClusterId, txid), Is.True);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await poison.GetQuarantinedAsync(SiteAClusterId), Does.Not.Contain(txid), "the release removes the entry");
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.OutcomeReceiverSagaQuarantineReleased));
+            Assert.That(await deadLetters.ReleaseQuarantinedSagaAsync(tree, SiteAClusterId, txid), Is.False, "nothing left to release");
+        });
+
+        // Released, the saga's record is applied again rather than parked at
+        // once; this one still fails, so it is deferred within the bound.
+        Assert.That(await DeliverAsync(malformed), Is.False, "a released saga's record is applied again, not parked at once");
+        await Task.Delay(TimeSpan.FromMilliseconds(450));
+
+        // Past the bound it is quarantined again - the saga stayed retired - and
+        // never poisoned and re-seeded, so releasing cannot restart the cycle.
+        outcomes.Clear();
+        bool acked;
+        using (ListenForSagaPoison(tree, outcomes))
+        {
+            acked = await PushAsync(malformed);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(acked, Is.True, "quarantined again and parked");
+            Assert.That(await poison.GetQuarantinedAsync(SiteAClusterId), Does.Contain(txid));
+            Assert.That(await poison.GetPoisonedAsync(SiteAClusterId), Does.Not.Contain(txid));
+            Assert.That(await poison.GetReseedOwedOriginsAsync(), Does.Not.Contain(SiteAClusterId));
+            Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.OutcomeReceiverSagaQuarantined));
+            Assert.That(await _siteB.Client.GetGrain<ILattice>(tree).GetAsync(keyA), Is.EqualTo(new byte[] { 1 }), "the settled saga is untouched");
+        });
     }
 }

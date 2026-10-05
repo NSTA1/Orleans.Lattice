@@ -406,7 +406,17 @@ internal sealed class DeadLetterTrackingReplicationApplier(
                 new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, entry.OriginClusterId ?? string.Empty),
                 LatticeTenantLabel.ForTree(entry.TreeId));
 
-            if (await TryQuarantineAsync(entry, key, failure, attempts).ConfigureAwait(false))
+            var quarantine = await TryQuarantineAsync(entry, key, failure, attempts).ConfigureAwait(false);
+            if (quarantine == QuarantineVerdict.HeldFull)
+            {
+                // Issue #4692: the saga must be quarantined but the bounded set is
+                // full. Poisoning it again would re-seed it for ever, so the record
+                // stays deferred, fail-closed: the stream from this origin for this
+                // tree waits until an operator releases a quarantine.
+                return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+            }
+
+            if (quarantine == QuarantineVerdict.Quarantined)
             {
                 // Issue #4692: the saga is quarantined. Its record is parked, not
                 // applied, so the stream moves past it, and the saga is never
@@ -662,20 +672,24 @@ internal sealed class DeadLetterTrackingReplicationApplier(
     /// would never move past it. Quarantine is an input-integrity fault: the saga
     /// is withheld whole on this receiver, so all-or-nothing visibility holds, but
     /// its liveness is given up, and it is counted and logged for the operator.
+    /// When the bounded quarantine set is full the verdict is
+    /// <see cref="QuarantineVerdict.HeldFull"/>: the record is held unacknowledged,
+    /// and the saga is never poisoned and re-seeded again, which would restart
+    /// the cycle quarantine exists to end.
     /// </summary>
-    private async Task<bool> TryQuarantineAsync(WalRecord entry, RetryKey key, Exception failure, int attempts)
+    private async Task<QuarantineVerdict> TryQuarantineAsync(WalRecord entry, RetryKey key, Exception failure, int attempts)
     {
         var origin = entry.OriginClusterId ?? string.Empty;
         var poison = grainFactory.GetGrain<IReceiverSagaPoisonGrain>(entry.TreeId);
         var classified = await poison.ClassifyAsync(origin, new[] { entry.TransactionId }).ConfigureAwait(false);
         if (classified.Quarantined.Count > 0)
         {
-            return true;
+            return QuarantineVerdict.Quarantined;
         }
 
         if (classified.Poisoned.Count > 0)
         {
-            return false;
+            return QuarantineVerdict.None;
         }
 
         var now = DateTime.UtcNow;
@@ -683,18 +697,20 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         if (now - first < options.Get(entry.TreeId).SagaDeferralTimeout
             || !await poison.IsRetiredAsync(origin, entry.TransactionId).ConfigureAwait(false))
         {
-            return false;
+            return QuarantineVerdict.None;
         }
 
         if (!await poison.QuarantineAsync(origin, entry.TransactionId, failure.Message ?? "<no message>").ConfigureAwait(false))
         {
-            RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaPoisonRefusedFull);
+            RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaQuarantineFull);
             logger.LogError(
                 failure,
                 "Receiver could not quarantine saga transaction {TransactionId} (tree '{TreeId}', origin {Origin}) because the "
-                + "quarantine set is full; it is poisoned and re-seeded again instead.",
+                + "quarantine set is full. The record is held unacknowledged, so the stream from that origin for that tree waits; "
+                + "the saga is not re-seeded again. Release resolved quarantines with "
+                + "ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync to free capacity.",
                 entry.TransactionId, entry.TreeId, origin);
-            return false;
+            return QuarantineVerdict.HeldFull;
         }
 
         RecordReceiverSagaPoisoned(entry.TreeId, origin, LatticeReplicationMetrics.OutcomeReceiverSagaQuarantined);
@@ -704,9 +720,23 @@ internal sealed class DeadLetterTrackingReplicationApplier(
             + "'{CrossTreeOperationId}') failed again after {Attempts} attempts although a re-seed already settled it, so the "
             + "re-seed cannot remove the cause. The saga is QUARANTINED: its records are parked in the dead-letter queue without "
             + "being applied, the stream moves past them, and it is not re-seeded again. Fix the cause (a malformed record, a "
-            + "contradictory decision, or a misconfigured ClusterId), then discard the parked records.",
+            + "contradictory decision, or a misconfigured ClusterId), discard the parked records, then release the quarantine with "
+            + "ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync.",
             entry.TransactionId, origin, entry.TreeId, entry.CrossTreeOperationId ?? string.Empty, attempts);
-        return true;
+        return QuarantineVerdict.Quarantined;
+    }
+
+    /// <summary>The outcome of <see cref="TryQuarantineAsync"/> (issue #4692).</summary>
+    private enum QuarantineVerdict
+    {
+        /// <summary>The saga is not quarantined; the poison bound applies as usual.</summary>
+        None,
+
+        /// <summary>The saga is quarantined: park the record and move past it.</summary>
+        Quarantined,
+
+        /// <summary>The saga must be quarantined but the set is full: hold the record, never re-seed.</summary>
+        HeldFull,
     }
 
     /// <summary>

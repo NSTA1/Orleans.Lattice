@@ -67,4 +67,23 @@ public interface ILatticeReplicationDeadLetters
         string originClusterId,
         Guid transactionId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator resolution of a quarantined receiver-side saga
+    /// (issue #4692): once the cause - a malformed record, a contradictory
+    /// decision, a misconfigured cluster id - is fixed, removes
+    /// <paramref name="transactionId"/> from <paramref name="originClusterId"/>
+    /// from <paramref name="treeId"/>'s durable quarantine set, so its records
+    /// are applied again instead of parked at once, and the bounded set regains
+    /// capacity. The saga stays recorded as retired by its re-seed, so a record
+    /// of it that keeps failing is quarantined again, never re-seeded. The
+    /// records already parked are not touched: inspect them with
+    /// <see cref="ListAsync"/> and remove them with <see cref="DiscardAsync"/>.
+    /// Returns <see langword="false"/> when the saga was not quarantined.
+    /// </summary>
+    Task<bool> ReleaseQuarantinedSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
 }
