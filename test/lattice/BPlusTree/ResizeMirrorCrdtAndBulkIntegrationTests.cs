@@ -269,10 +269,16 @@ public sealed class ResizeMirrorCrdtAndBulkIntegrationTests
     {
         // The join is opt-in: a whole-row merge that is not a resize or snapshot
         // mirror (a restore, a tree merge) still resolves last-writer-wins.
+        // One shard, so the merge below reaches the shard that owns "k": on the
+        // default map "k" routes elsewhere and a merge into shard 0 would never
+        // be read, whatever the leaf did with it (issue #4702).
         var tree = $"{GCounterPrefix}{Guid.NewGuid():N}";
+        await _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId)
+            .RegisterAsync(tree, new TreeRegistryEntry { ShardCount = 1 });
         var lattice = _cluster.GrainFactory.GetGrain<ILattice>(tree);
         await lattice.ApplyCrdtDeltaAsync("k", LatticeMergeMode.GCounter, Increment("A"));
         var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{tree}/0");
+        Assert.That(await shard.GetAsync("k"), Is.Not.Null, "PRECONDITION: the merged shard holds the key's row");
         var lower = new GCounter();
         lower.MergeDelta(new GCounterDelta { Increments = new Dictionary<string, long>(StringComparer.Ordinal) { ["B"] = 1 } });
 
