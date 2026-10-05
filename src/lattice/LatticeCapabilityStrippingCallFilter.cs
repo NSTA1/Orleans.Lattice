@@ -121,6 +121,12 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// at (issue #4522); only the routing tier, a forwarding shard, the split
     /// sweep, and the saga's terminal delivery may assert them.
     /// </para>
+    /// <para>
+    /// The new-leaf create intent is included because a leaf whose state row is
+    /// missing writes a first row only under it (issue #4654); an external client
+    /// asserting it could re-create a leaf whose row was lost as an empty one. Only
+    /// the paths that create leaves may assert it.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -138,6 +144,7 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
         LatticeEventConstants.PreparedRouteRequestContextKey,
         LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
+        LatticeEventConstants.NewLeafIntentRequestContextKey,
     ];
 
     /// <inheritdoc />

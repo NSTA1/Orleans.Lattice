@@ -3,33 +3,41 @@ using Orleans.Lattice.BPlusTree.State;
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
-/// The leaf's row record (issue #4654): durable proof, kept outside the leaf's
-/// own state row, that the row was once written.
+/// The leaf's birth rule (issue #4654): a leaf with no state row writes a first
+/// row, and serves data, only when it is being created.
 /// <para>
 /// The row is the leaf's only link to its tree, key range, projection checkpoint
 /// and kept-snapshot record (issue #4634). If it vanishes - lost storage, or a row
-/// deleted outside the lattice - the next activation finds no row and no tree id,
-/// has nothing to replay from, and used to serve an empty cache, so every key it
-/// held read as absent with no error. A missing row is also every leaf's first
-/// activation, so the leaf needs evidence from somewhere the loss did not reach.
+/// deleted outside the lattice - while routing still names the leaf, the next
+/// activation finds no row and no tree id and has nothing to replay from. It used
+/// to serve an empty cache, so every key it held read as absent with no error, and
+/// a call that bound it (the #1744 re-bind) turned it into an empty bound leaf for
+/// good.
 /// </para>
 /// <para>
-/// <c>PersistAsync</c> writes the record before the first state write of a leaf
-/// (and before the first write after this change of a leaf that predates it), so
-/// no row is ever durable without it. <c>ClearGrainStateAsync</c> deletes it only
-/// after the row, alongside the snapshot, so a deliberate clear leaves no record
-/// behind once it completes and an interrupted one stays failed closed until its
-/// retry does. A rowless, unbound activation that finds the record, or a snapshot
-/// that outlived the row, fails its replay closed.
+/// A rowless activation is either a leaf being created or a leaf whose row was
+/// lost, and once its row record (below) is lost as well nothing on the leaf can
+/// tell the two apart. So the leaf does not guess: every path that creates a leaf
+/// (shard bootstrap, leaf split, bulk load, the recovery reseed of a purged tree)
+/// carries a create intent naming it (<see cref="LatticeNewLeafIntentContext"/>),
+/// and a rowless activation without one fails every data operation closed and
+/// refuses to write a row.
+/// </para>
+/// <para>
+/// The row record, a separate leaf-keyed row (<see cref="ILeafRowRecordGrain"/>),
+/// is defence in depth. <c>PersistAsync</c> makes it durable before the first state
+/// write, and <c>ClearGrainStateAsync</c> deletes it only after the row and the
+/// snapshot. A create intent for a leaf whose record or snapshot survives is a
+/// creator about to replace a lost row with an empty one, so it is refused too.
 /// </para>
 /// </summary>
 internal sealed partial class BPlusLeafGrain
 {
     /// <summary>
-    /// Set once this activation has begun writing its own row, so the lost-row
-    /// check does not mistake a row this activation is creating for a lost one.
+    /// Set once this activation has been admitted as a leaf being created, so its
+    /// first state write may land and its data operations are served.
     /// </summary>
-    private bool _rowWriteAttemptedThisActivation;
+    private bool _createIntentAdmitted;
 
     /// <summary>The row-record sidecar, or <see langword="null"/> for a leaf without a Guid key.</summary>
     private ILeafRowRecordGrain? RowRecord =>
@@ -38,14 +46,54 @@ internal sealed partial class BPlusLeafGrain
             : null;
 
     /// <summary>
-    /// Makes the row record durable before a state write that would otherwise be
-    /// the first durable trace of this leaf's row. Runs at most once per leaf
-    /// lifetime: the flag it sets rides the write that follows. A failure fails
-    /// that write.
+    /// Whether this activation has no state row, no tree id and no admission as a
+    /// leaf being created, so it must not serve data: it may be a leaf whose row was
+    /// lost (issue #4654). A deliberately cleared activation keeps its existing
+    /// behaviour until it deactivates.
     /// </summary>
-    private async Task EnsureRowRecordedAsync()
+    private bool IsUnadmittedRowlessActivation =>
+        !_createIntentAdmitted
+        && !_leafStateCleared
+        && !state.RecordExists
+        && string.IsNullOrEmpty(state.State.TreeId);
+
+    /// <summary>
+    /// The data-operation gate of an unadmitted rowless activation: a caller the
+    /// internal-origin guard refuses is refused first, so the refusal reveals
+    /// nothing about the leaf; a call without a create intent naming this leaf
+    /// fails closed; one with an intent admits the leaf as being created (unless a
+    /// surviving row record or snapshot shows its row was lost) and proceeds.
+    /// </summary>
+    private async Task AwaitAdmissionThenReplayBarrierAsync()
     {
-        _rowWriteAttemptedThisActivation = true;
+        EnsureInternalOrigin(LatticeOperation.Read);
+        if (!LatticeNewLeafIntentContext.IsFor(context.GrainId))
+        {
+            throw new LeafStateRowLostException(context.GrainId.ToString(), treeId: null,
+                "it was not reached through a path creating it, so its row may have been lost", innerException: null);
+        }
+
+        if (IsUnadmittedRowlessActivation)
+        {
+            await AdmitCreateIntentAsync();
+        }
+
+        await AwaitReplayBarrierAsync();
+    }
+
+    /// <summary>
+    /// Admits a rowless activation as a leaf being created before its first state
+    /// write, then makes the row record durable before any state write that would
+    /// be the first durable trace of the row. A refusal or a failed record write
+    /// fails the state write.
+    /// </summary>
+    private async Task AdmitAndRecordRowAsync()
+    {
+        if (!state.RecordExists && !_createIntentAdmitted)
+        {
+            await AdmitCreateIntentAsync();
+        }
+
         if (state.State.RowRecorded || RowRecord is not { } record)
             return;
 
@@ -54,57 +102,66 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// For an activation that found no state row and no tree id: the fault to fail
-    /// its replay with when the row was once written (its row record is present, or
-    /// a snapshot outlived it), or <see langword="null"/> when this is a leaf whose
-    /// row was never written or was deliberately cleared. A record or snapshot that
-    /// cannot be read fails closed.
+    /// Admits this rowless activation as a leaf being created, or throws: the call
+    /// must carry a create intent naming this leaf, and neither a row record nor a
+    /// snapshot may survive from an earlier row. Either surviving means the row was
+    /// written and lost, and creating the leaf anew would replace what it held with
+    /// nothing.
     /// </summary>
-    private async Task<Exception?> DetectLostStateRowAsync(CancellationToken cancellationToken)
+    private async Task AdmitCreateIntentAsync()
     {
-        if (state.RecordExists
-            || !string.IsNullOrEmpty(state.State.TreeId)
-            || _leafStateCleared
-            || _rowWriteAttemptedThisActivation
-            || RowRecord is not { } record
-            || !context.GrainId.TryGetGuidKey(out var leafKey, out _))
+        if (!LatticeNewLeafIntentContext.IsFor(context.GrainId))
         {
-            return null;
+            throw new LeafStateRowLostException(context.GrainId.ToString(), state.State.TreeId,
+                "the write that would create it was not issued by a path creating it, so its row may have been lost",
+                innerException: null);
         }
 
-        string? evidence = null;
-        string? treeId = null;
-        Exception? fault = null;
-        try
+        if (context.GrainId.TryGetGuidKey(out var leafKey, out _) && RowRecord is { } record)
         {
-            if (await record.GetAsync() is { } recorded)
+            string? evidence = null;
+            string? treeId = null;
+            Exception? fault = null;
+            try
             {
-                evidence = "its row record shows the row was written";
-                treeId = recorded.TreeId;
+                if (await record.GetAsync() is { } recorded)
+                {
+                    evidence = "its row record shows a row was written";
+                    treeId = recorded.TreeId;
+                }
+                else if (await grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey).LoadAsync(CancellationToken.None) is not null)
+                {
+                    evidence = "a snapshot of it survives, so a row was written";
+                }
             }
-            else if (await grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey).LoadAsync(cancellationToken) is not null)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                evidence = "a snapshot of it survives, so the row was written";
+                evidence = "its row record or snapshot could not be read to tell a lost row from one never written";
+                fault = ex;
+            }
+
+            if (evidence is not null && fault is null && !state.RecordExists)
+            {
+                // A duplicate activation that lost the create race of a leaf with a
+                // deterministic id (a shard's root leaf, a bulk-load leaf) sees the
+                // winner's record; the winner's row is then in storage, and the
+                // first-create adopt converges on it (#1557). A record with no row
+                // behind it is a lost row.
+                await state.ReadStateAsync();
+                if (state.RecordExists)
+                {
+                    _createIntentAdmitted = true;
+                    return;
+                }
+            }
+
+            if (evidence is not null && !state.RecordExists)
+            {
+                throw new LeafStateRowLostException(context.GrainId.ToString(), treeId ?? state.State.TreeId, evidence, fault);
             }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
-        {
-            evidence = "its row record or snapshot could not be read to tell a lost row from one never written";
-            fault = ex;
-        }
 
-        // A birth seam that interleaved while the evidence was read may have
-        // written the row; that row is being created here, not lost.
-        if (evidence is null
-            || state.RecordExists
-            || !string.IsNullOrEmpty(state.State.TreeId)
-            || _leafStateCleared
-            || _rowWriteAttemptedThisActivation)
-        {
-            return null;
-        }
-
-        return new LeafStateRowLostException(context.GrainId.ToString(), treeId, evidence, fault);
+        _createIntentAdmitted = true;
     }
 
     /// <summary>

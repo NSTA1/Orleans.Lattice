@@ -1120,23 +1120,36 @@ record with the rest of its row.
 
 A leaf's own state row holds its tree binding, key range, projection
 checkpoint and kept-snapshot record. If that row is lost - lost
-storage, or a row deleted outside the lattice - while the shard still
-routes to the leaf, the leaf has nothing to replay from and cannot load
-its snapshot. It used to come up empty and report every key it held as
+storage, or a row deleted outside the lattice - while routing still
+names the leaf, the leaf has nothing to replay from and cannot load its
+snapshot. It used to come up empty and report every key it held as
 absent (issue #4654).
 
-So a leaf also keeps a small row record, in a separate row keyed by the
-leaf, that its state row was written. The record is made durable before
-the leaf's first state write - and before the next write of a leaf
-whose row predates it - and is deleted only after the leaf's row is
-deliberately cleared (tree deletion, a purge, a retirement, an empty-leaf reclaim or an orphan
-repair). An activation that finds no state row and no tree id, but
-finds the record, or a snapshot that outlived the row, fails its replay
-**closed**: data operations fail with `LeafStateRowLostException`,
-which implements `ILatticeLeafUnavailable`, and nothing is replayed. A
-record or snapshot that cannot be read fails closed too. A leaf whose
-row was never written - every leaf's first activation - and a leaf that
-was deliberately cleared are not affected.
+A leaf with no state row is either one being created or one whose row
+was lost, and nothing on the leaf can always tell the two apart. So
+the leaf does not guess: it serves data, and writes a first row, only
+when the call that reaches it carries a create intent naming it. The
+paths that create leaves carry one: a shard creating its root leaf, a
+leaf split creating its sibling, a bulk load or append creating its
+leaves, and recovery re-creating the leaves an interrupted purge
+cleared (only on a shard whose purge had begun clearing its leaves,
+which the shard records before its first leaf clear). The intent is a
+reserved request-context key, so an external client cannot assert it.
+Any other call to a leaf with no row - a read, a write, the write-path
+re-bind of an unbound leaf - fails **closed** with
+`LeafStateRowLostException`, which implements `ILatticeLeafUnavailable`.
+
+As defence in depth a leaf also keeps a small row record, in a separate
+row keyed by the leaf. It is made durable before the leaf's first state
+write (and before the next write of a leaf whose row predates it), and
+deleted only after the leaf's row is deliberately cleared. A create
+intent for a leaf whose row record, or snapshot, survives is refused:
+that is a creator about to replace a lost row with an empty one.
+
+The write-path re-bind of issue #1744 still repairs a leaf that keeps
+its row but lost its tree id. A leaf deliberately cleared while routing
+still names it (a purge that died part-way, outside recovery) fails
+closed like a lost one.
 
 The condition does not clear by itself, and a projection rebuild cannot
 repair it, because the rebuild needs the binding and key range the row

@@ -279,6 +279,10 @@ internal sealed partial class ShardRootGrain
             async slot =>
             {
                 var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
+
+                // A bulk load creates every planned leaf, so each first row write
+                // carries a create intent naming its leaf (issue #4654).
+                using var createIntent = LatticeNewLeafIntentContext.BeginScope(leafIds[slot]);
                 await leaf.InitializeSiblingAsync(new SiblingInitialization
                 {
                     TreeId = treeId,
@@ -468,8 +472,14 @@ internal sealed partial class ShardRootGrain
             var deterministicId = DeterministicGuid($"{shardKey}/append/{operationId}/leaf/{leafIndex++}");
             var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
             var newId = newLeaf.GetGrainId();
-            await newLeaf.SetTreeIdAsync(TreeId);
-            await newLeaf.SetShardIndexAsync(MyShardIndex);
+
+            // The append creates this leaf, so its first row write carries a
+            // create intent naming it (issue #4654).
+            using (LatticeNewLeafIntentContext.BeginScope(newId))
+            {
+                await newLeaf.SetTreeIdAsync(TreeId);
+                await newLeaf.SetShardIndexAsync(MyShardIndex);
+            }
             await newLeaf.MergeEntriesAsync(batch);
 
             if (prevNewLeafId is not null)
