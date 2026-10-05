@@ -20,8 +20,9 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 /// </para>
 /// <para>
 /// <b>Why prepare is the seam.</b> Both arms are reachable only from
-/// <see cref="SagaPhase.Prepared"/>: <c>vote-abort</c> from <c>AbortAsync</c> and
-/// <c>coordinator-loss</c> from the fence-expiry reminder. Prepare is therefore
+/// <see cref="SagaPhase.Prepared"/>: <c>vote-abort</c> from a coordinator abort
+/// decision and <c>coordinator-loss</c> from an operator's resolution of a
+/// participant whose coordinator was lost (issue #4637). Prepare is therefore
 /// exactly the population that can arm either, and it is the same execution path
 /// as the armed value rather than a constructor, which would prove only that the
 /// type loaded. The grain extends <c>TtlGrain</c> and declares no

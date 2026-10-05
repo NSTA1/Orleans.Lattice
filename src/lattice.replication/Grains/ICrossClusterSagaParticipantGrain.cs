@@ -50,4 +50,15 @@ internal interface ICrossClusterSagaParticipantGrain : IGrainWithStringKey
     /// <param name="request">The validated control request.</param>
     /// <returns>The participant's status response.</returns>
     Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request);
+
+    /// <summary>
+    /// Operator override for a prepared participant whose coordinator is lost
+    /// (issue #4637). Asks the coordinator first and applies its decision when it
+    /// answers - refusing a request that contradicts it, or any request while it
+    /// is still deciding - and applies <paramref name="commit"/> only when the
+    /// coordinator cannot be reached.
+    /// </summary>
+    /// <param name="commit"><see langword="true"/> to commit, <see langword="false"/> to compensate.</param>
+    /// <returns><see langword="true"/> when the call moved the participant to a terminal phase.</returns>
+    Task<bool> OperatorResolveAsync(bool commit);
 }

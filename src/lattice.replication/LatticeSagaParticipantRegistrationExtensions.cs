@@ -11,8 +11,9 @@ public static partial class LatticeReplicationServiceCollectionExtensions
     /// <b>same</b> cross-cluster saga alongside the built-in restore participant.
     /// Every enlisted participant on every cluster is driven through one
     /// unanimous prepare, a single global commit-or-abort decision, and
-    /// compensation on abort (including the bounded fence-timer auto-compensation
-    /// on coordinator loss); see <see cref="ISagaParticipant"/> for the full
+    /// compensation on abort (a participant whose fence expires asks the
+    /// coordinator for the decision and never compensates on the timer alone);
+    /// see <see cref="ISagaParticipant"/> for the full
     /// contract.
     /// <para>
     /// Registration is idempotent per participant type <b>and per form</b>. Each

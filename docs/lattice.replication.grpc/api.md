@@ -96,7 +96,7 @@ See [Configuration](configuration.md).
 | `orleans.lattice.replication.LatticeReplication` | `PullCompressionDictionary` | unary | Shared compression-dictionary pull. |
 | `orleans.lattice.replication.LatticeRemoteSnapshot` | `GetMetadata` | unary | Snapshot-bootstrap cut-point metadata. |
 | `orleans.lattice.replication.LatticeRemoteSnapshot` | `RequestSnapshot` | server-streaming | The snapshot entries at that cut-point. |
-| `orleans.lattice.replication.LatticeSaga` | `Prepare`, `Commit`, `Abort`, `GetStatus` | unary | Cross-cluster saga control. |
+| `orleans.lattice.replication.LatticeSaga` | `Prepare`, `Commit`, `Abort`, `GetStatus`, `GetDecision` | unary | Cross-cluster saga control. `GetDecision` is a prepared participant asking the coordinator cluster for the saga's decision ([#4637](https://github.com/NSTA1/Orleans.Lattice/issues/4637)). |
 
 A host that only sends to peers can omit endpoint mapping. A host that only receives can call `AddLatticeReplicationGrpc` with an empty `Peers` map and still map the endpoint; with the default saga peer gate it then refuses every inbound saga control call (see Security below).
 
