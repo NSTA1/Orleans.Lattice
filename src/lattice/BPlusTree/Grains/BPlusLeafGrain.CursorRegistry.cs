@@ -1015,23 +1015,6 @@ internal sealed partial class BPlusLeafGrain
         => partitionCount == 1 ? idBase : $"{idBase}_{partition}";
 
     /// <summary>
-    /// Computes, in a single cache pass, which WAL partitions this leaf holds
-    /// live data for - any cache row (a live value or a not-yet-reaped
-    /// tombstone) whose key routes to the partition via
-    /// <see cref="WalPartitionHash.Compute"/>. Used by
-    /// <see cref="ResolveDurablePinForPartition"/> to distinguish a genuinely
-    /// empty partition (safe to release its WAL trim block) from one that holds
-    /// committed-but-not-yet-checkpointed data (which still depends on the whole
-    /// WAL and must keep its block).
-    /// <para>
-    /// Walks keys only. The answer depends on nothing but the keys, so pulling
-    /// the payload of a lazily hydrated snapshot through this - on a path that
-    /// runs on every checkpoint flush and at deactivation - would force a leaf
-    /// to materialise itself in full to answer a question about routing, which
-    /// is exactly the cost bounded hydration exists to avoid.
-    /// </para>
-    /// </summary>
-    /// <summary>
     /// Whether this activation's WAL replay has latched: completed, retired, or
     /// never required. Until then the cache does not show every row the leaf owns.
     /// </summary>
@@ -1040,7 +1023,7 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Treats every partition as holding live rows until this activation's replay
-    /// has latched (the F08 finding of the WAL formal coverage epic). A cold
+    /// has latched (issue #4669). A cold
     /// activation's cache is empty for a partition its replay has not read yet, so
     /// a pin published meanwhile - by the checkpoint flush tail of a partition the
     /// replay swept first - would resolve that partition as an empty release, a
@@ -1059,6 +1042,24 @@ internal sealed partial class BPlusLeafGrain
         Array.Fill(partitionsWithLiveData, true);
         return partitionsWithLiveData;
     }
+
+    /// <summary>
+    /// Computes, in a single cache pass, which WAL partitions this leaf holds
+    /// live data for - any cache row (a live value or a not-yet-reaped
+    /// tombstone) whose key routes to the partition via
+    /// <see cref="WalPartitionHash.Compute"/>. Used by
+    /// <see cref="ResolveDurablePinForPartition"/> to distinguish a genuinely
+    /// empty partition (safe to release its WAL trim block) from one that holds
+    /// committed-but-not-yet-checkpointed data (which still depends on the whole
+    /// WAL and must keep its block).
+    /// <para>
+    /// Walks keys only. The answer depends on nothing but the keys, so pulling
+    /// the payload of a lazily hydrated snapshot through this - on a path that
+    /// runs on every checkpoint flush and at deactivation - would force a leaf
+    /// to materialise itself in full to answer a question about routing, which
+    /// is exactly the cost bounded hydration exists to avoid.
+    /// </para>
+    /// </summary>
     private bool[] ComputePartitionsWithLiveData(int partitionCount)
     {
         var hasData = new bool[partitionCount];
