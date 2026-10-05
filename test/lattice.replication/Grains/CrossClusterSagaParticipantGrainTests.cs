@@ -11,8 +11,8 @@ namespace Orleans.Lattice.Replication.Tests.Grains;
 
 /// <summary>
 /// Unit coverage for <see cref="CrossClusterSagaParticipantGrain"/>, the durable
-/// participant model. Drives prepare / commit / abort, the coordinator-loss
-/// fence-expiry auto-compensation, and idempotency against recording
+/// participant model. Drives prepare / commit / abort, the fence-expiry
+/// decision query (issue #4637), and idempotency against recording
 /// <see cref="ISagaParticipant"/> doubles, without a silo.
 /// </summary>
 [TestFixture]
@@ -186,20 +186,22 @@ public partial class CrossClusterSagaParticipantGrainTests
     }
 
     [Test]
-    public async Task Fence_expiry_auto_compensates_on_coordinator_loss()
+    public async Task Fence_expiry_without_a_reachable_coordinator_keeps_the_participant_prepared()
     {
+        // Issue #4637: the participant voted commit, so the coordinator may
+        // already have committed the other clusters. With no transport to ask it
+        // (none is registered here), the participant must keep its prepared
+        // state rather than compensate on its timer alone.
         var p1 = new RecordingSagaParticipant();
         var (grain, state, _) = CreateGrain([p1]);
         await grain.PrepareAsync(Request());
 
-        // The coordinator never delivers a decision: move the fence deadline
-        // into the past and fire the fence reminder.
         state.State.FenceDeadlineTicks = DateTime.UtcNow.Ticks - TimeSpan.FromMinutes(1).Ticks;
         await grain.ReceiveReminder(FenceReminder, default);
 
-        Assert.That(state.State.Phase, Is.EqualTo(SagaPhase.Aborted));
-        Assert.That(p1.AbortCount, Is.EqualTo(1), "fence expiry must auto-compensate the prepared participant");
-        Assert.That(state.State.Detail, Does.Contain("fence"));
+        Assert.That(state.State.Phase, Is.EqualTo(SagaPhase.Prepared));
+        Assert.That(p1.AbortCount, Is.Zero, "fence expiry alone must not compensate a participant that voted commit");
+        SagaParticipantFenceCensus.Release(SagaId);
     }
 
     [Test]

@@ -2112,10 +2112,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Tag key for the cause of a saga compensation carried by
     /// <see cref="SagaCompensations"/>. Values are
-    /// <see cref="SagaCauseVoteAbort"/> (a participant voted abort and the
-    /// coordinator drove a rollback) and <see cref="SagaCauseCoordinatorLoss"/>
-    /// (the cutover fence expired without a coordinator decision and the
-    /// participant auto-compensated).
+    /// <see cref="SagaCauseVoteAbort"/> (a rollback on the coordinator's abort
+    /// decision, delivered by the coordinator or learned by the participant on
+    /// fence expiry) and <see cref="SagaCauseCoordinatorLoss"/> (an operator
+    /// resolved the participant to abort while its coordinator was unreachable).
     /// </summary>
     public const string TagCause = "cause";
 
@@ -2274,9 +2274,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of saga compensations, incremented once per participant grain that
     /// rolls back a prepared saga and tagged by <see cref="TagCause"/>
-    /// (<see cref="SagaCauseVoteAbort"/> for a coordinator-driven rollback after a
-    /// vote abort, or <see cref="SagaCauseCoordinatorLoss"/> for a fence-expiry
-    /// auto-compensation after the coordinator decision never arrived).
+    /// (<see cref="SagaCauseVoteAbort"/> for a rollback on the coordinator's abort
+    /// decision, delivered or learned on fence expiry, or
+    /// <see cref="SagaCauseCoordinatorLoss"/> for an operator resolution to abort
+    /// while the coordinator was unreachable).
     /// </summary>
     public static readonly Counter<long> SagaCompensations =
         Meter.CreateCounter<long>("orleans.lattice.replication.saga.compensations", unit: "{compensation}",

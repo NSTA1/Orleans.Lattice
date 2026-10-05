@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Replication.Grains;
 /// Persistent state for <see cref="CrossClusterSagaParticipantGrain"/>, the
 /// durable participant model on a participant cluster. One activation per saga
 /// id (this grain's key). Records the durable phase the participant holds for
-/// the saga, the recorded vote, and the cutover fence deadline that arms the
-/// coordinator-loss auto-compensation safety net. Persisted across
+/// the saga, the recorded vote, and the cutover fence deadline past which the
+/// participant asks the coordinator for its decision. Persisted across
 /// deactivation so a duplicate control message is idempotent and the fence
 /// survives a silo restart (the fence is anchored on an Orleans reminder, which
 /// grain timers cannot provide).
@@ -42,9 +42,10 @@ internal sealed class CrossClusterSagaParticipantState
     /// <summary>
     /// Wall-clock UTC tick at which the cutover fence expires. While
     /// <see cref="Phase"/> is <see cref="SagaPhase.Prepared"/>, a fence reminder
-    /// that fires at or past this deadline auto-compensates (rolls back) the
-    /// prepared resource set - the coordinator-loss safety net. Zero when no
-    /// fence is armed.
+    /// that fires at or past this deadline asks the coordinator for the saga's
+    /// decision: it commits or compensates as the coordinator decided, and keeps
+    /// the fence while the coordinator is undecided or unreachable (#4637). Zero
+    /// when no fence is armed.
     /// </summary>
     [Id(6)] public long FenceDeadlineTicks { get; set; }
 
@@ -54,4 +55,13 @@ internal sealed class CrossClusterSagaParticipantState
     /// <see cref="SagaControlResponse.Detail"/>. May be <see langword="null"/>.
     /// </summary>
     [Id(7)] public string? Detail { get; set; }
+
+    /// <summary>
+    /// The backup set the saga restores as one unit, or <see langword="null"/>
+    /// for a single-tree restore. Persisted at prepare so a decision this
+    /// participant applies on its own - learned by querying the coordinator after
+    /// its fence timer fired, or forced by an operator - reaches every member tree
+    /// exactly as the coordinator's delivery would (issue #4637).
+    /// </summary>
+    [Id(8)] public string? SetId { get; set; }
 }

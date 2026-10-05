@@ -74,6 +74,24 @@ internal sealed class LoopbackAwareSagaControlChannel : ISagaControlChannel
             ? _local.GetStatusAsync(request, cancellationToken)
             : _remote.GetStatusAsync(clusterId, request, cancellationToken);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// A local query is answered in process with this cluster as the requester,
+    /// exactly as the gRPC service stamps a remote requester from its origin.
+    /// </remarks>
+    public Task<SagaControlResponse> GetDecisionAsync(string coordinatorClusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        => IsLocal(coordinatorClusterId)
+            ? _local.GetDecisionAsync(request with { RequesterClusterId = LocalClusterId() }, cancellationToken)
+            : _remote.GetDecisionAsync(coordinatorClusterId, request with { RequesterClusterId = null }, cancellationToken);
+
+    private string? LocalClusterId()
+    {
+        var configured = _options.CurrentValue.LocalClusterId;
+        return !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : _replicationOptions.CurrentValue.ClusterId;
+    }
+
     private bool IsLocal(string clusterId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(clusterId);

@@ -52,6 +52,38 @@ internal sealed class LatticeSagaControlHandler(IGrainFactory grainFactory) : IL
         return Participant(request).GetStatusAsync(request);
     }
 
+    /// <inheritdoc />
+    public async Task<SagaControlResponse> GetDecisionAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        // Fail closed: the requester is the authenticated origin the transport
+        // stamped; without one there is no participant to check membership for.
+        if (string.IsNullOrEmpty(request.RequesterClusterId))
+        {
+            throw new UnauthorizedAccessException(
+                $"A decision query for saga '{request.SagaId}' carries no authenticated requester cluster.");
+        }
+
+        var decision = await _grainFactory
+            .GetGrain<ICrossClusterSagaCoordinatorGrain>(request.SagaId)
+            .ResolveDecisionForParticipantAsync(request.RequesterClusterId)
+            .ConfigureAwait(false);
+
+        return new SagaControlResponse
+        {
+            SagaId = request.SagaId,
+            Phase = decision switch
+            {
+                CrossClusterSagaDecision.Committed => SagaPhase.Committed,
+                CrossClusterSagaDecision.Aborted => SagaPhase.Aborted,
+                _ => SagaPhase.Prepared,
+            },
+            Vote = SagaVote.None,
+            Detail = string.Empty,
+        };
+    }
+
     private ICrossClusterSagaParticipantGrain Participant(SagaControlRequest request) =>
         _grainFactory.GetGrain<ICrossClusterSagaParticipantGrain>(request.SagaId);
 }

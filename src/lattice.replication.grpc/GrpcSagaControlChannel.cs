@@ -73,6 +73,10 @@ internal sealed class GrpcSagaControlChannel : ISagaControlChannel, IDisposable
     public Task<SagaControlResponse> GetStatusAsync(string clusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
         => InvokeAsync(_methods.GetStatus, clusterId, request, cancellationToken);
 
+    /// <inheritdoc />
+    public Task<SagaControlResponse> GetDecisionAsync(string coordinatorClusterId, SagaControlRequest request, CancellationToken cancellationToken = default)
+        => InvokeAsync(_methods.GetDecision, coordinatorClusterId, request, cancellationToken);
+
     private async Task<SagaControlResponse> InvokeAsync(
         Method<SagaControlRequestBox, SagaControlResponseBox> method,
         string clusterId,

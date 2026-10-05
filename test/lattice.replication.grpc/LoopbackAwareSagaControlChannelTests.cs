@@ -117,6 +117,33 @@ public class LoopbackAwareSagaControlChannelTests
     }
 
     [Test]
+    public async Task GetDecisionAsync_answers_a_local_coordinator_in_process_with_this_cluster_as_requester()
+    {
+        // Issue #4637: a participant asking a coordinator on its own cluster is
+        // answered in process, stamped with this cluster exactly as the gRPC
+        // service stamps a remote requester from its origin.
+        var (channel, handler) = CreateChannel();
+        handler.GetDecisionAsync(Arg.Any<SagaControlRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new SagaControlResponse { SagaId = "saga-1", Phase = SagaPhase.Committed });
+
+        var response = await channel.GetDecisionAsync(LocalCluster, Request() with { RequesterClusterId = "forged" });
+
+        Assert.That(response.Phase, Is.EqualTo(SagaPhase.Committed));
+        await handler.Received(1).GetDecisionAsync(
+            Arg.Is<SagaControlRequest>(r => r.RequesterClusterId == LocalCluster), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void GetDecisionAsync_routes_a_remote_coordinator_to_the_grpc_channel()
+    {
+        var (channel, handler) = CreateChannel();
+
+        Assert.That(async () => await channel.GetDecisionAsync(RemoteCluster, Request()),
+            Throws.InvalidOperationException.With.Message.Contains(RemoteCluster));
+        handler.DidNotReceive().GetDecisionAsync(Arg.Any<SagaControlRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void PrepareAsync_routes_a_remote_cluster_to_the_grpc_channel()
     {
         // With no peer endpoint configured, the remote gRPC leg raises its

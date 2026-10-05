@@ -15,8 +15,8 @@ namespace Orleans.Lattice.Replication.Tests.Coyote;
 /// Each participant builds its shadow and votes: <see cref="SagaVote.Commit"/>
 /// when the build succeeds, <see cref="SagaVote.Abort"/> when its admission
 /// probe or build fails, in which case it compensates itself at once. The
-/// coordinator may be lost before deciding, which the participants' fence timers
-/// turn into an abort. Votes arrive, the decision is delivered, and each
+/// coordinator may be lost before deciding, which its prepare deadline turns into
+/// an abort the participants learn by querying it on fence expiry (issue #4637). Votes arrive, the decision is delivered, and each
 /// participant cuts over or compensates, all in an order the runtime picks.
 /// </para>
 /// <para>
