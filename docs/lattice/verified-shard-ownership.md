@@ -80,7 +80,7 @@ purged (#4475, fixed), saga values installed at a stamp that overwrites a later
 write (#4522, the drain fixed), a
 migration import dropped over a destination row the saga already resolved
 (#4564, fixed), a shadow marker a leaf split strands on a sibling that never sees the
-terminal (#4545), and, found by the review of this coverage, a router that cached the
+terminal (#4545, the dead-marker transfer fixed), and, found by the review of this coverage, a router that cached the
 old copy reading empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
