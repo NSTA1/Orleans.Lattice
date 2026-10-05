@@ -866,7 +866,8 @@ gap detection, like a view's, is exact by offset and made against what was
 actually read. The shared WAL subscriber probes the tail again whenever a read
 jumps an offset, so a trim that lands after its pre-read check is reported as a
 fall-off rather than read across. A jump the tail has not passed is a slot whose
-flush failed and was never acknowledged, and is read past.
+flush failed and was never acknowledged, and is read past as before (issue #4621
+tracks such a slot whose write lands after the reader has passed it).
 
 The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to
