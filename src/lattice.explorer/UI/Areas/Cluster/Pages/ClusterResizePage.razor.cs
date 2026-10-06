@@ -47,6 +47,9 @@ public partial class ClusterResizePage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    private ClusterTreeChanges TreeChanges { get; set; } = default!;
+
     private ClusterStatusPoller Poller => _poller ??= new ClusterStatusPoller(Time);
 
     /// <inheritdoc />
@@ -99,6 +102,12 @@ public partial class ClusterResizePage : IDisposable
         await InvokeAsync(() =>
         {
             var previous = _status.Value;
+            if (previous is { } before && IsActive(before) && !IsActive(value))
+            {
+                // The resize or its undo moved the tree's alias: every list of trees read before it is stale.
+                TreeChanges.Changed();
+            }
+
             if (previous is { UndoRequested: true } && !value.UndoRequested)
             {
                 if (value.InProgress)
@@ -165,6 +174,7 @@ public partial class ClusterResizePage : IDisposable
         if (started.Value is not null)
         {
             _reviewing = null;
+            TreeChanges.Changed();
             Toasts.Show("Resize started.", LtToastTone.Info);
             Show(started);
         }
@@ -188,6 +198,7 @@ public partial class ClusterResizePage : IDisposable
         {
             // Undo is accept-then-poll: the call returns once the undo is
             // persisted, and UndoRequested says whether it is still unwinding.
+            TreeChanges.Changed();
             Toasts.Show(
                 value.UndoRequested ? "Undo accepted. It is unwinding the resize; this page follows it." : "Resize undone.",
                 value.UndoRequested ? LtToastTone.Info : LtToastTone.Success);

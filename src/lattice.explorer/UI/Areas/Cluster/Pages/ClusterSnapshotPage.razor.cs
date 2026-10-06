@@ -51,6 +51,9 @@ public partial class ClusterSnapshotPage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    private ClusterTreeChanges TreeChanges { get; set; } = default!;
+
     private ClusterStatusPoller Poller => _poller ??= new ClusterStatusPoller(Time);
 
     private bool IsOffline => string.Equals(_mode, nameof(TreeSnapshotMode.Offline), StringComparison.Ordinal);
@@ -101,6 +104,8 @@ public partial class ClusterSnapshotPage : IDisposable
             var previous = _status.Value;
             if (!value.InProgress && previous is { InProgress: true })
             {
+                // The snapshot made a new tree: every list of trees read before it is stale.
+                TreeChanges.Changed();
                 Toasts.Show("Snapshot complete.", LtToastTone.Success);
             }
 
@@ -154,6 +159,7 @@ public partial class ClusterSnapshotPage : IDisposable
         if (started.Value is not null)
         {
             _reviewing = false;
+            TreeChanges.Changed();
             Toasts.Show("Snapshot started.", LtToastTone.Info);
             Show(started);
         }

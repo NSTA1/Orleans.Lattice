@@ -59,6 +59,13 @@ internal sealed class ExplorerSuggestions(IServiceProvider services)
         ShellCaller.Of(services),
         services.GetService<TimeProvider>()));
 
+    /// <summary>
+    /// Forgets the tenants <see cref="Tenants"/> remembers, so a tenant just created
+    /// or deleted is offered, or no longer offered, on the next keystroke rather than
+    /// once the remembered list goes stale.
+    /// </summary>
+    public void InvalidateTenants() => (_tenants as CachedSuggestionSource)?.Invalidate();
+
     /// <summary>Users from the identity directory.</summary>
     public ILtSuggestionSource Users => _users ??= Build(() => new DirectorySuggestionSource(Auth(), DirectoryPrincipalKind.User));
 
