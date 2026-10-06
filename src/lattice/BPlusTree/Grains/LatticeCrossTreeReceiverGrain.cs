@@ -170,6 +170,39 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         return false;
     }
 
+    /// <inheritdoc />
+    public async Task<bool> AbandonAsync()
+    {
+        var current = state.State;
+        if (current.WaitSet.Count == 0 && !current.Decided && current.Arrived.Count == 0)
+        {
+            return false;
+        }
+
+        Logger.LogWarning(
+            "Cross-tree receiver {Key}: origin '{Origin}' was decommissioned; abandoning the barrier without a decision.",
+            GrainContext.GrainId.Key, current.OriginClusterId);
+
+        await WithdrawFromIndexesAsync(current.WaitSet);
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is { } grainFactory)
+        {
+            var key = GrainContext.GrainId.Key.ToString()!;
+            foreach (var tree in current.Participants)
+            {
+                await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).RemoveTombstoneAsync(key);
+            }
+        }
+
+        if (current.Decided)
+        {
+            await UnregisterTtlAsync();
+        }
+
+        await state.ClearStateAsync();
+        _decisionAwaitingPersist = false;
+        return true;
+    }
+
     /// <summary>
     /// Whether the origin's purge frontier has reached the operation's decision
     /// sequence on every participant (issue #4733). Every participant counts,
@@ -438,7 +471,23 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             + "and decides on the trees that remain.",
             GrainContext.GrainId.Key, treeId);
 
-        state.State.WaitSet = state.State.WaitSet.Where(t => !string.Equals(t, treeId, StringComparison.Ordinal)).ToList();
+        var remainder = state.State.WaitSet.Where(t => !string.Equals(t, treeId, StringComparison.Ordinal)).ToList();
+        if (remainder.Count == 0)
+        {
+            // Dropping the only waited-for tree leaves no participant to decide
+            // on (#4741): an empty wait set and no arrivals would make the
+            // barrier complete and commit vacuously, a verdict no tree ever
+            // reported, which a later arrival of the tree would then be
+            // finalized with. Withdraw the barrier and clear it to unopened
+            // instead; a later arrival opens a fresh barrier and decides on its
+            // own verdict. The withdrawal comes first, so a failure leaves the
+            // barrier as it was.
+            await WithdrawFromIndexesAsync([treeId]);
+            await state.ClearStateAsync();
+            return CrossTreeReceiverDecision.InFlight;
+        }
+
+        state.State.WaitSet = remainder;
         await FillImportedArrivalsAsync();
         if (CrossTreeReceiverBarrier.IsComplete(state.State.WaitSet, state.State.Arrived))
         {
@@ -456,7 +505,13 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
 
         await SlideTtlAsync();
-        await UnindexAsync();
+
+        // The dropped tree was removed from WaitSet above, so the parameterless
+        // unindex (which walks the current WaitSet) would never withdraw its own
+        // ICrossTreeBarrierIndexGrain(treeId) entry - a permanent index leak.
+        // Pass it explicitly so both the survivors and the dropped tree are
+        // unindexed together.
+        await UnindexAsync([treeId]);
         return BuildDecision();
     }
 
@@ -693,9 +748,17 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     /// Withdraws the decided barrier from its trees' indexes. Best effort: an
     /// entry left behind is withdrawn by the next import of its tree that
     /// settles it (<see cref="SettleIndexEntryAsync"/>), or before the barrier's
-    /// retention clears it.
+    /// retention clears it. The current <c>WaitSet</c> is always covered; pass
+    /// <paramref name="extra"/> to also withdraw a tree that was already removed
+    /// from <c>WaitSet</c> before this call (for example a dropped-participant
+    /// tree, whose own index entry would otherwise never be unindexed because it
+    /// no longer appears in the current wait set).
     /// </summary>
-    private async Task UnindexAsync()
+    /// <param name="extra">
+    /// Additional tree ids to unindex alongside the current <c>WaitSet</c>, or
+    /// <see langword="null"/> when none are needed.
+    /// </param>
+    private async Task UnindexAsync(IEnumerable<string>? extra = null)
     {
         if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
         {
@@ -703,7 +766,7 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
 
         var key = GrainContext.GrainId.Key.ToString()!;
-        foreach (var tree in state.State.WaitSet)
+        foreach (var tree in extra is null ? state.State.WaitSet : state.State.WaitSet.Concat(extra))
         {
             try
             {

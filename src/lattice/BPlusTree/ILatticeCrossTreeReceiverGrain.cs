@@ -147,6 +147,22 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// list. Not interleaved: it never drops a barrier mid-call.
     /// </summary>
     Task<bool> SettleTombstoneAsync(IReadOnlyDictionary<string, long> frontiers);
+
+    /// <summary>
+    /// Abandons this barrier because its origin was decommissioned (issues
+    /// #4742, #4736): durably withdraws it from the barrier index of every tree
+    /// in its wait set and from the tombstone list of every participant, then
+    /// clears it to unopened, deciding nothing. Every tree of a barrier is a
+    /// replica of its one origin, so once that origin is gone there is no tree
+    /// left to vote; deciding on the arrivals so far would serve a verdict the
+    /// operation's other trees never reach. An abandoned sub-saga resolves
+    /// through its registry as <see cref="TxStatus.InFlight"/>, so the
+    /// decommission's per-tree pending clear aborts every tree of the
+    /// operation alike. A later arrival opens a fresh barrier. The withdrawals
+    /// precede the clear, so a failed withdrawal throws and leaves the barrier
+    /// as it was. Returns whether the barrier held any state.
+    /// </summary>
+    Task<bool> AbandonAsync();
 }
 
 /// <summary>

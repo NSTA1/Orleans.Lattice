@@ -299,7 +299,13 @@ remaining tree has arrived, decides by the usual rule; the applier then
 finalizes the remaining trees. The dropped tree's pending bucket of the
 sub-saga is discarded, because the tree is no longer a replica of the
 origin. A terminal dropped or deferred for any other reason (a merge-mode
-mismatch, an apply failure) never decides the barrier. A barrier that has
+mismatch, an apply failure) never decides the barrier. A drop that would
+leave the wait set empty never decides it either (#4741): with no tree left
+to vote, the commit-iff-every-arrival rule would hold vacuously, and a later
+arrival of the dropped tree would be finalized with a verdict nothing
+reported. The barrier instead withdraws its index entry and clears to
+unopened, so a later arrival opens a fresh barrier and decides on its own
+verdict. A barrier that has
 not opened is left untouched and persists nothing, since the tree and
 operation ids are peer-supplied.
 

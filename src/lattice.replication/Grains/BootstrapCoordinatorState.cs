@@ -279,4 +279,14 @@ internal sealed class BootstrapCoordinatorState
 
     /// <summary>The pending siblings this coordinator has already asked to re-seed.</summary>
     [Id(31)] public HashSet<string> SiblingReseedsRequested { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Set when <see cref="SourceClusterId"/> was decommissioned while this
+    /// import still held its cross-tree read fence (issue #4742). The
+    /// decommission abandons the source's barriers without deciding them, and
+    /// an abandon is not a decision, so the fence must not lift on the strength
+    /// of it: it stays up until a re-add of the source re-drives the import,
+    /// which clears this flag and lets the fresh drain decide the fence.
+    /// </summary>
+    [Id(32)] public bool FenceHeldForDecommissionedSource { get; set; }
 }

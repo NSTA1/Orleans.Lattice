@@ -1657,7 +1657,8 @@ later terminal computed under a changed replication configuration does not
 change it, and a tree whose terminal arrives after it became replicated
 joins it (issue #4692). A participant that stops being replicated here
 before its terminal arrives is removed from an undecided barrier, which then
-decides on the trees that remain. The receiver thus preserves cross-tree atomic
+decides on the trees that remain - or, when none remain, clears to unopened
+rather than deciding over no arrivals (issue #4741). The receiver thus preserves cross-tree atomic
 visibility across exactly the trees it hosts, whatever subset of the
 batch that is.
 
