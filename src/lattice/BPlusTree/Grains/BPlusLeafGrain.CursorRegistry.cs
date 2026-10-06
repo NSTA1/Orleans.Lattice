@@ -931,19 +931,29 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task UnregisterMaterialiserPinsAsync()
     {
-        // Retiring the pins drops their override holds too (issue #4641), so
-        // nothing this activation raised may be assumed to stand afterwards.
-        _overrideHoldRaised = null;
+        await RetireMaterialiserPinsAsync(await ResolveMaterialiserPinRetirementAsync());
+    }
+
+    /// <summary>
+    /// Names every materialiser pin this leaf could have registered, while its
+    /// tree id is still bound - the half of <see cref="UnregisterMaterialiserPinsAsync"/>
+    /// that must run before the state clear. A purge resolves here and retires
+    /// only after the row is gone (issue #4700), so a purge interrupted before
+    /// its row clear leaves a leaf whose data recovery hands back still pinned.
+    /// </summary>
+    /// <returns>The pins to retire, or <see langword="null"/> when there are none.</returns>
+    private async Task<MaterialiserPinRetirement?> ResolveMaterialiserPinRetirementAsync()
+    {
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
-            return;
+            return null;
         }
 
         var idBase = ResolveConsumerIdBase();
         if (idBase is null)
         {
-            return;
+            return null;
         }
 
         var treeId = state.State.TreeId!;
@@ -961,15 +971,35 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {Leaf} of tree '{TreeId}' could not resolve its WAL partition count while retiring its materialiser pins; the pins are left registered and the WAL GC's orphan sweep will retire them instead.",
                 context.GrainId,
                 treeId);
+            return null;
+        }
+
+        var consumerIds = new string[partitionCount];
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            consumerIds[partition] = BuildConsumerId(idBase, partition, partitionCount);
+        }
+
+        return new MaterialiserPinRetirement(reporter, treeId, consumerIds);
+    }
+
+    /// <summary>Retires the pins <see cref="ResolveMaterialiserPinRetirementAsync"/> named.</summary>
+    /// <param name="retirement">The pins to retire; <see langword="null"/> when there are none.</param>
+    private async Task RetireMaterialiserPinsAsync(MaterialiserPinRetirement? retirement)
+    {
+        // Retiring the pins drops their override holds too (issue #4641), so
+        // nothing this activation raised may be assumed to stand afterwards.
+        _overrideHoldRaised = null;
+        if (retirement is null)
+        {
             return;
         }
 
-        for (var partition = 0; partition < partitionCount; partition++)
+        foreach (var consumerId in retirement.ConsumerIds)
         {
-            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             try
             {
-                await reporter.UnregisterAsync(treeId, consumerId, CancellationToken.None);
+                await retirement.Reporter.UnregisterAsync(retirement.TreeId, consumerId, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -977,11 +1007,17 @@ internal sealed partial class BPlusLeafGrain
                     ex,
                     "Leaf {Leaf} of tree '{TreeId}' failed to retire materialiser pin {Consumer}; the WAL prefix behind it stays retained until the WAL GC's orphan sweep retires it.",
                     context.GrainId,
-                    treeId,
+                    retirement.TreeId,
                     consumerId);
             }
         }
     }
+
+    /// <summary>The materialiser pins a leaf clear retires, named while its tree id was bound.</summary>
+    /// <param name="Reporter">The cursor reporter that registered them.</param>
+    /// <param name="TreeId">The tree id they were registered under.</param>
+    /// <param name="ConsumerIds">One consumer id per WAL partition.</param>
+    private sealed record MaterialiserPinRetirement(ILeafCursorReporter Reporter, string TreeId, string[] ConsumerIds);
 
     private ILeafCursorReporter? ResolveCursorReporter()
     {

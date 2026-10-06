@@ -114,7 +114,7 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     /// </summary>
     /// <remarks>
     /// The fault budget is per case, and only as large as the violation needs:
-    /// a failed persist needs one, the other three need none, and every
+    /// a failed persist and a cold start each need one, the others need none, and every
     /// unneeded fault action widens the choice at each step and dilutes the
     /// search for the state the guard is about.
     /// <para>
@@ -136,6 +136,9 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     [TestCase(WalDurabilityLifecycleGuard.NoRollbackOnFailedPersist, 1, CoyoteModelHarness.DefaultIterations, "[PersistedBeliefHonest]")]
     [TestCase(WalDurabilityLifecycleGuard.ReaderIgnoresWatermark, 0, CoyoteModelHarness.DefaultIterations, "[ShippingNeverSkips]")]
     [TestCase(WalDurabilityLifecycleGuard.TrimFloorFromHighestPin, 0, 10000, "[TrimCoveredBySnapshot]")]
+    [TestCase(WalDurabilityLifecycleGuard.AckBeforeFlush, 0, CoyoteModelHarness.DefaultIterations, "[AckedWriteDurable]")]
+    [TestCase(WalDurabilityLifecycleGuard.ColdStartResumesFromCheckpoint, 1, 10000, "[ReadPositionHonest]")]
+    [TestCase(WalDurabilityLifecycleGuard.ReplayStopsAtPersistedCheckpoint, 0, CoyoteModelHarness.DefaultIterations, "[EveryAckedWriteMaterialised]")]
     public void Removing_one_fix_is_caught_by_the_assertion_it_protects(
         WalDurabilityLifecycleGuard guard, int faultBudget, int iterations, string tag)
     {
@@ -150,5 +153,29 @@ public sealed class WalDurabilityLifecycleCoyoteTests
             string.Join("\n", result.BugReports),
             Does.Contain(tag),
             $"removing {guard} was caught, but not by {tag}: the guard is not specific to the fix it names.");
+    }
+
+    /// <summary>
+    /// The guard for issue #2270 at the liveness assertion: with the read position
+    /// advancing only over a leaf's own entries, the leaf that owns nothing never
+    /// advances, keeps its seeded block pin and holds the GC, so the stream is
+    /// never reclaimed. Every write is still materialised by its owner, so
+    /// <c>[ReclamationEventuallyAdvances]</c> is what must report it.
+    /// </summary>
+    [Test]
+    public void Removing_the_read_position_over_foreign_entries_is_caught_by_the_reclamation_assertion()
+    {
+        var result = CoyoteModelHarness.Explore(
+            new WalDurabilityLifecycleModel(
+                WalDurabilityLifecycleGuard.ReadPositionTracksOwnEntries, faultBudget: 0, neverWrittenLeaf: true));
+
+        Assert.That(
+            result.BugsFound,
+            Is.GreaterThan(0),
+            $"a read position that tracks only the leaf's own entries must produce a violation in {result.Iterations} explored runs.");
+        Assert.That(
+            string.Join("\n", result.BugReports),
+            Does.Contain("[ReclamationEventuallyAdvances]"),
+            "a read position that tracks only the leaf's own entries was caught, but not by [ReclamationEventuallyAdvances].");
     }
 }

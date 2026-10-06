@@ -53,6 +53,13 @@ public partial class BPlusLeafGrainTests
             return Task.CompletedTask;
         }
 
+        public Task MarkPurgeClearedAsync()
+        {
+            events?.Add("record-purge-mark");
+            Recorded = new LeafRowRecordState { TreeId = Recorded?.TreeId, PurgeCleared = true };
+            return Task.CompletedTask;
+        }
+
         public Task ClearAsync()
         {
             events?.Add("record-clear");

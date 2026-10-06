@@ -101,6 +101,9 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
     /// </summary>
     public Exception? ThrowOnClear { get; set; }
 
+    /// <summary>Invoked when a <see cref="ClearStateAsync"/> succeeds, before the row is dropped.</summary>
+    public Action? OnClearState { get; set; }
+
     /// <summary>
     /// When set, the next call to <see cref="WriteStateAsync"/> throws this
     /// exception instead of incrementing <see cref="WriteCount"/>. Cleared
@@ -156,6 +159,7 @@ internal sealed class FakePersistentState<T> : IPersistentState<T> where T : new
             ThrowOnClear = null;
             throw ex;
         }
+        OnClearState?.Invoke();
         State = new();
 
         // Drop the row, not just its contents. A real provider's

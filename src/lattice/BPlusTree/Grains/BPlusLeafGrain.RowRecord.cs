@@ -39,6 +39,13 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool _createIntentAdmitted;
 
+    /// <summary>
+    /// Set when this activation was admitted by re-creating a leaf a purge cleared
+    /// (issue #4700): the record's purge mark must outlive the first row write, so
+    /// it is reset only once that write is durable, never before it.
+    /// </summary>
+    private bool _purgeMarkResetOwed;
+
     /// <summary>The row-record sidecar, or <see langword="null"/> for a leaf without a Guid key.</summary>
     private ILeafRowRecordGrain? RowRecord =>
         context.GrainId.TryGetGuidKey(out var leafKey, out _)
@@ -94,11 +101,101 @@ internal sealed partial class BPlusLeafGrain
             await AdmitCreateIntentAsync();
         }
 
-        if (state.State.RowRecorded || RowRecord is not { } record)
+        if (state.State.RowRecorded || _purgeMarkResetOwed || RowRecord is not { } record)
             return;
 
         await record.RecordAsync(state.State.TreeId);
         state.State.RowRecorded = true;
+    }
+
+    /// <summary>
+    /// After the first row write of a leaf re-created from a purge's clear, resets
+    /// the record's purge mark (issue #4700). Deferred until the row is durable: a
+    /// reset that landed first and was followed by a crash would leave a rowless
+    /// leaf whose record no longer names the purge, which no path could re-create.
+    /// </summary>
+    private async Task CompleteOwedPurgeMarkResetAsync()
+    {
+        if (!_purgeMarkResetOwed || RowRecord is not { } record)
+            return;
+
+        await record.RecordAsync(state.State.TreeId);
+        _purgeMarkResetOwed = false;
+        state.State.RowRecorded = true;
+    }
+
+    /// <inheritdoc />
+    public async Task RecoverBindingAsync(string treeId, int shardIndex)
+    {
+        // A rowless leaf has nothing replayed to wait for; it is admitted only by
+        // its record's purge mark. Any other leaf waits for its replay, as every
+        // birth seam does, before its binding is touched.
+        if (IsUnadmittedRowlessActivation)
+        {
+            EnsureInternalOrigin(LatticeOperation.Admin);
+            await AdmitPurgeClearedAsync();
+        }
+
+        await AwaitReplayBarrierAsync();
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        EnsureInternalOrigin(LatticeOperation.Admin);
+
+        await SetTreeIdAsync(treeId);
+        await SetShardIndexAsync(shardIndex);
+
+        // A leaf that kept its row through an interrupted purge may still carry the
+        // purge's mark. Reset it now that the leaf is bound again, so a later purge
+        // that never reaches this leaf cannot find a stale mark and re-create it
+        // empty after its row is lost. A no-op write when there is no mark.
+        if (_purgeMarkResetOwed)
+        {
+            await CompleteOwedPurgeMarkResetAsync();
+        }
+        else if (RowRecord is { } record)
+        {
+            await record.RecordAsync(state.State.TreeId);
+            state.State.RowRecorded = true;
+        }
+    }
+
+    /// <summary>
+    /// Admits this rowless activation for recovery only when its row record shows a
+    /// purge cleared it (issue #4700), deleting the snapshot and witness the purge's
+    /// interrupted clear may have left behind. Any other rowless leaf may be one
+    /// whose row was lost, and is refused. A fault reading the record propagates.
+    /// </summary>
+    private async Task AdmitPurgeClearedAsync()
+    {
+        if (RowRecord is not { } record)
+        {
+            throw new LeafStateRowLostException(context.GrainId.ToString(), treeId: null,
+                "it has no row record to show a purge cleared it", innerException: null);
+        }
+
+        var recorded = await record.GetAsync();
+        if (recorded is not { PurgeCleared: true })
+        {
+            throw new LeafStateRowLostException(context.GrainId.ToString(), recorded?.TreeId,
+                recorded is null
+                    ? "no purge cleared it and it has no row record, so its row and record may both have been lost"
+                    : "its row record shows a row was written that no purge cleared, so its row may have been lost",
+                innerException: null);
+        }
+
+        await AdmitPurgeClearedRemnantsAsync();
+    }
+
+    /// <summary>
+    /// Finishes the clear a purge began on this leaf - its snapshot and witness may
+    /// survive an interrupted clear - and admits the activation as a re-created leaf
+    /// whose record's purge mark is reset after its first row write.
+    /// </summary>
+    private async Task AdmitPurgeClearedRemnantsAsync()
+    {
+        await ClearSnapshotStorageAsync();
+        await ClearTerminalWitnessSidecarAsync();
+        _purgeMarkResetOwed = true;
+        _createIntentAdmitted = true;
     }
 
     /// <summary>
@@ -122,12 +219,20 @@ internal sealed partial class BPlusLeafGrain
             string? evidence = null;
             string? treeId = null;
             Exception? fault = null;
+            var purgeCleared = false;
             try
             {
                 if (await record.GetAsync() is { } recorded)
                 {
-                    evidence = "its row record shows a row was written";
-                    treeId = recorded.TreeId;
+                    // A leaf a purge cleared is re-created empty by design (issue
+                    // #4700): a shard re-seeding the deterministic root leaf of a
+                    // purged copy, or a bulk load re-using a leaf id.
+                    purgeCleared = recorded.PurgeCleared;
+                    if (!purgeCleared)
+                    {
+                        evidence = "its row record shows a row was written";
+                        treeId = recorded.TreeId;
+                    }
                 }
                 else if (await grainFactory.GetGrain<ILeafSnapshotStorageGrain>(leafKey).LoadAsync(CancellationToken.None) is not null)
                 {
@@ -158,6 +263,12 @@ internal sealed partial class BPlusLeafGrain
             if (evidence is not null && !state.RecordExists)
             {
                 throw new LeafStateRowLostException(context.GrainId.ToString(), treeId ?? state.State.TreeId, evidence, fault);
+            }
+
+            if (purgeCleared)
+            {
+                await AdmitPurgeClearedRemnantsAsync();
+                return;
             }
         }
 

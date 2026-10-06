@@ -217,6 +217,10 @@ internal sealed partial class BPlusLeafGrain
                 LatticeTenantLabel.ForTree(treeIdTag));
         }
 
+        // A leaf re-created from a purge's clear resets its record's purge mark
+        // only now that its first row is durable (issue #4700).
+        await CompleteOwedPurgeMarkResetAsync();
+
         // Best-effort byte-footprint publish to the owning shard root so the
         // shard-level storage-usage rollup stays current without ever
         // walking the leaf chain on the read path. The shard root marks

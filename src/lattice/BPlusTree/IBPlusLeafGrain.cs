@@ -1077,6 +1077,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task ClearGrainStateAsync();
 
     /// <summary>
+    /// <see cref="ClearGrainStateAsync"/> for a purge of a deleted tree (issue
+    /// #4700). Before anything is cleared it marks the leaf's row record as cleared
+    /// by a purge, durably, and it keeps the record afterwards, so a recovery of
+    /// the tree can tell this deliberate clear apart from a lost row and re-create
+    /// the leaf empty. Idempotent and resumable, like the plain clear.
+    /// </summary>
+    Task ClearGrainStateForPurgeAsync();
+
+    /// <summary>
+    /// Re-asserts this leaf's binding to <paramref name="treeId"/> and
+    /// <paramref name="shardIndex"/> on recovery of a deleted tree (issue #4700).
+    /// A leaf with a state row is bound as by the birth seams. A leaf with no state
+    /// row is re-created empty only when its row record shows a purge cleared it:
+    /// the purge's leftover snapshot and witness are deleted first, and the mark is
+    /// reset once the new row is durable. Any other rowless leaf - one whose row may
+    /// have been lost - is refused with <c>LeafStateRowLostException</c>. A fault
+    /// reading the record propagates, so the recovery fails and can be retried.
+    /// </summary>
+    /// <param name="treeId">The physical tree the leaf belongs to.</param>
+    /// <param name="shardIndex">The shard the leaf belongs to.</param>
+    Task RecoverBindingAsync(string treeId, int shardIndex);
+
+    /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
     /// of this leaf's materialised projection. Two leaves that have
     /// applied the same prefix of the same per-shard WAL produce

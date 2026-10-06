@@ -50,7 +50,7 @@ public partial class TreeDeletionGrainTests
             shardRoot.MarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.UnmarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.PurgeAsync().Returns(Task.CompletedTask);
-            shardRoot.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
+            shardRoot.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromResult(-1));
         }
     }
 
