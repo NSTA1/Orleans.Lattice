@@ -20,6 +20,8 @@ BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 --- FIND
        ELSE /\ ~Held
             /\ CrossTreeAcked
+            \* An open export holds the tree's decision purges (#4694).
+            /\ xo = "none"
             /\ \/ ~rconn
                \/ detached
                \/ ~\E p \in outbox : p.type = "prep" /\ Aff(p)

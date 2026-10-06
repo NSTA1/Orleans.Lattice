@@ -120,7 +120,7 @@
         "shard": "formal-tlc-atomic-variants",
         "tlc": true,
         "includeCategories": ["TlcShardAtomicVariants"],
-        "note": "The variant configurations of every AtomicCommit* module: AtomicCommitCrossCluster's 29 slices, about 31 test-minutes measured locally at two TLC workers. A variant has no control arm, so nothing here shares work with formal-tlc-atomic."
+        "note": "The variant configurations of every AtomicCommit* module: AtomicCommitCrossCluster's 29 slices, about 34 test-minutes measured locally at two TLC workers. A variant has no control arm, so nothing here shares work with formal-tlc-atomic."
       },
       {
         "shard": "formal-tlc-backup",

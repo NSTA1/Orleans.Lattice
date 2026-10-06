@@ -1,0 +1,26 @@
+# Pairs with RAllOrNothing. The uniform arrival's guard compares the operation's
+# decision against the time of the import instead of the export's open point. An
+# export opened and closed before the operation touched the tree names nothing of
+# it; the operation then decides, the sibling's terminal arrives, and the import
+# - now after the decision - is taken as the tree's uniform arrival. The barrier
+# commits and the sibling is served post-saga while this tree, imported from rows
+# that predate the operation, is served pre-saga. Issue #4684's R2 compares the
+# decision stamp with the export's open epoch C0 (#4716).
+MODULE: RAllOrNothingUniformArrivalGuardAtImport
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: R2's opened-after-the-decision guard is evaluated at the import, not at the export's open point
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox'
+--- REPLACE
+\* MUTATION: the guard is evaluated at the import.
+         /\ LET late == xtree /\ decision[T] # "inflight" /\ snap = "inflight" /\ ~ACarried(snap)
+            IN /\ BarrierImportBare("A", snap, late)
+               /\ afence' = (afence \/ (ViaBarrier(snap) \/ late))
+         /\ outbox'
+--- END

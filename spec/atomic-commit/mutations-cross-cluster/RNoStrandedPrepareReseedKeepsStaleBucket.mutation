@@ -10,7 +10,7 @@ PERTURBS: ReseedDrain
 BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-                        ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"
+                        ELSE IF snap = "inflight" /\ ~ACarried(snap) THEN "none"
 
 --- REPLACE
 \* MUTATION: no stale clear.

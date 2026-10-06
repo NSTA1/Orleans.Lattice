@@ -12,12 +12,12 @@ PERTURBS: Bootstrap
 BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
 
 --- FIND
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- REPLACE
 \* MUTATION: the import neither notifies the barrier nor holds the fence.
          /\ UNCHANGED <<rout, rstage, uimp>>
          /\ afence' = afence
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- END

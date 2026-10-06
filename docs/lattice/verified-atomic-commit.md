@@ -57,11 +57,13 @@ precisely:
   (#4701), and a peer that needs a re-seed of two trees at once re-seeds both.
   The module checks each loss path in its own variant configurations, one loss
   per behaviour, and both trees off the log at one boundary in their own.
-- It imports a bootstrap atomically. The receiver's drain installs the rows one
-  at a time, but behind a read fence for the whole drain (issue #4526, fixed by
-  #4594), so no reader observes a partial import, and the export ships a
-  decision row for a saga that decided while it ran (issue #4627), so its
-  decision read and its rows are of one instant. A cross-tree import records the
+- It takes a cross-tree import's export in steps - open, close, drain - and
+  every other import atomically. The export ships a decision row for a saga
+  that decided while it ran (issue #4627) and completes from the source WAL any
+  saga that decided between its passes (issue #4685, fixed by #4694), so its
+  decision read and its rows are of one instant. The receiver's drain installs
+  the rows one at a time, but behind a read fence for the whole drain (issue
+  #4526, fixed by #4594), so no reader observes a partial import. A cross-tree import records the
   tree's arrival with the receiver barrier and keeps the tree read-fenced until
   the barrier decides (issue #4683, fixed by #4706); the purge hold, the export
   precondition and the boundary its fence waits on close the case where the

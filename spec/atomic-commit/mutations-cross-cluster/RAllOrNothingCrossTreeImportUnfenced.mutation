@@ -10,10 +10,10 @@ PERTURBS: Bootstrap
 BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
 
 --- FIND
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- REPLACE
 \* MUTATION: the import raises no read fence.
          /\ afence' = afence
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- END

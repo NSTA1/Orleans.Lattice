@@ -298,7 +298,10 @@ hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
 through a snapshot bootstrap, after which the origin re-ships whatever its WAL
 retains from before the cut and the receiver settles it against the exported
-decisions. A cross-tree import - a bootstrap or a re-seed - records the tree's
+decisions. A cross-tree import - a bootstrap or a re-seed - takes its export in
+steps, open and close, so the operation can decide and purge between them; the
+close reads the decision and the rows at one instant (#4685, fixed by #4694), and
+R2's guard compares the decision with the open point. It records the tree's
 arrival with the receiver barrier and holds the tree's read fence until no
 barrier of its operations is undecided and every sibling tree has passed its
 boundary (#4683, fixed by #4706; #4684). Each behaviour fixes one shape: a
@@ -359,4 +362,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 4 | 30 | 56 | 37 | 58,304 |
+| `AtomicCommitCrossCluster` | 5 | 4 | 32 | 59 | 39 | 58,304 |

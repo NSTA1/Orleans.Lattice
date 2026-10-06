@@ -13,10 +13,10 @@ BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 --- FIND
     /\ rs = "marked"
     /\ ImportGate
-    /\ \E snap \in Snap0 :
+    /\ \E snap \in ASnap :
 --- REPLACE
     /\ rs = "marked"
     /\ ImportGate
 \* MUTATION: the decision read may predate the row passes.
-    /\ \E snap \in Snap0 \cup {"inflight"} :
+    /\ \E snap \in ASnap \cup {"inflight"} :
 --- END

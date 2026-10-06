@@ -9,12 +9,12 @@ PERTURBS: ReseedDrain
 BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
-                        ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF snap = "inflight" /\ ~ACarried(snap) THEN "none"
 
 --- REPLACE
 \* MUTATION: the clear discards carried buckets too.
                         ELSE IF snap = "inflight" THEN "none"
-                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
 
 --- END
