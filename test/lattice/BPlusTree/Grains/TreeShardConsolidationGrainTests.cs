@@ -582,6 +582,64 @@ public partial class TreeShardConsolidationGrainTests
         Assert.That(forwarded["ttl"].Timestamp, Is.EqualTo(hlc));
     }
 
+    /// <summary>
+    /// Regression coverage for the false-positive <see cref="LeafStateRowLostException"/>
+    /// a concurrent split/reactivation can raise mid-drain (issue #4654 chaos finding on
+    /// <c>Consolidation_under_split_pressure_write_load_and_reactivation_loses_nothing</c>).
+    /// A donor walk that lands on a leaf mid-retirement/recreation sees no durable row and
+    /// no create-intent context, so the leaf's guard fails closed even though the leaf is
+    /// not actually lost - it is momentarily between a retire and a re-admit that the walk's
+    /// own resume will naturally re-observe. The fix retries the whole drain pass from its
+    /// original resume key, which is safe because every entry already forwarded on the
+    /// failed attempt is an idempotent LWW re-merge on retry. Without the fix this test fails
+    /// by propagating <see cref="LeafStateRowLostException"/> out of <c>DrainAsync</c>.
+    /// </summary>
+    [Test]
+    public async Task Drain_retries_the_pass_when_a_leaf_transiently_reports_its_row_lost()
+    {
+        var h = CreateGrain(
+            existingState: InFlightState(ShardConsolidationPhase.Drain),
+            leafEntries: [Entries("a"), Entries("b"), Entries("c")]);
+
+        // Leaf 1 is mid-retirement/recreation when this pass walks it: its first
+        // call fails closed with LeafStateRowLostException (no durable row, no
+        // create-intent context observed by the walk), and only then - once the
+        // walk's own resume re-resolves it - does the leaf answer normally.
+        var flakyLeafId = GrainId.Create("leaf", "donor-leaf-1");
+        var flakyLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(flakyLeafId);
+        var attempts = 0;
+        flakyLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(_ =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new LeafStateRowLostException(
+                        flakyLeafId.ToString(), TreeId,
+                        "it was reached mid-retirement by a concurrent split", null);
+                }
+
+                return Task.FromResult(new StateDelta
+                {
+                    Entries = Entries("b"),
+                    Version = new VersionVector(),
+                });
+            });
+
+        var complete = await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True,
+                "the pass must retry past the transient row-lost fault rather than fault the drain");
+            Assert.That(attempts, Is.GreaterThanOrEqualTo(2),
+                "the flaky leaf must have been re-walked after the first attempt failed closed");
+            Assert.That(h.State.State.Phase, Is.EqualTo(ShardConsolidationPhase.Swap));
+            Assert.That(h.State.State.EntriesDrained, Is.EqualTo(3),
+                "every entry, including the retried leaf's, must be forwarded exactly once");
+        });
+    }
+
     // --- Swap: the ordering invariants ---
 
     [Test]

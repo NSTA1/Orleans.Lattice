@@ -1016,29 +1016,6 @@ internal sealed class TreeShardConsolidationGrain(
         }
 
         var donor = await GetDonorAsync();
-
-        var walk = await BoundedLeafWalk.StartAsync(
-            grainFactory, donor, state.State.DrainCursorKey, budget);
-        if (!walk.HasLeaf)
-        {
-            var prevCursorOnEmpty = state.State.DrainCursorKey;
-            var prevSweepOnEmpty = state.State.DrainSweepComplete;
-            state.State.DrainCursorKey = null;
-            state.State.DrainSweepComplete = true;
-            try
-            {
-                await PersistDrainProgressAsync();
-            }
-            catch
-            {
-                state.State.DrainCursorKey = prevCursorOnEmpty;
-                state.State.DrainSweepComplete = prevSweepOnEmpty;
-                state.State.DrainCursorLeafId = prevLegacyCursor;
-                throw;
-            }
-            return true;
-        }
-
         var slots = DonorSlots;
         var vsc = VirtualShardCount;
 
@@ -1046,41 +1023,93 @@ internal sealed class TreeShardConsolidationGrain(
         if (batchSize <= 0) batchSize = LatticeOptions.DefaultConsolidationDrainBatchSize;
 
         var survivor = await GetSurvivorAsync();
-        var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var sinceVersion = new VersionVector();
 
+        // Bounded retry: BoundedLeafWalk's cursor is always a key, so
+        // restarting from the ORIGINAL state.State.DrainCursorKey (never a
+        // partial cursor this attempt advanced to) re-descends the donor's
+        // shard root fresh and routes around a leaf a concurrent split
+        // retired mid-walk. A retired-then-reactivated leaf has no persisted
+        // row and no in-memory create-intent for this caller, so
+        // BPlusLeafGrain's row-loss guard cannot tell it apart from a
+        // genuinely lost row and fails closed with
+        // LeafStateRowLostException - correctly, since the guard has no way
+        // to recognise "legitimately retired" from here. Entries already
+        // flushed to the survivor before the fault are idempotent re-merges
+        // under LWW on retry, so re-walking from the original cursor never
+        // double-applies or loses an entry. Mirrors the equivalent retry on
+        // TreeShardSplitGrain.ForwardMovedSlotEntriesAsync.
+        const int maxAttempts = 5;
+        BoundedLeafWalk walk = default!;
         var entriesForwarded = 0L;
-
-        while (walk.HasLeaf)
+        for (var attempt = 1; ; attempt++)
         {
-            var leaf = walk.CurrentLeaf;
-
-            // Slot filtering is pushed into the leaf so only folding-slot
-            // entries are serialised onto the response - the donor's other
-            // keys never cross the wire and never enter this batch.
-            var delta = await leaf.GetDeltaSinceForSlotsAsync(sinceVersion, slots, vsc);
-            foreach (var (key, lww) in delta.Entries)
+            walk = await BoundedLeafWalk.StartAsync(
+                grainFactory, donor, state.State.DrainCursorKey, budget);
+            if (!walk.HasLeaf)
             {
-                batch[key] = lww;
-                if (batch.Count >= batchSize)
+                var prevCursorOnEmpty = state.State.DrainCursorKey;
+                var prevSweepOnEmpty = state.State.DrainSweepComplete;
+                state.State.DrainCursorKey = null;
+                state.State.DrainSweepComplete = true;
+                try
+                {
+                    await PersistDrainProgressAsync();
+                }
+                catch
+                {
+                    state.State.DrainCursorKey = prevCursorOnEmpty;
+                    state.State.DrainSweepComplete = prevSweepOnEmpty;
+                    state.State.DrainCursorLeafId = prevLegacyCursor;
+                    throw;
+                }
+                return true;
+            }
+
+            var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
+            entriesForwarded = 0L;
+
+            try
+            {
+                while (walk.HasLeaf)
+                {
+                    var leaf = walk.CurrentLeaf;
+
+                    // Slot filtering is pushed into the leaf so only
+                    // folding-slot entries are serialised onto the response -
+                    // the donor's other keys never cross the wire and never
+                    // enter this batch.
+                    var delta = await leaf.GetDeltaSinceForSlotsAsync(sinceVersion, slots, vsc);
+                    foreach (var (key, lww) in delta.Entries)
+                    {
+                        batch[key] = lww;
+                        if (batch.Count >= batchSize)
+                        {
+                            entriesForwarded += batch.Count;
+                            await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
+                            batch.Clear();
+                        }
+                    }
+
+                    if (!await walk.MoveNextAsync()) break;
+                }
+
+                // Flush before the cursor is persisted, so the recorded
+                // position is never ahead of the entries the survivor has
+                // accepted. A cursor past an unflushed batch would drop those
+                // entries permanently: the next pass resumes beyond them and
+                // no later sweep re-reads them.
+                if (batch.Count > 0)
                 {
                     entriesForwarded += batch.Count;
                     await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
-                    batch.Clear();
                 }
+
+                break;
             }
-
-            if (!await walk.MoveNextAsync()) break;
-        }
-
-        // Flush before the cursor is persisted, so the recorded position is
-        // never ahead of the entries the survivor has accepted. A cursor past
-        // an unflushed batch would drop those entries permanently: the next
-        // pass resumes beyond them and no later sweep re-reads them.
-        if (batch.Count > 0)
-        {
-            entriesForwarded += batch.Count;
-            await survivor.MergeManyAsync(batch, isCrossShardMigration: true);
+            catch (LeafStateRowLostException) when (attempt < maxAttempts)
+            {
+            }
         }
 
         // Snapshot every progress field before mutating it, so a failing

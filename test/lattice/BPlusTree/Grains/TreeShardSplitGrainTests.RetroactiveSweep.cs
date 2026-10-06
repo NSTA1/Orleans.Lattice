@@ -491,4 +491,54 @@ public partial class TreeShardSplitGrainTests
             committed: true,
             Arg.Is<IReadOnlyDictionary<string, byte[]>>(d => d != null && d.Count == 1 && d[key].SequenceEqual(snap.Value!)));
     }
+
+    // -------- row-loss retry (issues #4654 / #4751) --------
+
+    /// <summary>
+    /// <see cref="TreeShardSplitGrain"/>'s retroactive-sweep phase re-resolves
+    /// the source shard's leftmost leaf id and re-runs the whole sweep on
+    /// each attempt, bounded to five, so a leaf a concurrent fold retires
+    /// mid-sweep - which fails closed with <see cref="LeafStateRowLostException"/>
+    /// because the leaf's row-loss guard cannot tell "legitimately retired"
+    /// apart from a genuinely lost row from this caller's vantage point -
+    /// must not abort the split. This is the second of the three row-loss
+    /// retry sites (alongside <c>TreeShardSplitGrain.DrainAsync</c> and
+    /// <c>TreeShardConsolidationGrain.DrainPassAsync</c>); each has its own
+    /// detector because the three sites share no retry code, so a
+    /// regression in this one specifically would go undetected by the
+    /// others.
+    /// </summary>
+    [Test]
+    public async Task RetroactiveSweep_retries_the_sweep_when_the_leftmost_leaf_transiently_reports_its_row_lost()
+    {
+        var txid = Guid.NewGuid();
+        var snap = BuildSetSnapshot(txid, out var key);
+        var (grain, _, _, target, leaf, _) = CreateGrainWithSweepWiring(
+            leafSnapshots: [snap],
+            preCheckStatus: TxStatus.InFlight);
+
+        var attempts = 0;
+        leaf.GetPendingMutationsForSlotsAsync(Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(_ =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new LeafStateRowLostException(
+                        "leaf/retired-mid-sweep", TreeId,
+                        "it was reached mid-retirement by a concurrent fold", null);
+                }
+                return Task.FromResult(new List<PendingMutationSnapshot> { snap });
+            });
+
+        await grain.InitiateSplitStateAsync(0);
+
+        Assert.That(attempts, Is.GreaterThanOrEqualTo(2),
+            "a transient row-loss fault on the first attempt's leaf must be retried, not surfaced as a split failure");
+
+        // The retried sweep must still replay the mutation normally - a
+        // retry that swallows the fault but drops the snapshot would be
+        // worse than the original false-positive abort.
+        await target.Received(1).SetAsync(key, Arg.Is<byte[]>(b => b.SequenceEqual(snap.Value!)));
+    }
 }

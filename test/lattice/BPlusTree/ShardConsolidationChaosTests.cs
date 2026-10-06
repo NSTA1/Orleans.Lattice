@@ -139,6 +139,16 @@ public class ShardConsolidationChaosTests
         // it failed on unrelated branches - and every observed failure was
         // exclusively TimeoutException with zero correctness failures alongside.
         //
+        // A reader or writer can also surface StaleShardRoutingException, tallied
+        // here on the same basis. Its own documented contract
+        // (StaleShardRoutingException.cs) is that LatticeGrain retries a stale
+        // routing within a 60-second wall-clock budget and rethrows to the caller
+        // only once that budget expires without the topology quiescing. This
+        // fixture keeps splitting and folding for 90 seconds - longer than that
+        // budget - so a surfaced instance is the documented liveness boundary
+        // under non-quiescing topology, not a correctness defect; a write that
+        // threw was never acknowledged, exactly like a timeout.
+        //
         // The properties this fixture exists to assert are unaffected and are
         // still enforced exactly as before: no seeded key unreachable, no wrong
         // value, no acknowledged write lost, no duplication. A timed-out call
@@ -177,6 +187,20 @@ public class ShardConsolidationChaosTests
                 {
                     timeouts.Add($"reader on '{key}': {ex.Message}");
                 }
+                catch (StaleShardRoutingException ex)
+                {
+                    // StaleShardRoutingException.cs documents its own contract:
+                    // LatticeGrain retries a stale routing within a 60-second
+                    // wall-clock budget and only rethrows to the caller if the
+                    // topology has not quiesced by then. This fixture churns
+                    // the map continuously for 90 seconds - longer than that
+                    // budget - so a surfaced instance here is the documented
+                    // liveness boundary under non-quiescing topology, not a
+                    // correctness failure. Tallied with the timeouts for the
+                    // same reason: the read never completed, so it says
+                    // nothing about whether the key was reachable.
+                    timeouts.Add($"reader on '{key}': {ex.Message}");
+                }
                 catch (Exception ex)
                 {
                     failures.Add($"reader faulted on '{key}': {ex.GetType().Name}: {ex.Message}");
@@ -207,6 +231,15 @@ public class ShardConsolidationChaosTests
                 {
                     // Not recorded as acknowledged: SetAsync did not return, so
                     // this write is correctly excluded from the survival check.
+                    timeouts.Add($"writer on '{key}': {ex.Message}");
+                }
+                catch (StaleShardRoutingException ex)
+                {
+                    // Same liveness boundary as the reader's catch above (see
+                    // StaleShardRoutingException.cs's own 60-second retry-budget
+                    // contract): SetAsync did not return, so this write is
+                    // correctly excluded from the survival check, exactly like a
+                    // timeout.
                     timeouts.Add($"writer on '{key}': {ex.Message}");
                 }
                 catch (Exception ex)

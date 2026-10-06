@@ -255,6 +255,99 @@ public class TreeShardSplitGrainBoundedDrainTests
     }
 
     /// <summary>
+    /// Regression coverage for the false-positive <see cref="LeafStateRowLostException"/>
+    /// a concurrent fold/reactivation can raise mid-sweep (issue #4654 chaos finding on
+    /// <c>Consolidation_under_split_pressure_write_load_and_reactivation_loses_nothing</c>).
+    /// A bounded walk that lands on a leaf mid-retirement/recreation sees no durable row
+    /// and no create-intent context, so the leaf's guard fails closed even though the leaf
+    /// is not actually lost - it is momentarily between a retire and a re-admit that the
+    /// walk's own resume will naturally re-observe. The fix retries the whole bounded pass
+    /// from its original resume key (never partially, never skipping), which is safe because
+    /// every entry already forwarded on the failed attempt is an idempotent LWW re-merge on
+    /// retry. Without the fix this test fails by propagating
+    /// <see cref="LeafStateRowLostException"/> out of <c>DrainAsync</c>.
+    /// </summary>
+    [Test]
+    public async Task Drain_retries_the_pass_when_a_leaf_transiently_reports_its_row_lost()
+    {
+        var h = CreateDrainingSplit(leafCount: 3, leavesPerPass: 3);
+
+        // Leaf 1 is mid-retirement/recreation when this pass walks it: its first
+        // call fails closed with LeafStateRowLostException (no durable row, no
+        // create-intent context observed by the walk), and only then - once the
+        // walk's own resume re-resolves it - does the leaf answer normally.
+        var flakyLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(h.LeafIds[1]);
+        var attempts = 0;
+        flakyLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(_ =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new LeafStateRowLostException(
+                        h.LeafIds[1].ToString(), TreeId,
+                        "it was reached mid-retirement by a concurrent fold", null);
+                }
+
+                return Task.FromResult(new StateDelta
+                {
+                    Entries = new Dictionary<string, LwwValue<byte[]>>
+                    {
+                        ["entry-1"] = LwwValue<byte[]>.Create(
+                            [1], new HybridLogicalClock { WallClockTicks = 1, Counter = 1 }),
+                    },
+                    Version = new VersionVector(),
+                });
+            });
+
+        var complete = await h.Grain.DrainAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True,
+                "the pass must retry past the transient row-lost fault rather than fault the drain");
+            Assert.That(attempts, Is.GreaterThanOrEqualTo(2),
+                "the flaky leaf must have been re-walked after the first attempt failed closed");
+            Assert.That(h.MergedKeys, Is.EqualTo(new[] { "entry-0", "entry-1", "entry-2" }),
+                "every entry, including the retried leaf's, must be forwarded exactly once");
+        });
+    }
+
+    /// <summary>
+    /// Exhaustion must still fail closed: a <b>persistent</b>
+    /// <see cref="LeafStateRowLostException"/> - a genuinely lost row, not a
+    /// transient retire/recreate race - must surface to the caller once the
+    /// bounded retry is exhausted, never be swallowed. This is the other half
+    /// of the retry's safety case: the retry masks a momentary race, but it
+    /// must not mask a real loss.
+    /// </summary>
+    [Test]
+    public async Task Drain_propagates_a_persistent_row_lost_fault_after_exhausting_retries()
+    {
+        var h = CreateDrainingSplit(leafCount: 3, leavesPerPass: 3);
+
+        // Leaf 1 reports a row-lost fault on every attempt: there is no point
+        // at which the walk observes the leaf recover, as a genuinely lost row
+        // never does.
+        var deadLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(h.LeafIds[1]);
+        var attempts = 0;
+        Func<NSubstitute.Core.CallInfo, Task<StateDelta>> alwaysReportsRowLost = _ =>
+        {
+            attempts++;
+            throw new LeafStateRowLostException(
+                h.LeafIds[1].ToString(), TreeId, "the row is genuinely gone, not momentarily retired", null);
+        };
+        deadLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(alwaysReportsRowLost);
+
+        Assert.That(
+            () => h.Grain.DrainAsync(),
+            Throws.InstanceOf<LeafStateRowLostException>(),
+            "a persistent row-lost fault must surface after the bounded retry is exhausted, not be swallowed");
+        Assert.That(attempts, Is.EqualTo(5), "the pass must retry exactly maxAttempts times before giving up");
+    }
+
+    /// <summary>
     /// The definition-of-done case for this grain: the chain is structurally
     /// changed between two passes. The leaf the cursor points into splits, and
     /// the resumed sweep must still forward every remaining entry rather than
