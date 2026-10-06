@@ -314,6 +314,40 @@ public class TreeShardSplitGrainBoundedDrainTests
     }
 
     /// <summary>
+    /// Exhaustion must still fail closed: a <b>persistent</b>
+    /// <see cref="LeafStateRowLostException"/> - a genuinely lost row, not a
+    /// transient retire/recreate race - must surface to the caller once the
+    /// bounded retry is exhausted, never be swallowed. This is the other half
+    /// of the retry's safety case: the retry masks a momentary race, but it
+    /// must not mask a real loss.
+    /// </summary>
+    [Test]
+    public async Task Drain_propagates_a_persistent_row_lost_fault_after_exhausting_retries()
+    {
+        var h = CreateDrainingSplit(leafCount: 3, leavesPerPass: 3);
+
+        // Leaf 1 reports a row-lost fault on every attempt: there is no point
+        // at which the walk observes the leaf recover, as a genuinely lost row
+        // never does.
+        var deadLeaf = h.Factory.GetGrain<IBPlusLeafGrain>(h.LeafIds[1]);
+        var attempts = 0;
+        Func<NSubstitute.Core.CallInfo, Task<StateDelta>> alwaysReportsRowLost = _ =>
+        {
+            attempts++;
+            throw new LeafStateRowLostException(
+                h.LeafIds[1].ToString(), TreeId, "the row is genuinely gone, not momentarily retired", null);
+        };
+        deadLeaf.GetDeltaSinceForSlotsAsync(Arg.Any<VersionVector>(), Arg.Any<int[]>(), Arg.Any<int>())
+            .Returns(alwaysReportsRowLost);
+
+        Assert.That(
+            () => h.Grain.DrainAsync(),
+            Throws.InstanceOf<LeafStateRowLostException>(),
+            "a persistent row-lost fault must surface after the bounded retry is exhausted, not be swallowed");
+        Assert.That(attempts, Is.EqualTo(5), "the pass must retry exactly maxAttempts times before giving up");
+    }
+
+    /// <summary>
     /// The definition-of-done case for this grain: the chain is structurally
     /// changed between two passes. The leaf the cursor points into splits, and
     /// the resumed sweep must still forward every remaining entry rather than
