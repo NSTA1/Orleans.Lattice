@@ -1236,6 +1236,49 @@
       ]
     },
     {
+      "id": "decommission-peer",
+      "in_process": "ILatticeReplicationControl.DecommissionPeerAsync",
+      "grpc_method": "/orleans.lattice.api.replication/DecommissionPeer",
+      "transport_scope": "both",
+      "request": "ReplicationDecommissionPeerRequestMessage",
+      "response": "ReplicationDecommissionPeerResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "PeerClusterId is null or empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The peer is still present in the configured replication peer set (ReplicationPeers / IReplicationTopology.CurrentPeers); it must be removed from ReplicationPeers before it can be decommissioned."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Idempotent per tree; iterating every registered tree and calling it again for an already-decommissioned peer re-marks the peer and is a no-op for trees that never enrolled it.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Decommissioning an already-decommissioned peer reaches the same end state and is reported via AlreadyDecommissioned=true, though the marker's timestamp is refreshed on every call.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "concurrency": {
+        "rule": "Fans out per tree rather than acting atomically across all trees; for each tree that actually enrolled the peer it un-enrols the peer from ICrossTreePeerEnrolmentGrain and synchronously force-detaches that tree's shipper so the cross-tree decision hold releases without waiting on the asynchronous, retried ReplicationDriverActivationService detach path.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DecommissionPeerAsync",
+        "src/lattice.replication/ILatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
+        "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#DecommissionPeerMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#DecommissionPeer"
+      ]
+    },
+    {
       "id": "disable-replication",
       "in_process": "ILatticeReplicationControl.DisableReplicationAsync",
       "grpc_method": "/orleans.lattice.api.replication/DisableReplication",
