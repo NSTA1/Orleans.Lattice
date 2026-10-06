@@ -11,8 +11,8 @@ SUMMARY: one participant's prepare is never written for replication, so its comm
 PERTURBS: OriginPrepare
 
 --- FIND
-    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys}
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys}
 --- REPLACE
 \* MUTATION: k2's prepare is not replicated.
-    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys \ {k2}}
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys \ {k2}}
 --- END

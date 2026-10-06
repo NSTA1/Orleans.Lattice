@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The decommission's clear reads each saga's status
+# from the tree's own registry row, which for a tree delegated to the operation's
+# barrier is still undecided after the barrier has decided: it discards that
+# tree's bucket while a sibling the barrier finalized is served post-saga.
+# #4740 resolves each saga through the registry's delegation-aware status.
+MODULE: RAllOrNothingDecommissionClearsByLocalStatus
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the decommission clears a tree delegated to a decided barrier by its own undecided row
+PERTURBS: DecomWalk
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ LET v == RView(tr)
+
+--- REPLACE
+\* MUTATION: the tree's own row, not the barrier's verdict.
+    /\ LET v == rdec[tr]
+
+--- END

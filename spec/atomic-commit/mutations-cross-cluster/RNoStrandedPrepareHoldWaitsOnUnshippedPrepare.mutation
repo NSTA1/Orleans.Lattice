@@ -19,10 +19,10 @@ SUMMARY: a terminal waits on every prepare the saga wrote, including one never s
 PERTURBS: OriginPrepare, DeliverTerminal
 
 --- FIND
-    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys}
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys}
 --- REPLACE
 \* MUTATION: k2's prepare is never shipped (trimmed or filtered).
-    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys \ {k2}}
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys \ {k2}}
 --- END
 --- FIND
     /\ \A p \in outbox : (p.type = "prep" /\ p.key = m.key) => p \in dlv

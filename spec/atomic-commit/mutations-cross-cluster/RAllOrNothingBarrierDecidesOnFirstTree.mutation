@@ -11,10 +11,10 @@ SUMMARY: the cross-tree receiver barrier decides on its first arrival rather tha
 PERTURBS: ReceiverNotify
 
 --- FIND
-           complete == \A w \in live : eff[w] # "none"
+           complete == live # {} /\ \A w \in live : eff[w] # "none"
 --- REPLACE
 \* MUTATION: one arrival completes the barrier.
-           complete == \E w \in live : eff[w] # "none"
+           complete == live # {} /\ \E w \in live : eff[w] # "none"
 --- END
 --- FIND
              THEN /\ cdec' = IF \A w \in live : eff[w] = "committed" THEN "committed" ELSE "aborted"

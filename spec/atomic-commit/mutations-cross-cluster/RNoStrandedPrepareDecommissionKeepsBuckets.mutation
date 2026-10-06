@@ -1,0 +1,20 @@
+# Pairs with RNoStrandedPrepare. The decommission abandons the origin's barriers but
+# leaves its pending buckets staged. A tree stages a prepare when it arrives,
+# before its terminal, so a bucket whose terminal had not arrived is never
+# consumed once its tree is no longer a replica. #4740 discards every pending
+# bucket from the origin on its trees (StalePendingClearer).
+MODULE: RNoStrandedPrepareDecommissionKeepsBuckets
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the decommission's walk keeps the origin's pending buckets
+PERTURBS: DecomWalk
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 2, Shape = 0, PreHold = 1, DialFaults = 0
+
+--- FIND
+          /\ rpend' = [k \in XKeys |-> IF TreeOf(k) = tr THEN "none" ELSE rpend[k]]
+
+--- REPLACE
+\* MUTATION: the walk keeps the buckets.
+          /\ rpend' = rpend
+
+--- END

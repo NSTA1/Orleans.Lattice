@@ -25,9 +25,13 @@ PERTURBS: DeliverTerminal, ReceiverRegister, ReceiverNotify
 --- END
 --- FIND
     /\ rstage' = [rstage EXCEPT ![tr] = "done"]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo, lossVars>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, bclr, bdrop, dw, bfresh>>
 --- REPLACE
 \* MUTATION: the notify is followed by the registration.
     /\ rstage' = [rstage EXCEPT ![tr] = "register"]
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo, lossVars>>
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, bclr, bdrop, dw, bfresh>>
 --- END

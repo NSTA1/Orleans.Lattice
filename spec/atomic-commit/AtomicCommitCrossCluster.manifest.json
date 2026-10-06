@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 5,
     "properties": 4,
-    "actions": 32,
-    "mutations": 59,
-    "behaviourRows": 39,
+    "actions": 35,
+    "mutations": 65,
+    "behaviourRows": 42,
     "distinctStates": 58304
   },
   "variants": {
@@ -44,10 +44,10 @@
       "distinctStates": 15984
     },
     "DecomFollow": {
-      "distinctStates": 30338
+      "distinctStates": 44455
     },
     "DecomJoin": {
-      "distinctStates": 40745
+      "distinctStates": 52501
     },
     "XGapFollowCommit": {
       "distinctStates": 54387
@@ -65,7 +65,7 @@
       "distinctStates": 64145
     },
     "XGapJoinPreHold": {
-      "distinctStates": 99577
+      "distinctStates": 97849
     },
     "XPoisonFollow": {
       "distinctStates": 29169
@@ -74,7 +74,7 @@
       "distinctStates": 50703
     },
     "XPoisonPreHold": {
-      "distinctStates": 16876
+      "distinctStates": 16588
     },
     "XDetachFollowCommit": {
       "distinctStates": 67884
@@ -83,22 +83,67 @@
       "distinctStates": 49452
     },
     "XDecomFollowCommit": {
-      "distinctStates": 104840
+      "distinctStates": 56953
     },
     "XDecomFollowAbort": {
-      "distinctStates": 79348
+      "distinctStates": 56233
     },
-    "XDecomJoin": {
-      "distinctStates": 50647
+    "XDecomJoinCommit": {
+      "distinctStates": 69762
+    },
+    "XDecomJoinAbort": {
+      "distinctStates": 68989
     },
     "MutualNoPurge": {
       "distinctStates": 45303
     },
     "MutualPurgeOne": {
-      "distinctStates": 13699
+      "distinctStates": 13363
     },
     "MutualPurgeBoth": {
-      "distinctStates": 3119
+      "distinctStates": 2543
+    },
+    "XTtlJoin": {
+      "distinctStates": 6429
+    },
+    "XTtlGap": {
+      "distinctStates": 7731
+    },
+    "XTtlDetach": {
+      "distinctStates": 31992
+    },
+    "XTtlPoison": {
+      "distinctStates": 2331
+    },
+    "XTtlDecomCommit": {
+      "distinctStates": 100241
+    },
+    "XTtlDecomAbort": {
+      "distinctStates": 99133
+    },
+    "XIdxDecomCommit": {
+      "distinctStates": 91355
+    },
+    "XIdxDecomAbort": {
+      "distinctStates": 90091
+    },
+    "XOneJoin": {
+      "distinctStates": 2030
+    },
+    "XOneGap": {
+      "distinctStates": 18392
+    },
+    "XOneDetach": {
+      "distinctStates": 10210
+    },
+    "XOnePoison": {
+      "distinctStates": 1759
+    },
+    "XOneDecom": {
+      "distinctStates": 6731
+    },
+    "XOneDecomTtl": {
+      "distinctStates": 8015
     }
   }
 }

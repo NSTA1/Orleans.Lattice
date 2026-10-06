@@ -1,0 +1,25 @@
+# Pairs with RImportFenceLifts. The receiver drops a decided barrier's tombstone
+# once the origin has purged the operation's decision, though a terminal of it
+# can still be shipped: a decommission released the cross-tree hold before tree
+# B's terminal was acknowledged, and the re-add rewinds tree B, re-shipping it
+# after the drop. The barrier reopens and waits for ever. The origin purges a
+# tree's decision only once its WAL is trimmed past every record of the
+# operation on that tree, terminals included (#4508's guard).
+MODULE: RImportFenceLiftsTombstoneDropsOverShippableTerminal
+TARGET: RImportFenceLifts
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a tombstone drops once the origin purged its decision while a terminal of it can still ship
+PERTURBS: TombstoneDrop
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0, BarrierTtl = 1, IndexFaults = 0
+
+--- FIND
+    /\ ~bdrop
+    /\ PurgeFrontierPassed
+
+--- REPLACE
+    /\ ~bdrop
+\* MUTATION: the frontier passes with a terminal left to ship.
+    /\ purged /\ (LossPath = 5 => bpur)
+
+--- END

@@ -11,9 +11,9 @@ SUMMARY: one source shard's terminal is never replicated, so the receiver tally 
 PERTURBS: OriginBroadcast
 
 --- FIND
-    /\ outbox' = outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
+    /\ outbox' = IF k \in RKeys THEN outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))} ELSE outbox
 --- REPLACE
 \* MUTATION: k2's terminal is dropped before it is shipped.
-    /\ outbox' = IF k = k2 THEN outbox
+    /\ outbox' = IF k = k2 \/ k \notin RKeys THEN outbox
                  ELSE outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
 --- END

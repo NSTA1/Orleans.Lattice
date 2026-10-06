@@ -73,32 +73,42 @@ transport assumption or its read view already does.
 | `RAllOrNothingOffLogShipperAcksWithheldRecords` | `RAllOrNothing` | Invariant | `MutualOffLog` | a shipper off the log counts the records it withholds as acknowledged, so its tree reads as past the boundary |
 | `RAllOrNothingCrossTreePurgeBeforeBarrierDecides` | `RAllOrNothing` | Invariant | `OriginPurge` | the origin purges a cross-tree sub-saga's decision before the operation's barrier has decided (issue #4684's hold removed) |
 | `RAllOrNothingCrossTreeHoldReleasedOnDetach` | `RAllOrNothing` | Invariant | `OriginPurge` | a detach releases the cross-tree purge hold |
-| `RNoStrandedPrepareDecommissionKeepsBarrierWaiting` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission leaves the removed tree in the barrier's wait set (#4698 removed) |
-| `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
-| `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
+| `RNoStrandedPrepareDecommissionKeepsBuckets` | `RNoStrandedPrepare` | Temporal | `DecomWalk` | the decommission's walk keeps the peer's pending buckets, staged before their terminals arrived (issue #4736) |
+| `RAllOrNothingDecommissionWalksTreeByTree` | `RAllOrNothing` | Invariant | `Decommission`, `DecomWalk` | the decommission drops each tree from its barriers as it walks it, deciding on the trees that remain, so the order of the walk splits a committed operation (issue #4742) |
+| `RAllOrNothingDecommissionClearsByLocalStatus` | `RAllOrNothing` | Invariant | `DecomWalk` | the decommission clears a tree delegated to a decided barrier by its own undecided row, not the barrier's verdict (issue #4742) |
+| `RAllOrNothingDecommissionLiftsImportFence` | `RAllOrNothing` | Invariant | `FenceLift` | a decommission's abandon of a barrier lifts the fence of a tree imported with the operation's verdict (issue #4742) |
+| `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | the origin's trees added back after a decommission are readable before their fresh imports |
 | `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
 | `RAllOrNothingCrossTreeExportUnderPreHoldSilo` | `RAllOrNothing` | Invariant | `ExportOpen` | a cross-tree export is served while a silo predates the purge hold (issue #4684's export precondition removed) |
 | `RAllOrNothingUniformArrivalGuardAtImport` | `RAllOrNothing` | Invariant | `Bootstrap` | R2's opened-after-the-decision guard is evaluated at the import instead of the export's open point |
 | `RAllOrNothingExportOpenPastEveryDecision` | `RAllOrNothing` | Invariant | `ExportOpen` | the export records no open point and is taken as opened after every decision |
 | `RAllOrNothingExportPassesInterleaveWithSaga` | `RAllOrNothing` | Invariant | `ExportClose` | the export reads the decision before its rows, so a saga deciding between them ships as bare committed rows (issue #4685 before #4694) |
+| `RImportFenceLiftsTombstoneDroppedAtTtl` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a decided barrier's retention clears its verdict, so a later arrival reopens it (issue #4730's third route) |
+| `RImportFenceLiftsStaleIndexEntry` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a cleared barrier stays indexed and a reader counts its entry as undecided (issue #4730 as filed) |
+| `RImportFenceLiftsTombstoneDroppedBeforeFrontier` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone is dropped with no purge frontier, and a later arrival reopens the barrier |
+| `RImportFenceLiftsTombstoneDropsOverShippableTerminal` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone drops once the origin purged its decision while a terminal of it can still ship, which a decommission and re-add then re-ships |
 
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
-`SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`): the base
+`SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`, `BarrierTtl`,
+`IndexFaults`, `OneReplicated`): the base
 cfg enables none, so the control arm checks the target on the instance with no
 loss path and a receiver that follows the stream,
 and the variant configurations check every property under each loss path with
 its fix.
 
-Every mutant but three is deadlock-free: run with a cfg naming only `TypeOK` and
+Every mutant but six is deadlock-free: run with a cfg naming only `TypeOK` and
 deadlock checking on, each reports no error (`TypeOkTallyExpectedRunaway`
 reports its own target first), so none races its target against a deadlock
-under TLC's parallel search. The three are deadlocks by construction, so each
+under TLC's parallel search. The six are deadlocks by construction, so each
 declares `DEADLOCK: off` and the harness's third arm confirms the deadlock is
 real: `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` holds a terminal that can
 never be delivered, `RCommittedEventuallyVisibleReseedWaitsOnSibling` leaves two
-re-seeds each waiting on the other, and `RImportFenceLiftsBarrierIgnoresUniformImport`
-leaves a barrier waiting for an arrival that never comes.
+re-seeds each waiting on the other, `RImportFenceLiftsBarrierIgnoresUniformImport`
+leaves a barrier waiting for an arrival that never comes, and
+`RImportFenceLiftsStaleIndexEntry`, `RImportFenceLiftsTombstoneDroppedBeforeFrontier`
+and `RImportFenceLiftsTombstoneDropsOverShippableTerminal` leave an import's fence
+held by a barrier that can never decide.
 
 These mutations are regression checks for defects this module found or
 reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`
@@ -139,7 +149,7 @@ purged while a prepare of its saga can still be re-shipped, and each loss path's
 re-seed missing a step: a stale bucket left, a decision row not fanned out, a
 replay that withholds a live saga or re-ships a purged one, withheld records
 lost, a purge the holds do not stop, an export that settles a re-seed it
-cannot vouch for, a tree left in a barrier's wait set after a decommission, a
+cannot vouch for, a decommission's walk that keeps the peer's buckets, a
 barrier that never takes a bare import's uniform arrival, and two re-seeds each
 waiting on the other's boundary. The transport stays fair about
 every record it is given; the defect is always in what it is given or in what
