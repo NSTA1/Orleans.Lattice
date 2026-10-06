@@ -324,7 +324,7 @@ public partial class ClusterWalPage : IDisposable
 
     private void OnWatchChanged() => _ = InvokeAsync(StateHasChanged);
 
-    private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(() =>
+    private void OnWatchFinished(LatticeOperationStatus status) => _ = InvokeAsync(async () =>
     {
         if (_load.IsLeft)
         {
@@ -337,6 +337,8 @@ public partial class ClusterWalPage : IDisposable
                 _receipt = ReceiptFrom(status);
                 _watch.Clear();
                 Toasts.Show("WAL partition moved.", LtToastTone.Success);
+                StateHasChanged();
+                await RereadPlacementAsync();
                 break;
             case LatticeOperationState.Cancelled:
                 Toasts.Show("The move was stopped before its flip: the partition stays on its source.", LtToastTone.Warning);
@@ -348,6 +350,42 @@ public partial class ClusterWalPage : IDisposable
 
         StateHasChanged();
     });
+
+    // A finished move flips the partition to its target under a new placement
+    // version, and a reclaim drops the retained source: the audit and the plan on
+    // screen were read before either, so both are read again. A failed re-read
+    // keeps what was shown.
+    private async Task RereadPlacementAsync()
+    {
+        if (TreeId is not { } tree || _load.IsLeft)
+        {
+            return;
+        }
+
+        var token = _load.Token;
+        var audit = ClusterLoad<TreeWalPlacementAudit>.RunAsync(ct => Facades.RequireTreeAdmin().AuditWalPlacementAsync(tree, ct), token);
+        var plan = Partition is { } partition && Target is { } target
+            ? ClusterLoad<TreeWalMovePlan>.RunAsync(ct => Facades.RequireTreeAdmin().PlanWalMoveAsync(tree, partition, target, ct), token)
+            : null;
+        var auditLoad = await audit;
+        var planLoad = plan is null ? null : await plan;
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        if (auditLoad.Value is not null)
+        {
+            _audit = auditLoad;
+        }
+
+        if (planLoad?.Value is not null)
+        {
+            _plan = planLoad;
+        }
+
+        StateHasChanged();
+    }
 
     /// <summary>The receipt a finished move's result describes.</summary>
     /// <param name="status">The succeeded move's status.</param>
@@ -392,6 +430,7 @@ public partial class ClusterWalPage : IDisposable
             _receipt = value;
             _reclaimKey = null;
             Toasts.Show("WAL source reclaimed.", LtToastTone.Success);
+            await RereadPlacementAsync();
         }
         else
         {

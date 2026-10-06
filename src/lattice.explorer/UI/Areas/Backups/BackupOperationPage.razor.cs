@@ -1,6 +1,9 @@
 using Microsoft.AspNetCore.Components;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Operations;
+using Orleans.Lattice.Backup;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Operations;
@@ -33,6 +36,7 @@ public partial class BackupOperationPage : IDisposable
     private bool _confirmRevert;
     private bool _cancelling;
     private string? _cancelError;
+    private string? _treesChangedBy;
 
     [Inject]
     internal BackupOperations Operations { get; set; } = default!;
@@ -48,6 +52,9 @@ public partial class BackupOperationPage : IDisposable
 
     [Inject]
     internal TimeProvider Time { get; set; } = default!;
+
+    [Inject]
+    internal ClusterTreeChanges TreeChanges { get; set; } = default!;
 
     private string PageTitleText => _operation?.Title
         ?? (_follower?.Status is { } status ? BackupClusterOperation.Title(status) : "Operation");
@@ -191,7 +198,21 @@ public partial class BackupOperationPage : IDisposable
         _ = InvokeAsync(StateHasChanged);
     }
 
-    private void OnFollowedChanged() => _ = InvokeAsync(StateHasChanged);
+    private void OnFollowedChanged() => _ = InvokeAsync(() =>
+    {
+        // A finished restore has replaced, repaired or created its target tree:
+        // the tree lists the circuit remembers (the Data area, the tree pickers
+        // and the cluster's tree list) describe the trees as they were before.
+        if (_follower?.Status is { State: LatticeOperationState.Succeeded } status
+            && status.Kind is BackupOperationKinds.Restore or BackupOperationKinds.ColdRestore
+            && !string.Equals(_treesChangedBy, status.OperationId, StringComparison.Ordinal))
+        {
+            _treesChangedBy = status.OperationId;
+            TreeChanges.Changed();
+        }
+
+        StateHasChanged();
+    });
 
     private void Detach()
     {
