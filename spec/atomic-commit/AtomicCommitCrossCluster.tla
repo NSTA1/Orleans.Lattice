@@ -431,12 +431,8 @@ OnStream(r) == IF Aff(r) THEN rconn /\ rs = "none" /\ ReplayShips ELSE ~boff
 \* and the forced-trim hold (#4534-B), both released on a detach.
 Held == ~detached /\ (rs # "none" \/ filt)
 
-\* The trees a decommission took out of the barrier's wait set.
-\* The trees a decommission of the origin covers, and those its walk has
-\* passed.
+\* The trees a decommission of the origin covers: every tree replicated here.
 DecTrees == IF xtree THEN ReplTrees ELSE {"A"}
-
-Dropped == IF decom THEN DecTrees \ dw ELSE {}
 
 \* The cross-tree purge hold (#4684's fix): the origin keeps a cross-tree
 \* saga's decision until every configured peer of every participant tree has
@@ -676,7 +672,7 @@ ReceiverRegister(tr) ==
 ReceiverNotify(tr) ==
     /\ rstage[tr] = "notify"
     /\ LET carr2 == [carr EXCEPT ![tr] = rout[tr]]
-           live == RWaitSet \ Dropped
+           live == RWaitSet
            eff == [w \in Trees |-> IF carr2[w] = "none" /\ uimp[w] THEN carr2[Other(w)] ELSE carr2[w]]
            \* A barrier left with no tree to wait for decides nothing: there is
            \* no verdict to take (issue #4741's fix).
@@ -1061,10 +1057,10 @@ Decommission ==
           /\ rstage' = IF open THEN [w \in Trees |-> IF w \in DecTrees THEN "idle" ELSE rstage[w]] ELSE rstage
           /\ rdeleg' = IF open THEN [w \in Trees |-> IF w \in DecTrees THEN FALSE ELSE rdeleg[w]] ELSE rdeleg
           /\ idx' = IF open THEN FALSE ELSE idx
-    \* Neither tree is a replica of the origin any longer: tree A's stream and
-    \* tree B's are both closed.
+    \* No tree replicated here is a replica of the origin any longer: tree A's
+    \* stream is closed, and so is tree B's when it is replicated here.
     /\ rconn' = FALSE
-    /\ boff' = (boff \/ xtree)
+    /\ boff' = (boff \/ "B" \in DecTrees)
     /\ rs' = "none"
     /\ filt' = FALSE
     /\ verdict' = "none"
@@ -1123,7 +1119,7 @@ ReaddFresh ==
     /\ bclr' = FALSE
     /\ bdrop' = FALSE
     /\ afresh' = TRUE
-    /\ bfresh' = xtree
+    /\ bfresh' = ("B" \in DecTrees)
     \* A tree added to the peer is a boundary (#4721), but every tree of the
     \* origin is added back here, and each passes it by its own fresh import
     \* (acaught, bcaught), so the sibling records outstanding are not tracked.

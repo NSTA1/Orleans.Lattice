@@ -86,7 +86,7 @@ transport assumption or its read view already does.
 | `RImportFenceLiftsTombstoneDroppedAtTtl` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a decided barrier's retention clears its verdict, so a later arrival reopens it (issue #4730's third route) |
 | `RImportFenceLiftsStaleIndexEntry` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a cleared barrier stays indexed and a reader counts its entry as undecided (issue #4730 as filed) |
 | `RImportFenceLiftsTombstoneDroppedBeforeFrontier` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone is dropped with no purge frontier, and a later arrival reopens the barrier |
-| `RImportFenceLiftsPurgeBeforeTerminalsAcked` | `RImportFenceLifts` | Temporal | `OriginPurge` | the cross-tree purge hold releases on the barrier's decision alone, so a terminal re-ships after the tombstone drops |
+| `RImportFenceLiftsTombstoneDropsOverShippableTerminal` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone drops once the origin purged its decision while a terminal of it can still ship, which a decommission and re-add then re-ships |
 
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
@@ -107,8 +107,8 @@ never be delivered, `RCommittedEventuallyVisibleReseedWaitsOnSibling` leaves two
 re-seeds each waiting on the other, `RImportFenceLiftsBarrierIgnoresUniformImport`
 leaves a barrier waiting for an arrival that never comes, and
 `RImportFenceLiftsStaleIndexEntry`, `RImportFenceLiftsTombstoneDroppedBeforeFrontier`
-and `RImportFenceLiftsPurgeBeforeTerminalsAcked` leave an import's fence held by
-a barrier that can never decide.
+and `RImportFenceLiftsTombstoneDropsOverShippableTerminal` leave an import's fence
+held by a barrier that can never decide.
 
 These mutations are regression checks for defects this module found or
 reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`

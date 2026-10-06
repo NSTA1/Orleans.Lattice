@@ -7,9 +7,9 @@
   "counts": {
     "invariants": 5,
     "properties": 4,
-    "actions": 34,
+    "actions": 35,
     "mutations": 65,
-    "behaviourRows": 41,
+    "behaviourRows": 42,
     "distinctStates": 58304
   },
   "variants": {
@@ -44,10 +44,10 @@
       "distinctStates": 15984
     },
     "DecomFollow": {
-      "distinctStates": 30338
+      "distinctStates": 44455
     },
     "DecomJoin": {
-      "distinctStates": 40745
+      "distinctStates": 52501
     },
     "XGapFollowCommit": {
       "distinctStates": 54387
@@ -83,13 +83,16 @@
       "distinctStates": 49452
     },
     "XDecomFollowCommit": {
-      "distinctStates": 85396
+      "distinctStates": 56953
     },
     "XDecomFollowAbort": {
-      "distinctStates": 61736
+      "distinctStates": 56233
     },
-    "XDecomJoin": {
-      "distinctStates": 47369
+    "XDecomJoinCommit": {
+      "distinctStates": 69762
+    },
+    "XDecomJoinAbort": {
+      "distinctStates": 68989
     },
     "MutualNoPurge": {
       "distinctStates": 45303
@@ -113,10 +116,16 @@
       "distinctStates": 2331
     },
     "XTtlDecomCommit": {
-      "distinctStates": 25723
+      "distinctStates": 100241
     },
     "XTtlDecomAbort": {
-      "distinctStates": 25697
+      "distinctStates": 99133
+    },
+    "XIdxDecomCommit": {
+      "distinctStates": 91355
+    },
+    "XIdxDecomAbort": {
+      "distinctStates": 90091
     },
     "XOneJoin": {
       "distinctStates": 2030
@@ -131,10 +140,10 @@
       "distinctStates": 1759
     },
     "XOneDecom": {
-      "distinctStates": 6761
+      "distinctStates": 6731
     },
     "XOneDecomTtl": {
-      "distinctStates": 9523
+      "distinctStates": 8015
     }
   }
 }
