@@ -55,10 +55,13 @@ precisely:
   #4664, fixed by #4666). A tree that stops being replicated on the receiver is
   dropped from the undecided cross-tree barrier its terminal would have reached
   (#4698). A peer decommissioned for good (#4724) releases the origin's
-  cross-tree purge holds, and on a receiving cluster it is to be dropped from
-  every undecided barrier from that peer with its pending buckets discarded -
-  modelled, and not yet in production (issue #4736). Re-added, it comes back as
-  a fresh replica (#4701). A peer that needs a re-seed of two trees at once
+  cross-tree purge holds. On a receiving cluster (#4740, issue #4736) it first
+  abandons every undecided barrier from that peer whole, taking no decision, and
+  only then settles each tree's pending buckets from the peer by that tree's
+  registry, so the order the trees are walked in cannot split an operation
+  (issue #4742). No import from the peer lifts its read fence while the peer
+  stays decommissioned. Re-added, the peer's barriers are reset and each tree
+  comes back as a fresh replica, unreadable until its fresh import (#4701). A peer that needs a re-seed of two trees at once
   re-seeds both. The module assumes an operator eventually re-adds or
   decommissions a detached peer; one left detached for ever keeps its trees'
   cross-tree decisions held at the origin for as long.

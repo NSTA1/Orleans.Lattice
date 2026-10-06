@@ -12,11 +12,11 @@ PERTURBS: FenceLift
 BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 1, DialFaults = 0, AckLoss = 0
 
 --- FIND
-    /\ IF tr = "A" THEN afence ELSE bfence
     /\ Passed(Other(tr))
+    /\ BarrierQuiet
 
 --- REPLACE
-    /\ IF tr = "A" THEN afence ELSE bfence
 \* MUTATION: the fence does not wait for the sibling's boundary.
+    /\ BarrierQuiet
 
 --- END

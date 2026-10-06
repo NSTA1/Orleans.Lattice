@@ -73,11 +73,11 @@ transport assumption or its read view already does.
 | `RAllOrNothingOffLogShipperAcksWithheldRecords` | `RAllOrNothing` | Invariant | `MutualOffLog` | a shipper off the log counts the records it withholds as acknowledged, so its tree reads as past the boundary |
 | `RAllOrNothingCrossTreePurgeBeforeBarrierDecides` | `RAllOrNothing` | Invariant | `OriginPurge` | the origin purges a cross-tree sub-saga's decision before the operation's barrier has decided (issue #4684's hold removed) |
 | `RAllOrNothingCrossTreeHoldReleasedOnDetach` | `RAllOrNothing` | Invariant | `OriginPurge` | a detach releases the cross-tree purge hold |
-| `RNoStrandedPrepareDecommissionKeepsBarrierWaiting` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission leaves the removed tree in the barrier's wait set (#4698 removed) |
-| `RNoStrandedPrepareDecommissionKeepsBuckets` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission keeps the peer's pending buckets, staged before their terminals arrived (issue #4736) |
-| `RLinearizedTerminalsBarrierDecidesWithNoArrival` | `RLinearizedTerminals` | Invariant | `Decommission` | with one participant replicated here, the decommission decides the barrier over an empty remainder, so a later join is finalized committed though the operation aborted (issue #4741, defence in depth) |
-| `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
-| `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
+| `RNoStrandedPrepareDecommissionKeepsBuckets` | `RNoStrandedPrepare` | Temporal | `DecomWalk` | the decommission's walk keeps the peer's pending buckets, staged before their terminals arrived (issue #4736) |
+| `RAllOrNothingDecommissionWalksTreeByTree` | `RAllOrNothing` | Invariant | `Decommission`, `DecomWalk` | the decommission drops each tree from its barriers as it walks it, deciding on the trees that remain, so the order of the walk splits a committed operation (issue #4742) |
+| `RAllOrNothingDecommissionClearsByLocalStatus` | `RAllOrNothing` | Invariant | `DecomWalk` | the decommission clears a tree delegated to a decided barrier by its own undecided row, not the barrier's verdict (issue #4742) |
+| `RAllOrNothingDecommissionLiftsImportFence` | `RAllOrNothing` | Invariant | `FenceLift` | a decommission's abandon of a barrier lifts the fence of a tree imported with the operation's verdict (issue #4742) |
+| `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | the origin's trees added back after a decommission are readable before their fresh imports |
 | `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
 | `RAllOrNothingCrossTreeExportUnderPreHoldSilo` | `RAllOrNothing` | Invariant | `ExportOpen` | a cross-tree export is served while a silo predates the purge hold (issue #4684's export precondition removed) |
 | `RAllOrNothingUniformArrivalGuardAtImport` | `RAllOrNothing` | Invariant | `Bootstrap` | R2's opened-after-the-decision guard is evaluated at the import instead of the export's open point |
@@ -149,7 +149,7 @@ purged while a prepare of its saga can still be re-shipped, and each loss path's
 re-seed missing a step: a stale bucket left, a decision row not fanned out, a
 replay that withholds a live saga or re-ships a purged one, withheld records
 lost, a purge the holds do not stop, an export that settles a re-seed it
-cannot vouch for, a tree left in a barrier's wait set after a decommission, a
+cannot vouch for, a decommission's walk that keeps the peer's buckets, a
 barrier that never takes a bare import's uniform arrival, and two re-seeds each
 waiting on the other's boundary. The transport stays fair about
 every record it is given; the defect is always in what it is given or in what

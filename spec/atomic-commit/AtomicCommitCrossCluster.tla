@@ -608,7 +608,7 @@ DeliverPrepare(m) ==
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
     /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
 
 \* A source-shard terminal reaches the receiver: IReplicationApplyGrain.
 \* ApplyTxTerminalAsync records it against the tree's registry tally
@@ -652,7 +652,7 @@ DeliverTerminal(m) ==
     /\ \/ outbox' = outbox \ {m}
        \/ AckLoss = 1 /\ outbox' = outbox
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, rdeleg, rdial, carr, cdec, rfin,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
 
 (***************************************************************************)
 (* THE CROSS-TREE RECEIVER BARRIER.                                        *)
@@ -1008,7 +1008,7 @@ ShipperGap(m) ==
     /\ rs' = "marked"
     /\ losses' = 1
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   purged, ptrim, detached, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   purged, ptrim, detached, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars>>
 
 \* A peer is removed from the topology (#4534-B). In one write its shipper
 \* marks itself DetachedFromLog and takes the peer off the log, then leaves
@@ -1022,7 +1022,7 @@ Detach ==
     /\ rs' = "marked"
     /\ losses' = 1
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars>>
 
 \* The peer is added back (EnsureActiveAsync): the shipper re-takes the
 \* replay hold and re-marks the re-seed at the current export epoch, so no
@@ -1124,9 +1124,9 @@ ReaddFresh ==
     /\ bdrop' = FALSE
     /\ afresh' = TRUE
     /\ bfresh' = xtree
-    \* A tree added to the peer is a boundary like the upgrade's: its fence
-    \* waits until the peer has applied every sibling record written before it.
-    /\ ubnd' = ubnd \cup {r \in outbox : ~Aff(r)}
+    \* A tree added to the peer is a boundary (#4721), but every tree of the
+    \* origin is added back here, and each passes it by its own fresh import
+    \* (acaught, bcaught), so the sibling records outstanding are not tracked.
     /\ bcaught' = FALSE
     /\ uimp' = [w \in Trees |-> FALSE]
     /\ xo' = "none"
@@ -1135,7 +1135,7 @@ ReaddFresh ==
     /\ rfin' = {}
     /\ rtodo' = rtodo \ AKeys
     /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv,
-                   gone, purged, ptrim, rpoison, losses, preguard,
+                   gone, purged, ptrim, rpoison, losses, preguard, ubnd,
                    boff, bpur, bfence, acaught, abnd, dw>>
 
 \* The receiver's applier gives up on a prepare it deferred past
@@ -1158,7 +1158,7 @@ ReceiverPoison(m) ==
     /\ losses' = 1
     /\ verdict' = IF filt THEN "ship" ELSE verdict
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, preguard, filt, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rs, detached, preguard, filt, afence, ubnd, decom, afresh, bVars>>
 
 \* The poison's re-seed: a bootstrap the receiver starts
 \* (ReceiverSagaPoisonReseed), drained behind the read fence. Committed rows
@@ -1238,7 +1238,7 @@ ReseedRewind ==
     /\ filt' = TRUE
     /\ verdict' = "none"
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars>>
 
 \* The replay filter withholds a record of a purged saga: the shipper
 \* consumes it without shipping it.
@@ -1251,7 +1251,7 @@ ReplayWithhold(m) ==
     /\ outbox' = outbox \ {m}
     /\ verdict' = "withhold"
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
 
 \* Every cursor has passed the replay horizon: the filter clears, and with
 \* it the replay hold.
@@ -1262,20 +1262,24 @@ FilterClear ==
     /\ filt' = FALSE
     /\ verdict' = "none"
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars, dw, bfresh>>
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars>>
 
 \* The origin's cross-tree purge frontier has passed the operation (#4733):
-\* its decision is purged on every participant replicated here. Then no
-\* arrival for it can come again: no export carries its decision row; the
-\* cross-tree hold (CrossTreeAcked) purged it only once the peer had
-\* acknowledged every terminal of it, so none is shipped again in the
-\* ordinary stream; and a rewind or a bootstrap hand-off replays it through
-\* the replay filter, which withholds a purged saga whole, while the replay
-\* hold stops a purge during a replay. The origin advertises it on the
-\* source-frontier header. Tree B's decision row is purged only on the path
-\* that takes both trees off the log; on every other path tree B is never
-\* imported and its stream never rewinds, so its row reaches no export.
-PurgeFrontierPassed == purged /\ (LossPath = 5 => bpur)
+\* its decision is purged on every participant. Then no arrival for it can
+\* come again: no export carries its decision row, and the origin purges a
+\* tree's row only once its WAL is trimmed past every record of the
+\* operation on that tree (#4508's guard), terminals included, so neither the
+\* stream nor a rewind ships one again. The origin advertises it on the
+\* source-frontier header. The model's purge of tree A trims only its
+\* prepares, and tree B's row is purged only on the path that takes both
+\* trees off the log; while the cross-tree hold stands, every terminal was
+\* acknowledged first (CrossTreeAcked), but a decommission releases the hold,
+\* and a re-add then rewinds tree B. So the frontier is stated directly: no
+\* terminal of the operation is left to ship.
+PurgeFrontierPassed ==
+    /\ purged
+    /\ LossPath = 5 => bpur
+    /\ ~\E r \in outbox : r.type = "term"
 
 \* The receiver drops a decided barrier's tombstone once the origin's purge
 \* frontier has passed its operation: no arrival for it can come again, and a

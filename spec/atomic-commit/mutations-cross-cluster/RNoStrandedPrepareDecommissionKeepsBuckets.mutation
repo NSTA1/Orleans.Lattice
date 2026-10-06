@@ -1,24 +1,20 @@
-# Pairs with RNoStrandedPrepare. A receiving cluster's decommission of a peer
-# drops its trees from every undecided barrier but leaves the peer's pending
-# buckets staged. A tree stages a prepare when it arrives, before its terminal,
-# so a tree whose terminal had not arrived holds buckets that nothing will ever
-# consume: its terminal is dropped once it is no longer a replica, and a re-add
-# is the operator's choice. Issue #4736's fix discards every pending bucket from
-# the peer on its trees (StalePendingClearer).
+# Pairs with RNoStrandedPrepare. The decommission abandons the origin's barriers but
+# leaves its pending buckets staged. A tree stages a prepare when it arrives,
+# before its terminal, so a bucket whose terminal had not arrived is never
+# consumed once its tree is no longer a replica. #4740 discards every pending
+# bucket from the origin on its trees (StalePendingClearer).
 MODULE: RNoStrandedPrepareDecommissionKeepsBuckets
 TARGET: RNoStrandedPrepare
 CLASS: Temporal
-SUMMARY: a decommission drops the peer's trees from its barriers but keeps their pending buckets
-PERTURBS: Decommission
+SUMMARY: the decommission's walk keeps the origin's pending buckets
+PERTURBS: DecomWalk
 BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 2, Shape = 0, PreHold = 1, DialFaults = 0
 
 --- FIND
-    /\ afresh' = TRUE
-    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+          /\ rpend' = [k \in XKeys |-> IF TreeOf(k) = tr THEN "none" ELSE rpend[k]]
 
 --- REPLACE
-    /\ afresh' = TRUE
-\* MUTATION: the peer's buckets are kept.
-    /\ rpend' = rpend
+\* MUTATION: the walk keeps the buckets.
+          /\ rpend' = rpend
 
 --- END
