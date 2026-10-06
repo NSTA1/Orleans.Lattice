@@ -66,6 +66,11 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         Logger.LogInformation(
             "Cross-tree receiver {Key}: retention window expired; clearing state.",
             GrainContext.GrainId.Key);
+
+        // An index entry must not outlive the state it points to (#4730): a
+        // cleared barrier reads as undecided. A withdrawal that fails throws,
+        // the decided state is kept, and the entry keeps reading decided.
+        await WithdrawFromIndexesAsync(state.State.WaitSet);
         await state.ClearStateAsync();
     }
 
@@ -470,9 +475,48 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> SettleIndexEntryAsync(string treeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.Replication);
+
+        var holds = state.State.WaitSet.Count > 0
+            && state.State.WaitSet.Contains(treeId)
+            && !(state.State.Decided && !_decisionAwaitingPersist);
+        if (holds)
+        {
+            return true;
+        }
+
+        await WithdrawFromIndexesAsync([treeId]);
+        return false;
+    }
+
+    /// <summary>
+    /// Durably withdraws this barrier from the indexes of
+    /// <paramref name="trees"/>. A failure propagates (#4730).
+    /// </summary>
+    private async Task WithdrawFromIndexesAsync(IEnumerable<string> trees)
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in trees)
+        {
+            await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).RemoveAsync(key);
+        }
+    }
+
     /// <summary>
     /// Withdraws the decided barrier from its trees' indexes. Best effort: an
-    /// entry left behind costs a reader one status read.
+    /// entry left behind is withdrawn by the next import of its tree that
+    /// settles it (<see cref="SettleIndexEntryAsync"/>), or before the barrier's
+    /// retention clears it.
     /// </summary>
     private async Task UnindexAsync()
     {
