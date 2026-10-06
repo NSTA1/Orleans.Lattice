@@ -67,11 +67,38 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             "Cross-tree receiver {Key}: retention window expired; clearing state.",
             GrainContext.GrainId.Key);
 
-        // An index entry must not outlive the state it points to (#4730): a
-        // cleared barrier reads as undecided. A withdrawal that fails throws,
-        // the decided state is kept, and the entry keeps reading decided.
+        // An index entry must not outlive the state it points to (#4730). A
+        // withdrawal that fails throws, and the full decided state is kept.
         await WithdrawFromIndexesAsync(state.State.WaitSet);
-        await state.ClearStateAsync();
+
+        // Keep a tombstone of the decision rather than clear it (#4730). The
+        // origin can ship the operation again for as long as it stores the
+        // decision - a rewind re-ships its terminals, and an export carries its
+        // decision row while the cross-tree hold is unreleased - and a cleared
+        // barrier would reopen on that arrival and wait for ever for a sibling
+        // whose terminal was acknowledged long ago. A decided tombstone takes
+        // the decided short-circuit instead: it finalizes the arriving tree
+        // with the verdict and never re-indexes. The receiver cannot observe
+        // the origin's purge, so the tombstone is kept: identity and verdict
+        // only.
+        var tombstone = new CrossTreeReceiverState
+        {
+            OriginClusterId = state.State.OriginClusterId,
+            OperationId = state.State.OperationId,
+            Decided = true,
+            Committed = state.State.Committed,
+        };
+        var previous = state.State;
+        state.State = tombstone;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State = previous;
+            throw;
+        }
     }
 
     /// <summary>

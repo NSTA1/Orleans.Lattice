@@ -109,9 +109,79 @@ public partial class CrossTreeImportBarrierIntegrationTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(status.Opened, Is.False, "precondition: the retention cleared the barrier");
-            Assert.That(await indexA.GetAsync(), Does.Not.Contain(key), "no entry outlives the cleared barrier");
-            Assert.That(await indexB.GetAsync(), Does.Not.Contain(key), "no entry outlives the cleared barrier");
+            Assert.That(status.Opened, Is.False, "precondition: the retention compacted the barrier");
+            Assert.That(status.Decided, Is.True, "the retention keeps a decided tombstone");
+            Assert.That(await Barrier(operationId).GetDecisionAsync(), Is.EqualTo(TxStatus.Committed));
+            Assert.That(await indexA.GetAsync(), Does.Not.Contain(key), "no entry outlives the compacted barrier");
+            Assert.That(await indexB.GetAsync(), Does.Not.Contain(key), "no entry outlives the compacted barrier");
+        });
+    }
+
+    /// <summary>Decides the operation's barrier on site B, then runs its retention.</summary>
+    private async Task DecideThenExpireAsync(string treeA, string treeB, string operationId)
+    {
+        await AuthorCrossTreeWriteAsync(treeA, treeB, operationId);
+        await DeliverTreeBAsync(treeA, treeB, operationId);
+        await StartBootstrapAsync(treeA);
+        Assert.That(await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental), Is.EqualTo(LatticeBootstrapState.LiveIncremental),
+            "precondition: the barrier decides");
+        await Barrier(operationId).AsReference<IRemindable>().ReceiveReminder(BarrierRetentionReminder, default);
+    }
+
+    [Test]
+    public async Task A_terminal_re_shipped_after_the_barrier_retention_does_not_reopen_it()
+    {
+        // Issue #4730, route 3: a rewind re-ships tree A's retained terminal
+        // after the barrier's retention ran. A cleared barrier would reopen on
+        // it and wait for ever for tree B, whose terminal was acknowledged long
+        // ago, pinning every later import of either tree.
+        const string treeA = "xtib-reopen-term-a";
+        const string treeB = "xtib-reopen-term-b";
+        const string operationId = "xtib-reopen-term-op";
+        await DecideThenExpireAsync(treeA, treeB, operationId);
+
+        var txid = (await ExportedCrossTreeDecisionAsync(treeA, operationId)).TransactionId;
+        await _siteB.Client.GetGrain<IReplicationApplyGrain>(treeA).ApplyTxTerminalAsync(
+            txid, committed: true, ShardOf("k"),
+            HybridLogicalClock.Tick(new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks }), SiteAClusterId,
+            atomicShardCount: 0, crossTreeOperationId: operationId, crossTreeWaitSet: [treeA, treeB]);
+        var status = await Barrier(operationId).GetStatusAsync();
+
+        await StartBootstrapAsync(treeB);
+        var phaseB = await AwaitPhaseAsync(treeB, LatticeBootstrapState.LiveIncremental);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(status.Decided, Is.True, "the re-shipped terminal finds the decided tombstone");
+            Assert.That(await _siteB.Client.GetGrain<ICrossTreeBarrierIndexGrain>(treeB).GetAsync(),
+                Does.Not.Contain(LatticeCrossTreeReceiverGrain.ComputeKey(SiteAClusterId, operationId)), "the barrier never re-indexes");
+            Assert.That(phaseB, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "a later import of the sibling is not pinned");
+            Assert.That(await ReadAsync(treeA, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 1 })));
+            Assert.That(await ReadAsync(treeB, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 2 })));
+        });
+    }
+
+    [Test]
+    public async Task A_re_drain_after_the_barrier_retention_whose_export_still_carries_the_decision_lifts_its_fence()
+    {
+        // Issue #4730, route 3: a re-seed of tree A drains an export that still
+        // carries the operation's decision row (the origin keeps it while the
+        // cross-tree hold is unreleased) after the barrier's retention ran.
+        const string treeA = "xtib-reopen-drain-a";
+        const string treeB = "xtib-reopen-drain-b";
+        const string operationId = "xtib-reopen-drain-op";
+        await DecideThenExpireAsync(treeA, treeB, operationId);
+        Assert.That((await ExportAsync(treeA)).Any(e => e.IsDecision && e.CrossTreeOperationId == operationId), Is.True,
+            "precondition: the export still carries the decision row");
+
+        await StartBootstrapAsync(treeA);
+        var phase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the re-drain's fence lifts");
+            Assert.That((await Barrier(operationId).GetStatusAsync()).Decided, Is.True);
+            Assert.That(await ReadAsync(treeA, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 1 })));
         });
     }
 
