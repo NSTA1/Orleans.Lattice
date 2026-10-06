@@ -20,7 +20,7 @@ namespace Orleans.Lattice.Api.Replication;
 /// The engine's precondition / mode-change exceptions surface unchanged so a
 /// transport can map them to the appropriate status.
 /// </remarks>
-internal sealed class LatticeReplicationControl : ILatticeReplicationControl
+internal sealed class LatticeReplicationControl : ILatticeReplicationControl, ILatticeReplicationPeerAdmin
 {
     private readonly ILatticeReplicationConfigAuthority _authority;
     private readonly ReplicationAccessAuthorizer _authorizer;

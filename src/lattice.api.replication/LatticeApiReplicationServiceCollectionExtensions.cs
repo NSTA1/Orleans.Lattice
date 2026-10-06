@@ -77,6 +77,14 @@ public static partial class LatticeApiReplicationServiceCollectionExtensions
         // that every transport binding (gRPC and MCP) adapts over.
         builder.Services.TryAddSingleton<ILatticeReplicationControl, LatticeReplicationControl>();
 
+        // The peer-decommissioning facade is the same instance as the control
+        // facade above (LatticeReplicationControl implements both interfaces);
+        // it is registered separately so a cluster-wide operator verb that is
+        // not shaped like the tree-scoped control surface stays on its own
+        // public interface instead of widening ILatticeReplicationControl.
+        builder.Services.TryAddSingleton<ILatticeReplicationPeerAdmin>(
+            sp => (ILatticeReplicationPeerAdmin)sp.GetRequiredService<ILatticeReplicationControl>());
+
         // Idempotency marker: the structural wiring runs once regardless of how
         // many times the host calls this method. A repeat call still layers any
         // supplied configure delegate above, matching how the sibling add-ons treat

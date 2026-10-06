@@ -19,7 +19,7 @@ namespace Orleans.Lattice.Api.Mcp;
 /// outbound request by the credential-forwarding interceptor and the remote cluster
 /// re-runs the facade's own fail-closed replication access gate.
 /// </remarks>
-internal sealed class GrpcLatticeReplicationControl : ILatticeReplicationControl
+internal sealed class GrpcLatticeReplicationControl : ILatticeReplicationControl, ILatticeReplicationPeerAdmin
 {
     private readonly LatticeReplicationApiGrpcClient _client;
 

@@ -90,6 +90,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
 internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServiceBase
 {
     private readonly ILatticeReplicationControl _control;
+    private readonly ILatticeReplicationPeerAdmin _peerAdmin;
     private readonly ILatticeReplicationApiCredentialBridge _credentialBridge;
     private readonly ILatticeReplicationApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeReplicationApiGrpcOptions> _options;
@@ -108,6 +109,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     public LatticeReplicationGrpcService(
         LatticeReplicationGrpcMethods methods,
         ILatticeReplicationControl control,
+        ILatticeReplicationPeerAdmin peerAdmin,
         ILatticeReplicationApiCredentialBridge credentialBridge,
         ILatticeReplicationApiAuthSchemeSource authSchemeSource,
         IOptions<LatticeReplicationApiGrpcOptions> options,
@@ -115,12 +117,14 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
+        ArgumentNullException.ThrowIfNull(peerAdmin);
         ArgumentNullException.ThrowIfNull(credentialBridge);
         ArgumentNullException.ThrowIfNull(authSchemeSource);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(logger);
 
         _control = control;
+        _peerAdmin = peerAdmin;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;
@@ -209,9 +213,9 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
 
     /// <inheritdoc />
     public override Task<ReplicationDecommissionPeerResponse> DecommissionPeer(ReplicationDecommissionPeerRequestMessage request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
+        => InvokeAsync(request, context, static async (ILatticeReplicationPeerAdmin peerAdmin, ReplicationDecommissionPeerRequestMessage req, CancellationToken ct) =>
         {
-            var result = await control.DecommissionPeerAsync(req.PeerClusterId, ct).ConfigureAwait(false);
+            var result = await peerAdmin.DecommissionPeerAsync(req.PeerClusterId, ct).ConfigureAwait(false);
             return new ReplicationDecommissionPeerResponse
             {
                 PeerClusterId = result.PeerClusterId,
@@ -231,7 +235,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         return Task.FromResult(_authSchemeSource.GetAdvertisement());
     }
 
-    private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
         Func<ILatticeReplicationControl, TRequest, CancellationToken, Task<TResponse>> handler)
@@ -239,12 +243,37 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(context);
 
+        return InvokeCoreAsync(context, ct => handler(_control, request, ct));
+    }
+
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
+        TRequest request,
+        ServerCallContext context,
+        Func<ILatticeReplicationPeerAdmin, TRequest, CancellationToken, Task<TResponse>> handler)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+
+        return InvokeCoreAsync(context, ct => handler(_peerAdmin, request, ct));
+    }
+
+    /// <summary>
+    /// Shared call wrapper behind both <see cref="InvokeAsync{TRequest, TResponse}(TRequest, ServerCallContext, Func{ILatticeReplicationControl, TRequest, CancellationToken, Task{TResponse}})"/>
+    /// overloads: stamps the caller's credential and asserted active tenant onto
+    /// the ambient context for the duration of <paramref name="invoke"/>, then
+    /// translates the engine's precondition / mode-change / authorization
+    /// failures onto gRPC status codes.
+    /// </summary>
+    private async Task<TResponse> InvokeCoreAsync<TResponse>(
+        ServerCallContext context,
+        Func<CancellationToken, Task<TResponse>> invoke)
+    {
         using var credentialScope = StampCallerCredential(context);
         using var activeTenantScope = StampActiveTenant(context);
 
         try
         {
-            return await handler(_control, request, context.CancellationToken).ConfigureAwait(false);
+            return await invoke(context.CancellationToken).ConfigureAwait(false);
         }
         catch (RpcException)
         {

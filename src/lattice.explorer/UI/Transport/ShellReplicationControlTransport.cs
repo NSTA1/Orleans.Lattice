@@ -10,7 +10,7 @@ namespace Orleans.Lattice.Explorer.UI.Transport;
 /// </summary>
 /// <param name="channel">The circuit's transport channel.</param>
 internal sealed class ShellReplicationControlTransport(ShellTransportChannel channel)
-    : ShellTransportAdapter<LatticeReplicationApiGrpcClient>(channel, LatticeReplicationApiGrpcClient.Create), ILatticeReplicationControl
+    : ShellTransportAdapter<LatticeReplicationApiGrpcClient>(channel, LatticeReplicationApiGrpcClient.Create), ILatticeReplicationControl, ILatticeReplicationPeerAdmin
 {
     /// <inheritdoc />
     public Task<ReplicationEnableResult> EnableReplicationAsync(

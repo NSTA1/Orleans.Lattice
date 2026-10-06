@@ -2,7 +2,7 @@ namespace Orleans.Lattice.Api.Replication;
 
 /// <summary>
 /// The transport-agnostic outcome of a
-/// <see cref="ILatticeReplicationControl.DecommissionPeerAsync"/> call.
+/// <see cref="ILatticeReplicationPeerAdmin.DecommissionPeerAsync"/> call.
 /// Decommissioning is permanent: unlike removing a peer from
 /// <c>ReplicationPeers</c> (a detach, which keeps every tree's durable
 /// enrolment so the peer can be re-added without a fresh bootstrap),

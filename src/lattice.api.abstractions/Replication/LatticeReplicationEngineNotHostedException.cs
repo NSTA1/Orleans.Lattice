@@ -3,7 +3,7 @@ using Orleans.Serialization.Cloning;
 namespace Orleans.Lattice.Api.Replication;
 
 /// <summary>
-/// Thrown by <see cref="ILatticeReplicationControl.DecommissionPeerAsync"/> when
+/// Thrown by <see cref="ILatticeReplicationPeerAdmin.DecommissionPeerAsync"/> when
 /// the caller is authorized but no replication engine is hosted in this
 /// process, so there is no <c>ILatticeReplicationPeerDecommissioner</c> to
 /// carry the decommission out. This is a hosting-topology fault, not an
