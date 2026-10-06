@@ -171,6 +171,47 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     }
 
     [Test]
+    public async Task A_sibling_drained_only_from_an_export_opened_before_the_capture_does_not_pass_the_boundary()
+    {
+        // Route 2 counts a drain of the sibling only from an export numbered above
+        // the captured epoch. The sibling here was drained first, from an export
+        // that opened before the tree's export captured its boundary, and its
+        // shipper vouches nothing: that drain cannot carry a sibling record
+        // written between its export and the capture, so the tree stays fenced
+        // until the sibling is drained again from a later export.
+        const string tree = "xtsb-stale-t";
+        const string sibling = "xtsb-stale-s";
+        await _siteA.Client.GetGrain<ILattice>(tree).SetAsync("k", [1]);
+        await _siteA.Client.GetGrain<ILattice>(sibling).SetAsync("k", [2]);
+
+        var siblingFirst = await ImportAsync(sibling, LatticeBootstrapState.LiveIncremental);
+        var drainedBefore = await Coordinator(sibling).GetDrainedExportEpochAsync(SiteAClusterId);
+        Assert.That(siblingFirst, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "precondition: the sibling was drained first");
+        Assert.That(drainedBefore, Is.Not.Null, "precondition: the sibling has a drained export epoch");
+
+        Siblings[sibling] = true;
+        var held = await ImportAsync(tree, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
+        await Task.Delay(1500);
+        var heldPhase = await Coordinator(tree).GetStateAsync(CancellationToken.None);
+        var fencedWhileHeld = await FencedAsync(tree);
+
+        var siblingAgain = await ImportAsync(sibling, LatticeBootstrapState.LiveIncremental);
+        var released = await AwaitPhaseAsync(tree, TimeSpan.FromSeconds(60), LatticeBootstrapState.LiveIncremental);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(held, Is.Not.EqualTo(LatticeBootstrapState.Failed));
+            Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff),
+                "a drain from an export opened before the capture does not pass the boundary");
+            Assert.That(fencedWhileHeld, Is.True);
+            Assert.That(siblingAgain, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+            Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
+                "a drain from an export opened after the capture does");
+            Assert.That(await FencedAsync(tree), Is.False);
+        });
+    }
+
+    [Test]
     public async Task A_sibling_passes_once_its_shipper_vouches_acknowledged_positions_past_the_captured_tails()
     {
         const string tree = "xtsb-route1-t";
