@@ -20,9 +20,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Crash recovery rides on replication's own at-least-once redelivery: every
 /// <see cref="NotifyTerminalAsync"/> persists before returning and returns the
 /// full finalize set whenever decided, so a redelivered terminal re-heals
-/// materialization idempotently. A one-shot retention reminder clears the
-/// persisted state once the configured <see cref="LatticeOptions.AtomicWriteRetention"/>
-/// elapses after the decision.
+/// materialization idempotently. A one-shot retention reminder compacts the
+/// persisted state to a decided tombstone - identity and verdict only - once
+/// the configured <see cref="LatticeOptions.AtomicWriteRetention"/> elapses
+/// after the decision, having withdrawn the barrier from its trees' indexes
+/// first (issue #4730). The tombstone is kept: the origin can ship the
+/// operation again while it stores the decision, and a late arrival must find
+/// the barrier decided rather than reopen it.
 /// </para>
 /// </summary>
 internal sealed class LatticeCrossTreeReceiverGrain(

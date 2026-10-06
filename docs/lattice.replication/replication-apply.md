@@ -345,6 +345,26 @@ its wait set, under every tree it waits for (`ICrossTreeBarrierIndexGrain`,
 keyed by the receiver tree), and withdraws once decided, so an import of one
 of those trees can find it.
 
+An index entry never outlives the barrier state it points to
+([#4730](https://github.com/NSTA1/Orleans.Lattice/issues/4730)). The
+withdrawal on decision is best effort, so an import does not trust an entry:
+it asks the barrier, serialized with whatever opens or decides it, whether it
+still holds the tree. A barrier holds the tree only while it has opened,
+waits for the tree, and has no durable decision. Otherwise it withdraws the
+entry, and it never holds the tree's fence. That covers a barrier that never
+opened, because its open write failed after it indexed itself: its sibling's
+terminal is not acknowledged until the notify succeeds, so the sibling
+boundary keeps the tree fenced until it is redelivered. When a decided
+barrier's retention runs, it withdraws itself from every index and keeps a
+**decided tombstone** (identity and verdict) instead of clearing its state.
+The origin can ship the operation again for as long as it stores the
+decision: a rewind re-ships its terminals, and an export carries its decision
+row while the cross-tree decision purge hold is unreleased. A cleared barrier
+would reopen on such an arrival and wait for ever for a sibling whose terminal
+was acknowledged long ago. The tombstone finalizes the arriving tree with the
+verdict instead. The receiver cannot observe the origin's purge, so a
+tombstone is kept indefinitely: one small row per cross-tree operation.
+
 A shipped cross-tree terminal carries the operation's **decision stamps**:
 per participating tree, the export epoch the origin read after the decision
 was durable (`WalRecord.CrossTreeDecisionStamps`, on the wire only). The
