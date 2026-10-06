@@ -7,18 +7,39 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// The Apps area's address grammar: <c>/apps</c> ("Your apps"),
 /// <c>/apps/catalogue?source=&amp;filter=&amp;q=</c>, and the pre-install review at
 /// <c>/apps/catalogue/{source}/{slug}[@{version}]</c>. The app pages under
-/// <c>/apps/{slug}/...</c> belong to A2; this type only builds links to them.
+/// <c>/apps/{slug}/...</c> belong to A2; this type only builds links to them. An app's UI
+/// is opened in a window of its own, so a link to it carries <see cref="NewWindowTarget"/>
+/// and <see cref="NewWindowRel"/>.
 /// </summary>
 internal static class AppsRoutes
 {
+    /// <summary>The <c>target</c> of every link that opens an app's window.</summary>
+    public const string NewWindowTarget = "_blank";
+
+    /// <summary>
+    /// The <c>rel</c> of every link that opens an app's window: the new window has no handle on
+    /// the console that opened it and is sent no referrer, so it shares nothing with it.
+    /// </summary>
+    public const string NewWindowRel = "noopener noreferrer";
+
     /// <summary>The area key and first route segment.</summary>
     public const string AreaKey = "apps";
 
     /// <summary>The catalogue's route segment, reserved: no app slug can be browsed at <c>/apps/catalogue</c>.</summary>
     public const string CatalogueSegment = "catalogue";
 
-    /// <summary>The app page segment that hosts an app's UI.</summary>
+    /// <summary>
+    /// The app page segment that once hosted an app's UI inside the console. The UI now opens
+    /// only in a window of its own, so an address under this segment is redirected to the same
+    /// in-app path under <see cref="WindowSegment"/>, and nothing links to it.
+    /// </summary>
     public const string OpenSegment = "open";
+
+    /// <summary>
+    /// The app page segment that hosts an app's UI on its own, filling a browser window of
+    /// its own: <c>/apps/{slug}/window[/{in-app path}]</c>.
+    /// </summary>
+    public const string WindowSegment = "window";
 
     /// <summary>The query key selecting a source, or <see cref="AllSources"/>.</summary>
     public const string SourceQuery = "source";
@@ -79,10 +100,24 @@ internal static class AppsRoutes
     /// <param name="slug">The app slug.</param>
     public static ExplorerAddress App(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug]);
 
-    /// <summary>An installed app's framed UI (A2).</summary>
+    /// <summary>An installed app's UI in a browser window of its own (A2), where every "Open" control leads.</summary>
     /// <param name="tenant">The tenant the address is rooted at, or <see langword="null"/>.</param>
     /// <param name="slug">The app slug.</param>
-    public static ExplorerAddress Open(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, OpenSegment]);
+    public static ExplorerAddress Window(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, WindowSegment]);
+
+    /// <summary>
+    /// Whether <paramref name="address"/> is an app's window, <c>[/t/{tenant}]/apps/{slug}/window[/...]</c>,
+    /// for any slug but the reserved catalogue segment.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    public static bool IsWindow(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return string.Equals(address.Area, AreaKey, StringComparison.Ordinal)
+            && address.Path.Count >= 2
+            && !string.Equals(address.Path[0], CatalogueSegment, StringComparison.Ordinal)
+            && string.Equals(address.Path[1], WindowSegment, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Reads a review address's <c>{slug}[@{version}]</c> segment.

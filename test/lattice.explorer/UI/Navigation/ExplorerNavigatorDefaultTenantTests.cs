@@ -62,6 +62,26 @@ public sealed class ExplorerNavigatorDefaultTenantTests
     }
 
     [Test]
+    public void IsStandalone_follows_the_addresss_area_and_is_false_outside_every_area()
+    {
+        var standalone = new FakeArea("window", "Window", 3) { Standalone = address => address.Path.Count > 0 };
+        var navigator = new ExplorerNavigator(
+            new TestNavigationManager(),
+            new ExplorerAreaDirectory([_data, _cluster, standalone], new ExplorerChromeOptions(), new ManualTimeProvider()),
+            new ExplorerTenancy());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(navigator.IsStandalone(ExplorerAddress.Parse("/window/x")), Is.True);
+            Assert.That(navigator.IsStandalone(ExplorerAddress.Parse("/window")), Is.False, "the area answers per address");
+            Assert.That(navigator.IsStandalone(ExplorerAddress.Parse("/data/orders")), Is.False);
+            Assert.That(navigator.IsStandalone(ExplorerAddress.Parse("/unknown/x")), Is.False);
+            Assert.That(navigator.IsStandalone(ExplorerAddress.Home), Is.False);
+            Assert.That(() => navigator.IsStandalone(null!), Throws.ArgumentNullException);
+        });
+    }
+
+    [Test]
     public void A_tenant_is_unresolved_only_when_tenancy_is_on_and_none_is_established()
     {
         var unresolved = Substitute.For<IExplorerTenantView>();

@@ -19,139 +19,111 @@
     prerender could only have guessed, an area the caller may not see renders
     the not-found page, an unavailable one says why, and nothing renders an
     area's page before its availability is known.
+
+    A standalone address (one its area marks as filling a browser window of its
+    own, such as an app's window) keeps the same root, the same gates and the
+    session overlay, but draws no skip links, header, address line or spine.
 *@
 
 <div class="@RootClass" @ref="_root">
-    <nav class="lt-shell-skip" aria-label="Skip links">
-        <a class="lt-shell-skip__link" href="#lt-shell-directory" @onclick="SkipToDirectoryAsync" @onclick:preventDefault>Skip to directory</a>
-        <a class="lt-shell-skip__link" href="#lt-shell-address" @onclick="SkipToAddressAsync" @onclick:preventDefault>Skip to address</a>
-        <a class="lt-shell-skip__link" href="#lt-shell-content" @onclick="SkipToContentAsync" @onclick:preventDefault>Skip to content</a>
-    </nav>
+    @if (!IsStandalone)
+    {
+        <nav class="lt-shell-skip" aria-label="Skip links">
+            <a class="lt-shell-skip__link" href="#lt-shell-directory" @onclick="SkipToDirectoryAsync" @onclick:preventDefault>Skip to directory</a>
+            <a class="lt-shell-skip__link" href="#lt-shell-address" @onclick="SkipToAddressAsync" @onclick:preventDefault>Skip to address</a>
+            <a class="lt-shell-skip__link" href="#lt-shell-content" @onclick="SkipToContentAsync" @onclick:preventDefault>Skip to content</a>
+        </nav>
 
-    <header class="lt-shell-header">
-        @if (IsCompact)
-        {
-            <button type="button"
-                    class="lt-btn lt-btn--quiet lt-shell-header__control"
-                    aria-haspopup="dialog"
-                    aria-expanded="@(_directoryOpen ? "true" : "false")"
-                    @onclick="OpenDirectory"
-                    @ref="_directoryToggle">
-                Directory
-            </button>
-        }
-        <a class="lt-shell-brand" href="@HomeHref">
-            <LtMark Size="22" />
-            @* Compact, the name drops its namespace so it fits between the header's two controls whole, never cut off. *@
-            <span class="lt-shell-brand__name">@if (!IsCompact) { <span class="lt-shell-brand__prefix">Orleans.</span> }Lattice Explorer</span>
-        </a>
-        <div class="lt-shell-header__end">
+        <header class="lt-shell-header">
             @if (IsCompact)
             {
                 <button type="button"
                         class="lt-btn lt-btn--quiet lt-shell-header__control"
                         aria-haspopup="dialog"
-                        aria-expanded="@(_menuOpen ? "true" : "false")"
-                        @onclick="OpenMenu"
-                        @ref="_menuToggle">
-                    Menu
+                        aria-expanded="@(_directoryOpen ? "true" : "false")"
+                        @onclick="OpenDirectory"
+                        @ref="_directoryToggle">
+                    Directory
                 </button>
             }
-            else
-            {
-                @Slot(ShellSlotNames.HeaderConnection)
-                <AppearanceMenu />
-                <CascadingValue Value="_location">
-                    <TenantSwitcher />
-                </CascadingValue>
-                @Slot(ShellSlotNames.HeaderIdentity)
-            }
-        </div>
-    </header>
+            <a class="lt-shell-brand" href="@HomeHref">
+                <LtMark Size="22" />
+                @* Compact, the name drops its namespace so it fits between the header's two controls whole, never cut off. *@
+                <span class="lt-shell-brand__name">@if (!IsCompact) { <span class="lt-shell-brand__prefix">Orleans.</span> }Lattice Explorer</span>
+            </a>
+            <div class="lt-shell-header__end">
+                @if (IsCompact)
+                {
+                    <button type="button"
+                            class="lt-btn lt-btn--quiet lt-shell-header__control"
+                            aria-haspopup="dialog"
+                            aria-expanded="@(_menuOpen ? "true" : "false")"
+                            @onclick="OpenMenu"
+                            @ref="_menuToggle">
+                        Menu
+                    </button>
+                }
+                else
+                {
+                    @Slot(ShellSlotNames.HeaderConnection)
+                    <AppearanceMenu />
+                    <CascadingValue Value="_location">
+                        <TenantSwitcher />
+                    </CascadingValue>
+                    @Slot(ShellSlotNames.HeaderIdentity)
+                }
+            </div>
+        </header>
+    }
 
     <CascadingValue Value="_location">
         <CascadingValue Name="@LtBreakpointCascade.Name" Value="_breakpoint">
-            <div class="lt-shell-address" id="lt-shell-address" tabindex="-1">
-                <AddressLine @ref="_addressLine" />
-            </div>
-
-            <div class="lt-shell-body">
-                @if (!IsCompact)
-                {
-                    <div class="@DirectoryClass" id="lt-shell-directory" tabindex="-1" @ref="_directory">
-                        <DirectorySpine Rail="@(_breakpoint == LtBreakpoint.Medium)" />
-                    </div>
-                }
-                <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
-                    @if (!_sessionReady)
-                    {
-                        @* No page asks the cluster anything until the circuit's configuration and sign-in are loaded, so nothing is read, or remembered, as the wrong caller. *@
-                        <LtSkeleton Lines="6" Label="Loading" />
-                    }
-                    else if (_tenantPending)
-                    {
-                        @* A prerender that cannot read the tenant this caller last held, at an address that names none: nothing renders under a guessed tenant. *@
-                        <LtSkeleton Lines="6" Label="@TenantPendingLabel" />
-                    }
-                    else if (TenantResolving)
-                    {
-                        @* The browser is at another tenant's address than the one resolved: nothing renders until the layout has scoped the circuit to it. *@
-                        <LtSkeleton Lines="6" Label="Loading" />
-                    }
-                    else if (TenantUnresolved)
-                    {
-                        @* Fail closed: with no tenant established a call would be served as the reserved default tenant, so no tenant-scoped page asks the cluster anything. *@
-                        <h1 class="lt-shell-page-title">Tenant not established</h1>
-                        <LtEmptyState Title="Nothing is shown" HeadingLevel="2">@TenantUnresolvedReason</LtEmptyState>
-                    }
-                    else if (GatedArea is { } area)
-                    {
-                        @if (!_location.EntriesLoaded)
-                        {
-                            <LtSkeleton Lines="6" Label="Loading" />
-                        }
-                        else if (_location.CurrentEntry is not { } entry)
-                        {
-                            <NotFoundPage />
-                        }
-                        else if (!entry.IsVisible)
-                        {
-                            <h1 class="lt-shell-page-title">@area.DisplayName</h1>
-                            <LtEmptyState Title="Not available" HeadingLevel="2">@entry.Availability.Reason</LtEmptyState>
-                        }
-                        else
-                        {
-                            @TenantBody
-                        }
-                    }
-                    else
-                    {
-                        @TenantBody
-                    }
-                </main>
-            </div>
-
-            @if (IsCompact)
+            @if (IsStandalone)
             {
-                <LtDialog Open="_directoryOpen"
-                          OpenChanged="OnDirectoryOpenChanged"
-                          Title="Directory"
-                          Placement="LtDialogPlacement.Start"
-                          ReturnFocus="_directoryToggle">
-                    <TenantSwitcher Stacked="true" />
-                    <DirectorySpine OnNavigate="CloseDirectory" />
-                </LtDialog>
-                <LtDialog Open="_menuOpen"
-                          OpenChanged="OnMenuOpenChanged"
-                          Title="Menu"
-                          Placement="LtDialogPlacement.End"
-                          ReturnFocus="_menuToggle">
-                    <div class="lt-shell-overflow" @onclick="CloseMenu">
-                        @Slot(ShellSlotNames.HeaderConnection)
-                        @Slot(ShellSlotNames.HeaderIdentity)
-                        <AppearanceControls />
-                    </div>
-                </LtDialog>
+                <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
+                    @GatedContent
+                </main>
+            }
+            else
+            {
+                <div class="lt-shell-address" id="lt-shell-address" tabindex="-1">
+                    <AddressLine @ref="_addressLine" />
+                </div>
+
+                <div class="lt-shell-body">
+                    @if (!IsCompact)
+                    {
+                        <div class="@DirectoryClass" id="lt-shell-directory" tabindex="-1" @ref="_directory">
+                            <DirectorySpine Rail="@(_breakpoint == LtBreakpoint.Medium)" />
+                        </div>
+                    }
+                    <main class="lt-shell-content" id="lt-shell-content" tabindex="-1" @ref="_content">
+                        @GatedContent
+                    </main>
+                </div>
+
+                @if (IsCompact)
+                {
+                    <LtDialog Open="_directoryOpen"
+                              OpenChanged="OnDirectoryOpenChanged"
+                              Title="Directory"
+                              Placement="LtDialogPlacement.Start"
+                              ReturnFocus="_directoryToggle">
+                        <TenantSwitcher Stacked="true" />
+                        <DirectorySpine OnNavigate="CloseDirectory" />
+                    </LtDialog>
+                    <LtDialog Open="_menuOpen"
+                              OpenChanged="OnMenuOpenChanged"
+                              Title="Menu"
+                              Placement="LtDialogPlacement.End"
+                              ReturnFocus="_menuToggle">
+                        <div class="lt-shell-overflow" @onclick="CloseMenu">
+                            @Slot(ShellSlotNames.HeaderConnection)
+                            @Slot(ShellSlotNames.HeaderIdentity)
+                            <AppearanceControls />
+                        </div>
+                    </LtDialog>
+                }
             }
             @* Inside the width cascade, so the session overlay's dialogs open as full-screen sheets when compact. *@
             @Slot(ShellSlotNames.OverlaySession)
@@ -160,3 +132,54 @@
 
     <LtToastRegion Label="Notifications" />
 </div>
+
+@code {
+    // The main landmark's content, behind every gate, whether or not the chrome is drawn around it.
+    private RenderFragment GatedContent => @<text>
+        @if (!_sessionReady)
+        {
+            @* No page asks the cluster anything until the circuit's configuration and sign-in are loaded, so nothing is read, or remembered, as the wrong caller. *@
+            <LtSkeleton Lines="6" Label="Loading" />
+        }
+        else if (_tenantPending)
+        {
+            @* A prerender that cannot read the tenant this caller last held, at an address that names none: nothing renders under a guessed tenant. *@
+            <LtSkeleton Lines="6" Label="@TenantPendingLabel" />
+        }
+        else if (TenantResolving)
+        {
+            @* The browser is at another tenant's address than the one resolved: nothing renders until the layout has scoped the circuit to it. *@
+            <LtSkeleton Lines="6" Label="Loading" />
+        }
+        else if (TenantUnresolved)
+        {
+            @* Fail closed: with no tenant established a call would be served as the reserved default tenant, so no tenant-scoped page asks the cluster anything. *@
+            <h1 class="lt-shell-page-title">Tenant not established</h1>
+            <LtEmptyState Title="Nothing is shown" HeadingLevel="2">@TenantUnresolvedReason</LtEmptyState>
+        }
+        else if (GatedArea is { } area)
+        {
+            @if (!_location.EntriesLoaded)
+            {
+                <LtSkeleton Lines="6" Label="Loading" />
+            }
+            else if (_location.CurrentEntry is not { } entry)
+            {
+                <NotFoundPage />
+            }
+            else if (!entry.IsVisible)
+            {
+                <h1 class="lt-shell-page-title">@area.DisplayName</h1>
+                <LtEmptyState Title="Not available" HeadingLevel="2">@entry.Availability.Reason</LtEmptyState>
+            }
+            else
+            {
+                @TenantBody
+            }
+        }
+        else
+        {
+            @TenantBody
+        }
+    </text>;
+}

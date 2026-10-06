@@ -258,19 +258,22 @@ public partial class AppsPage : IDisposable
         var name = AppsPresentation.DisplayName(app.Presentation, app.Slug);
         if (app.HasUi)
         {
+            // The app's UI opens in a window of its own, which shares nothing with the console.
             builder.OpenElement(0, "a");
             builder.AddAttribute(1, "class", "lt-btn");
-            builder.AddAttribute(2, "href", Href(AppsRoutes.Open(Address.Tenant, app.Slug)));
-            builder.AddAttribute(3, "aria-label", "Open " + name);
-            builder.AddContent(4, "Open");
+            builder.AddAttribute(2, "href", Href(AppsRoutes.Window(Address.Tenant, app.Slug)));
+            builder.AddAttribute(3, "target", AppsRoutes.NewWindowTarget);
+            builder.AddAttribute(4, "rel", AppsRoutes.NewWindowRel);
+            builder.AddAttribute(5, "aria-label", "Open " + name + " in a new window");
+            builder.AddContent(6, "Open");
             builder.CloseElement();
         }
 
-        builder.OpenElement(5, "a");
-        builder.AddAttribute(6, "class", "lt-btn lt-btn--quiet");
-        builder.AddAttribute(7, "href", Href(AppsRoutes.App(Address.Tenant, app.Slug)));
-        builder.AddAttribute(8, "aria-label", "Details of " + name);
-        builder.AddContent(9, "Details");
+        builder.OpenElement(7, "a");
+        builder.AddAttribute(8, "class", "lt-btn lt-btn--quiet");
+        builder.AddAttribute(9, "href", Href(AppsRoutes.App(Address.Tenant, app.Slug)));
+        builder.AddAttribute(10, "aria-label", "Details of " + name);
+        builder.AddContent(11, "Details");
         builder.CloseElement();
     }
 }

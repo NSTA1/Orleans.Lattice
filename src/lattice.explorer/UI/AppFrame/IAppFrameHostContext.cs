@@ -21,4 +21,14 @@ internal interface IAppFrameHostContext
 
     /// <summary>The signed-in user's display name, or <see langword="null"/> when unknown.</summary>
     string? UserDisplayName { get; }
+
+    /// <summary>
+    /// Records the appearance the Explorer's own page is drawn in, as the frame host read it
+    /// from the document, so <see cref="Appearance"/> reports it from then on. The default
+    /// ignores it; an implementation that keeps it sanitises it first.
+    /// </summary>
+    /// <param name="appearance">The appearance read from the page.</param>
+    void ObserveAppearance(AppFrameAppearance appearance)
+    {
+    }
 }
