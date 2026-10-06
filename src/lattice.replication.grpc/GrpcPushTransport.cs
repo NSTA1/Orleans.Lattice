@@ -392,6 +392,14 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
                 }
             }
 
+            // The origin's cross-tree purge frontier (issue #4733), whatever the
+            // batch's tree.
+            if (batch.CrossTreePurgeFrontier is { Frontiers.Count: > 0 } purge)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.CrossTreePurgeFrontierHeader, purge.ToText());
+            }
+
             // The source lineage the batch was read under (issue #4673).
             if (batch.SourceLineage is { } sourceLineage)
             {

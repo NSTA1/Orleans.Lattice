@@ -354,6 +354,7 @@ internal sealed partial class ReplicationShipperGrain
         try
         {
             await ApplyReceiverLineageAsync();
+            await RefreshPurgeFrontierAsync();
             NoteReapFilterScope(options);
             var tree = ComputeTreeLowWatermark(options);
             _reapLowWatermark = ComputeTreeLowWatermark(options, forReap: true);

@@ -66,4 +66,11 @@ internal sealed class CrossTreeTxState
     /// host that stamps nothing. The first stamps stand.
     /// </summary>
     [Id(7)] public Dictionary<string, long>? DecisionStamps { get; set; }
+
+    /// <summary>
+    /// The decision sequences (issue #4733): per participating tree, its
+    /// decision counter's value issued for this operation. <see langword="null"/>
+    /// until issued, and on a host that stamps nothing. The first issued stand.
+    /// </summary>
+    [Id(8)] public Dictionary<string, long>? DecisionSequences { get; set; }
 }

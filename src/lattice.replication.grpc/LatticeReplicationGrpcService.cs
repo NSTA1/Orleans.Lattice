@@ -412,6 +412,41 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     }
 
     /// <summary>
+    /// Records the cross-tree purge frontier the authenticated sender advertised
+    /// beside the push (issue #4733): past it the origin stores no cross-tree
+    /// decision of the tree, so a decided barrier tombstone here whose every
+    /// participant it has passed is dropped. Called only after the caller's
+    /// origin is authenticated, read only for an origin in the configured
+    /// topology, and parsed strictly and bounded; anything else advertises
+    /// nothing. A failure to record it is logged and never fails the push.
+    /// </summary>
+    private async Task ObservePurgeFrontierAsync(ServerCallContext context, string originClusterId)
+    {
+        if (_topology?.CurrentPeers.Contains(originClusterId) != true
+            || !CrossTreePurgeFrontier.TryParse(
+                GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.CrossTreePurgeFrontierHeader),
+                out var frontier))
+        {
+            return;
+        }
+
+        try
+        {
+            await CrossTreePurgeFrontierRecorder.RecordAsync(_grainFactory, originClusterId, frontier!).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex,
+                "Recording the cross-tree purge frontier of origin {Origin} failed; it is advertised again on a later push.",
+                originClusterId);
+        }
+    }
+
+    /// <summary>
     /// The source lineage the sender stamped on the push (issue #4673):
     /// <see langword="null"/> when the header is absent (a sender that predates
     /// it), the parsed value when it is a <see cref="Guid"/> in the <c>D</c>
@@ -479,6 +514,7 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // the frontier epoch every ack below reports (#4586 part 2b).
         var receiverLineage = await ObserveSourceFrontierAsync(
             context, request.TreeName, request.OriginClusterId).ConfigureAwait(false);
+        await ObservePurgeFrontierAsync(context, request.OriginClusterId).ConfigureAwait(false);
 
         var entries = request.Entries;
 

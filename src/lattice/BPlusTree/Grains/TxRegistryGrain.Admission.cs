@@ -33,7 +33,7 @@ internal sealed partial class TxRegistryGrain
     internal const long AdmissionEstimateSnapshotPinBytes = 384;
     internal const long AdmissionEstimatePinnedTxidBytes = 48;
     internal const long AdmissionEstimateWalGenerationBytes = 64;
-    internal const long AdmissionEstimateCrossTreeMembershipBytes = 1024;
+    internal const long AdmissionEstimateCrossTreeMembershipBytes = 1280;
 
     /// <summary>
     /// Count-weighted estimate of the registry's persisted row size. Reads

@@ -37,6 +37,10 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
     public async Task SetUp()
     {
         PerTreeGatedTransport.Refused.Clear();
+        _savedPurgeRefresh = CrossTreePurgeFrontierSourceGrain.RefreshInterval;
+        _savedPurgeShip = ReplicationShipperGrain.PurgeFrontierInterval;
+        CrossTreePurgeFrontierSourceGrain.RefreshInterval = TimeSpan.Zero;
+        ReplicationShipperGrain.PurgeFrontierInterval = TimeSpan.FromMilliseconds(200);
         var builder = new TestClusterBuilder(initialSilosCount: 1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         _cluster = builder.Build();
@@ -53,6 +57,128 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
         }
 
         PerTreeGatedTransport.Refused.Clear();
+        CrossTreePurgeFrontierSourceGrain.RefreshInterval = _savedPurgeRefresh;
+        ReplicationShipperGrain.PurgeFrontierInterval = _savedPurgeShip;
+    }
+
+    private TimeSpan _savedPurgeRefresh;
+    private TimeSpan _savedPurgeShip;
+
+    private Task<System.Collections.Immutable.ImmutableDictionary<string, long>> PurgeFrontierAsync() =>
+        _cluster.Client.GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key).GetAsync();
+
+    [Test]
+    public async Task The_purge_frontier_stays_below_a_stored_cross_tree_decision_and_passes_it_once_purged()
+    {
+        // Issue #4733: the origin advertises, per tree, a decision sequence
+        // below every cross-tree decision it still stores; once a decision is
+        // purged the frontier passes it, and a receiver drops its tombstone.
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var treeA = "xth-pf-a-" + suffix;
+        var treeB = "xth-pf-b-" + suffix;
+        var client = _cluster.Client;
+        foreach (var tree in new[] { treeA, treeB })
+        {
+            await client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(
+                tree, new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 64, MaxInternalChildren = 4 });
+            await client.GetGrain<IReplicationShipperGrain>($"{tree}/{PeerClusterId}").EnsureActiveAsync(CancellationToken.None);
+        }
+
+        await client.SetManyAtomicAsync(
+            [
+                new LatticeTreeBatch(treeA, [new("k", [1])]),
+                new LatticeTreeBatch(treeB, [new("k", [2])]),
+            ],
+            "xth-pf-op-" + suffix);
+        var txA = await CrossTreeSubSagaAsync(treeA);
+        var txB = await CrossTreeSubSagaAsync(treeB);
+        var registryA = TxRegistryRouting.GetRegistry(client, treeA, txA);
+        var registryB = TxRegistryRouting.GetRegistry(client, treeB, txB);
+        var sequenceA = (await registryA.GetCrossTreeMembershipsAsync([txA]))[txA].DecisionSequences![treeA];
+        var sequenceB = (await registryB.GetCrossTreeMembershipsAsync([txB]))[txB].DecisionSequences![treeB];
+        var whileStored = await PurgeFrontierAsync();
+
+        await AwaitShippedAsync(treeA);
+        await AwaitShippedAsync(treeB);
+        await TrimAllAsync(treeA);
+        await TrimAllAsync(treeB);
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                await AgeAndPruneAsync(registryB);
+                await AgeAndPruneAsync(registryA);
+                return await registryA.GetRecordedStatusAsync(txA) == TxStatus.InFlight
+                    && await registryB.GetRecordedStatusAsync(txB) == TxStatus.InFlight;
+            },
+            "both sub-sagas' decisions to be purged",
+            TimeSpan.FromSeconds(60));
+        var afterPurge = await PurgeFrontierAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sequenceA, Is.GreaterThan(0), "precondition: the decision is sequenced on tree A");
+            Assert.That(whileStored.GetValueOrDefault(treeA, -1), Is.LessThan(sequenceA), "the frontier stays below a stored decision");
+            Assert.That(whileStored.GetValueOrDefault(treeB, -1), Is.LessThan(sequenceB));
+            Assert.That(afterPurge.GetValueOrDefault(treeA, -1), Is.GreaterThanOrEqualTo(sequenceA), "a purged decision is passed");
+            Assert.That(afterPurge.GetValueOrDefault(treeB, -1), Is.GreaterThanOrEqualTo(sequenceB));
+        });
+    }
+
+    [Test]
+    public async Task A_pending_sequence_holds_the_purge_frontier_below_it_until_confirmed()
+    {
+        // Issued but not yet recorded where the frontier reads stored decisions:
+        // the frontier must not pass it in between (#4733).
+        var tree = "xth-pending-" + Guid.NewGuid().ToString("N")[..8];
+        var sequences = _cluster.Client.GetGrain<ICrossTreeDecisionSequenceGrain>(tree);
+        await _cluster.Client.GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key)
+            .RegisterTreesAsync([tree]);
+        var issued = await sequences.IssueAsync("xth-pending-op");
+        var whilePending = await PurgeFrontierAsync();
+        await sequences.ConfirmAsync("xth-pending-op");
+        var afterConfirm = await PurgeFrontierAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(whilePending.GetValueOrDefault(tree, -1), Is.LessThan(issued), "a pending sequence holds the frontier below it");
+            Assert.That(afterConfirm.GetValueOrDefault(tree, -1), Is.EqualTo(issued),
+                "with nothing pending or stored the frontier is the counter");
+        });
+    }
+
+    [Test]
+    public async Task A_cross_tree_decision_stored_before_sequencing_holds_the_purge_frontier_below_zero()
+    {
+        var tree = "xth-legacy-" + Guid.NewGuid().ToString("N")[..8];
+        var txid = Guid.NewGuid();
+        var registry = TxRegistryRouting.GetRegistry(_cluster.Client, tree, txid);
+        await _cluster.Client.GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key)
+            .RegisterTreesAsync([tree]);
+        await registry.RecordCrossTreeMembershipAsync(txid, "xth-legacy-op", [tree]);
+        await registry.MarkCommittedAsync(txid);
+
+        Assert.That((await PurgeFrontierAsync()).ContainsKey(tree), Is.False,
+            "a stored decision without a sequence counts as 0, so no frontier is advertised for the tree");
+    }
+
+    [Test]
+    public async Task A_shipper_advertises_the_cross_tree_purge_frontier_beside_its_batches()
+    {
+        var tree = "xth-advertise-" + Guid.NewGuid().ToString("N")[..8];
+        var client = _cluster.Client;
+        await client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(
+            tree, new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 64, MaxInternalChildren = 4 });
+        await client.GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key).RegisterTreesAsync([tree]);
+        await client.GetGrain<IReplicationShipperGrain>($"{tree}/{PeerClusterId}").EnsureActiveAsync(CancellationToken.None);
+
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                await client.GetGrain<ILattice>(tree).SetAsync("tick", [1]);
+                return PerTreeGatedTransport.PurgeFrontiers.Values.Any(f => f.Frontiers.ContainsKey(tree));
+            },
+            "a batch to carry the cluster's cross-tree purge frontier",
+            TimeSpan.FromSeconds(60));
     }
 
     [Test]
@@ -384,12 +510,19 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
 
         public static readonly ConcurrentDictionary<string, ReplicationAckedPositions> VouchedPositions = new(StringComparer.Ordinal);
 
+        public static readonly ConcurrentDictionary<string, CrossTreePurgeFrontier> PurgeFrontiers = new(StringComparer.Ordinal);
+
         /// <summary>The receiver lineage this peer reports, so the shipper vouches a watermark.</summary>
         public static readonly Guid Lineage = Guid.Parse("4b2f8d0e-7c1a-4e3b-9a6d-2f5e8c1b0a97");
 
         public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         {
             var accepted = !Refused.ContainsKey(batch.TreeName);
+            if (batch.CrossTreePurgeFrontier is { } purge)
+            {
+                PurgeFrontiers[batch.TreeName] = purge;
+            }
+
             if (accepted && batch.SourceFrontier?.AckedPositions is { } vouched)
             {
                 VouchedPositions[batch.TreeName] = vouched;

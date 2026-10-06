@@ -36,4 +36,18 @@ internal interface ICrossTreeBarrierIndexGrain : IGrainWithStringKey
     /// <summary>The tree's latest snapshot import from <paramref name="originClusterId"/>, if any.</summary>
     [AlwaysInterleave]
     Task<CrossTreeImportRecord?> GetImportAsync(string originClusterId);
+
+    /// <summary>
+    /// Durably lists <paramref name="barrierKey"/> as a decided tombstone the
+    /// tree took part in (issue #4733), swept when the tree's purge frontier
+    /// advances. Idempotent.
+    /// </summary>
+    Task AddTombstoneAsync(string barrierKey);
+
+    /// <summary>Durably unlists <paramref name="barrierKey"/>. Idempotent.</summary>
+    Task RemoveTombstoneAsync(string barrierKey);
+
+    /// <summary>Every listed tombstone.</summary>
+    [AlwaysInterleave]
+    Task<ImmutableArray<string>> GetTombstonesAsync();
 }

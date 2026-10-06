@@ -174,6 +174,73 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
         await h.TreeFrontier.Received(1).ObserveAsync(Origin, Frontier, Arg.Any<CancellationToken>());
     }
 
+    private static readonly string PurgeFrontierText = new CrossTreePurgeFrontier
+    {
+        Frontiers = System.Collections.Immutable.ImmutableDictionary.CreateRange(
+            StringComparer.Ordinal, [new KeyValuePair<string, long>("tree-a", 7)]),
+    }.ToText();
+
+    /// <summary>
+    /// The calls that addressed the origin's cross-tree purge frontier grain
+    /// (issue #4733), a core-internal interface this project cannot name.
+    /// </summary>
+    private static int PurgeFrontierCalls(Harness h, string origin) =>
+        h.Factory.ReceivedCalls().Count(call =>
+            call.GetMethodInfo().Name == nameof(IGrainFactory.GetGrain)
+            && call.GetMethodInfo().IsGenericMethod
+            && call.GetMethodInfo().GetGenericArguments()[0].Name == "ICrossTreePurgeFrontierGrain"
+            && Equals(call.GetArguments()[0], origin));
+
+    [Test]
+    public async Task A_configured_peers_cross_tree_purge_frontier_is_recorded_for_its_origin()
+    {
+        var h = new Harness();
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, null, null, PurgeFrontierText));
+
+        Assert.That(PurgeFrontierCalls(h, Origin), Is.EqualTo(1));
+    }
+
+    [TestCase(null)]
+    [TestCase("someone-else")]
+    public void A_purge_frontier_on_a_call_whose_origin_is_not_authenticated_as_the_body_origin_is_never_read(string? stampedOrigin)
+    {
+        // A peer cannot advertise a purge frontier for another origin: that
+        // would drop that origin's tombstones and let a barrier reopen.
+        var h = new Harness();
+
+        var refused = Assert.ThrowsAsync<RpcException>(
+            async () => await h.Service().Push(EmptyBox(), new CallContext(stampedOrigin, null, null, PurgeFrontierText)));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(PurgeFrontierCalls(h, Origin) + PurgeFrontierCalls(h, "someone-else"), Is.Zero);
+        });
+    }
+
+    [TestCase("not-a-frontier")]
+    [TestCase("1|dHJlZQ==:-1")]
+    [TestCase("2|dHJlZQ==:1")]
+    public async Task A_malformed_purge_frontier_advertises_nothing(string text)
+    {
+        var h = new Harness();
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, null, null, text));
+
+        Assert.That(PurgeFrontierCalls(h, Origin), Is.Zero);
+    }
+
+    [Test]
+    public async Task A_purge_frontier_from_a_peer_that_is_not_configured_is_ignored()
+    {
+        var h = new Harness();
+
+        await h.Service(peers: ["someone-else"]).Push(EmptyBox(), new CallContext(Origin, null, null, PurgeFrontierText));
+
+        Assert.That(PurgeFrontierCalls(h, Origin), Is.Zero);
+    }
+
     [Test]
     public async Task A_frontier_from_a_peer_that_is_not_configured_is_ignored()
     {
@@ -260,13 +327,13 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
         });
     }
 
-    private sealed class CallContext(string? stampedOrigin, string? frontier, string? ackedPositions = null) : ServerCallContext
+    private sealed class CallContext(string? stampedOrigin, string? frontier, string? ackedPositions = null, string? purgeFrontier = null) : ServerCallContext
     {
         protected override string MethodCore => "Push";
         protected override string HostCore => string.Empty;
         protected override string PeerCore => string.Empty;
         protected override DateTime DeadlineCore => DateTime.MaxValue;
-        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = Headers(stampedOrigin, frontier, ackedPositions);
+        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = Headers(stampedOrigin, frontier, ackedPositions, purgeFrontier);
         protected override CancellationToken CancellationTokenCore => CancellationToken.None;
         protected override global::Grpc.Core.Metadata ResponseTrailersCore { get; } = new();
         protected override Status StatusCore { get; set; }
@@ -277,7 +344,7 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
             => throw new NotSupportedException();
         protected override Task WriteResponseHeadersAsyncCore(global::Grpc.Core.Metadata responseHeaders) => Task.CompletedTask;
 
-        private static global::Grpc.Core.Metadata Headers(string? stampedOrigin, string? frontier, string? ackedPositions)
+        private static global::Grpc.Core.Metadata Headers(string? stampedOrigin, string? frontier, string? ackedPositions, string? purgeFrontier)
         {
             var headers = new global::Grpc.Core.Metadata();
             if (stampedOrigin is not null)
@@ -293,6 +360,11 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
             if (ackedPositions is not null)
             {
                 headers.Add(LatticeReplicationGrpcMetadataNames.AckedPositionsHeader, ackedPositions);
+            }
+
+            if (purgeFrontier is not null)
+            {
+                headers.Add(LatticeReplicationGrpcMetadataNames.CrossTreePurgeFrontierHeader, purgeFrontier);
             }
 
             return headers;
