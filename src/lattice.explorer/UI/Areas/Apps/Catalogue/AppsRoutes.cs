@@ -20,6 +20,12 @@ internal static class AppsRoutes
     /// <summary>The app page segment that hosts an app's UI.</summary>
     public const string OpenSegment = "open";
 
+    /// <summary>
+    /// The app page segment that hosts an app's UI on its own, filling a browser window of
+    /// its own: <c>/apps/{slug}/window[/{in-app path}]</c>.
+    /// </summary>
+    public const string WindowSegment = "window";
+
     /// <summary>The query key selecting a source, or <see cref="AllSources"/>.</summary>
     public const string SourceQuery = "source";
 
@@ -83,6 +89,25 @@ internal static class AppsRoutes
     /// <param name="tenant">The tenant the address is rooted at, or <see langword="null"/>.</param>
     /// <param name="slug">The app slug.</param>
     public static ExplorerAddress Open(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, OpenSegment]);
+
+    /// <summary>An installed app's UI in a browser window of its own (A2).</summary>
+    /// <param name="tenant">The tenant the address is rooted at, or <see langword="null"/>.</param>
+    /// <param name="slug">The app slug.</param>
+    public static ExplorerAddress Window(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, WindowSegment]);
+
+    /// <summary>
+    /// Whether <paramref name="address"/> is an app's window, <c>[/t/{tenant}]/apps/{slug}/window[/...]</c>,
+    /// for any slug but the reserved catalogue segment.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    public static bool IsWindow(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return string.Equals(address.Area, AreaKey, StringComparison.Ordinal)
+            && address.Path.Count >= 2
+            && !string.Equals(address.Path[0], CatalogueSegment, StringComparison.Ordinal)
+            && string.Equals(address.Path[1], WindowSegment, StringComparison.Ordinal);
+    }
 
     /// <summary>
     /// Reads a review address's <c>{slug}[@{version}]</c> segment.

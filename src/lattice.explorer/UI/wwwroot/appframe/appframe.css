@@ -26,6 +26,8 @@
 
 .appframe__bar {
   display: flex;
+  flex-wrap: wrap;
+  gap: var(--lt-space-2);
   justify-content: flex-start;
   min-inline-size: 0;
 }
@@ -40,6 +42,13 @@
 .appframe__bar > .lt-btn {
   min-block-size: 2.75rem;
   min-inline-size: 2.75rem;
+}
+
+/* "Open in new window" is a link styled as a button, so it lays out like one. */
+.appframe__bar > a.lt-btn {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 [data-lt-density="compact"] .appframe__bar > .lt-btn {

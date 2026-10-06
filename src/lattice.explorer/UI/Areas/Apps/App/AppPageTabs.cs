@@ -35,7 +35,14 @@ internal static class AppPageTabs
     /// <summary>The app's own UI in its sandboxed frame.</summary>
     public const string Open = "open";
 
-    /// <summary>Every section, in display order.</summary>
+    /// <summary>
+    /// The app's own UI in its sandboxed frame, alone in a browser window of its own. Offered
+    /// exactly when <see cref="Open"/> is, but never a tab: it is reached from the open section's
+    /// "Open in new window" link, and the layout renders it without the shell's chrome.
+    /// </summary>
+    public const string Window = Catalogue.AppsRoutes.WindowSegment;
+
+    /// <summary>Every section, in display order. <see cref="Window"/> is not one: it is never a tab.</summary>
     public static IReadOnlyList<string> All { get; } =
         [Overview, Trees, Roles, Tools, Subscriptions, Replication, Consent, Open];
 
@@ -75,7 +82,7 @@ internal static class AppPageTabs
         {
             Overview or Trees or Roles or Tools or Subscriptions or Replication => true,
             Consent => model.IsAppInstallHolder,
-            Open => model.CanOpen,
+            Open or Window => model.CanOpen,
             _ => false,
         };
     }

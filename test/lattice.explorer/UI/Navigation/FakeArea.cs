@@ -54,6 +54,12 @@ internal sealed class FakeArea : IExplorerArea
     /// <inheritdoc />
     public IReadOnlyList<int>? GetChainSpans(Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress address) => ChainSpans(address);
 
+    /// <summary>Whether an address in the area renders standalone; never, unless the test says so.</summary>
+    public Func<Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress, bool> Standalone { get; set; } = _ => false;
+
+    /// <inheritdoc />
+    public bool IsStandaloneAt(Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress address) => Standalone(address);
+
     /// <summary>How many times availability was asked.</summary>
     public int AvailabilityCalls { get; private set; }
 

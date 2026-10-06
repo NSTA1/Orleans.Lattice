@@ -31,6 +31,19 @@ public sealed class AppPageTabsAndTextTests
     }
 
     [Test]
+    public void The_window_is_offered_exactly_when_open_is_but_is_never_a_tab()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(AppPageTabs.Window, Is.EqualTo("window"));
+            Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: true), AppPageTabs.Window), Is.True);
+            Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: false), AppPageTabs.Window), Is.False);
+            Assert.That(AppPageTabs.All, Does.Not.Contain(AppPageTabs.Window));
+            Assert.That(AppPageTabs.For(RoleHolder(canOpen: true)), Does.Not.Contain(AppPageTabs.Window));
+        });
+    }
+
+    [Test]
     public void Every_section_is_a_lower_case_segment_with_a_title()
     {
         Assert.Multiple(() =>

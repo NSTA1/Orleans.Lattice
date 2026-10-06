@@ -80,6 +80,15 @@ public sealed partial class AppFrame : IAsyncDisposable
     public string LeaveHref { get; set; } = "apps";
 
     /// <summary>
+    /// Where "Open in new window" points, relative to the base URL, or <see langword="null"/>
+    /// (the default) to offer no such link. The link opens a new browsing context with
+    /// <c>noopener</c> and <c>noreferrer</c>, so the new window launches the app afresh on its
+    /// own circuit, through the same per-launch gate, and shares nothing with this one.
+    /// </summary>
+    [Parameter]
+    public string? WindowHref { get; set; }
+
+    /// <summary>
     /// Raised by Esc in the host chrome. When unset, focus moves to the element carrying
     /// <c>data-lt-address-line</c>.
     /// </summary>

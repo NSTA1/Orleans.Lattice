@@ -47,7 +47,7 @@ else if (_load.Kind == AppPageLoadKind.Unavailable)
         </LtEmptyState>
     </div>
 }
-else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && Tab == AppPageTabs.Open && !enabled.CanOpen)
+else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && IsFrameSection && !enabled.CanOpen)
 {
     @* The administrative read proves the install exists, so this is not "nothing here": the caller's own access is what is missing, or has not caught up yet. *@
     <PageTitle>@enabled.DisplayName - Apps - Orleans.Lattice Explorer</PageTitle>
@@ -66,6 +66,18 @@ else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && Is
 else if (_load.Model is not { } model || !IsSectionAddress || !AppPageTabs.IsOffered(model, Tab))
 {
     <NotFoundPage />
+}
+else if (Tab == AppPageTabs.Window)
+{
+    @* The app alone in a window of its own: the layout draws no chrome here, so nothing but the frame is rendered. *@
+    <PageTitle>@model.DisplayName - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-visually-hidden">@model.DisplayName</h1>
+    <div class="lt-app-window">
+        <AppFrame AppSlug="@model.Slug"
+                  Path="@FramePath"
+                  OnNavSync="HandleNavSync"
+                  LeaveHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Overview))" />
+    </div>
 }
 else
 {
@@ -130,6 +142,7 @@ else
                             <AppFrame AppSlug="@model.Slug"
                                       Path="@FramePath"
                                       OnNavSync="HandleNavSync"
+                                      WindowHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Window))"
                                       LeaveHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Overview))" />
                             break;
                     }

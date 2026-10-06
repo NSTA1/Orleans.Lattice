@@ -30,8 +30,32 @@ to you" or "No app is assigned to you yet".
 | `/apps/catalogue/{source}/{slug}[@{version}]` | Review before install, or manage an install: consent, lifecycle, upgrade and re-consent. Without a version, the source's newest is reviewed. |
 | `/apps/{slug}/{tab}` | The app's own pages, built from its manifest: `overview`, `trees`, `roles`, `tools`, `subscriptions`, `replication`, and `consent` (`AppInstall` only). The bare `/apps/{slug}` shows the overview in place. |
 | `/apps/{slug}/open[/{path}]` | The app's UI, when it ships one and the caller holds a role. Up to four in-app path segments follow `open`; a deeper in-app path travels as `?path=`, and its query as `?query=`. |
+| `/apps/{slug}/window[/{path}]` | The same UI alone, filling a browser window of its own, with no Explorer chrome around it. Offered exactly when `open` is, and its in-app path is carried the same way. See [Opening an app in its own window](#opening-an-app-in-its-own-window). |
 
 With tenancy on, each address is rooted at `/t/{tenant}`.
+
+### Opening an app in its own window
+
+The app's Open tab has an **Open in new window** link beside **Leave app**. It opens
+`/apps/{slug}/window` in a new browser window or tab, with `noopener` and
+`noreferrer`, so the new window shares nothing with the console that opened it.
+
+That address is an ordinary Explorer URL, so it can also be bookmarked, shared, or
+typed in to go straight to the app without passing through the rest of the console.
+The Apps area marks it **standalone**: the layout draws no header, address line or
+directory spine, and the frame fills the window. Nothing else changes. The page goes
+through every gate an Explorer page does (session, tenant, the area's availability, and
+the app's own Open check), and the frame is the same sandboxed frame with the same
+bridge. The new window starts its own launch, on its own Blazor circuit, through the
+per-launch workspace gate.
+
+Sign-in lives in the header. So a caller who reaches a window address while signed out
+sees the full console, signs in there, and the chrome then drops away. The window's
+**Leave app** goes to the app's overview, in the full console.
+
+An app's MCP tools never pass through the Explorer. An MCP client reaches them
+directly on the cluster's MCP endpoint, as `{slug}_{tool}`; see
+[app MCP tools](../lattice.api.mcp.apps/README.md).
 
 ### Sources
 
@@ -237,7 +261,8 @@ Guidance:
   density and reduced-motion attributes on `<html>` and updates them on
   `context.changed`, although the web head does not yet send `context.changed`, so
   a frame keeps the appearance it started with. Keep layouts fluid: the frame
-  fills the content area at every width, down to a phone.
+  fills the content area at every width, down to a phone, and in its own window it
+  fills the whole window.
 - **Digests.** Pin every asset's digest and the bundle digest in the manifest. The
   [task-board sample](../../samples/Explorer/Apps/TaskBoard/README.md) computes them
   in a test that fails with the correct values whenever a file changes.

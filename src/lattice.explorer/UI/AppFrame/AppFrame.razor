@@ -5,6 +5,10 @@
 <section class="appframe" aria-label="@AppName" @onkeydown="HandleKeyDownAsync">
     <div class="appframe__bar">
         <LtButton Variant="LtButtonVariant.Quiet" OnClick="LeaveAsync" data-appframe-leave="before">Leave app</LtButton>
+        @if (!string.IsNullOrEmpty(WindowHref))
+        {
+            <a class="lt-btn lt-btn--quiet" href="@WindowHref" target="_blank" rel="noopener noreferrer" data-appframe-window>Open in new window</a>
+        }
     </div>
 
     @switch (_phase)

@@ -29,6 +29,13 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 /// was. The routes declare optional parameters, never a catch-all, so a path deeper than
 /// <see cref="AppPageAddresses.MaxInAppSegments"/> segments rides in the address's query.
 /// </para>
+/// <para>
+/// The window section, <c>/apps/{slug}/window[/a/b]</c>, is the open section alone in a
+/// browser window of its own: offered exactly when open is, it renders only the frame, and
+/// the Apps area marks it standalone so the layout draws none of the shell's chrome around
+/// it while keeping every gate it applies. It keeps its in-frame path in the address the
+/// same way.
+/// </para>
 /// </remarks>
 public partial class AppPage : IDisposable
 {
@@ -62,13 +69,16 @@ public partial class AppPage : IDisposable
     /// <summary>The section the address names; the overview when it names none.</summary>
     internal string Tab => Address.Path.Count > 1 ? Address.Path[1] : AppPageTabs.Overview;
 
-    /// <summary>The in-frame path the address carries for the open section, or <see langword="null"/>.</summary>
-    internal string? FramePath => Tab == AppPageTabs.Open ? AppPageAddresses.FramePath(Address) : null;
+    /// <summary>The in-frame path the address carries for the open or window section, or <see langword="null"/>.</summary>
+    internal string? FramePath => IsFrameSection ? AppPageAddresses.FramePath(Address) : null;
+
+    /// <summary>Whether the address names a section that hosts the app's frame: open, or its own window.</summary>
+    private bool IsFrameSection => Tab is AppPageTabs.Open or AppPageTabs.Window;
 
     private bool IsSectionAddress =>
         string.Equals(Address.Area, AppPageAddresses.AppsArea, StringComparison.Ordinal)
         && Address.Path.Count >= 1
-        && (Address.Path.Count <= 2 || string.Equals(Address.Path[1], AppPageTabs.Open, StringComparison.Ordinal));
+        && (Address.Path.Count <= 2 || IsFrameSection);
 
     /// <summary>Stops any load in flight.</summary>
     public void Dispose()
@@ -179,7 +189,7 @@ public partial class AppPage : IDisposable
 
     private void HandleNavSync(string framePath)
     {
-        if (AppPageAddresses.FromFramePath(Address.Tenant, Slug, framePath) is not { } target)
+        if (AppPageAddresses.FromFramePath(Address.Tenant, Slug, framePath, Tab) is not { } target)
         {
             return;
         }

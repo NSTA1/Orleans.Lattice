@@ -134,6 +134,30 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
     }
 
     [Test]
+    public void No_new_window_link_is_offered_unless_one_is_given()
+    {
+        var cut = RenderFrame();
+
+        Assert.That(cut.FindAll("[data-appframe-window]"), Is.Empty);
+    }
+
+    [Test]
+    public void The_new_window_link_opens_its_target_with_no_opener_and_no_referrer()
+    {
+        var cut = RenderFrame(parameters => parameters.Add(p => p.WindowHref, "apps/taskboard/window"));
+
+        var link = cut.Find(".appframe__bar:first-child a[data-appframe-window]");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(link.TextContent, Is.EqualTo("Open in new window"));
+            Assert.That(link.GetAttribute("href"), Is.EqualTo("apps/taskboard/window"));
+            Assert.That(link.GetAttribute("target"), Is.EqualTo("_blank"));
+            Assert.That(link.GetAttribute("rel")!.Split(' '), Is.EquivalentTo(new[] { "noopener", "noreferrer" }));
+        });
+    }
+
+    [Test]
     public void Escape_in_the_host_chrome_returns_focus_to_the_address_line()
     {
         var cut = RenderFrame();

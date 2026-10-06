@@ -86,7 +86,8 @@ internal static class AppPageAddresses
             : ExplorerAddress.Create(tenant, AppsArea, [CatalogueSegment, sourceKey, slug]);
 
     /// <summary>
-    /// The in-frame path an Open address names: its segments after <c>/apps/{slug}/open</c>
+    /// The in-frame path an Open or Window address names: its segments after
+    /// <c>/apps/{slug}/{section}</c>
     /// (or its <see cref="InAppPath"/> value, for a deep path) behind a leading <c>/</c>, with
     /// the <see cref="InAppQuery"/> value after a <c>?</c>. <see langword="null"/> when it
     /// names no path, so the app starts at its own start.
@@ -112,8 +113,8 @@ internal static class AppPageAddresses
     }
 
     /// <summary>
-    /// The Open address for an in-frame path the app reported: up to
-    /// <see cref="MaxInAppSegments"/> segments below <c>/apps/{slug}/open</c> (a deeper path
+    /// The Open (or Window) address for an in-frame path the app reported: up to
+    /// <see cref="MaxInAppSegments"/> segments below <c>/apps/{slug}/{section}</c> (a deeper path
     /// goes in <see cref="InAppPath"/>) and its query in <see cref="InAppQuery"/>. A fragment
     /// is dropped and empty segments collapse. <see langword="null"/> when the path cannot be
     /// an address.
@@ -121,8 +122,9 @@ internal static class AppPageAddresses
     /// <param name="tenant">The tenant root, or <see langword="null"/>.</param>
     /// <param name="slug">The app slug.</param>
     /// <param name="framePath">The path from <c>nav.sync</c>, starting with <c>/</c>.</param>
+    /// <param name="section">The section hosting the frame: <see cref="AppPageTabs.Open"/>, the default, or <see cref="AppPageTabs.Window"/>.</param>
     /// <returns>The address, or <see langword="null"/>.</returns>
-    public static ExplorerAddress? FromFramePath(string? tenant, string slug, string? framePath)
+    public static ExplorerAddress? FromFramePath(string? tenant, string slug, string? framePath, string section = AppPageTabs.Open)
     {
         if (string.IsNullOrEmpty(framePath))
         {
@@ -148,8 +150,8 @@ internal static class AppPageAddresses
         {
             var segments = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
             var address = segments.Length <= MaxInAppSegments
-                ? ExplorerAddress.Create(tenant, AppsArea, [slug, AppPageTabs.Open, .. segments])
-                : ExplorerAddress.Create(tenant, AppsArea, [slug, AppPageTabs.Open]).WithQuery(InAppPath, "/" + string.Join('/', segments));
+                ? ExplorerAddress.Create(tenant, AppsArea, [slug, section, .. segments])
+                : ExplorerAddress.Create(tenant, AppsArea, [slug, section]).WithQuery(InAppPath, "/" + string.Join('/', segments));
             return string.IsNullOrEmpty(query) ? address : address.WithQuery(InAppQuery, query);
         }
         catch (ArgumentException)

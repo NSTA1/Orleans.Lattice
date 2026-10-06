@@ -98,6 +98,29 @@ public sealed class AppsRoutesTests
             Assert.That(AppsRoutes.Landing("acme").Format(), Is.EqualTo("/t/acme/apps"));
             Assert.That(AppsRoutes.App(null, "crm").Format(), Is.EqualTo("/apps/crm"));
             Assert.That(AppsRoutes.Open(null, "crm").Format(), Is.EqualTo("/apps/crm/open"));
+            Assert.That(AppsRoutes.Window(null, "crm").Format(), Is.EqualTo("/apps/crm/window"));
+            Assert.That(AppsRoutes.Window("acme", "crm").Format(), Is.EqualTo("/t/acme/apps/crm/window"));
         });
+    }
+
+    [TestCase("/apps/crm/window", true)]
+    [TestCase("/apps/crm/window/board/7", true)]
+    [TestCase("/t/acme/apps/crm/window", true)]
+    [TestCase("/apps/crm/open", false)]
+    [TestCase("/apps/crm", false)]
+    [TestCase("/apps/window", false)]
+    [TestCase("/apps", false)]
+    [TestCase("/apps/catalogue/window", false)]
+    [TestCase("/apps/catalogue/window/crm", false)]
+    [TestCase("/data/crm/window", false)]
+    public void Only_an_apps_window_address_is_a_window(string address, bool expected)
+    {
+        Assert.That(AppsRoutes.IsWindow(ExplorerAddress.Parse(address)), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void IsWindow_rejects_a_null_address()
+    {
+        Assert.That(() => AppsRoutes.IsWindow(null!), Throws.ArgumentNullException);
     }
 }

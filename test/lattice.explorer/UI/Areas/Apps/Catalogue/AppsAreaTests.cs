@@ -32,6 +32,21 @@ public sealed class AppsAreaTests : AppsTestContext
     }
 
     [Test]
+    public void Only_an_apps_window_renders_standalone()
+    {
+        IExplorerArea area = Area();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(area.IsStandaloneAt(AppsRoutes.Window(null, "crm")), Is.True);
+            Assert.That(area.IsStandaloneAt(AppsRoutes.Window("acme", "crm")), Is.True);
+            Assert.That(area.IsStandaloneAt(AppsRoutes.Open(null, "crm")), Is.False);
+            Assert.That(area.IsStandaloneAt(AppsRoutes.App(null, "crm")), Is.False);
+            Assert.That(area.IsStandaloneAt(AppsRoutes.Landing(null)), Is.False);
+        });
+    }
+
+    [Test]
     public async Task Every_signed_in_user_sees_the_area_even_with_no_app()
     {
         Restrict();

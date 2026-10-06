@@ -48,6 +48,35 @@ public sealed class AppPageAddressesTests
         Assert.That(AppPageAddresses.FromFramePath(null, "crm", framePath)!.Format(), Is.EqualTo(address));
     }
 
+    [TestCase("/apps/crm/window", null)]
+    [TestCase("/apps/crm/window/board/42?query=view%3Dall", "/board/42?view=all")]
+    public void A_window_address_names_its_in_frame_path_as_the_open_section_does(string address, string? framePath)
+    {
+        Assert.That(AppPageAddresses.FramePath(ExplorerAddress.Parse(address)), Is.EqualTo(framePath));
+    }
+
+    [TestCase("/board/42?view=all", "/apps/crm/window/board/42?query=view%3Dall")]
+    [TestCase("/", "/apps/crm/window")]
+    public void An_in_frame_path_reported_in_a_window_stays_in_the_window(string framePath, string address)
+    {
+        Assert.That(
+            AppPageAddresses.FromFramePath(null, "crm", framePath, AppPageTabs.Window)!.Format(),
+            Is.EqualTo(address));
+    }
+
+    [Test]
+    public void A_deep_path_reported_in_a_window_goes_in_the_windows_query()
+    {
+        var deep = AppPageAddresses.FromFramePath("acme", "crm", "/a/b/c/d/e", AppPageTabs.Window)!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(deep.Path, Is.EqualTo(new[] { "crm", "window" }));
+            Assert.That(deep.GetQuery(AppPageAddresses.InAppPath), Is.EqualTo("/a/b/c/d/e"));
+            Assert.That(AppPageAddresses.FramePath(ExplorerAddress.Parse(deep.Format())), Is.EqualTo("/a/b/c/d/e"));
+        });
+    }
+
     [TestCase("/board/42?view=all")]
     [TestCase("/a b/c%20d")]
     [TestCase("/%41")]
