@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class CrossTreeImportBarrierIntegrationTests
+public partial class CrossTreeImportBarrierIntegrationTests
 {
     private const string SiteAClusterId = "xtib-site-a";
     private const string SiteBClusterId = "xtib-site-b";

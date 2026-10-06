@@ -160,16 +160,34 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         }
     }
 
-    /// <summary>The barriers among <paramref name="keys"/> that have not decided yet.</summary>
+    /// <summary>
+    /// The barriers among <paramref name="keys"/> that still hold this tree's
+    /// read fence: opened, waiting for the tree and not durably decided. Each
+    /// is asked itself, serialized with whatever opens or decides it, and
+    /// withdraws its entry from the tree's index when it holds nothing, so an
+    /// entry left by a failed withdrawal - or by a barrier whose open write
+    /// failed, or that its retention cleared after it decided - never pins the
+    /// fence (#4730). A barrier that cannot be asked holds (fail closed).
+    /// </summary>
     private async Task<List<string>> UndecidedBarriersAsync(IEnumerable<string> keys)
     {
         var undecided = new List<string>();
         foreach (var key in keys)
         {
-            var status = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key)
-                .GetDecisionAsync()
-                .ConfigureAwait(true);
-            if (status == TxStatus.InFlight)
+            bool holds;
+            try
+            {
+                holds = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key)
+                    .SettleIndexEntryAsync(TreeName)
+                    .ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogDebug(ex, "Settling cross-tree barrier {Key} for tree '{TreeName}' failed; it keeps holding the fence", key, TreeName);
+                holds = true;
+            }
+
+            if (holds)
             {
                 undecided.Add(key);
             }

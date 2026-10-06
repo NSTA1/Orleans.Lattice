@@ -111,6 +111,22 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// has not opened is left unchanged. Returns the barrier's decision.
     /// </summary>
     Task<CrossTreeReceiverDecision> ReevaluateAsync();
+
+    /// <summary>
+    /// Whether this barrier still holds the read fence of an import of
+    /// <paramref name="treeId"/> (issues #4684, #4730): it has opened, still
+    /// waits for the tree, and has no durable decision. Otherwise - it never
+    /// opened (its open write failed after it indexed itself), it was cleared
+    /// after deciding (a barrier arms its retention only once its decision is
+    /// durable), it decided, or it stopped waiting for the tree - it durably
+    /// withdraws its entry from the tree's barrier index and returns
+    /// <see langword="false"/>, so a stale entry never pins the tree's fence.
+    /// Deliberately not interleaved: it is serialized with every call that
+    /// opens or decides the barrier, so it cannot withdraw an entry an
+    /// in-flight open is about to rely on. A failed withdrawal throws, and
+    /// the caller keeps the fence.
+    /// </summary>
+    Task<bool> SettleIndexEntryAsync(string treeId);
 }
 
 /// <summary>
