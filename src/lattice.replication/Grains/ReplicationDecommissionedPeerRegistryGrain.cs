@@ -35,4 +35,25 @@ internal sealed class ReplicationDecommissionedPeerRegistryGrain(
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public async Task ClearDecommissionedAsync(string peerClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
+        if (!state.State.DecommissionedAtUtc.TryGetValue(peerClusterId, out var previousDecommissionedAtUtc))
+        {
+            return;
+        }
+
+        state.State.DecommissionedAtUtc.Remove(peerClusterId);
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.DecommissionedAtUtc[peerClusterId] = previousDecommissionedAtUtc;
+            throw;
+        }
+    }
 }

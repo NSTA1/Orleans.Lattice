@@ -200,6 +200,110 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     }
 
     /// <summary>
+    /// Whether the fence is held for a decommissioned source (#4742): the
+    /// latch is set, or the cluster-wide decommissioned-peer registry lists the
+    /// source, in which case the latch is set and persisted so a re-add, not
+    /// the registry clearing, releases it. A registry that cannot be read holds
+    /// (fail closed).
+    /// </summary>
+    private async Task<bool> FenceHeldForDecommissionedSourceAsync()
+    {
+        if (state.State.FenceHeldForDecommissionedSource)
+        {
+            return true;
+        }
+
+        bool decommissioned;
+        try
+        {
+            decommissioned = await _grainFactory
+                .GetGrain<IReplicationDecommissionedPeerRegistryGrain>(IReplicationDecommissionedPeerRegistryGrain.SingletonKey)
+                .IsDecommissionedAsync(state.State.SourceClusterId)
+                .ConfigureAwait(true);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogDebug(ex, "Reading the decommissioned-peer registry for tree '{TreeName}' failed; its fence stays up", TreeName);
+            return true;
+        }
+
+        if (!decommissioned)
+        {
+            return false;
+        }
+
+        state.State.FenceHeldForDecommissionedSource = true;
+        await state.WriteStateAsync().ConfigureAwait(true);
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> HoldFenceForDecommissionedSourceAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        if (!state.State.InProgress
+            || !string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            || (!state.State.ReadFenceArmed
+                && state.State.PendingCrossTreeBarriers.Count == 0
+                && state.State.PendingSiblingBoundaries.Count == 0))
+        {
+            return false;
+        }
+
+        if (!state.State.FenceHeldForDecommissionedSource)
+        {
+            state.State.FenceHeldForDecommissionedSource = true;
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                state.State.FenceHeldForDecommissionedSource = false;
+                throw;
+            }
+
+            Logger.LogWarning(
+                "Source '{SourceClusterId}' of tree '{TreeName}' was decommissioned while its import held the read fence; the fence stays up until the source is re-added",
+                sourceClusterId, TreeName);
+        }
+
+        return true;
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RedriveForReAddedSourceAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        if (!state.State.FenceHeldForDecommissionedSource
+            || !string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // The fence slots are carried over, as a failed bootstrap's re-drive
+        // carries them (#4526): the fresh drain decides whether it lifts.
+        var prevPhase = state.State.Phase;
+        state.State.FenceHeldForDecommissionedSource = false;
+        state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.FenceHeldForDecommissionedSource = true;
+            state.State.Phase = prevPhase;
+            throw;
+        }
+
+        Logger.LogWarning(
+            "Source '{SourceClusterId}' of tree '{TreeName}' was re-added after a decommission; re-driving the read-fenced import from a fresh export",
+            sourceClusterId, TreeName);
+        return true;
+    }
+
+    /// <summary>
     /// Re-checks what holds the imported tree's read fence: the cross-tree
     /// barriers indexed under it (#4683, #4684) and the sibling boundaries its
     /// import captured (#4684). Returns <see langword="true"/> once nothing
@@ -213,6 +317,17 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         {
             // The drain lifted the fence: nothing was waiting.
             return true;
+        }
+
+        // An abandon is not a decision (#4742): a decommission of the source
+        // clears its barriers without deciding them, so they stop counting
+        // below. Until a re-add re-drives the import, the fence stays up.
+        if (await FenceHeldForDecommissionedSourceAsync().ConfigureAwait(true))
+        {
+            Logger.LogDebug(
+                "Tree '{TreeName}' stays read-fenced: its source '{SourceClusterId}' was decommissioned and has not been re-added",
+                TreeName, state.State.SourceClusterId);
+            return false;
         }
 
         // While any barrier the drain recorded still waits, every barrier indexed

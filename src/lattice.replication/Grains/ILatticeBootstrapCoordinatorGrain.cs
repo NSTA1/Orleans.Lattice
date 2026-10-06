@@ -159,4 +159,26 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><see langword="true"/> when a fence was lifted; <see langword="false"/> when none was armed.</returns>
     Task<bool> ForceLiftReadFenceAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Called by a decommission of <paramref name="sourceClusterId"/> before it
+    /// abandons that source's cross-tree barriers (issue #4742). When this
+    /// tree's import from that source still holds its cross-tree read fence,
+    /// durably records that the fence must stay up until the source is re-added:
+    /// an abandoned barrier no longer counts as undecided, so without this the
+    /// next phase tick would lift the fence over an import its siblings never
+    /// matched. Returns whether the fence is now held for the decommission.
+    /// </summary>
+    /// <param name="sourceClusterId">The decommissioned source cluster.</param>
+    Task<bool> HoldFenceForDecommissionedSourceAsync(string sourceClusterId);
+
+    /// <summary>
+    /// Called when <paramref name="sourceClusterId"/> is re-added after a
+    /// decommission (issue #4742). When this tree's import from that source is
+    /// holding its fence for the decommission, re-drives the import from a
+    /// fresh export with the fence still armed, so the fresh drain decides
+    /// whether the fence lifts. Returns whether a re-drive was started.
+    /// </summary>
+    /// <param name="sourceClusterId">The re-added source cluster.</param>
+    Task<bool> RedriveForReAddedSourceAsync(string sourceClusterId);
 }
