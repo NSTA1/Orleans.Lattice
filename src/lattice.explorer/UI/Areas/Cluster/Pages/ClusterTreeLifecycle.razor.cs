@@ -51,8 +51,17 @@ public partial class ClusterTreeLifecycle : IDisposable
     [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;
 
+    /// <summary>
+    /// Raised once a delete, recover, purge or alias has changed the tree, so the
+    /// page that hosts this tab reads what it shows about the tree again: an alias
+    /// retargets the name at another physical tree with its own shard count and
+    /// leaf size.
+    /// </summary>
+    [Parameter]
+    public EventCallback OperationSettled { get; set; }
+
     [Inject]
-    private ClusterTreeCatalog Catalog { get; set; } = default!;
+    private ClusterTreeChanges TreeChanges { get; set; } = default!;
 
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
@@ -102,7 +111,7 @@ public partial class ClusterTreeLifecycle : IDisposable
         {
             if (!value.PurgeInProgress && _status.Value is { PurgeInProgress: true })
             {
-                Catalog.Invalidate();
+                TreeChanges.Changed();
                 Toasts.Show(value.PurgeComplete ? "Tree purged." : "The purge stopped before it finished.", value.PurgeComplete ? LtToastTone.Success : LtToastTone.Warning);
             }
 
@@ -160,8 +169,9 @@ public partial class ClusterTreeLifecycle : IDisposable
 
         if (result.Value is not null)
         {
-            Catalog.Invalidate();
+            TreeChanges.Changed();
             Toasts.Show("Alias set.", LtToastTone.Success);
+            await OperationSettled.InvokeAsync();
         }
         else
         {
@@ -179,8 +189,9 @@ public partial class ClusterTreeLifecycle : IDisposable
         if (result.Value is { } value)
         {
             Show(result);
-            Catalog.Invalidate();
+            TreeChanges.Changed();
             Toasts.Show(done(value), value.PurgeInProgress ? LtToastTone.Info : LtToastTone.Success);
+            await OperationSettled.InvokeAsync();
         }
         else
         {

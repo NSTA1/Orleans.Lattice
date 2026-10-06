@@ -2,7 +2,9 @@ using Microsoft.AspNetCore.Components;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
+using Orleans.Lattice.Explorer.UI.Suggestions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 
@@ -29,6 +31,12 @@ public partial class TenancyTenantPage
 
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
+
+    [Inject]
+    internal ExplorerSuggestions Suggestions { get; set; } = default!;
+
+    [Inject]
+    internal ClusterTreeChanges TreeChanges { get; set; } = default!;
 
     [Inject]
     internal NavigationManager Navigation { get; set; } = default!;
@@ -134,6 +142,7 @@ public partial class TenancyTenantPage
                 : await admin.ResumeTenantAsync(TenantId).ConfigureAwait(true);
             _view = _view with { Status = result.NewStatus };
             Catalog.Invalidate();
+            Suggestions.InvalidateTenants();
             var state = TenancyFormat.TenantStateLabel(result.NewStatus).ToLowerInvariant();
             Toasts.Show(result.Changed ? $"Tenant {TenantId} is {state}." : $"Tenant {TenantId} was already {state}.", LtToastTone.Success);
         }
@@ -172,7 +181,11 @@ public partial class TenancyTenantPage
             _busy = false;
         }
 
+        // The tenant is gone from the tenant pickers, and its trees - soft-deleted
+        // with it - from every remembered tree list.
         Catalog.Invalidate();
+        Suggestions.InvalidateTenants();
+        TreeChanges.Changed();
         var trees = result.CascadedTreeCount == 1 ? "1 tree" : $"{TenancyFormat.Count(result.CascadedTreeCount)} trees";
         Toasts.Show($"Tenant {TenantId} deleted; {trees} soft-deleted.", LtToastTone.Success);
         Navigator.NavigateTo(TenancyRoutes.Directory);

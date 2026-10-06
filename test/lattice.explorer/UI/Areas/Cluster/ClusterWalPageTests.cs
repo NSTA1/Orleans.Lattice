@@ -167,6 +167,55 @@ public sealed class ClusterWalPageTests : ClusterTestContext
     }
 
     [Test]
+    public void A_finished_move_and_a_reclaim_each_re_read_the_placement_so_the_audit_is_never_stale()
+    {
+        Admin.AuditWalPlacementAsync(TreeId, Arg.Any<CancellationToken>()).Returns(
+            Audit(5, "blob-x"),
+            Audit(6, "blob-b"),
+            Audit(7, "blob-b"));
+        Tracked.Script(
+            TreeAdminOperationKinds.WalMove,
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Running, TreeAdminOperationPhases.Copying, 400, 1200, TreeAdminOperationUnits.Entries),
+            Status(TreeAdminOperationKinds.WalMove, LatticeOperationState.Succeeded, "Completed", result: MovedResult()));
+        Admin.ReclaimMovedWalSourceAsync(TreeId, 1, "blob-x", Arg.Any<CancellationToken>()).Returns(new TreeWalMoveReceipt
+        {
+            TreeId = TreeId, Partition = 1, FromProviderKey = "blob-x", ToProviderKey = "blob-b", Outcome = TreeWalMoveOutcome.SourceReclaimed,
+        });
+        var cut = RenderAt("/cluster/wal?tree=orders&partition=1&target=blob-b");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-cluster-stage").TextContent, Does.Contain("placement version 5")));
+
+        Button(cut, "Move partition...").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-confirm"), Is.Not.Empty));
+        ConfirmTyping(cut, TreeId);
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-cluster='move-progress']"), Is.Not.Empty));
+        Time.Advance(ClusterStatusPoller.Interval);
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Toasts, Does.Contain("WAL partition moved."));
+            Assert.That(cut.Find(".lt-cluster-stage").TextContent, Does.Contain("placement version 6").And.Not.Contain("placement version 5"));
+            Assert.That(cut.Find("tbody").TextContent, Does.Contain("blob-b").And.Not.Contain("blob-x"));
+        });
+
+        Button(cut, "Reclaim the source...").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-confirm"), Is.Not.Empty));
+        ConfirmTyping(cut, TreeId);
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(Toasts, Does.Contain("WAL source reclaimed."));
+            Assert.That(cut.Find(".lt-cluster-stage").TextContent, Does.Contain("placement version 7"));
+        });
+    }
+
+    private static TreeWalPlacementAudit Audit(long version, string partitionOne) => new()
+    {
+        TreeId = TreeId, Version = version, PartitionCount = 2, AllResolvableOnThisSilo = false,
+        Partitions = [new TreeWalPartitionPlacement { Partition = 0, ProviderKey = "blob-a", ResolvableOnThisSilo = true }, new TreeWalPartitionPlacement { Partition = 1, ProviderKey = partitionOne }],
+        KnownProviderKeys = ["blob-a", "blob-b"],
+    };
+
+    [Test]
     public void A_move_running_from_another_tab_is_followed_and_can_be_stopped_before_its_flip()
     {
         var operationId = TreeAdminOperationIds.New(TreeAdminOperationKinds.WalMove, TreeAdminOperationIds.Target(TreeId, 1));

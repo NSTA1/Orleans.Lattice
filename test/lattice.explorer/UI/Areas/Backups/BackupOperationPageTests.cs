@@ -293,6 +293,43 @@ public sealed class BackupOperationPageTests : BackupsTestContext
     }
 
     [Test]
+    public void A_followed_restore_that_succeeds_forgets_the_remembered_tree_lists_once()
+    {
+        var changes = 0;
+        Services.GetRequiredService<Orleans.Lattice.Explorer.UI.Areas.Data.DataDirectory>().Changed += () => changes++;
+        Backups.Statuses["op-r"] = FakeBackupControl.Running("op-r", BackupOperationKinds.Restore, "orders");
+        var cut = RenderAt<BackupOperationPage>("backups/operations/op-r");
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-operation-progress .lt-pill").TextContent.Trim(), Is.EqualTo("Queued")));
+        Assert.That(changes, Is.Zero, "a queued restore has not changed the trees yet");
+
+        Backups.SucceedRestore("op-r", FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.InPlace)));
+        Tick();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-operation-progress .lt-pill").TextContent.Trim(), Is.EqualTo("Succeeded"));
+            Assert.That(changes, Is.EqualTo(1), "the restored tree's lists are forgotten at once");
+        });
+        cut.Render();
+        Assert.That(changes, Is.EqualTo(1), "and only once per operation");
+    }
+
+    [Test]
+    public void A_reverted_restore_forgets_the_remembered_tree_lists()
+    {
+        var changes = 0;
+        Services.GetRequiredService<Orleans.Lattice.Explorer.UI.Areas.Data.DataDirectory>().Changed += () => changes++;
+        var operation = Actions.Revert("op-r", FakeBackupControl.RestoreResult(new LatticeRestoreRequest("b1", "orders", mode: LatticeRestoreMode.ShadowCutover)));
+        var cut = RenderAt<BackupOperationPage>("backups/operations/" + operation.Id);
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find("[role=status]").TextContent, Does.Contain("Succeeded"));
+            Assert.That(changes, Is.GreaterThan(0));
+        });
+    }
+
+    [Test]
     public void An_in_place_restore_offers_no_revert()
     {
         Backups.Statuses["op-r"] = FakeBackupControl.Running("op-r", BackupOperationKinds.Restore, "orders");
