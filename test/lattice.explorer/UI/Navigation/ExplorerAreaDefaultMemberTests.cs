@@ -61,6 +61,14 @@ public sealed class ExplorerAreaDefaultMemberTests
     }
 
     [Test]
+    public void An_area_that_says_nothing_is_never_standalone()
+    {
+        IExplorerArea area = new SilentArea();
+
+        Assert.That(area.IsStandaloneAt(Address), Is.False, "the chrome is drawn unless an area asks otherwise");
+    }
+
+    [Test]
     public void An_area_that_says_nothing_offers_no_completions()
     {
         IExplorerArea area = new SilentArea();
@@ -105,6 +113,7 @@ public sealed class ExplorerAreaDefaultMemberTests
             Assert.That(area.IsTenantScoped, Is.False);
             Assert.That(area.IsTenantScopedAt(Address), Is.True);
             Assert.That(area.GetChainSpans(Address), Is.EqualTo(new[] { 2 }));
+            Assert.That(area.IsStandaloneAt(Address), Is.True);
             Assert.That(area.Completions, Is.Not.Null);
             Assert.That(area.Commands.Select(command => command.Id), Is.EqualTo(new[] { "probe.go" }));
             Assert.That(await area.GetHomeStatusAsync(CancellationToken.None), Is.EqualTo("1 thing"));
@@ -174,6 +183,8 @@ public sealed class ExplorerAreaDefaultMemberTests
         public bool IsTenantScopedAt(ExplorerAddress address) => true;
 
         public IReadOnlyList<int>? GetChainSpans(ExplorerAddress address) => [2];
+
+        public bool IsStandaloneAt(ExplorerAddress address) => true;
 
         public IAddressCompletionSource? Completions => new NoCompletions();
 

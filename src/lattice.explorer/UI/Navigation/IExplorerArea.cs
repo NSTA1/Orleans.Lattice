@@ -69,6 +69,17 @@ internal interface IExplorerArea
     IReadOnlyList<int>? GetChainSpans(Address.ExplorerAddress address) => null;
 
     /// <summary>
+    /// Whether <paramref name="address"/>, an address in this area, renders
+    /// standalone: the layout keeps every gate it applies to the content, but
+    /// draws no header, address line or directory spine around it. Defaults to
+    /// <see langword="false"/>; an area answers <see langword="true"/> only for a
+    /// page meant to fill a browser window of its own, such as an app's UI opened
+    /// in a new window.
+    /// </summary>
+    /// <param name="address">An address whose area is this one.</param>
+    bool IsStandaloneAt(Address.ExplorerAddress address) => false;
+
+    /// <summary>
     /// The area's completion source for the address line, or <see langword="null"/>
     /// for none. Only a <see cref="AreaAvailabilityKind.Visible"/> area is asked.
     /// </summary>

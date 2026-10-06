@@ -35,6 +35,11 @@ namespace Orleans.Lattice.Explorer.UI.Layout;
 /// is measured, not queried in a stylesheet, which keeps every layout width in the
 /// one breakpoint layer.
 /// </para>
+/// <para>
+/// At an address its area marks standalone (<see cref="IExplorerArea.IsStandaloneAt"/>)
+/// it draws no skip links, header, address line or spine, and the main landmark fills
+/// the viewport; every gate on the content, the session overlay and the toasts stay.
+/// </para>
 /// </remarks>
 public partial class ShellLayout : IAsyncDisposable
 {
@@ -110,9 +115,25 @@ public partial class ShellLayout : IAsyncDisposable
 
     private bool IsCompact => _breakpoint == LtBreakpoint.Compact;
 
+    // The browser's own address decides, so a standalone window never draws the chrome
+    // while the layout is still resolving its location, nor a chromed page lose it. A
+    // standalone address reached directly by a caller who is not signed in keeps the
+    // chrome once the session is known, because sign-in lives in the header; it drops
+    // the chrome as soon as the caller signs in.
+    private bool IsStandalone =>
+        Navigator.IsStandalone(Navigator.Current ?? _location.Address)
+        && (!_sessionReady || AuthSession.IsAuthenticated);
+
     // The compact modifier is how a stylesheet reacts to the band without a width
-    // query: every .lt-toolbar under it stacks.
-    private string RootClass => IsCompact ? "lt-viewport lt-shell lt-shell--compact" : "lt-viewport lt-shell";
+    // query: every .lt-toolbar under it stacks. The standalone modifier lets the main
+    // landmark fill the viewport when no chrome is drawn.
+    private string RootClass => (IsCompact, IsStandalone) switch
+    {
+        (true, true) => "lt-viewport lt-shell lt-shell--compact lt-shell--standalone",
+        (true, false) => "lt-viewport lt-shell lt-shell--compact",
+        (false, true) => "lt-viewport lt-shell lt-shell--standalone",
+        _ => "lt-viewport lt-shell",
+    };
 
     private string DirectoryClass => _breakpoint == LtBreakpoint.Medium
         ? "lt-shell-directory lt-shell-directory--rail"

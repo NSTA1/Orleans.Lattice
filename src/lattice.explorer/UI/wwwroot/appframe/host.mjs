@@ -163,6 +163,26 @@ export function focusAddressLine() {
   return false;
 }
 
+// The appearance the Explorer's own page is drawn in, as the chrome resolved it on the
+// document: the material (data-bs-theme, with "follow the system" already resolved),
+// the contrast overlay (an explicit choice, or the platform's prefers-contrast), the
+// density, and the platform's reduced-motion preference. Only names from the closed set
+// are returned; .NET sanitises them again before any reaches a frame.
+export function readAppearance() {
+  const root = document.documentElement;
+  const media = (query) => !!window.matchMedia && window.matchMedia(query).matches;
+  const contrastChoice = root.getAttribute('data-lt-contrast');
+  const contrast = contrastChoice === 'more' || contrastChoice === 'standard'
+    ? contrastChoice
+    : (media('(prefers-contrast: more)') ? 'more' : 'standard');
+  return [
+    root.getAttribute('data-bs-theme') === 'dark' ? 'board' : 'paper',
+    contrast,
+    root.getAttribute('data-lt-density') === 'compact' ? 'compact' : 'comfortable',
+    media('(prefers-reduced-motion: reduce)') ? 'reduce' : 'full',
+  ];
+}
+
 function onPortMessage(frameId, state, event) {
   if (state.closed) {
     return;

@@ -5,8 +5,8 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App;
 
 /// <summary>
 /// The app pages' addresses: their own sections, the cross-area links (Data, Replication,
-/// the catalogue's re-consent), and the round trip between an in-frame path and the open
-/// address.
+/// the catalogue's re-consent), the round trip between an in-frame path and the window
+/// address, and the redirect from a legacy open address.
 /// </summary>
 [TestFixture]
 public sealed class AppPageAddressesTests
@@ -26,28 +26,60 @@ public sealed class AppPageAddressesTests
         });
     }
 
-    [TestCase("/apps/crm/open", null)]
-    [TestCase("/apps/crm/open/board", "/board")]
-    [TestCase("/apps/crm/open/board/42?query=view%3Dall", "/board/42?view=all")]
-    [TestCase("/apps/crm/open?query=tab%3D2", "/?tab=2")]
-    [TestCase("/apps/crm/open/a%20b", "/a b")]
-    public void An_open_address_names_its_in_frame_path(string address, string? framePath)
+    [TestCase("/apps/crm/window", null)]
+    [TestCase("/apps/crm/window/board", "/board")]
+    [TestCase("/apps/crm/window/board/42?query=view%3Dall", "/board/42?view=all")]
+    [TestCase("/apps/crm/window?query=tab%3D2", "/?tab=2")]
+    [TestCase("/apps/crm/window/a%20b", "/a b")]
+    public void A_window_address_names_its_in_frame_path(string address, string? framePath)
     {
         Assert.That(AppPageAddresses.FramePath(ExplorerAddress.Parse(address)), Is.EqualTo(framePath));
     }
 
-    [TestCase("/board/42", "/apps/crm/open/board/42")]
-    [TestCase("/board/42?view=all", "/apps/crm/open/board/42?query=view%3Dall")]
-    [TestCase("/board/42#anchor", "/apps/crm/open/board/42")]
-    [TestCase("//board///42/", "/apps/crm/open/board/42")]
-    [TestCase("/", "/apps/crm/open")]
-    [TestCase("/?", "/apps/crm/open")]
-    [TestCase("/%41", "/apps/crm/open/%2541")]
-    public void An_in_frame_path_becomes_an_open_address(string framePath, string address)
+    [TestCase("/board/42", "/apps/crm/window/board/42")]
+    [TestCase("/board/42?view=all", "/apps/crm/window/board/42?query=view%3Dall")]
+    [TestCase("/board/42#anchor", "/apps/crm/window/board/42")]
+    [TestCase("//board///42/", "/apps/crm/window/board/42")]
+    [TestCase("/", "/apps/crm/window")]
+    [TestCase("/?", "/apps/crm/window")]
+    [TestCase("/%41", "/apps/crm/window/%2541")]
+    public void An_in_frame_path_becomes_a_window_address(string framePath, string address)
     {
         Assert.That(AppPageAddresses.FromFramePath(null, "crm", framePath)!.Format(), Is.EqualTo(address));
     }
 
+    [TestCase("/apps/crm/open", "/apps/crm/window")]
+    [TestCase("/apps/crm/open/board/42?query=view%3Dall", "/apps/crm/window/board/42?query=view%3Dall")]
+    [TestCase("/apps/crm/open?path=%2Fa%2Fb%2Fc%2Fd%2Fe", "/apps/crm/window?path=%2Fa%2Fb%2Fc%2Fd%2Fe")]
+    [TestCase("/t/acme/apps/crm/open/board", "/t/acme/apps/crm/window/board")]
+    public void A_legacy_open_address_leads_to_the_same_in_app_path_in_the_window(string address, string window)
+    {
+        var target = AppPageAddresses.WindowForLegacyOpen(ExplorerAddress.Parse(address))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(target.Tenant, Is.EqualTo(ExplorerAddress.Parse(window).Tenant));
+            Assert.That(target.Path, Is.EqualTo(ExplorerAddress.Parse(window).Path));
+            Assert.That(AppPageAddresses.FramePath(target), Is.EqualTo(AppPageAddresses.FramePath(ExplorerAddress.Parse(window))));
+        });
+    }
+
+    [TestCase("/apps/crm/window")]
+    [TestCase("/apps/crm/overview")]
+    [TestCase("/apps/crm")]
+    [TestCase("/apps")]
+    [TestCase("/apps/catalogue/open")]
+    [TestCase("/data/crm/open")]
+    public void Only_a_legacy_open_address_is_redirected(string address)
+    {
+        Assert.That(AppPageAddresses.WindowForLegacyOpen(ExplorerAddress.Parse(address)), Is.Null);
+    }
+
+    [Test]
+    public void The_legacy_redirect_needs_an_address()
+    {
+        Assert.That(() => AppPageAddresses.WindowForLegacyOpen(null!), Throws.ArgumentNullException);
+    }
     [TestCase("/board/42?view=all")]
     [TestCase("/a b/c%20d")]
     [TestCase("/%41")]
@@ -73,10 +105,10 @@ public sealed class AppPageAddressesTests
         Assert.Multiple(() =>
         {
             Assert.That(AppPageAddresses.MaxInAppSegments, Is.EqualTo(4));
-            Assert.That(shallow.Path, Is.EqualTo(new[] { "crm", "open", "a", "b", "c", "d" }));
-            Assert.That(deep.Path, Is.EqualTo(new[] { "crm", "open" }));
+            Assert.That(shallow.Path, Is.EqualTo(new[] { "crm", "window", "a", "b", "c", "d" }));
+            Assert.That(deep.Path, Is.EqualTo(new[] { "crm", "window" }));
             Assert.That(deep.GetQuery(AppPageAddresses.InAppPath), Is.EqualTo("/a/b/c/d/e"));
-            Assert.That(AppPageAddresses.FramePath(ExplorerAddress.Parse("/apps/crm/open?path=a%2Fb")), Is.EqualTo("/a/b"));
+            Assert.That(AppPageAddresses.FramePath(ExplorerAddress.Parse("/apps/crm/window?path=a%2Fb")), Is.EqualTo("/a/b"));
         });
     }
 

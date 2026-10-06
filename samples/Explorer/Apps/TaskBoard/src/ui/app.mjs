@@ -174,10 +174,9 @@ function render() {
   renderDetail();
 }
 
-function showContext(context, appearance) {
-  const material = appearance.theme === "board" ? "Board" : "Paper";
+function showContext(context) {
   byId("tb-context").textContent =
-    context.slug + " " + context.version + (context.tenant ? " in " + context.tenant : "") + ", " + material + ".";
+    context.slug + " " + context.version + (context.tenant ? " in " + context.tenant : "") + ".";
 }
 
 function showIcon() {
@@ -362,15 +361,12 @@ lattice.on("lattice.revoked", function () {
 async function start() {
   let context = null;
   try {
-    const appearance = await lattice.ready;
+    // The kit applies the appearance attributes, and re-applies them on
+    // context.changed, so the stylesheet follows the console by itself.
+    await lattice.ready;
     showIcon();
     context = await lattice.request("context.read");
-    showContext(context, appearance);
-    // The kit has already re-applied the Paper or Board attributes, so the
-    // stylesheet follows by itself; this only keeps the label honest.
-    lattice.on("context.changed", function (next) {
-      showContext(context, next);
-    });
+    showContext(context);
     state.canEdit = canWrite(context);
     await refresh();
   } catch (error) {

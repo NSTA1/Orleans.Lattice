@@ -58,6 +58,19 @@
   min-width: 0;
 }
 
+/* An app alone in a window of its own: the frame fills the standalone main landmark. */
+.lt-app-window {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.lt-app-window > .appframe {
+  flex: 1 1 auto;
+}
+
 .lt-app-sections .lt-tabs__tab {
   min-height: 2.75rem;
 }
