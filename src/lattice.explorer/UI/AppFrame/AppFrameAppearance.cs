@@ -32,6 +32,19 @@ internal sealed record AppFrameAppearance(string Theme, string Contrast, string 
     /// <summary>Paper, standard contrast, comfortable density, full motion.</summary>
     public static AppFrameAppearance Default { get; } = new(Paper, StandardContrast, Comfortable, false);
 
+    /// <summary>
+    /// The appearance the frame host read from the Explorer's page: its theme, contrast and
+    /// density names and <c>reduce</c> or <c>full</c> motion, in that order. Anything outside
+    /// the closed sets falls back to the default value, and anything that is not exactly four
+    /// values is the whole default.
+    /// </summary>
+    /// <param name="values">The values the frame host returned, or <see langword="null"/>.</param>
+    /// <returns>The sanitised appearance.</returns>
+    public static AppFrameAppearance FromDocument(IReadOnlyList<string?>? values) =>
+        values is { Count: 4 }
+            ? new AppFrameAppearance(values[0] ?? Paper, values[1] ?? StandardContrast, values[2] ?? Comfortable, values[3] == "reduce").Sanitise()
+            : Default;
+
     /// <summary>Returns a copy whose every value is in its closed set, replacing anything else with the default.</summary>
     /// <returns>The sanitised appearance.</returns>
     public AppFrameAppearance Sanitise()

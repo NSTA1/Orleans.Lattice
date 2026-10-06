@@ -106,7 +106,7 @@ internal static partial class ShellServiceCollectionExtensions
     /// <param name="services">The service collection to register into.</param>
     static partial void AddAppsCatalogue(IServiceCollection services);
 
-    /// <summary>Apps area: manifest-derived app pages and the framed Open tab (A2, issue #3819).</summary>
+    /// <summary>Apps area: manifest-derived app pages and each app's own window (A2, issue #3819).</summary>
     /// <param name="services">The service collection to register into.</param>
     static partial void AddApp(IServiceCollection services);
 

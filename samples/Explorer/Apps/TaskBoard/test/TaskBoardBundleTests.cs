@@ -63,7 +63,6 @@ public sealed class TaskBoardBundleTests
         Assert.Multiple(() =>
         {
             Assert.That(module, Does.Contain("await lattice.ready"));
-            Assert.That(module, Does.Contain("lattice.on(\"context.changed\""));
             Assert.That(module, Does.Contain("lattice.on(\"nav.changed\""));
             Assert.That(module, Does.Contain("lattice.on(\"lattice.revoked\""));
             Assert.That(module, Does.Contain("lattice.assetUrl(\"icon.svg\")"));

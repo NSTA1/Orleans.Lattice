@@ -117,7 +117,7 @@ public sealed class AppFrameEndpointTests
 
         using var frame = await client.GetAsync("/_apps/frame/v1/frame.html");
         using var boot = await client.GetAsync("/_apps/frame/v1/boot.js");
-        using var page = await client.GetAsync("/apps/taskboard/open");
+        using var page = await client.GetAsync("/apps/taskboard/window");
         using var lookalike = await client.GetAsync("/_apps/frame/v2/frame.html");
         using var missing = await client.GetAsync("/_apps/frame/v1/missing.js");
 

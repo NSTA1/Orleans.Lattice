@@ -35,8 +35,8 @@ public sealed partial class AppsPageTests : AppsTestContext
             Assert.That(cut.FindAll($"[data-lt-command='{AppsArea.InstallCommandId}']"), Is.Empty);
             Assert.That(cut.FindAll("[role=alert]"), Is.Empty);
             Assert.That(cut.Find("tbody tr").TextContent, Does.Contain("CRM").And.Contain("viewer, editor"));
-            Assert.That(cut.FindAll("a[href='apps/crm/open']"), Has.Count.EqualTo(1));
-            Assert.That(cut.FindAll("a[href='apps/notes/open']"), Is.Empty, "an app without a UI has no Open control");
+            Assert.That(cut.FindAll("a[href='apps/crm/window'][target='_blank'][rel='noopener noreferrer']"), Has.Count.EqualTo(1));
+            Assert.That(cut.FindAll("a[href='apps/notes/window']"), Is.Empty, "an app without a UI has no Open control");
             Assert.That(cut.FindAll("a[href='apps/notes']"), Has.Count.EqualTo(1));
             Assert.That(cut.Find("link[rel=stylesheet]").GetAttribute("href"), Is.EqualTo(AppsCatalogueAssets.Stylesheet));
         });

@@ -56,7 +56,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     public string AppSlug { get; set; } = string.Empty;
 
     /// <summary>
-    /// The app's in-frame path from the address line (the <c>{*path}</c> of <c>/apps/{slug}/open</c>),
+    /// The app's in-frame path from the address line (the <c>{*path}</c> of <c>/apps/{slug}/window</c>),
     /// or <see langword="null"/> for the app's own start. A change is sent to the frame as
     /// <c>nav.changed</c>.
     /// </summary>
@@ -78,15 +78,6 @@ public sealed partial class AppFrame : IAsyncDisposable
     /// <summary>Where "Leave app" navigates when <see cref="OnLeave"/> is unset, relative to the base URL.</summary>
     [Parameter]
     public string LeaveHref { get; set; } = "apps";
-
-    /// <summary>
-    /// Where "Open in new window" points, relative to the base URL, or <see langword="null"/>
-    /// (the default) to offer no such link. The link opens a new browsing context with
-    /// <c>noopener</c> and <c>noreferrer</c>, so the new window launches the app afresh on its
-    /// own circuit, through the same per-launch gate, and shares nothing with this one.
-    /// </summary>
-    [Parameter]
-    public string? WindowHref { get; set; }
 
     /// <summary>
     /// Raised by Esc in the host chrome. When unset, focus moves to the element carrying
@@ -259,6 +250,12 @@ public sealed partial class AppFrame : IAsyncDisposable
         }
 
         var generation = _generation;
+        await ObserveAppearanceAsync().ConfigureAwait(true);
+        if (generation != _generation)
+        {
+            return;
+        }
+
         AppFrameBundleResult loaded;
         try
         {
@@ -452,6 +449,30 @@ public sealed partial class AppFrame : IAsyncDisposable
         catch (Exception exception) when (exception is JSException or JSDisconnectedException or TaskCanceledException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the appearance the Explorer's own page is drawn in - the user's chosen material,
+    /// contrast and density, with "follow the system" resolved as the page resolved it - and
+    /// records it on the host context, so the bundle and <c>context.read</c> both report it.
+    /// A read that fails leaves the appearance as it was: cosmetic, never a launch failure.
+    /// </summary>
+    private async Task ObserveAppearanceAsync()
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var values = await _module.InvokeAsync<string?[]?>("readAppearance", _disposal.Token).ConfigureAwait(true);
+            HostContext.ObserveAppearance(AppFrameAppearance.FromDocument(values));
+        }
+        catch (Exception exception) when (exception is JSException or JSDisconnectedException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException)
+        {
+            // Anything the page answers that is not a well-formed read keeps the appearance as it was.
         }
     }
 

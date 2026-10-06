@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App;
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
 public sealed partial class AppPageTests : AppPageTestContext
 {
-    private static readonly string[] RoleHolderTabs = ["Overview", "Trees", "Roles", "Tools", "Subscriptions", "Replication", "Open"];
+    private static readonly string[] RoleHolderTabs = ["Overview", "Trees", "Roles", "Tools", "Subscriptions", "Replication"];
 
     [Test]
     public void A_role_holder_sees_the_overview_and_every_section_but_consent()
@@ -42,7 +42,7 @@ public sealed partial class AppPageTests : AppPageTestContext
             Assert.That(cut.FindAll(".lt-dl__term").Select(term => term.TextContent), Does.Not.Contain("Provenance"));
             Assert.That(cut.Find(".lt-app-description").TextContent, Is.EqualTo("Keeps accounts and orders.\nOne line per fact."));
             Assert.That(cut.Find(".lt-app-head code").TextContent, Is.EqualTo("a/crm"));
-            Assert.That(cut.Find("a.lt-btn").GetAttribute("href"), Is.EqualTo("apps/crm/open"));
+            Assert.That(cut.Find("a.lt-btn").GetAttribute("href"), Is.EqualTo("apps/crm/window"));
             Assert.That(cut.Find("link[rel=stylesheet]").GetAttribute("href"), Is.EqualTo(AppPagesAssets.Stylesheet));
             Assert.That(Control.DescribeCalls, Is.Zero, "a caller the probe says lacks AppInstall is never described");
         });
@@ -116,8 +116,8 @@ public sealed partial class AppPageTests : AppPageTestContext
     [TestCase("apps/crm/overview")]
     [TestCase("apps/crm/trees")]
     [TestCase("apps/crm/consent")]
-    [TestCase("apps/crm/open")]
-    [TestCase("apps/crm/open/board/1")]
+    [TestCase("apps/crm/window")]
+    [TestCase("apps/crm/window/board/1")]
     public void A_caller_with_neither_a_role_nor_app_install_sees_not_found_for_the_whole_subtree(string address)
     {
         // The app exists and the control would describe it - to a holder of AppInstall.
@@ -185,11 +185,11 @@ public sealed partial class AppPageTests : AppPageTestContext
 
         var cut = RenderAt("apps/crm/overview");
 
-        Assert.That(TabLabels(cut), Is.EqualTo(new[] { "Overview", "Trees", "Roles", "Tools", "Subscriptions", "Replication", "Consent", "Open" }));
+        Assert.That(TabLabels(cut), Is.EqualTo(new[] { "Overview", "Trees", "Roles", "Tools", "Subscriptions", "Replication", "Consent" }));
     }
 
     [Test]
-    public void An_app_without_a_ui_has_no_open_section_at_all()
+    public void An_app_without_a_ui_offers_no_open_control_and_has_no_window()
     {
         Workspace.Grant(Workspace(ui: false));
 
@@ -197,12 +197,12 @@ public sealed partial class AppPageTests : AppPageTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(TabLabels(overview), Does.Not.Contain("Open"));
+            Assert.That(overview.FindAll("[data-lt-open-app]"), Is.Empty);
             Assert.That(Definition(overview, "User interface"), Is.EqualTo("This app ships no UI."));
             Assert.That(overview.FindAll("a.lt-btn"), Is.Empty);
         });
 
-        var open = RenderAt("apps/crm/open");
+        var open = RenderAt("apps/crm/window");
         Assert.That(open.Find("h1").TextContent, Is.EqualTo("Nothing lives at this address"));
     }
 
@@ -341,7 +341,7 @@ public sealed partial class AppPageTests : AppPageTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(overview.Find("a.lt-btn").GetAttribute("href"), Is.EqualTo("t/acme/apps/crm/open"));
+            Assert.That(overview.Find("a.lt-btn").GetAttribute("href"), Is.EqualTo("t/acme/apps/crm/window"));
             Assert.That(trees.Find("tbody a").GetAttribute("href"), Is.EqualTo("t/acme/data/a/crm/orders"));
         });
     }
@@ -380,12 +380,12 @@ public sealed partial class AppPageTests : AppPageTestContext
     }
 
     [Test]
-    public void A_move_within_the_open_apps_own_frame_reads_nothing()
+    public void A_move_within_the_apps_own_window_reads_nothing()
     {
         Workspace.Grant(Workspace());
-        var cut = RenderAt("apps/crm/open");
+        var cut = RenderAt("apps/crm/window");
 
-        Navigation.NavigateTo("apps/crm/open/board");
+        Navigation.NavigateTo("apps/crm/window/board");
         cut.Render();
 
         Assert.That(Workspace.Described, Has.Count.EqualTo(1), "re-reading would tear the running frame down");
@@ -394,9 +394,9 @@ public sealed partial class AppPageTests : AppPageTestContext
     [Test]
     public void The_route_parameters_bind_without_the_page_reading_them()
     {
-        var cut = Render<AppPage>(parameters => parameters.Add(page => page.P1, "crm").Add(page => page.P2, "open").Add(page => page.P3, "board"));
+        var cut = Render<AppPage>(parameters => parameters.Add(page => page.P1, "crm").Add(page => page.P2, "window").Add(page => page.P3, "board"));
 
-        Assert.That(new[] { cut.Instance.P1, cut.Instance.P2, cut.Instance.P3 }, Is.EqualTo(new[] { "crm", "open", "board" }));
+        Assert.That(new[] { cut.Instance.P1, cut.Instance.P2, cut.Instance.P3 }, Is.EqualTo(new[] { "crm", "window", "board" }));
     }
 
     private static string Definition(IRenderedComponent<AppPage> cut, string term) =>

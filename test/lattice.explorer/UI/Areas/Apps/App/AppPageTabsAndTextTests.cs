@@ -21,7 +21,7 @@ public sealed class AppPageTabsAndTextTests
         {
             Assert.That(AppPageTabs.For(RoleHolder(canOpen: false)),
                 Is.EqualTo(new[] { "overview", "trees", "roles", "tools", "subscriptions", "replication" }));
-            Assert.That(AppPageTabs.For(RoleHolder(canOpen: true))[^1], Is.EqualTo("open"));
+            Assert.That(AppPageTabs.For(RoleHolder(canOpen: true)), Is.EqualTo(AppPageTabs.For(RoleHolder(canOpen: false))), "opening an app is never a tab");
             Assert.That(AppPageTabs.For(RoleHolder(canOpen: false) with { Admin = Admin() }), Does.Contain("consent"));
             Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: true), "settings"), Is.False);
             Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: true), null), Is.False);
@@ -31,13 +31,14 @@ public sealed class AppPageTabsAndTextTests
     }
 
     [Test]
-    public void The_window_is_offered_exactly_when_open_is_but_is_never_a_tab()
+    public void The_window_is_offered_exactly_when_the_caller_can_open_the_app_and_open_is_no_longer_a_section()
     {
         Assert.Multiple(() =>
         {
             Assert.That(AppPageTabs.Window, Is.EqualTo("window"));
             Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: true), AppPageTabs.Window), Is.True);
             Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: false), AppPageTabs.Window), Is.False);
+            Assert.That(AppPageTabs.IsOffered(RoleHolder(canOpen: true), "open"), Is.False, "the old in-console section is gone; its address redirects to the window");
             Assert.That(AppPageTabs.All, Does.Not.Contain(AppPageTabs.Window));
             Assert.That(AppPageTabs.For(RoleHolder(canOpen: true)), Does.Not.Contain(AppPageTabs.Window));
         });

@@ -97,7 +97,6 @@ public sealed class AppsRoutesTests
         {
             Assert.That(AppsRoutes.Landing("acme").Format(), Is.EqualTo("/t/acme/apps"));
             Assert.That(AppsRoutes.App(null, "crm").Format(), Is.EqualTo("/apps/crm"));
-            Assert.That(AppsRoutes.Open(null, "crm").Format(), Is.EqualTo("/apps/crm/open"));
             Assert.That(AppsRoutes.Window(null, "crm").Format(), Is.EqualTo("/apps/crm/window"));
             Assert.That(AppsRoutes.Window("acme", "crm").Format(), Is.EqualTo("/t/acme/apps/crm/window"));
         });

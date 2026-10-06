@@ -7,17 +7,32 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 /// The Apps area's address grammar: <c>/apps</c> ("Your apps"),
 /// <c>/apps/catalogue?source=&amp;filter=&amp;q=</c>, and the pre-install review at
 /// <c>/apps/catalogue/{source}/{slug}[@{version}]</c>. The app pages under
-/// <c>/apps/{slug}/...</c> belong to A2; this type only builds links to them.
+/// <c>/apps/{slug}/...</c> belong to A2; this type only builds links to them. An app's UI
+/// is opened in a window of its own, so a link to it carries <see cref="NewWindowTarget"/>
+/// and <see cref="NewWindowRel"/>.
 /// </summary>
 internal static class AppsRoutes
 {
+    /// <summary>The <c>target</c> of every link that opens an app's window.</summary>
+    public const string NewWindowTarget = "_blank";
+
+    /// <summary>
+    /// The <c>rel</c> of every link that opens an app's window: the new window has no handle on
+    /// the console that opened it and is sent no referrer, so it shares nothing with it.
+    /// </summary>
+    public const string NewWindowRel = "noopener noreferrer";
+
     /// <summary>The area key and first route segment.</summary>
     public const string AreaKey = "apps";
 
     /// <summary>The catalogue's route segment, reserved: no app slug can be browsed at <c>/apps/catalogue</c>.</summary>
     public const string CatalogueSegment = "catalogue";
 
-    /// <summary>The app page segment that hosts an app's UI.</summary>
+    /// <summary>
+    /// The app page segment that once hosted an app's UI inside the console. The UI now opens
+    /// only in a window of its own, so an address under this segment is redirected to the same
+    /// in-app path under <see cref="WindowSegment"/>, and nothing links to it.
+    /// </summary>
     public const string OpenSegment = "open";
 
     /// <summary>
@@ -85,12 +100,7 @@ internal static class AppsRoutes
     /// <param name="slug">The app slug.</param>
     public static ExplorerAddress App(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug]);
 
-    /// <summary>An installed app's framed UI (A2).</summary>
-    /// <param name="tenant">The tenant the address is rooted at, or <see langword="null"/>.</param>
-    /// <param name="slug">The app slug.</param>
-    public static ExplorerAddress Open(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, OpenSegment]);
-
-    /// <summary>An installed app's UI in a browser window of its own (A2).</summary>
+    /// <summary>An installed app's UI in a browser window of its own (A2), where every "Open" control leads.</summary>
     /// <param name="tenant">The tenant the address is rooted at, or <see langword="null"/>.</param>
     /// <param name="slug">The app slug.</param>
     public static ExplorerAddress Window(string? tenant, string slug) => ExplorerAddress.Create(tenant, AreaKey, [slug, WindowSegment]);

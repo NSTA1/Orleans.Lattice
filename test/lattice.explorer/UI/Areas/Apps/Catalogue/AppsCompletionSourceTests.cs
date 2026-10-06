@@ -21,17 +21,17 @@ public sealed class AppsCompletionSourceTests : AppsTestContext
         Workspace.Apps.Add(AppsTestData.Mine("notes", hasUi: false));
 
         var all = await CompleteAsync("", AddressQueryMode.App);
-        var open = await CompleteAsync("crm/o", AddressQueryMode.App);
+        var open = await CompleteAsync("crm/w", AddressQueryMode.App);
         var byName = await CompleteAsync("CR", AddressQueryMode.App);
 
         Assert.Multiple(() =>
         {
-            Assert.That(all.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/open", "a/notes" }));
+            Assert.That(all.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/window", "a/notes" }));
             Assert.That(all[0].Target.Format(), Is.EqualTo("/apps/crm"));
             Assert.That(all[0].Detail, Is.EqualTo("CRM"));
-            Assert.That(all[1].Target.Format(), Is.EqualTo("/apps/crm/open"));
-            Assert.That(open.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm/open" }));
-            Assert.That(byName.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/open" }));
+            Assert.That(all[1].Target.Format(), Is.EqualTo("/apps/crm/window"));
+            Assert.That(open.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm/window" }));
+            Assert.That(byName.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/window" }));
         });
     }
 
@@ -83,7 +83,7 @@ public sealed class AppsCompletionSourceTests : AppsTestContext
 
         Assert.Multiple(() =>
         {
-            Assert.That(search.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/open" }));
+            Assert.That(search.Select(completion => completion.Label), Is.EqualTo(new[] { "a/crm", "a/crm/window" }));
             Assert.That(prefixed, Is.Empty);
         });
     }

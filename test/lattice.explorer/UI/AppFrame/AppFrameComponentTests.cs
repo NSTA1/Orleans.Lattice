@@ -25,6 +25,7 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
     private ManualTimeProvider _time = null!;
     private BunitJSModuleInterop _module = null!;
     private JSRuntimeInvocationHandler<bool> _attach = null!;
+    private JSRuntimeInvocationHandler<string?[]?> _readAppearance = null!;
 
     [SetUp]
     public void Arrange()
@@ -44,6 +45,48 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
         {
             _module.Setup<bool>(method, _ => true).SetResult(true);
         }
+
+        _readAppearance = _module.Setup<string?[]?>("readAppearance", _ => true);
+        _readAppearance.SetResult(null);
+    }
+
+    [Test]
+    public async Task The_bundle_carries_the_appearance_the_explorers_page_is_drawn_in()
+    {
+        _readAppearance.SetResult(["board", "more", "compact", "reduce"]);
+        var cut = RenderFrame();
+
+        await ReadyAsync(cut);
+
+        var appearance = JsonDocument.Parse((string)_module.Invocations["sendBundle"].Single().Arguments[1]!).RootElement.GetProperty("appearance");
+        Assert.Multiple(() =>
+        {
+            Assert.That(_module.Invocations["readAppearance"], Has.Count.EqualTo(1));
+            Assert.That(appearance.GetProperty("theme").GetString(), Is.EqualTo("board"));
+            Assert.That(appearance.GetProperty("contrast").GetString(), Is.EqualTo("more"));
+            Assert.That(appearance.GetProperty("density").GetString(), Is.EqualTo("compact"));
+            Assert.That(appearance.GetProperty("reducedMotion").GetBoolean(), Is.True);
+            Assert.That(
+                Services.GetRequiredService<IAppFrameHostContext>().Appearance,
+                Is.EqualTo(new AppFrameAppearance("board", "more", "compact", true)),
+                "context.read reports what the bundle carried");
+        });
+    }
+
+    [Test]
+    public async Task An_appearance_read_that_fails_leaves_the_default_and_still_launches()
+    {
+        _readAppearance.SetException(new Microsoft.JSInterop.JSException("no document"));
+        var cut = RenderFrame();
+
+        await ReadyAsync(cut);
+
+        var appearance = JsonDocument.Parse((string)_module.Invocations["sendBundle"].Single().Arguments[1]!).RootElement.GetProperty("appearance");
+        Assert.Multiple(() =>
+        {
+            Assert.That(appearance.GetProperty("theme").GetString(), Is.EqualTo("paper"));
+            Assert.That(cut.Instance.Failure, Is.Null);
+        });
     }
 
     [Test]
@@ -131,30 +174,6 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
         cut.Find("[data-appframe-leave=before]").Click();
 
         Assert.That(Services.GetRequiredService<NavigationManager>().Uri, Does.EndWith("/apps/taskboard"));
-    }
-
-    [Test]
-    public void No_new_window_link_is_offered_unless_one_is_given()
-    {
-        var cut = RenderFrame();
-
-        Assert.That(cut.FindAll("[data-appframe-window]"), Is.Empty);
-    }
-
-    [Test]
-    public void The_new_window_link_opens_its_target_with_no_opener_and_no_referrer()
-    {
-        var cut = RenderFrame(parameters => parameters.Add(p => p.WindowHref, "apps/taskboard/window"));
-
-        var link = cut.Find(".appframe__bar:first-child a[data-appframe-window]");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(link.TextContent, Is.EqualTo("Open in new window"));
-            Assert.That(link.GetAttribute("href"), Is.EqualTo("apps/taskboard/window"));
-            Assert.That(link.GetAttribute("target"), Is.EqualTo("_blank"));
-            Assert.That(link.GetAttribute("rel")!.Split(' '), Is.EquivalentTo(new[] { "noopener", "noreferrer" }));
-        });
     }
 
     [Test]

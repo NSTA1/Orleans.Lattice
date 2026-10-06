@@ -43,9 +43,9 @@ internal static class AppPageAddresses
     public const string InAppPath = "path";
 
     /// <summary>
-    /// The most in-frame path segments an open address carries as path segments: the page's
+    /// The most in-frame path segments a window address carries as path segments: the page's
     /// routes declare optional parameters, never a catch-all, and four of them follow
-    /// <c>/apps/{slug}/open</c>.
+    /// <c>/apps/{slug}/window</c>.
     /// </summary>
     public const int MaxInAppSegments = 4;
 
@@ -86,13 +86,12 @@ internal static class AppPageAddresses
             : ExplorerAddress.Create(tenant, AppsArea, [CatalogueSegment, sourceKey, slug]);
 
     /// <summary>
-    /// The in-frame path an Open or Window address names: its segments after
-    /// <c>/apps/{slug}/{section}</c>
-    /// (or its <see cref="InAppPath"/> value, for a deep path) behind a leading <c>/</c>, with
+    /// The in-frame path a window address (or a legacy <c>open</c> address) names: its segments
+    /// after <c>/apps/{slug}/{section}</c> (or its <see cref="InAppPath"/> value, for a deep path) behind a leading <c>/</c>, with
     /// the <see cref="InAppQuery"/> value after a <c>?</c>. <see langword="null"/> when it
     /// names no path, so the app starts at its own start.
     /// </summary>
-    /// <param name="address">An Open address.</param>
+    /// <param name="address">A window address.</param>
     /// <returns>The in-frame path, or <see langword="null"/>.</returns>
     public static string? FramePath(ExplorerAddress address)
     {
@@ -113,8 +112,8 @@ internal static class AppPageAddresses
     }
 
     /// <summary>
-    /// The Open (or Window) address for an in-frame path the app reported: up to
-    /// <see cref="MaxInAppSegments"/> segments below <c>/apps/{slug}/{section}</c> (a deeper path
+    /// The window address for an in-frame path the app reported: up to
+    /// <see cref="MaxInAppSegments"/> segments below <c>/apps/{slug}/window</c> (a deeper path
     /// goes in <see cref="InAppPath"/>) and its query in <see cref="InAppQuery"/>. A fragment
     /// is dropped and empty segments collapse. <see langword="null"/> when the path cannot be
     /// an address.
@@ -122,9 +121,8 @@ internal static class AppPageAddresses
     /// <param name="tenant">The tenant root, or <see langword="null"/>.</param>
     /// <param name="slug">The app slug.</param>
     /// <param name="framePath">The path from <c>nav.sync</c>, starting with <c>/</c>.</param>
-    /// <param name="section">The section hosting the frame: <see cref="AppPageTabs.Open"/>, the default, or <see cref="AppPageTabs.Window"/>.</param>
     /// <returns>The address, or <see langword="null"/>.</returns>
-    public static ExplorerAddress? FromFramePath(string? tenant, string slug, string? framePath, string section = AppPageTabs.Open)
+    public static ExplorerAddress? FromFramePath(string? tenant, string slug, string? framePath)
     {
         if (string.IsNullOrEmpty(framePath))
         {
@@ -150,13 +148,37 @@ internal static class AppPageAddresses
         {
             var segments = text.Split('/', StringSplitOptions.RemoveEmptyEntries);
             var address = segments.Length <= MaxInAppSegments
-                ? ExplorerAddress.Create(tenant, AppsArea, [slug, section, .. segments])
-                : ExplorerAddress.Create(tenant, AppsArea, [slug, section]).WithQuery(InAppPath, "/" + string.Join('/', segments));
+                ? ExplorerAddress.Create(tenant, AppsArea, [slug, AppPageTabs.Window, .. segments])
+                : ExplorerAddress.Create(tenant, AppsArea, [slug, AppPageTabs.Window]).WithQuery(InAppPath, "/" + string.Join('/', segments));
             return string.IsNullOrEmpty(query) ? address : address.WithQuery(InAppQuery, query);
         }
         catch (ArgumentException)
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// The window address a legacy <c>[/t/{tenant}]/apps/{slug}/open[/{path}]</c> address now
+    /// leads to, keeping its tenant, its in-app path and query; <see langword="null"/> for any
+    /// other address. The app's UI no longer runs inside the console, so an old link or bookmark
+    /// is redirected rather than broken.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    /// <returns>The window address, or <see langword="null"/>.</returns>
+    public static ExplorerAddress? WindowForLegacyOpen(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        if (!string.Equals(address.Area, AppsArea, StringComparison.Ordinal)
+            || address.Path.Count < 2
+            || string.Equals(address.Path[0], CatalogueSegment, StringComparison.Ordinal)
+            || !string.Equals(address.Path[1], Catalogue.AppsRoutes.OpenSegment, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var slug = address.Path[0];
+        return FromFramePath(address.Tenant, slug, FramePath(address) ?? "/")
+            ?? ExplorerAddress.Create(address.Tenant, AppsArea, [slug, AppPageTabs.Window]);
     }
 }

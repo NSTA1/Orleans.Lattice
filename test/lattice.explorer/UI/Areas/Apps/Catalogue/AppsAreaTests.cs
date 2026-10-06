@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.Catalogue;
@@ -40,7 +41,7 @@ public sealed class AppsAreaTests : AppsTestContext
         {
             Assert.That(area.IsStandaloneAt(AppsRoutes.Window(null, "crm")), Is.True);
             Assert.That(area.IsStandaloneAt(AppsRoutes.Window("acme", "crm")), Is.True);
-            Assert.That(area.IsStandaloneAt(AppsRoutes.Open(null, "crm")), Is.False);
+            Assert.That(area.IsStandaloneAt(ExplorerAddress.Parse("/apps/crm/open")), Is.False);
             Assert.That(area.IsStandaloneAt(AppsRoutes.App(null, "crm")), Is.False);
             Assert.That(area.IsStandaloneAt(AppsRoutes.Landing(null)), Is.False);
         });
