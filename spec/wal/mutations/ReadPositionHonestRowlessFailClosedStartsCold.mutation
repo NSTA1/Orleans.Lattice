@@ -23,7 +23,7 @@ PERTURBS: ActivateRowless
     /\ rp' = [rp EXCEPT ![l] = -1]
     /\ UNCHANGED walVars
     /\ UNCHANGED <<stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
-    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeBegun, cleared>>
+    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeRec, cleared, deleted, purged>>
     /\ UNCHANGED faults
 --- END
 --- FIND

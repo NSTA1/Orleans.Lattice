@@ -1,20 +1,21 @@
-# Pairs with ClearRecorded. The purge clears a leaf without first recording on
-# its shard that it began clearing leaves, so recovery can never re-create the
-# leaf and it fails closed for ever. The base records ShardRootState.LeafClearsBegun
-# before the first clear. Production analogue: #4671's R4.
+# Pairs with ClearRecorded. The purge clears a leaf it has not marked, so once
+# the row is gone recovery can never re-create the leaf and it fails closed for
+# ever. The base clears only a leaf whose marker is already durable
+# (ClearGrainStateForPurgeAsync marks first). Production analogue: #4700's
+# reordering perturbations.
 MODULE: ClearRecordedClearWithoutRecord
 TARGET: ClearRecorded
 CLASS: Invariant
-SUMMARY: the purge clears a leaf without recording that it began
+SUMMARY: the purge clears a leaf it has not marked
 PERTURBS: PurgeClear
 
 --- FIND
-    /\ purgeBegun' = TRUE
-    /\ cleared' = [cleared EXCEPT ![l] = TRUE]
+PurgeClear(l) ==
+    /\ purgeRec[l]
 --- REPLACE
-\* MUTATION: the clear runs without the shard's record.
-    /\ purgeBegun' = purgeBegun
-    /\ cleared' = [cleared EXCEPT ![l] = TRUE]
+\* MUTATION: the clear does not wait for the leaf's marker.
+PurgeClear(l) ==
+    /\ SnapshotLoss
 --- END
 --- FIND
 SnapshotLoss == FALSE

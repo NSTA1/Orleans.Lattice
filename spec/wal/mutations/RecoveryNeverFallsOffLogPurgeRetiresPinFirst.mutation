@@ -1,0 +1,32 @@
+# Pairs with RecoveryNeverFallsOffLog. The purge retires a marked leaf's pin
+# before it clears the row. Interrupted between the two, the leaf keeps its row
+# with no pin; the GC trims past its checkpoint; recovery keeps the leaf's data
+# and its next activation latches stale. The base retires the pin last
+# (#4710). Production analogue: P11, purge pins-first.
+MODULE: RecoveryNeverFallsOffLogPurgeRetiresPinFirst
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: the purge retires a marked leaf's pin before clearing its row
+PERTURBS: PinRetire
+
+--- FIND
+PinRetire(l) ==
+    /\ ~row[l]
+--- REPLACE
+\* MUTATION: a marked leaf's pin goes before its row.
+PinRetire(l) ==
+    /\ ~row[l] \/ purgeRec[l]
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END
