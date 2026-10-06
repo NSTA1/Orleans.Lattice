@@ -8,7 +8,7 @@
     "invariants": 5,
     "properties": 4,
     "actions": 34,
-    "mutations": 64,
+    "mutations": 65,
     "behaviourRows": 41,
     "distinctStates": 58304
   },
@@ -117,6 +117,24 @@
     },
     "XTtlDecomAbort": {
       "distinctStates": 25697
+    },
+    "XOneJoin": {
+      "distinctStates": 2030
+    },
+    "XOneGap": {
+      "distinctStates": 18392
+    },
+    "XOneDetach": {
+      "distinctStates": 10210
+    },
+    "XOnePoison": {
+      "distinctStates": 1759
+    },
+    "XOneDecom": {
+      "distinctStates": 6761
+    },
+    "XOneDecomTtl": {
+      "distinctStates": 9523
     }
   }
 }

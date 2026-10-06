@@ -13,8 +13,8 @@ SUMMARY: terminals are written with no touched-shard count, so the receiver mark
 PERTURBS: OriginBroadcast
 
 --- FIND
-    /\ outbox' = outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
+    /\ outbox' = IF k \in RKeys THEN outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))} ELSE outbox
 --- REPLACE
 \* MUTATION: the terminal is unstamped (count 0), the legacy path.
-    /\ outbox' = outbox \cup {Term(k, phase[T] = "committing", 0)}
+    /\ outbox' = IF k \in RKeys THEN outbox \cup {Term(k, phase[T] = "committing", 0)} ELSE outbox
 --- END

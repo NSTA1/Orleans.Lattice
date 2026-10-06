@@ -75,6 +75,7 @@ transport assumption or its read view already does.
 | `RAllOrNothingCrossTreeHoldReleasedOnDetach` | `RAllOrNothing` | Invariant | `OriginPurge` | a detach releases the cross-tree purge hold |
 | `RNoStrandedPrepareDecommissionKeepsBarrierWaiting` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission leaves the removed tree in the barrier's wait set (#4698 removed) |
 | `RNoStrandedPrepareDecommissionKeepsBuckets` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission keeps the peer's pending buckets, staged before their terminals arrived (issue #4736) |
+| `RLinearizedTerminalsBarrierDecidesWithNoArrival` | `RLinearizedTerminals` | Invariant | `Decommission` | with one participant replicated here, the decommission decides the barrier over an empty remainder, so a later join is finalized committed though the operation aborted (issue #4741, defence in depth) |
 | `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
 | `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
 | `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
@@ -90,7 +91,7 @@ transport assumption or its read view already does.
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
 `SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`, `BarrierTtl`,
-`IndexFaults`): the base
+`IndexFaults`, `OneReplicated`): the base
 cfg enables none, so the control arm checks the target on the instance with no
 loss path and a receiver that follows the stream,
 and the variant configurations check every property under each loss path with

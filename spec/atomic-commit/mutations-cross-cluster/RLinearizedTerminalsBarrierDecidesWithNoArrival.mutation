@@ -1,0 +1,21 @@
+# Pairs with RLinearizedTerminals. When only one participant tree is replicated
+# here and a decommission drops it before its terminal arrived, the barrier
+# decides over the trees that remain - none - and so commits with no verdict to
+# take. The tree, added back, then joins the decided barrier and is finalized
+# committed though the operation aborted. Production never reaches a barrier
+# with no arrival - the opening terminal's arrival is written with the wait
+# set, and the drop refuses an arrived tree - and #4740's guard keeps it from
+# deciding one (issue #4741).
+MODULE: RLinearizedTerminalsBarrierDecidesWithNoArrival
+TARGET: RLinearizedTerminals
+CLASS: Invariant
+SUMMARY: a barrier left with no tree to wait for decides committed over no arrival
+PERTURBS: Decommission
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 2, Shape = 1, PreHold = 0, DialFaults = 0, OneReplicated = 1
+
+--- FIND
+           complete == cdec = "inflight" /\ live # {} /\ \A w \in live : carr[w] # "none"
+--- REPLACE
+\* MUTATION: an empty remainder decides.
+           complete == cdec = "inflight" /\ \A w \in live : carr[w] # "none"
+--- END

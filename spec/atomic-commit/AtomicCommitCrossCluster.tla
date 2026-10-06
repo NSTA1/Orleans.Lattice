@@ -354,6 +354,23 @@ IndexFaults == 0
 \* it is exactly the set of open, undecided barriers and adds nothing.
 IndexModel == BarrierTtl = 1 \/ IndexFaults = 1
 
+\*   OneReplicated  1 only tree A of the cross-tree operation is replicated to
+\*                  this receiver, so its barrier's wait set is {A}; 0 both
+\*                  trees are.
+OneReplicated == 0
+
+ASSUME OneReplicated = 1 => Shape = 1
+
+\* The trees replicated to this receiver, and their keys: the receiver's wait
+\* set, and the keys the receiver properties speak for.
+ReplTrees == IF OneReplicated = 1 THEN {"A"} ELSE Trees
+
+\* Constant-level, as the temporal properties quantify over it: in the
+\* single-tree shape every key is tree A's.
+RKeys == IF OneReplicated = 1 THEN {k1} ELSE XKeys
+
+RWaitSet == WaitSet \cap ReplTrees
+
 JoinStart == 0
 
 SagaOutcome == 2
@@ -495,7 +512,7 @@ Init ==
 OriginPrepare ==
     /\ Origin!PrepareTx(T)
     /\ VotesAdmitted(vote'[T])
-    /\ outbox' = outbox \cup {Prep(k) : k \in XKeys}
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys}
     /\ oext' = IF xtree THEN [tr \in Trees |-> tr \in WaitSet] ELSE oext
     /\ UNCHANGED <<xtree, orcv, dlv, rconn, leafVars, registryVars, barrierVars, lossVars>>
 
@@ -512,7 +529,7 @@ OriginDecide ==
 \* terminals, which drops its ExternalAuthorities row.
 OriginBroadcast(k) ==
     /\ Origin!BroadcastStep(T, k)
-    /\ outbox' = outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))}
+    /\ outbox' = IF k \in RKeys THEN outbox \cup {Term(k, phase[T] = "committing", ShardCount(TreeOf(k)))} ELSE outbox
     /\ oext' = IF xtree THEN [oext EXCEPT ![TreeOf(k)] = FALSE] ELSE oext
     /\ UNCHANGED <<xtree, orcv, dlv, rconn, leafVars, registryVars, barrierVars, lossVars>>
 
@@ -651,9 +668,11 @@ ReceiverRegister(tr) ==
 ReceiverNotify(tr) ==
     /\ rstage[tr] = "notify"
     /\ LET carr2 == [carr EXCEPT ![tr] = rout[tr]]
-           live == WaitSet \ Dropped
+           live == RWaitSet \ Dropped
            eff == [w \in Trees |-> IF carr2[w] = "none" /\ uimp[w] THEN carr2[Other(w)] ELSE carr2[w]]
-           complete == \A w \in live : eff[w] # "none"
+           \* A barrier left with no tree to wait for decides nothing: there is
+           \* no verdict to take (issue #4741's fix).
+           complete == live # {} /\ \A w \in live : eff[w] # "none"
        IN /\ carr' = carr2
           /\ IF cdec # "inflight"
              THEN /\ UNCHANGED <<cdec, idx>>
@@ -1024,7 +1043,7 @@ Decommission ==
     /\ decom' = TRUE
     /\ afresh' = TRUE
     /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
-    /\ LET live == WaitSet \ {"A"}
+    /\ LET live == RWaitSet \ {"A"}
            complete == cdec = "inflight" /\ live # {} /\ \A w \in live : carr[w] # "none"
        IN /\ cdec' = IF complete
                      THEN (IF \A w \in live : carr[w] = "committed" THEN "committed" ELSE "aborted")
@@ -1495,18 +1514,18 @@ Spec ==
 \* saga's keys post-saga and another pre-saga, across trees as well as
 \* within one. "hidden" is compatible with either, as in AtomicCommit.
 RAllOrNothing ==
-    ~\E a, b \in XKeys : RObserved(a) = "post" /\ RObserved(b) = "pre"
+    ~\E a, b \in RKeys : RObserved(a) = "post" /\ RObserved(b) = "pre"
 
 \* The receiver never surfaces a saga the origin did not commit: a key is
 \* observed post-saga on the receiver only once the origin's decision is
 \* committed.
 RStrictIsolation ==
-    \A k \in XKeys : RObserved(k) = "post" => decision[T] = "committed"
+    \A k \in RKeys : RObserved(k) = "post" => decision[T] = "committed"
 
 \* A receiver leaf applies a terminal only after its registry recorded the
 \* saga's outcome, and only that outcome, which is the origin's.
 RLinearizedTerminals ==
-    \A k \in XKeys :
+    \A k \in RKeys :
         rterm[k] # "none" =>
             /\ rdec[TreeOf(k)] = decision[T]
             /\ rterm[k] = Kind(decision[T])
@@ -1527,7 +1546,7 @@ DelegationsDisjoint ==
 \* (stated over the whole behaviour for the reason AtomicCommit's
 \* MonotonicVisibility is).
 RMonotonicVisibility ==
-    \A k \in XKeys :
+    \A k \in RKeys :
         [](RObserved(k) = "post" => [](RObserved(k) # "pre"))
 
 \* Under a fair transport every replicated committed saga eventually becomes
@@ -1538,15 +1557,17 @@ RMonotonicVisibility ==
 \* removed from the peer for good is not a replica of the origin, so it owes
 \* nothing until it is added back.
 RCommittedEventuallyVisible ==
-    (decision[T] = "committed") ~> (\A k \in XKeys : rproj[k] = "post" \/ (decom /\ TreeOf(k) = "A"))
+    (decision[T] = "committed") ~> (\A k \in RKeys : rproj[k] = "post" \/ (decom /\ TreeOf(k) = "A"))
 
 \* An imported tree's read fence lifts: no drain leaves its tree unreadable for
 \* good, whether it waits on a barrier that never decides or on a sibling that
 \* never passes its boundary.
-RImportFenceLifts == (afence ~> ~afence) /\ (bfence ~> ~bfence)
+\* A tree a decommission removed from the peer for good is not a replica: its
+\* reads are hidden until a fresh bootstrap, which re-arms its fence.
+RImportFenceLifts == (afence ~> (~afence \/ decom)) /\ (bfence ~> ~bfence)
 
 \* No prepared bucket is stranded on the receiver: every bucket the receiver
 \* stages is eventually consumed by a terminal, committed or aborted.
 RNoStrandedPrepare ==
-    \A k \in XKeys : (rpend[k] = "pending") ~> (rpend[k] = "none")
+    \A k \in RKeys : (rpend[k] = "pending") ~> (rpend[k] = "none")
 =============================================================================
