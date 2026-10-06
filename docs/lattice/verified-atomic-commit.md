@@ -63,9 +63,10 @@ precisely:
   decision row for a saga that decided while it ran (issue #4627), so its
   decision read and its rows are of one instant. A cross-tree import records the
   tree's arrival with the receiver barrier and keeps the tree read-fenced until
-  the barrier decides (issue #4683, fixed by #4706); issue #4684 adds the purge
-  hold, the export precondition and the boundary that close the case where the
-  origin purged the tree's half of the operation first.
+  the barrier decides (issue #4683, fixed by #4706); the purge hold, the export
+  precondition and the boundary its fence waits on close the case where the
+  origin purged the tree's half of the operation first (issue #4684, fixed by
+  #4716 and #4721).
 - It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
   shipper drops the filtered prepares but ships every terminal, so all-or-nothing
   holds only over the keys that peer replicates.
