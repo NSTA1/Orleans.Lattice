@@ -7,7 +7,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the replay filter's verdict reads the decision alone, so an undecided saga reads as purged
 PERTURBS: ReplayWithhold
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ FirstSight = "withhold"

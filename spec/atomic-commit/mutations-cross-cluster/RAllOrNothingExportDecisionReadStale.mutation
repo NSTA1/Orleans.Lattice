@@ -8,13 +8,15 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the re-seed export's decision read can predate its row passes
 PERTURBS: ReseedDrain
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ rs = "marked"
+    /\ ImportGate
     /\ \E snap \in Snap0 :
 --- REPLACE
     /\ rs = "marked"
+    /\ ImportGate
 \* MUTATION: the decision read may predate the row passes.
     /\ \E snap \in Snap0 \cup {"inflight"} :
 --- END

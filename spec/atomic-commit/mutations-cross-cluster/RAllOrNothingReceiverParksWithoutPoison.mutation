@@ -8,7 +8,7 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the receiver parks and acknowledges a prepare it gave up on without poisoning its saga
 PERTURBS: ReceiverPoison
-BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ rpoison' = TRUE

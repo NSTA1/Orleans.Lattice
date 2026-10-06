@@ -15,6 +15,7 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: the origin forgets a saga over a still-resident bucket and exports the aged-out row as Indeterminate, as it did before #4501
 PERTURBS: OriginForget
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 
 --- FIND
 OriginForget ==
@@ -31,8 +32,10 @@ OriginForget ==
     /\ UNCHANGED xvars
 --- END
 --- FIND
+    IF purged THEN {"inflight"}
     ELSE IF forgotten[T] THEN {decision[T]}
 --- REPLACE
 \* MUTATION: a stored row the registry no longer reports is exported as Indeterminate.
+    IF purged THEN {"inflight"}
     ELSE IF forgotten[T] THEN {"indeterminate"}
 --- END

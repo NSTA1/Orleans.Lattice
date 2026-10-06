@@ -7,7 +7,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the records a peer off the log withheld are not retained for its rewind
 PERTURBS: ReseedRewind
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ outbox' = outbox \cup Retained

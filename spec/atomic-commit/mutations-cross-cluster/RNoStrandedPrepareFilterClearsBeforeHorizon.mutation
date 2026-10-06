@@ -7,11 +7,11 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the replay filter clears while records below its horizon are still unshipped
 PERTURBS: FilterClear
-BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ rs = "none"
-    /\ outbox = {}
+    /\ ~\E r \in outbox : Aff(r)
     /\ filt' = FALSE
 --- REPLACE
     /\ rs = "none"

@@ -1,0 +1,25 @@
+# Pairs with RCommittedEventuallyVisible. R1 as first designed: a cross-tree import
+# waits until the sibling tree has passed its boundary, by acknowledgement or by a
+# re-seed of its own. When the peer needs a re-seed of both trees, each waits on
+# the other's: a shipper off the log acknowledges nothing until its tree is
+# re-seeded. Neither import runs, and the committed saga never becomes visible.
+# #4684's R1 is a condition on lifting the fence, not on starting the import.
+MODULE: RCommittedEventuallyVisibleReseedWaitsOnSibling
+TARGET: RCommittedEventuallyVisible
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a tree's re-seed waits for its sibling to pass the boundary, and two re-seeds wait on each other
+PERTURBS: TreeReseed
+BOUNDS: LossPath = 5, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 1, DialFaults = 0, Purges = 0, AckLoss = 0
+
+--- FIND
+    /\ (Purges = 0 /\ tr = "B") => rs = "none"
+    /\ ImportGate
+
+--- REPLACE
+    /\ (Purges = 0 /\ tr = "B") => rs = "none"
+    /\ ImportGate
+\* MUTATION: the import waits for the sibling's boundary.
+    /\ Passed(Other(tr))
+
+--- END

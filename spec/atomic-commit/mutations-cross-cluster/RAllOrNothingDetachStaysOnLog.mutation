@@ -7,7 +7,7 @@ TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: a removed peer's shipper leaves the offset consumers but keeps shipping the saga
 PERTURBS: Detach
-BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ detached' = TRUE

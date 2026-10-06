@@ -1,0 +1,29 @@
+# Pairs with RAllOrNothing. A tree added back after a decommission serves reads
+# from its reset state before its fresh bootstrap has imported it, while the
+# sibling serves the operation post-saga. The re-added tree stays unreadable
+# until the bootstrap.
+MODULE: RAllOrNothingFreshReaddReadableBeforeBootstrap
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a tree added back to the peer is readable before its fresh bootstrap
+PERTURBS: ReaddFresh
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+    /\ afence' = FALSE
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ rterm' =
+--- REPLACE
+    /\ afence' = FALSE
+\* MUTATION: the re-added tree is readable at once.
+    /\ afresh' = FALSE
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ rterm' =
+--- END
+--- FIND
+                   gone, purged, ptrim, rpoison, losses, preguard, afresh,
+                   boff, bpur, bfence, acaught, abnd>>
+--- REPLACE
+                   gone, purged, ptrim, rpoison, losses, preguard,
+                   boff, bpur, bfence, acaught, abnd>>
+--- END

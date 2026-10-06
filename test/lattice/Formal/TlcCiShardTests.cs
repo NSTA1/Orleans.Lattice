@@ -101,7 +101,7 @@ public sealed class TlcCiShardTests
             foreach (var (module, variant) in variants)
             {
                 var expected = module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal)
-                    ? TlcCiShard.Atomic
+                    ? TlcCiShard.AtomicVariants
                     : module.Name.StartsWith("Replication", StringComparison.Ordinal) ? TlcCiShard.ReBootstrap : null;
                 Assert.That(TlcCiShard.OfVariant(module, variant), Is.EqualTo(expected), $"{module.Name}.{variant}");
             }
@@ -120,7 +120,7 @@ public sealed class TlcCiShardTests
         Assert.Multiple(() =>
         {
             Assert.That(Categories(mutation), Is.EqualTo(new[] { TlcCiShard.ReBootstrap }));
-            Assert.That(Categories(variant), Is.EqualTo(new[] { TlcCiShard.Atomic }));
+            Assert.That(Categories(variant), Is.EqualTo(new[] { TlcCiShard.AtomicVariants }));
             Assert.That(Categories(baseCase), Is.Empty);
         });
     }

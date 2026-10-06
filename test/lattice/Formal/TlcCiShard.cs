@@ -49,14 +49,21 @@ internal static class TlcCiShard
     /// </summary>
     public const string ReBootstrap = "TlcShardReBootstrap";
 
-    /// <summary>The mutants and variant configurations of every AtomicCommit* module.</summary>
+    /// <summary>
+    /// The mutants of every AtomicCommit* module. Its variant configurations
+    /// are <see cref="AtomicVariants"/>: a variant has no control arm, so
+    /// splitting them off leaves every shared control with its mutants.
+    /// </summary>
     public const string Atomic = "TlcShardAtomic";
+
+    /// <summary>The variant configurations of every AtomicCommit* module.</summary>
+    public const string AtomicVariants = "TlcShardAtomicVariants";
 
     /// <summary>The mutants of every Backup* module.</summary>
     public const string Backup = "TlcShardBackup";
 
     /// <summary>Every category <see cref="Of"/> and <see cref="OfVariant"/> can return.</summary>
-    public static IReadOnlyList<string> All { get; } = [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, Backup];
+    public static IReadOnlyList<string> All { get; } = [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, AtomicVariants, Backup];
 
     /// <summary>
     /// The shard category of <paramref name="mutation"/> of
@@ -114,7 +121,7 @@ internal static class TlcCiShard
             return ReBootstrap;
         }
 
-        return module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? Atomic : null;
+        return module.Name.StartsWith("AtomicCommit", StringComparison.Ordinal) ? AtomicVariants : null;
     }
 
     private static bool IsReplicationCompanion(string name) =>

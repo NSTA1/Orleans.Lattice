@@ -7,7 +7,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: an export drained while a silo predates the purge hold settles the re-seed
 PERTURBS: ReseedDrain
-BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
     /\ rs' = IF preguard THEN rs ELSE "drained"
