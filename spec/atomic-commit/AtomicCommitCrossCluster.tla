@@ -1176,7 +1176,11 @@ ExportOpen ==
 \* The export closes: its decision read and its rows are of one instant, later
 \* than its open (the prepared and committed passes, completed from the source
 \* WAL over the segment from C0 to C1, with every saga that decided between
-\* its passes shipped whole, #4694). cut is tree A's records retained at the
+\* its passes shipped whole, #4694). Production closes in several steps; one
+\* step stands for them because the export's purge hold, taken at its open,
+\* keeps the decision they read from being purged between them, and the
+\* export fails closed if the log was trimmed past its open point.
+\* cut is tree A's records retained at the
 \* close: the shipper resumes from its own cursors, so it may re-ship any of
 \* them, and every record written after the close it ships.
 ExportClose ==
