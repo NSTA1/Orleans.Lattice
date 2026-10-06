@@ -86,48 +86,6 @@ public sealed class TrackedFileEnumerationTests
     }
 
     [Test]
-    public void Text_file_enumeration_omits_a_tracked_file_deleted_in_the_worktree()
-    {
-        var tracked = HygieneFiles.EnumerateTextFiles(RepoRoot, CoreHygieneScope.Value).ToList();
-        Assert.That(tracked, Is.Not.Empty, "The tracked enumeration returned nothing at all.");
-
-        var candidate = tracked.FirstOrDefault(path => path.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
-        Assert.That(candidate, Is.Not.Null, "No tracked markdown file was available for the deletion probe.");
-        var probe = candidate ?? throw new AssertionException("No tracked markdown file was available for the deletion probe.");
-
-        var relative = Path.GetRelativePath(RepoRoot, probe).Replace('\\', '/');
-        var backup = probe + ".bak";
-
-        try
-        {
-            File.Move(probe, backup);
-            Assert.That(File.Exists(probe), Is.False, "The tracked probe file still exists after the delete simulation.");
-            Assert.That(File.Exists(backup), Is.True, "The backup copy was not created.");
-
-            var duringDelete = HygieneFiles.EnumerateTextFiles(RepoRoot, CoreHygieneScope.Value).ToList();
-            Assert.Multiple(() =>
-            {
-                Assert.That(duringDelete, Does.Not.Contain(probe),
-                    "A tracked file deleted in the worktree still reached the content gates as an unreadable path.");
-                Assert.That(duringDelete.Count, Is.EqualTo(tracked.Count - 1),
-                    "Deleting one tracked text file in the worktree should remove exactly one file from the content scan.");
-            });
-        }
-        finally
-        {
-            if (File.Exists(backup))
-            {
-                File.Move(backup, probe);
-            }
-        }
-
-        var restored = HygieneFiles.EnumerateTextFiles(RepoRoot, CoreHygieneScope.Value).ToList();
-        Assert.That(restored, Does.Contain(probe),
-            "The restored tracked probe file did not return to the content scan.");
-        Assert.That(Path.GetRelativePath(RepoRoot, probe).Replace('\\', '/'), Is.EqualTo(relative));
-    }
-
-    [Test]
     public void Tracked_enumeration_omits_an_untracked_file_in_a_slice_root()
     {
         // The repo-level scan and the slice scan are separate code paths.

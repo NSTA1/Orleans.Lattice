@@ -111,7 +111,6 @@ public static class HygieneFiles
     {
         foreach (var file in HygieneRepository.EnumerateSliceFiles(repoRoot, scope, "*"))
         {
-            if (!File.Exists(file)) continue;
             if (ShouldScan(file, repoRoot)) yield return file;
         }
 
@@ -119,7 +118,6 @@ public static class HygieneFiles
 
         foreach (var file in HygieneRepository.EnumerateRepoLevelFiles(repoRoot, "*", scope.OtherSliceRoots))
         {
-            if (!File.Exists(file)) continue;
             if (ShouldScan(file, repoRoot)) yield return file;
         }
     }
