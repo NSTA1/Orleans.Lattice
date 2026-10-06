@@ -170,7 +170,7 @@ public sealed class AppsCataloguePageTests : AppsTestContext
 
         var cut = RenderAt<AppsCataloguePage>("/apps/catalogue");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody a[href='apps/crm/open']"), Has.Count.EqualTo(1)));
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody a[href='apps/crm/window'][target='_blank'][rel='noopener noreferrer']"), Has.Count.EqualTo(1)));
     }
 
     [Test]

@@ -25,10 +25,10 @@ public sealed class AppPageRoutingTests : AppPageTestContext
     [TestCase("t/acme/apps/catalogue/in-image/crm", nameof(AppReviewPage))]
     [TestCase("apps/crm", nameof(AppPage))]
     [TestCase("apps/crm/trees", nameof(AppPage))]
-    [TestCase("apps/crm/open", nameof(AppPage))]
-    [TestCase("apps/crm/open/board/42/cards/7", nameof(AppPage))]
+    [TestCase("apps/crm/window", nameof(AppPage))]
+    [TestCase("apps/crm/window/board/42/cards/7", nameof(AppPage))]
     [TestCase("t/acme/apps/crm/consent", nameof(AppPage))]
-    [TestCase("t/acme/apps/crm/open/board", nameof(AppPage))]
+    [TestCase("t/acme/apps/crm/window/board", nameof(AppPage))]
     public void The_router_resolves_the_catalogue_to_its_own_page_and_every_app_section_to_the_app_page(string address, string page)
     {
         var cut = Render<Router>(parameters => parameters

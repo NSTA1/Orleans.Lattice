@@ -16,7 +16,7 @@ public sealed class ExplorerFrameHeaderExemptionTests
     [TestCase("/")]
     [TestCase("/data")]
     [TestCase("/data/a/crm/orders")]
-    [TestCase("/apps/task-board/open")]
+    [TestCase("/apps/task-board/window")]
     [TestCase("/t/acme/apps")]
     [TestCase("/auth/login")]
     [TestCase("/_blazor/negotiate")]

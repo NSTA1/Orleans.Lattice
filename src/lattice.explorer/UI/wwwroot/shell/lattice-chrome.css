@@ -532,6 +532,24 @@
   padding: var(--lt-space-4) var(--lt-space-3);
 }
 
+/*
+ * Standalone: a page that fills a browser window of its own, such as an app opened
+ * in a new window. The layout draws no header, address line or spine, so the main
+ * landmark is the only row and fills the viewport; its page lays out in a column.
+ */
+.lt-shell.lt-shell--standalone {
+  grid-template-rows: minmax(0, 1fr);
+  height: 100vh;
+  height: 100dvh;
+}
+
+.lt-shell.lt-shell--standalone .lt-shell-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--lt-space-2);
+}
+
 /* ==========================================================================
    5. Pages - the shared page head, mono data text, Home and not found
    ========================================================================== */
