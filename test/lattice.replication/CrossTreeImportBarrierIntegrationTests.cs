@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class CrossTreeImportBarrierIntegrationTests
+public partial class CrossTreeImportBarrierIntegrationTests
 {
     private const string SiteAClusterId = "xtib-site-a";
     private const string SiteBClusterId = "xtib-site-b";
@@ -599,9 +599,18 @@ public class CrossTreeImportBarrierIntegrationTests
 
         public static void Resume(string tree) => Paused.TryRemove(tree, out _);
 
-        public Task<RemoteSnapshotMetadata> GetMetadataAsync(
-            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default) =>
-            inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+        /// <summary>
+        /// Trees whose export metadata reports it was not served under the
+        /// cross-tree hold, as a source that predates the hold reports it.
+        /// </summary>
+        public static readonly ConcurrentDictionary<string, bool> Unhonoured = new(StringComparer.Ordinal);
+
+        public async Task<RemoteSnapshotMetadata> GetMetadataAsync(
+            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default)
+        {
+            var metadata = await inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+            return Unhonoured.ContainsKey(treeName) ? metadata with { CrossTreeHoldHonoured = false } : metadata;
+        }
 
         public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
             string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc,

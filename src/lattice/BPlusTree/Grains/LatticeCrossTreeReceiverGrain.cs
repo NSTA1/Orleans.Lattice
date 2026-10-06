@@ -20,9 +20,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// Crash recovery rides on replication's own at-least-once redelivery: every
 /// <see cref="NotifyTerminalAsync"/> persists before returning and returns the
 /// full finalize set whenever decided, so a redelivered terminal re-heals
-/// materialization idempotently. A one-shot retention reminder clears the
-/// persisted state once the configured <see cref="LatticeOptions.AtomicWriteRetention"/>
-/// elapses after the decision.
+/// materialization idempotently. A one-shot retention reminder compacts the
+/// persisted state to a decided tombstone - identity and verdict only - once
+/// the configured <see cref="LatticeOptions.AtomicWriteRetention"/> elapses
+/// after the decision, having withdrawn the barrier from its trees' indexes
+/// first (issue #4730). The tombstone is kept: the origin can ship the
+/// operation again while it stores the decision, and a late arrival must find
+/// the barrier decided rather than reopen it.
 /// </para>
 /// </summary>
 internal sealed class LatticeCrossTreeReceiverGrain(
@@ -66,7 +70,39 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         Logger.LogInformation(
             "Cross-tree receiver {Key}: retention window expired; clearing state.",
             GrainContext.GrainId.Key);
-        await state.ClearStateAsync();
+
+        // An index entry must not outlive the state it points to (#4730). A
+        // withdrawal that fails throws, and the full decided state is kept.
+        await WithdrawFromIndexesAsync(state.State.WaitSet);
+
+        // Keep a tombstone of the decision rather than clear it (#4730). The
+        // origin can ship the operation again for as long as it stores the
+        // decision - a rewind re-ships its terminals, and an export carries its
+        // decision row while the cross-tree hold is unreleased - and a cleared
+        // barrier would reopen on that arrival and wait for ever for a sibling
+        // whose terminal was acknowledged long ago. A decided tombstone takes
+        // the decided short-circuit instead: it finalizes the arriving tree
+        // with the verdict and never re-indexes. The receiver cannot observe
+        // the origin's purge, so the tombstone is kept: identity and verdict
+        // only.
+        var tombstone = new CrossTreeReceiverState
+        {
+            OriginClusterId = state.State.OriginClusterId,
+            OperationId = state.State.OperationId,
+            Decided = true,
+            Committed = state.State.Committed,
+        };
+        var previous = state.State;
+        state.State = tombstone;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State = previous;
+            throw;
+        }
     }
 
     /// <summary>
@@ -470,9 +506,48 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> SettleIndexEntryAsync(string treeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, treeId, LatticeOperation.Replication);
+
+        var holds = state.State.WaitSet.Count > 0
+            && state.State.WaitSet.Contains(treeId)
+            && !(state.State.Decided && !_decisionAwaitingPersist);
+        if (holds)
+        {
+            return true;
+        }
+
+        await WithdrawFromIndexesAsync([treeId]);
+        return false;
+    }
+
+    /// <summary>
+    /// Durably withdraws this barrier from the indexes of
+    /// <paramref name="trees"/>. A failure propagates (#4730).
+    /// </summary>
+    private async Task WithdrawFromIndexesAsync(IEnumerable<string> trees)
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in trees)
+        {
+            await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).RemoveAsync(key);
+        }
+    }
+
     /// <summary>
     /// Withdraws the decided barrier from its trees' indexes. Best effort: an
-    /// entry left behind costs a reader one status read.
+    /// entry left behind is withdrawn by the next import of its tree that
+    /// settles it (<see cref="SettleIndexEntryAsync"/>), or before the barrier's
+    /// retention clears it.
     /// </summary>
     private async Task UnindexAsync()
     {
