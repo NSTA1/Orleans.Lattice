@@ -45,7 +45,7 @@ public partial class ClusterTreePage : IDisposable
     private NavigationManager Navigation { get; set; } = default!;
 
     [Inject]
-    private ClusterTreeCatalog Catalog { get; set; } = default!;
+    private ClusterTreeChanges TreeChanges { get; set; } = default!;
 
     private string Lede => _config is { } config
         ? string.Join(" - ", new[]
@@ -108,12 +108,13 @@ public partial class ClusterTreePage : IDisposable
 
     private string Href(ExplorerAddress address) => Navigator.Canonicalize(address.WithTenant(Scope)).ToHref();
 
-    // A reshard, resize or snapshot the summary followed has finished: the
-    // heading's shard count and leaf size, and the remembered tree list, describe
+    // A reshard, resize or snapshot the summary followed has finished, or the
+    // lifecycle tab deleted, recovered, purged or re-aliased the tree: the
+    // heading's shard count and leaf size, and the remembered tree lists, describe
     // the tree as it was, so they are read again. A failed read keeps the heading.
     private async Task OnOperationSettledAsync()
     {
-        Catalog.Invalidate();
+        TreeChanges.Changed();
         var config = await ClusterLoad<TreeConfigurationReport>.RunAsync(
             ct => Facades.RequireTreeAdmin().GetTreeConfigAsync(TreeId, ct),
             _lifetime.Token);

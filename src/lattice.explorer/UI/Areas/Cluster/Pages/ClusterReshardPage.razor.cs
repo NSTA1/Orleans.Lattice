@@ -44,6 +44,9 @@ public partial class ClusterReshardPage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    [Inject]
+    private ClusterTreeChanges TreeChanges { get; set; } = default!;
+
     private ClusterStatusPoller Poller => _poller ??= new ClusterStatusPoller(Time);
 
     /// <inheritdoc />
@@ -115,6 +118,8 @@ public partial class ClusterReshardPage : IDisposable
         {
             if (!value.InProgress && _status.Value is { InProgress: true })
             {
+                // The tree's shard count changed: every list of trees read before it is stale.
+                TreeChanges.Changed();
                 Toasts.Show($"Reshard complete: {ClusterFormat.Plural(value.CurrentPhysicalShardCount, "physical shard")}.", LtToastTone.Success);
             }
 
@@ -179,6 +184,7 @@ public partial class ClusterReshardPage : IDisposable
         {
             _reviewing = null;
             _target = null;
+            TreeChanges.Changed();
             Toasts.Show("Reshard started.", LtToastTone.Info);
             Show(started);
         }
