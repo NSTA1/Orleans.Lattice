@@ -146,6 +146,9 @@ XKeys == Origin!Written(T)
 (*              operation's decision that names nothing of it: a barrier   *)
 (*              opened later takes its arrival with the siblings' verdict  *)
 (*              (#4684's R2).                                              *)
+(*  idx         the barrier is listed in its trees' barrier indexes.       *)
+(*  bclr        the barrier's retention cleared it, keeping a tombstone    *)
+(*              of its verdict; bdrop: the tombstone was dropped.          *)
 (***************************************************************************)
 VARIABLES xtree, oext, orcv, outbox, dlv, rconn,
           rpend, rterm, rproj,
@@ -346,6 +349,10 @@ SplitExport == 1
 BarrierTtl == 0
 
 IndexFaults == 0
+
+\* The barrier index is tracked only on the slices that exercise it; elsewhere
+\* it is exactly the set of open, undecided barriers and adds nothing.
+IndexModel == BarrierTtl = 1 \/ IndexFaults = 1
 
 JoinStart == 0
 
@@ -656,12 +663,12 @@ ReceiverNotify(tr) ==
                   /\ rfin' = rfin \cup live
                   \* The decided barrier withdraws from its trees' indexes, best
                   \* effort (LatticeCrossTreeReceiverGrain.UnindexAsync).
-                  /\ idx' \in IF IndexFaults = 1 THEN BOOLEAN ELSE {FALSE}
+                  /\ idx' \in IF ~IndexModel THEN {idx} ELSE IF IndexFaults = 1 THEN BOOLEAN ELSE {FALSE}
              ELSE /\ UNCHANGED <<cdec, rfin>>
                   \* The first arrival opens the barrier and indexes it under
                   \* every wait-set tree (IndexAsync, before the wait set
                   \* persists).
-                  /\ idx' = (idx \/ \A w \in Trees : carr[w] = "none")
+                  /\ idx' = (idx \/ (IndexModel /\ \A w \in Trees : carr[w] = "none"))
     /\ rstage' = [rstage EXCEPT ![tr] = "done"]
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
@@ -1023,6 +1030,9 @@ Decommission ==
                      THEN (IF \A w \in live : carr[w] = "committed" THEN "committed" ELSE "aborted")
                      ELSE cdec
           /\ rfin' = IF complete THEN (rfin \ {"A"}) \cup live ELSE rfin \ {"A"}
+          \* A barrier the drop decided withdraws from its trees' indexes, best
+          \* effort, as any decided barrier does.
+          /\ idx' \in IF complete /\ IndexModel THEN (IF IndexFaults = 1 THEN BOOLEAN ELSE {FALSE}) ELSE {idx}
     /\ rtodo' = rtodo \ AKeys
     \* Tree A is no longer attached to the peer and owes it no re-seed.
     /\ rconn' = FALSE
@@ -1033,7 +1043,7 @@ Decommission ==
     /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, rterm, rproj, registryVars, carr,
                    gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd,
-                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, idx, bclr, bdrop>>
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, bclr, bdrop>>
 
 \* A decommissioned peer is added back as a fresh replica of tree A: the
 \* receiver resets tree A's state from that origin - its buckets, terminal
@@ -1066,7 +1076,10 @@ ReaddFresh ==
     /\ uimp' = [uimp EXCEPT !["A"] = FALSE]
     /\ xo' = "none"
     /\ xs' = NoExport
-    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec, rfin, rtodo,
+    \* A fresh replica owes the old one's hand-off nothing.
+    /\ rfin' = rfin \ {"A"}
+    /\ rtodo' = rtodo \ AKeys
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec,
                    gone, purged, ptrim, rpoison, losses, preguard, afresh,
                    boff, bpur, bfence, acaught, abnd, idx, bclr, bdrop>>
 
@@ -1437,6 +1450,10 @@ Next ==
 (* fan out) and a pending bootstrap eventually run. OriginForget, the dial *)
 (* faults and the foreign claim are unfair environment events.             *)
 (***************************************************************************)
+\* The operator is fair too: a detached peer is eventually re-added or
+\* decommissioned (Readd, Decommission). A peer left detached for ever keeps
+\* the origin's cross-tree purge holds for as long - safe, and outside the
+\* liveness properties' claim.
 OriginProgress == OriginPrepare \/ OriginDecide \/ \E k \in XKeys : OriginBroadcast(k)
 
 AckedDelivery ==

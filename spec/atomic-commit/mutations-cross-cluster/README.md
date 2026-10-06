@@ -81,24 +81,32 @@ transport assumption or its read view already does.
 | `RAllOrNothingUniformArrivalGuardAtImport` | `RAllOrNothing` | Invariant | `Bootstrap` | R2's opened-after-the-decision guard is evaluated at the import instead of the export's open point |
 | `RAllOrNothingExportOpenPastEveryDecision` | `RAllOrNothing` | Invariant | `ExportOpen` | the export records no open point and is taken as opened after every decision |
 | `RAllOrNothingExportPassesInterleaveWithSaga` | `RAllOrNothing` | Invariant | `ExportClose` | the export reads the decision before its rows, so a saga deciding between them ships as bare committed rows (issue #4685 before #4694) |
+| `RImportFenceLiftsTombstoneDroppedAtTtl` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a decided barrier's retention clears its verdict, so a later arrival reopens it (issue #4730's third route) |
+| `RImportFenceLiftsStaleIndexEntry` | `RImportFenceLifts` | Temporal | `BarrierTtlExpire` | a cleared barrier stays indexed and a reader counts its entry as undecided (issue #4730 as filed) |
+| `RImportFenceLiftsTombstoneDroppedBeforeFrontier` | `RImportFenceLifts` | Temporal | `TombstoneDrop` | a tombstone is dropped with no purge frontier, and a later arrival reopens the barrier |
+| `RImportFenceLiftsPurgeBeforeTerminalsAcked` | `RImportFenceLifts` | Temporal | `OriginPurge` | the cross-tree purge hold releases on the barrier's decision alone, so a terminal re-ships after the tombstone drops |
 
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
-`SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`): the base
+`SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`, `BarrierTtl`,
+`IndexFaults`): the base
 cfg enables none, so the control arm checks the target on the instance with no
 loss path and a receiver that follows the stream,
 and the variant configurations check every property under each loss path with
 its fix.
 
-Every mutant but three is deadlock-free: run with a cfg naming only `TypeOK` and
+Every mutant but six is deadlock-free: run with a cfg naming only `TypeOK` and
 deadlock checking on, each reports no error (`TypeOkTallyExpectedRunaway`
 reports its own target first), so none races its target against a deadlock
-under TLC's parallel search. The three are deadlocks by construction, so each
+under TLC's parallel search. The six are deadlocks by construction, so each
 declares `DEADLOCK: off` and the harness's third arm confirms the deadlock is
 real: `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` holds a terminal that can
 never be delivered, `RCommittedEventuallyVisibleReseedWaitsOnSibling` leaves two
-re-seeds each waiting on the other, and `RImportFenceLiftsBarrierIgnoresUniformImport`
-leaves a barrier waiting for an arrival that never comes.
+re-seeds each waiting on the other, `RImportFenceLiftsBarrierIgnoresUniformImport`
+leaves a barrier waiting for an arrival that never comes, and
+`RImportFenceLiftsStaleIndexEntry`, `RImportFenceLiftsTombstoneDroppedBeforeFrontier`
+and `RImportFenceLiftsPurgeBeforeTerminalsAcked` leave an import's fence held by
+a barrier that can never decide.
 
 These mutations are regression checks for defects this module found or
 reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`

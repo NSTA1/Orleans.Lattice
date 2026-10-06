@@ -1,0 +1,22 @@
+# Pairs with RImportFenceLifts. The cross-tree purge hold waits for the barrier's
+# decision but not for the peer to acknowledge every terminal of the operation.
+# The decision is purged, the purge frontier passes, the receiver drops the
+# tombstone, and an unacknowledged terminal is then shipped again and reopens
+# the barrier. The frontier is a sound drop condition only because #4716's hold
+# releases after every participant's terminal is acknowledged past.
+MODULE: RImportFenceLiftsPurgeBeforeTerminalsAcked
+TARGET: RImportFenceLifts
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: the cross-tree purge hold releases once the barrier has decided, before every terminal is acknowledged
+PERTURBS: OriginPurge
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0, BarrierTtl = 1, IndexFaults = 1
+
+--- FIND
+            /\ CrossTreeAcked
+            \* An open export holds the tree's decision purges (#4694).
+--- REPLACE
+\* MUTATION: the hold waits for the decision, not for the acknowledgements.
+            /\ (~xtree \/ decom \/ cdec # "inflight" \/ bclr)
+            \* An open export holds the tree's decision purges (#4694).
+--- END

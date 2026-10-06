@@ -52,9 +52,16 @@ precisely:
   leftover buckets and drains a decided one's (#4631), the replay that follows
   withholds a purged saga whole while purges are held (#4533, #4534-B), and no
   export drained while a silo predates the purge hold settles a re-seed (issue
-  #4664, fixed by #4666). A peer removed from a tree for good is dropped from
-  every undecided cross-tree barrier (#4698) and comes back as a fresh replica
-  (#4701), and a peer that needs a re-seed of two trees at once re-seeds both.
+  #4664, fixed by #4666). A tree that stops being replicated on the receiver is
+  dropped from the undecided cross-tree barrier its terminal would have reached
+  (#4698). A peer decommissioned for good (#4724) releases the origin's
+  cross-tree purge holds, and on a receiving cluster it is to be dropped from
+  every undecided barrier from that peer with its pending buckets discarded -
+  modelled, and not yet in production (issue #4736). Re-added, it comes back as
+  a fresh replica (#4701). A peer that needs a re-seed of two trees at once
+  re-seeds both. The module assumes an operator eventually re-adds or
+  decommissions a detached peer; one left detached for ever keeps its trees'
+  cross-tree decisions held at the origin for as long.
   The module checks each loss path in its own variant configurations, one loss
   per behaviour, and both trees off the log at one boundary in their own.
 - It takes a cross-tree import's export in steps - open, close, drain - and
@@ -68,7 +75,12 @@ precisely:
   the barrier decides (issue #4683, fixed by #4706); the purge hold, the export
   precondition and the boundary its fence waits on close the case where the
   origin purged the tree's half of the operation first (issue #4684, fixed by
-  #4716 and #4721).
+  #4716 and #4721). A decided barrier keeps a tombstone of its verdict past its
+  retention, so a terminal re-shipped later or an import of a stale export never
+  reopens it, and a reader of a tree's barrier index settles each entry at the
+  barrier (issue #4730, fixed by #4732); the tombstone drops once the origin's
+  cross-tree purge frontier shows the operation purged on every participant
+  (issue #4733, #4735).
 - It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
   shipper drops the filtered prepares but ships every terminal, so all-or-nothing
   holds only over the keys that peer replicates.
