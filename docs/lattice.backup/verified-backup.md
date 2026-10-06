@@ -107,7 +107,8 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - an atomic batch in flight across a local cutover and its revert, which the
   shard-ownership specification's `ShardOwnershipCutover` module checks, and
   which found #4689 (fixed);
-- the receiver side of cross-cluster atomic batches, which depends on #4480.
+- the receiver side of cross-cluster atomic batches, which the atomic-commit
+  cross-cluster module checks ([formal coverage](../lattice/formal-coverage.md)).
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in
 full what lies outside its scope, and any gap open against production.

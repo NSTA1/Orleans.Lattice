@@ -159,6 +159,10 @@ public sealed class SpecModuleDiscoveryControlTests
             s => s.Replace(VariantFile, "    TypeOK", "    Safe")),
         new("note states a census count", nameof(RefinementDetectorMappingTests.The_note_records_no_hand_maintained_census_count),
             s => s.Replace("Refinement.md", "for the Formal discovery controls.", "for the Formal discovery controls. The census found ten rows detected, three partial or undetected.")),
+        new("detector verdict is partial", nameof(RefinementDetectorMappingTests.Every_detector_verdict_is_an_unqualified_yes),
+            s => s.Replace("Refinement.md", $"RecordTerminalDecisionAsync`. | Yes: `{SyntheticSpecModule.Detector}`", $"RecordTerminalDecisionAsync`. | Partial: `{SyntheticSpecModule.Detector}`")),
+        new("note cites an open issue as a gap", nameof(RefinementDetectorMappingTests.The_note_cites_no_open_issue_as_a_gap),
+            s => s.Replace("Refinement.md", "for the Formal discovery controls.", "for the Formal discovery controls. The second path is tracked by #4442.")),
     ];
 
     /// <summary>
