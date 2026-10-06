@@ -365,6 +365,16 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // Ships with the hold, under the same capability check.
         builder.Services.AddSingleton<ICrossTreeDecisionStamper, ReplicationCrossTreeDecisionStamper>();
 
+        // Issue #4684 (decommission verb): removes a peer for good from every
+        // *registered* tree's durable enrolment - not only the trees currently
+        // replicated, because enrolment outlives a tree leaving the replicated
+        // set - which is what lets the cross-tree decision hold's live
+        // AllPeersPastAsync check stop waiting on it. Resolves the tree
+        // registry through the core library's own singleton grain factory
+        // extension, so it is safe to construct regardless of whether runtime
+        // config is enabled.
+        builder.Services.TryAddSingleton<ILatticeReplicationPeerDecommissioner, LatticeReplicationPeerDecommissioner>();
+
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'
         // VC slots and re-seed the per-tree LocalVectorClock (durable

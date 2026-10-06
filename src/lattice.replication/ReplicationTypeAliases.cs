@@ -348,4 +348,17 @@ public static class ReplicationTypeAliases
     // The source lineage a sender stamped on an entry, carried with it into the
     // causal-apply buffer and the dead-letter queue (#4707).
     internal const string ReplicationSourceLineageStamp = "olr.ls";
+
+    // Per-peer decommission registry: a durable record that a peer was
+    // decommissioned (never re-enrolled implicitly), distinct from the
+    // reversible detach tracked by ICrossTreePeerEnrolmentGrain.
+
+    /// <summary>Alias for the cluster-wide decommissioned-peer registry grain interface.</summary>
+    internal const string IReplicationDecommissionedPeerRegistryGrain = "olr.dg";
+
+    /// <summary>Alias for <see cref="Grains.ReplicationDecommissionedPeerRegistryState"/>.</summary>
+    internal const string ReplicationDecommissionedPeerRegistryState = "olr.ds";
+
+    /// <summary>Alias for <see cref="LatticeReplicationPeerStillConfiguredException"/>.</summary>
+    internal const string LatticeReplicationPeerStillConfiguredException = "olr.dx";
 }

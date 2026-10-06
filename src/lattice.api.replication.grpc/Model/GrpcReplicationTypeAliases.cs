@@ -33,6 +33,12 @@ public static class GrpcReplicationTypeAliases
     /// <summary>Alias for <see cref="ReplicationDisableResponse"/>.</summary>
     public const string ReplicationDisableResponse = "oirg.disresp";
 
+    /// <summary>Alias for <see cref="ReplicationDecommissionPeerRequestMessage"/>.</summary>
+    public const string ReplicationDecommissionPeerRequestMessage = "oirg.dpreq";
+
+    /// <summary>Alias for <see cref="ReplicationDecommissionPeerResponse"/>.</summary>
+    public const string ReplicationDecommissionPeerResponse = "oirg.dpresp";
+
     /// <summary>Alias for <see cref="ReplicationGetConfigRequest"/>.</summary>
     public const string ReplicationGetConfigRequest = "oirg.cfgreq";
 

@@ -52,4 +52,7 @@ public static class ApiReplicationTypeAliases
     /// <summary>Alias for <see cref="ReplicationLinkDirection"/>.</summary>
     public const string ReplicationLinkDirection = "oir.ld";
 
+    /// <summary>Alias for <see cref="ReplicationDecommissionPeerResult"/>.</summary>
+    public const string ReplicationDecommissionPeerResult = "oir.dp";
+
 }

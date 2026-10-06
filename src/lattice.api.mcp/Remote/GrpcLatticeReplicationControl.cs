@@ -48,4 +48,10 @@ internal sealed class GrpcLatticeReplicationControl : ILatticeReplicationControl
     public Task<ReplicationConfigReport> GetReplicationConfigAsync(
         CancellationToken cancellationToken = default)
         => _client.GetReplicationConfigAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(
+        string peerClusterId,
+        CancellationToken cancellationToken = default)
+        => _client.DecommissionPeerAsync(peerClusterId, cancellationToken);
 }

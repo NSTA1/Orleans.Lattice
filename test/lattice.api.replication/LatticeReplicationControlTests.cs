@@ -20,7 +20,11 @@ public sealed class LatticeReplicationControlTests
     private static LatticeReplicationControl CreateControl(
         ILatticeReplicationConfigAuthority authority,
         ILatticeAccessGate gate) =>
-        new(authority, new ReplicationAccessAuthorizer(gate, membership: null), new DefaultTenantContextResolver());
+        new(
+            authority,
+            new ReplicationAccessAuthorizer(gate, membership: null),
+            new DefaultTenantContextResolver(),
+            Substitute.For<ILatticeReplicationPeerDecommissioner>());
 
     [Test]
     public async Task EnableReplicationAsync_authorized_delegates_to_authority_and_maps_result()
@@ -100,6 +104,59 @@ public sealed class LatticeReplicationControlTests
             async () => await control.DisableReplicationAsync(Tree),
             Throws.TypeOf<LatticeAuthorizationDeniedException>());
         Assert.That(authority.ReceivedCalls().Any(), Is.False);
+    }
+
+    [Test]
+    public async Task DecommissionPeerAsync_authorized_delegates_to_decommissioner_and_maps_result()
+    {
+        var decommissioner = Substitute.For<ILatticeReplicationPeerDecommissioner>();
+        decommissioner
+            .DecommissionPeerAsync("site-b", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new LatticeReplicationPeerDecommissionOutcome("site-b", 3, false)));
+        var control = new LatticeReplicationControl(
+            Substitute.For<ILatticeReplicationConfigAuthority>(),
+            new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
+            new DefaultTenantContextResolver(),
+            decommissioner);
+
+        var result = await control.DecommissionPeerAsync("site-b");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.PeerClusterId, Is.EqualTo("site-b"));
+            Assert.That(result.TreeCount, Is.EqualTo(3));
+            Assert.That(result.AlreadyDecommissioned, Is.False);
+        });
+        await decommissioner.Received(1).DecommissionPeerAsync("site-b", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void DecommissionPeerAsync_unauthorized_denies_and_never_calls_decommissioner()
+    {
+        var decommissioner = Substitute.For<ILatticeReplicationPeerDecommissioner>();
+        var control = new LatticeReplicationControl(
+            Substitute.For<ILatticeReplicationConfigAuthority>(),
+            new ReplicationAccessAuthorizer(new DenyingAccessGate("no grant"), membership: null),
+            new DefaultTenantContextResolver(),
+            decommissioner);
+
+        Assert.That(
+            async () => await control.DecommissionPeerAsync("site-b"),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
+        Assert.That(
+            decommissioner.ReceivedCalls().Any(),
+            Is.False,
+            "the decommissioner must not be consulted when authorization fails");
+    }
+
+    [Test]
+    public void DecommissionPeerAsync_null_peer_throws()
+    {
+        var control = CreateControl(Substitute.For<ILatticeReplicationConfigAuthority>(), new AllowingAccessGate());
+
+        Assert.That(
+            async () => await control.DecommissionPeerAsync(null!),
+            Throws.ArgumentNullException);
     }
 
     [Test]
@@ -300,7 +357,11 @@ public sealed class LatticeReplicationControlTests
     public void Constructor_null_authority_throws()
     {
         Assert.That(
-            () => new LatticeReplicationControl(null!, new ReplicationAccessAuthorizer(new AllowingAccessGate()), new DefaultTenantContextResolver()),
+            () => new LatticeReplicationControl(
+                null!,
+                new ReplicationAccessAuthorizer(new AllowingAccessGate()),
+                new DefaultTenantContextResolver(),
+                Substitute.For<ILatticeReplicationPeerDecommissioner>()),
             Throws.ArgumentNullException);
     }
 
@@ -309,7 +370,10 @@ public sealed class LatticeReplicationControlTests
     {
         Assert.That(
             () => new LatticeReplicationControl(
-                Substitute.For<ILatticeReplicationConfigAuthority>(), null!, new DefaultTenantContextResolver()),
+                Substitute.For<ILatticeReplicationConfigAuthority>(),
+                null!,
+                new DefaultTenantContextResolver(),
+                Substitute.For<ILatticeReplicationPeerDecommissioner>()),
             Throws.ArgumentNullException);
     }
 
@@ -320,6 +384,19 @@ public sealed class LatticeReplicationControlTests
             () => new LatticeReplicationControl(
                 Substitute.For<ILatticeReplicationConfigAuthority>(),
                 new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
+                null!,
+                Substitute.For<ILatticeReplicationPeerDecommissioner>()),
+            Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public void Constructor_null_decommissioner_throws()
+    {
+        Assert.That(
+            () => new LatticeReplicationControl(
+                Substitute.For<ILatticeReplicationConfigAuthority>(),
+                new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
+                new DefaultTenantContextResolver(),
                 null!),
             Throws.ArgumentNullException);
     }

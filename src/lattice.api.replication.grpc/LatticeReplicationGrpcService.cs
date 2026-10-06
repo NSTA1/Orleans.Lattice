@@ -34,6 +34,9 @@ internal abstract class LatticeReplicationGrpcServiceBase
     /// <summary>Reports the effective replicated-tree set. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
     public abstract Task<ReplicationConfigResponse> GetReplicationConfig(ReplicationGetConfigRequest request, ServerCallContext context);
 
+    /// <summary>Permanently decommissions a peer. Implemented in <see cref="LatticeReplicationGrpcService"/>.</summary>
+    public abstract Task<ReplicationDecommissionPeerResponse> DecommissionPeer(ReplicationDecommissionPeerRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// Returns the endpoint's advertised auth schemes. Unauthenticated: this RPC
     /// is exempt from the authorization interceptor so a client can learn how to
@@ -64,6 +67,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
             binder.AddMethod(methods.EnableReplication, (UnaryServerMethod<ReplicationEnableRequestMessage, ReplicationEnableResponse>?)null);
             binder.AddMethod(methods.DisableReplication, (UnaryServerMethod<ReplicationDisableRequestMessage, ReplicationDisableResponse>?)null);
             binder.AddMethod(methods.GetReplicationConfig, (UnaryServerMethod<ReplicationGetConfigRequest, ReplicationConfigResponse>?)null);
+            binder.AddMethod(methods.DecommissionPeer, (UnaryServerMethod<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             return;
         }
@@ -71,6 +75,7 @@ internal abstract class LatticeReplicationGrpcServiceBase
         binder.AddMethod(methods.EnableReplication, new UnaryServerMethod<ReplicationEnableRequestMessage, ReplicationEnableResponse>(serviceImpl.EnableReplication));
         binder.AddMethod(methods.DisableReplication, new UnaryServerMethod<ReplicationDisableRequestMessage, ReplicationDisableResponse>(serviceImpl.DisableReplication));
         binder.AddMethod(methods.GetReplicationConfig, new UnaryServerMethod<ReplicationGetConfigRequest, ReplicationConfigResponse>(serviceImpl.GetReplicationConfig));
+        binder.AddMethod(methods.DecommissionPeer, new UnaryServerMethod<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse>(serviceImpl.DecommissionPeer));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
     }
 }
@@ -203,6 +208,19 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         });
 
     /// <inheritdoc />
+    public override Task<ReplicationDecommissionPeerResponse> DecommissionPeer(ReplicationDecommissionPeerRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static async (control, req, ct) =>
+        {
+            var result = await control.DecommissionPeerAsync(req.PeerClusterId, ct).ConfigureAwait(false);
+            return new ReplicationDecommissionPeerResponse
+            {
+                PeerClusterId = result.PeerClusterId,
+                TreeCount = result.TreeCount,
+                AlreadyDecommissioned = result.AlreadyDecommissioned,
+            };
+        });
+
+    /// <inheritdoc />
     public override Task<AuthSchemeAdvertisement> GetAuthScheme(AuthSchemeAdvertisementRequest request, ServerCallContext context)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -253,6 +271,13 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             // An enable would change the merge mode of an already-enabled tree;
             // the sanctioned path is disable-then-re-enable. A precondition
             // failure the operator can act on, not an internal fault.
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
+        }
+        catch (LatticeReplicationPeerStillConfiguredException ex)
+        {
+            // The peer is still present in ReplicationPeers; decommission
+            // requires a detach first. A precondition failure the operator can
+            // act on, not an internal fault.
             throw new RpcException(new Status(StatusCode.FailedPrecondition, ex.Message));
         }
         catch (ArgumentException ex)

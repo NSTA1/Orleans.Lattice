@@ -193,6 +193,7 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
                 LatticeReplicationGrpcMethods.EnableReplicationMethodName => LatticeReplicationApiOperation.EnableReplication,
                 LatticeReplicationGrpcMethods.DisableReplicationMethodName => LatticeReplicationApiOperation.DisableReplication,
                 LatticeReplicationGrpcMethods.GetReplicationConfigMethodName => LatticeReplicationApiOperation.GetReplicationConfig,
+                LatticeReplicationGrpcMethods.DecommissionPeerMethodName => LatticeReplicationApiOperation.DecommissionPeer,
                 _ => LatticeReplicationApiOperation.Unknown,
             };
 
@@ -201,6 +202,7 @@ internal sealed class LatticeReplicationApiGrpcAuthInterceptor : Interceptor
             ReplicationEnableRequestMessage e => e.TreeId,
             ReplicationDisableRequestMessage d => d.TreeId,
             ReplicationPeerStatusQuery q when !string.IsNullOrEmpty(q.TreeId) => q.TreeId,
+            ReplicationDecommissionPeerRequestMessage p => p.PeerClusterId,
             _ => null,
         };
 
