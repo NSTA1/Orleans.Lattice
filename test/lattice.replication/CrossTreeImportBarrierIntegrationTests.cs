@@ -37,6 +37,12 @@ public partial class CrossTreeImportBarrierIntegrationTests
 
     private static readonly ConcurrentDictionary<string, IRemoteSnapshotTransport> SiteATransports = new();
 
+    /// <summary>Site B's replication topology, so a test can re-add site A at runtime.</summary>
+    private static readonly FakeReplicationTopology SiteBTopology = new();
+
+    /// <summary>The tree site B replicates statically, so its driver activation service subscribes to the topology.</summary>
+    private const string ActivationAnchorTree = "xtib-activation-anchor";
+
     private TestCluster _siteA = null!;
     private TestCluster _siteB = null!;
     private LatticeSnapshotProvider _siteAProvider = null!;
@@ -575,8 +581,19 @@ public partial class CrossTreeImportBarrierIntegrationTests
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
-            siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteBClusterId);
+            siloBuilder.AddLatticeReplication(opts =>
+            {
+                opts.ClusterId = SiteBClusterId;
+                // One statically replicated tree, so the driver activation
+                // service runs and subscribes to the topology: a test re-adds
+                // site A at runtime through it. No test writes to this tree.
+                opts.ReplicatedTrees = new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+                {
+                    [ActivationAnchorTree] = LatticeMergeMode.LwwRegister,
+                };
+            });
             siloBuilder.ConfigureLatticeReplication(ElsewhereTree, opts => opts.ClusterId = "xtib-site-elsewhere");
+            siloBuilder.Services.AddSingleton<IReplicationTopology>(SiteBTopology);
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
                 siloBuilder.Services.AddSingleton(transport);

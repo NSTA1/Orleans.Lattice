@@ -66,6 +66,60 @@ public sealed class TxRegistryWalPurgeGuardTests
     }
 
     [Test]
+    public async Task Replicated_tree_holds_an_aged_out_decision_until_the_wal_trims_past_its_terminal()
+    {
+        // Issue #4508: the guard holds the decision until the WAL is trimmed
+        // past every record of the saga, its terminal included, not only its
+        // prepare: while the terminal is retained a peer can still be shipped
+        // it, and the cross-cluster model's tombstone drop rests on no terminal
+        // being left to ship once the decision is purged.
+        var tree = $"{ReplicatedPrefix}{Guid.NewGuid():N}";
+        var txid = Guid.NewGuid();
+        var wal = _cluster.Client.GetGrain<IWalShardGrain>($"{tree}/0");
+        var prepareSequence = await wal.AppendAsync(
+            new WalRecord
+            {
+                TreeId = tree,
+                Op = MutationKind.Set,
+                Key = "k",
+                Value = [1],
+                Timestamp = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks },
+                TransactionId = txid,
+                IsPrepared = true,
+            },
+            CancellationToken.None);
+        var terminalSequence = await wal.AppendAsync(
+            new WalRecord
+            {
+                TreeId = tree,
+                Op = MutationKind.TxCommit,
+                Key = "0",
+                Timestamp = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks },
+                TransactionId = txid,
+                ShardIndex = 0,
+            },
+            CancellationToken.None);
+        Assert.That(terminalSequence, Is.GreaterThan(prepareSequence), "precondition: the terminal follows the prepare");
+
+        var registry = TxRegistryRouting.GetRegistry(_cluster.Client, tree, txid);
+        await registry.MarkCommittedAsync(txid);
+        await registry.ForgetAsync(txid);
+
+        await WalProvider().TrimAsync(tree, 0, prepareSequence, CancellationToken.None);
+        await AgeAndPruneAsync(registry);
+        await AgeAndPruneAsync(registry);
+
+        Assert.That(await registry.GetRecordedStatusAsync(txid), Is.EqualTo(TxStatus.Committed),
+            "the decision must outlive its retention while the WAL still retains the saga's terminal");
+
+        await WalProvider().TrimAsync(tree, 0, terminalSequence, CancellationToken.None);
+        await AgeAndPruneAsync(registry);
+
+        Assert.That(await registry.GetRecordedStatusAsync(txid), Is.EqualTo(TxStatus.InFlight),
+            "once the WAL is trimmed past the terminal the aged-out decision is purged");
+    }
+
+    [Test]
     public async Task Replicated_tree_with_zero_retention_still_holds_the_decision_until_the_wal_trims()
     {
         // Zero retention used to drop the decision at forget time, which on a
