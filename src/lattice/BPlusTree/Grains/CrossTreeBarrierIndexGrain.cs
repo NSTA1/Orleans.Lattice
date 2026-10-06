@@ -61,6 +61,49 @@ internal sealed class CrossTreeBarrierIndexGrain(
         Task.FromResult(state.State.Imports.TryGetValue(originClusterId, out var import) ? import : null);
 
     /// <inheritdoc />
+    public async Task AddTombstoneAsync(string barrierKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(barrierKey);
+        if (!state.State.Tombstones.Add(barrierKey))
+        {
+            return;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Tombstones.Remove(barrierKey);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RemoveTombstoneAsync(string barrierKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(barrierKey);
+        if (!state.State.Tombstones.Remove(barrierKey))
+        {
+            return;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Tombstones.Add(barrierKey);
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<ImmutableArray<string>> GetTombstonesAsync() => Task.FromResult(state.State.Tombstones.ToImmutableArray());
+
+    /// <inheritdoc />
     public async Task RemoveAsync(string barrierKey)
     {
         ArgumentException.ThrowIfNullOrEmpty(barrierKey);

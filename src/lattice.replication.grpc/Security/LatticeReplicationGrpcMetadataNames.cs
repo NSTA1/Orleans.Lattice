@@ -55,6 +55,14 @@ internal static class LatticeReplicationGrpcMetadataNames
     public const string AckedPositionsHeader = "x-lattice-replication-acked-positions";
 
     /// <summary>
+    /// Header that carries a chunk of the sender's cross-tree purge frontier
+    /// (issue #4733) on a push. Read only on a push whose origin is
+    /// authenticated and a configured peer, parsed strictly and bounded; a
+    /// missing or malformed value advertises nothing.
+    /// </summary>
+    public const string CrossTreePurgeFrontierHeader = "x-lattice-replication-cross-tree-purge-frontier";
+
+    /// <summary>
     /// Header that carries the source tree lineage the sender read a pushed
     /// batch under (issue #4673), as a <see cref="Guid"/> in the <c>D</c>
     /// format. Read only after the caller's origin is authenticated and parsed

@@ -143,5 +143,6 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// export row of the sub-saga can carry them. Idempotent; a no-op for a
     /// sub-saga that has no transaction id.
     /// </summary>
-    Task RecordCrossTreeDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps);
+    Task RecordCrossTreeDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null);
 }

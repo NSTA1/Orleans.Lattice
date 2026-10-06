@@ -1367,6 +1367,7 @@ internal sealed partial class ReplicationShipperGrain(
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                 SourceFrontier = _currentFrontier,
+                CrossTreePurgeFrontier = _currentPurgeFrontier,
                 SourceLineage = SourceLineageStamp,
                 // Payload is empty on the framing path - the
                 // transport consumes EncodedEnvelope. Bytes-only
@@ -2126,6 +2127,7 @@ internal sealed partial class ReplicationShipperGrain(
                         OriginClusterId = options.ClusterId,
                         ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                         SourceFrontier = _currentFrontier,
+                        CrossTreePurgeFrontier = _currentPurgeFrontier,
                         SourceLineage = SourceLineageStamp,
                         Payload = ReadOnlyMemory<byte>.Empty,
                         Envelope = null,
@@ -3610,6 +3612,7 @@ internal sealed partial class ReplicationShipperGrain(
                 OriginClusterId = options.ClusterId,
                 ReseedAfterEpoch = state.State.ReseedRequiredEpoch,
                 SourceFrontier = _currentFrontier,
+                CrossTreePurgeFrontier = _currentPurgeFrontier,
                 Payload = ReadOnlyMemory<byte>.Empty,
                 Envelope = null,
                 EncodedEnvelope = encodedEnvelope,

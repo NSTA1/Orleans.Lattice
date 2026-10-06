@@ -599,7 +599,8 @@ internal sealed partial class AtomicWriteGrain(
     }
 
     /// <inheritdoc />
-    public async Task RecordCrossTreeDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps)
+    public async Task RecordCrossTreeDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null)
     {
         ArgumentNullException.ThrowIfNull(stamps);
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -612,8 +613,8 @@ internal sealed partial class AtomicWriteGrain(
 
         var registry = RegistryFor(state.State.TreeId, txid);
         await TxRegistryWriteRetry.RunAsync(
-            (registry, txid, stamps),
-            static s => s.registry.RecordCrossTreeDecisionStampsAsync(s.txid, s.stamps));
+            (registry, txid, stamps, sequences),
+            static s => s.registry.RecordCrossTreeDecisionStampsAsync(s.txid, s.stamps, s.sequences));
     }
 
     /// <inheritdoc />

@@ -347,6 +347,14 @@ public static class ReplicationTypeAliases
     internal const string ReplicationAckedPositions = "olr.ap";
     internal const string CrossTreeSiblingBoundary = "olr.sb";
 
+    // Cross-tree decision sequences and the origin's purge frontier (#4733).
+    internal const string ICrossTreeDecisionSequenceGrain = "olr.qg";
+    internal const string CrossTreeDecisionSequenceState = "olr.qs";
+    internal const string CrossTreeDecisionSequenceSnapshot = "olr.qn";
+    internal const string ICrossTreePurgeFrontierSourceGrain = "olr.pf";
+    internal const string CrossTreePurgeFrontierSourceState = "olr.pt";
+    internal const string CrossTreePurgeFrontier = "olr.pz";
+
     // The source lineage a sender stamped on an entry, carried with it into the
     // causal-apply buffer and the dead-letter queue (#4707).
     internal const string ReplicationSourceLineageStamp = "olr.ls";

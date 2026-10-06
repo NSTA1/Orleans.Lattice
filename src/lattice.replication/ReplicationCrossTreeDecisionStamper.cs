@@ -34,4 +34,35 @@ internal sealed class ReplicationCrossTreeDecisionStamper(IGrainFactory grainFac
 
         return stamps;
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<string, long>> IssueSequencesAsync(
+        string operationId, IReadOnlyList<string> participants, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(participants);
+
+        // Covered by the frontier before any sequence exists to cover.
+        await grainFactory.GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key)
+            .RegisterTreesAsync(participants);
+        var sequences = new Dictionary<string, long>(participants.Count, StringComparer.Ordinal);
+        foreach (var tree in participants)
+        {
+            sequences[tree] = await grainFactory.GetGrain<ICrossTreeDecisionSequenceGrain>(tree).IssueAsync(operationId);
+        }
+
+        return sequences;
+    }
+
+    /// <inheritdoc />
+    public async Task ConfirmSequencesAsync(
+        string operationId, IReadOnlyList<string> participants, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(participants);
+        foreach (var tree in participants)
+        {
+            await grainFactory.GetGrain<ICrossTreeDecisionSequenceGrain>(tree).ConfirmAsync(operationId);
+        }
+    }
 }
