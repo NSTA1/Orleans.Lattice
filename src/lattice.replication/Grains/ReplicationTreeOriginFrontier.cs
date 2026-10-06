@@ -22,4 +22,11 @@ internal sealed class ReplicationTreeOriginFrontier
     /// origin ships a watermark for the tree in the current epoch.
     /// </summary>
     [Id(2)] public bool Capped { get; set; }
+
+    /// <summary>
+    /// The latest acknowledged read positions the origin's shipper vouched with
+    /// an accepted watermark in the current epoch (issue #4684), or
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(3)] public ReplicationAckedPositions? AckedPositions { get; set; }
 }

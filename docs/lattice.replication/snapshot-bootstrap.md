@@ -1212,6 +1212,31 @@ again: it is often trimmed, which is why the peer fell off the log. So
   not lift the read fence, and the bootstrap does not complete, while any
   barrier indexed under the tree is undecided, including one that opened
   after the drain while the fence was still up.
+- **Nor while a sibling tree may still owe a terminal.** An import can
+  settle a sub-saga from bare rows before the sibling tree's terminal of the
+  same operation has reached this cluster, and then no barrier exists yet to
+  hold the fence. So the export captures, after its last row, every other
+  tree the source replicates: its physical write-ahead log, each partition's
+  next sequence, and its export epoch. The tree stays read-fenced until
+  every such sibling that this cluster replicates and whose log held
+  anything has passed its boundary
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)), by either
+  of two routes:
+  - **Acknowledged.** The sibling's shipper vouched acknowledged read
+    positions on the same log at or past every captured tail (see
+    [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)).
+    This cluster acknowledges a cross-tree terminal only once its barrier
+    has it.
+  - **Re-imported.** A drain of the sibling here ended from an export
+    numbered above the captured epoch, so opened after the capture. It
+    counts once the drain ends, while the sibling's own fence may still be
+    held, so two imports that wait on each other both pass.
+
+  A sibling that has not passed within five minutes is re-seeded
+  automatically when `AutoBootstrapOnFallOffLog` is on. With it off, the
+  tree stays fenced until an operator re-seeds the sibling, the same
+  availability caveat a fall-off off the log carries. An export from a source
+  that did not serve it under the cross-tree hold carries no boundaries.
 
 A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's

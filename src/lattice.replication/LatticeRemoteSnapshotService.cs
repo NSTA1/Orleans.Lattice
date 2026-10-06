@@ -295,9 +295,19 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
             yield return new RemoteSnapshotStreamItem { Entry = entry };
         }
 
-        if (stream.CloseGeneration is { } close)
+        // Captured after the last entry, so every sibling record the receiver
+        // must have before it serves this tree is below the boundary (#4684).
+        var siblings = ExportGate is null || _replicationContext is null
+            ? null
+            : await ExportGate.CaptureSiblingBoundariesAsync(treeName, _replicationContext, cancellationToken).ConfigureAwait(false);
+        if (stream.CloseGeneration is not null || siblings is not null)
         {
-            yield return new RemoteSnapshotStreamItem { CloseGeneration = close, SourceFrontier = stream.SourceFrontier };
+            yield return new RemoteSnapshotStreamItem
+            {
+                CloseGeneration = stream.CloseGeneration,
+                SourceFrontier = stream.SourceFrontier,
+                SiblingBoundaries = siblings,
+            };
         }
     }
 }

@@ -180,14 +180,16 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     }
 
     /// <summary>
-    /// Re-checks the barriers holding the imported tree's read fence. Returns
-    /// <see langword="true"/> once none is undecided, having lifted the fence
-    /// (the caller persists); <see langword="false"/> while one still waits for a
-    /// sibling's terminal, leaving the tree fenced for the next tick.
+    /// Re-checks what holds the imported tree's read fence: the cross-tree
+    /// barriers indexed under it (#4683, #4684) and the sibling boundaries its
+    /// import captured (#4684). Returns <see langword="true"/> once nothing
+    /// holds it, having lifted the fence (the caller persists);
+    /// <see langword="false"/> while something still does, leaving the tree
+    /// fenced for the next tick.
     /// </summary>
     private async Task<bool> ReleaseCrossTreeHoldAsync()
     {
-        if (state.State.PendingCrossTreeBarriers.Count == 0)
+        if (state.State.PendingCrossTreeBarriers.Count == 0 && state.State.PendingSiblingBoundaries.Count == 0)
         {
             // The drain lifted the fence: nothing was waiting.
             return true;
@@ -196,20 +198,30 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         // While the fence is held, every barrier indexed under the tree counts,
         // including one that opened after the drain: the tree is served only
         // once none waits (#4684).
-        var undecided = await UndecidedBarriersAsync(
-                state.State.PendingCrossTreeBarriers.Union(await IndexedBarriersAsync(TreeName).ConfigureAwait(true), StringComparer.Ordinal))
-            .ConfigureAwait(true);
-        if (undecided.Count > 0)
+        var undecided = state.State.PendingCrossTreeBarriers.Count == 0
+            ? []
+            : await UndecidedBarriersAsync(
+                    state.State.PendingCrossTreeBarriers.Union(await IndexedBarriersAsync(TreeName).ConfigureAwait(true), StringComparer.Ordinal))
+                .ConfigureAwait(true);
+        var siblingsBefore = state.State.PendingSiblingBoundaries.Count;
+        await PruneSiblingBoundariesAsync(state.State.SourceClusterId).ConfigureAwait(true);
+        if (state.State.PendingSiblingBoundaries.Count > 0)
         {
-            if (undecided.Count != state.State.PendingCrossTreeBarriers.Count)
+            await RequestStuckSiblingReseedsAsync(state.State.SourceClusterId).ConfigureAwait(true);
+        }
+
+        if (undecided.Count > 0 || state.State.PendingSiblingBoundaries.Count > 0)
+        {
+            if (undecided.Count != state.State.PendingCrossTreeBarriers.Count
+                || siblingsBefore != state.State.PendingSiblingBoundaries.Count)
             {
                 state.State.PendingCrossTreeBarriers = undecided;
                 await state.WriteStateAsync().ConfigureAwait(true);
             }
 
             Logger.LogDebug(
-                "Tree '{TreeName}' stays read-fenced: {Count} cross-tree barrier(s) its import arrived at await a sibling tree's terminal",
-                TreeName, undecided.Count);
+                "Tree '{TreeName}' stays read-fenced: {Barriers} cross-tree barrier(s) await a sibling tree's terminal and {Siblings} sibling tree(s) have not passed their boundary",
+                TreeName, undecided.Count, state.State.PendingSiblingBoundaries.Count);
             return false;
         }
 
@@ -219,10 +231,128 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         }
 
         state.State.PendingCrossTreeBarriers = [];
+        state.State.SiblingReseedsRequested.Clear();
         Logger.LogInformation(
-            "Every cross-tree barrier the import of tree '{TreeName}' arrived at has decided; its read fence is lifted",
+            "Every cross-tree barrier and sibling boundary holding the import of tree '{TreeName}' is settled; its read fence is lifted",
             TreeName);
         return true;
+    }
+
+    /// <summary>How long a sibling may fail to pass its boundary before this coordinator asks to re-seed it.</summary>
+    internal static TimeSpan SiblingBoundaryReseedAfter { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Records the sibling boundaries the drained export captured (issue #4684),
+    /// scoped to the trees replicated here: a sibling this cluster does not
+    /// replicate never vouches to it and has no barrier here to complete. An
+    /// export that carried none - from a source that did not serve it under the
+    /// cross-tree hold - holds nothing.
+    /// </summary>
+    private void RecordSiblingBoundaries(string treeName, SnapshotStream snapshot)
+    {
+        state.State.PendingSiblingBoundaries = new Dictionary<string, CrossTreeSiblingBoundary>(StringComparer.Ordinal);
+        state.State.SiblingReseedsRequested.Clear();
+        state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
+        if (snapshot.SiblingBoundaries is not { } boundaries)
+        {
+            return;
+        }
+
+        foreach (var (sibling, boundary) in boundaries)
+        {
+            if (!string.Equals(sibling, treeName, StringComparison.Ordinal)
+                && !boundary.IsEmpty
+                && IsTreeReplicatedHere(sibling))
+            {
+                state.State.PendingSiblingBoundaries[sibling] = boundary;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drops every sibling that has passed its boundary (issue #4684): its
+    /// shipper vouched acknowledged positions on the captured log at or past
+    /// every captured tail - an acknowledged cross-tree terminal has reached its
+    /// barrier here - or this cluster drained an import of it from an export
+    /// numbered above the captured epoch, which opened after the capture. In
+    /// memory; the caller persists. A sibling's import counts once its drain
+    /// ends, before its own fence lifts, so two imports that wait on each
+    /// other both pass.
+    /// </summary>
+    private async Task PruneSiblingBoundariesAsync(string? sourceClusterId)
+    {
+        if (state.State.PendingSiblingBoundaries.Count == 0 || string.IsNullOrEmpty(sourceClusterId))
+        {
+            return;
+        }
+
+        foreach (var (sibling, boundary) in state.State.PendingSiblingBoundaries.ToList())
+        {
+            var frontier = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(sibling).GetAsync().ConfigureAwait(true);
+            if (frontier.AckedPositions.TryGetValue(sourceClusterId, out var acked)
+                && acked.CoversTails(boundary.PhysicalTreeId, boundary.Tails))
+            {
+                state.State.PendingSiblingBoundaries.Remove(sibling);
+                continue;
+            }
+
+            var imported = await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
+                .GetDrainedExportEpochAsync(sourceClusterId)
+                .ConfigureAwait(true);
+            if (imported is { } epoch && epoch > boundary.ExportEpoch)
+            {
+                state.State.PendingSiblingBoundaries.Remove(sibling);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Asks to re-seed every pending sibling that has not passed its boundary
+    /// within <see cref="SiblingBoundaryReseedAfter"/> (issue #4684): a sibling
+    /// whose shipper never vouches positions here (it is off the log, or its
+    /// replication is key-filtered) would otherwise pin the fence until an
+    /// operator acts. Its import from an export opened after the capture passes
+    /// the boundary. Honours <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
+    /// as a fall-off does; asks at most once per sibling per import.
+    /// </summary>
+    private async Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
+    {
+        if (string.IsNullOrEmpty(sourceClusterId)
+            || DateTime.UtcNow.Ticks - state.State.SiblingBoundariesSinceUtcTicks < SiblingBoundaryReseedAfter.Ticks)
+        {
+            return;
+        }
+
+        foreach (var sibling in state.State.PendingSiblingBoundaries.Keys.ToList())
+        {
+            if (!state.State.SiblingReseedsRequested.Add(sibling))
+            {
+                continue;
+            }
+
+            if (!_optionsMonitor.Get(sibling).AutoBootstrapOnFallOffLog)
+            {
+                Logger.LogWarning(
+                    "Tree '{TreeName}' stays read-fenced: sibling tree '{Sibling}' has not passed its boundary from {Source} and automatic bootstrap is disabled; re-seed it to serve '{TreeName}'",
+                    TreeName, sibling, sourceClusterId, TreeName);
+                continue;
+            }
+
+            try
+            {
+                await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
+                    .BootstrapAsync(sourceClusterId, CancellationToken.None)
+                    .ConfigureAwait(true);
+                Logger.LogInformation(
+                    "Sibling tree '{Sibling}' has not passed its boundary from {Source} within {Bound}; re-seeding it so tree '{TreeName}' can be served",
+                    sibling, sourceClusterId, SiblingBoundaryReseedAfter, TreeName);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                state.State.SiblingReseedsRequested.Remove(sibling);
+                Logger.LogDebug(ex, "Re-seeding sibling tree '{Sibling}' from {Source} was not accepted; retried on a later tick", sibling, sourceClusterId);
+            }
+        }
     }
 
     /// <summary>

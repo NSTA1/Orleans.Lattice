@@ -46,6 +46,15 @@ internal static class LatticeReplicationGrpcMetadataNames
     public const string SourceFrontierHeader = "x-lattice-replication-source-frontier";
 
     /// <summary>
+    /// Header that carries the sender's acknowledged read positions for the
+    /// batch's tree (issue #4684), beside <see cref="SourceFrontierHeader"/>.
+    /// Read only with a valid source frontier from an authenticated, configured
+    /// peer, parsed strictly and bounded; a missing or malformed value vouches no
+    /// positions.
+    /// </summary>
+    public const string AckedPositionsHeader = "x-lattice-replication-acked-positions";
+
+    /// <summary>
     /// Header that carries the source tree lineage the sender read a pushed
     /// batch under (issue #4673), as a <see cref="Guid"/> in the <c>D</c>
     /// format. Read only after the caller's origin is authenticated and parsed

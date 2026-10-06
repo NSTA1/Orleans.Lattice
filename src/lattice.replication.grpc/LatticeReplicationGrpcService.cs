@@ -385,7 +385,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceFrontierHeader),
                 out var parsed))
         {
-            shipped = parsed;
+            shipped = ReplicationAckedPositions.TryParse(
+                    GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.AckedPositionsHeader),
+                    out var acked)
+                ? parsed with { AckedPositions = acked }
+                : parsed;
         }
 
         try

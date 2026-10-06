@@ -230,6 +230,33 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
     }
 
     [Test]
+    public async Task A_vouching_shipper_ships_its_acknowledged_positions_on_its_log()
+    {
+        // Issue #4684, R1: a receiver passes a sibling's boundary on the
+        // positions the sibling's shipper vouches it acknowledged, which ride
+        // beside the watermark and only while the shipper vouches one.
+        var tree = "xth-positions-" + Guid.NewGuid().ToString("N")[..8];
+        var client = _cluster.Client;
+        await client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(
+            tree, new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 64, MaxInternalChildren = 4 });
+        var shipper = client.GetGrain<IReplicationShipperGrain>($"{tree}/{PeerClusterId}");
+        await shipper.EnsureActiveAsync(CancellationToken.None);
+        await client.GetGrain<ILattice>(tree).SetAsync("k", [1]);
+        await AwaitShippedAsync(tree);
+        var tails = await TailsAsync(tree);
+
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                await client.GetGrain<ILattice>(tree).SetAsync("tick", [1]);
+                return PerTreeGatedTransport.VouchedPositions.TryGetValue(tree, out var vouched)
+                    && vouched.CoversTails(tree, [.. tails]);
+            },
+            "a batch of the tree to carry the shipper's acknowledged positions on its log",
+            TimeSpan.FromSeconds(60));
+    }
+
+    [Test]
     public void The_hold_compares_only_the_partitions_a_shipper_reads_and_holds_on_no_published_position()
     {
         Assert.Multiple(() =>
@@ -355,9 +382,19 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
 
         public static readonly ConcurrentDictionary<string, IReadOnlyDictionary<string, long>?> StampedTerminals = new(StringComparer.Ordinal);
 
+        public static readonly ConcurrentDictionary<string, ReplicationAckedPositions> VouchedPositions = new(StringComparer.Ordinal);
+
+        /// <summary>The receiver lineage this peer reports, so the shipper vouches a watermark.</summary>
+        public static readonly Guid Lineage = Guid.Parse("4b2f8d0e-7c1a-4e3b-9a6d-2f5e8c1b0a97");
+
         public Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
         {
             var accepted = !Refused.ContainsKey(batch.TreeName);
+            if (accepted && batch.SourceFrontier?.AckedPositions is { } vouched)
+            {
+                VouchedPositions[batch.TreeName] = vouched;
+            }
+
             if (accepted && batch.EncodedEnvelope is { } envelope)
             {
                 foreach (var segment in envelope.EncodedEntries.Span)
@@ -370,7 +407,12 @@ public sealed class CrossTreeDecisionHoldIntegrationTests
                 }
             }
 
-            return Task.FromResult(new ReplicationAck { Accepted = accepted, HighestAppliedHlc = HybridLogicalClock.Zero });
+            return Task.FromResult(new ReplicationAck
+            {
+                Accepted = accepted,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                ReceiverLineage = Lineage,
+            });
         }
     }
 }
