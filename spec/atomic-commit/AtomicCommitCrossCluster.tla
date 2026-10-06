@@ -26,8 +26,12 @@
 (*   - bootstrap of a fresh receiver from a snapshot export, including the *)
 (*     aged-out committed export vocabulary (issues #2328 and #2318);      *)
 (*   - every way production loses a record to a peer, each with its fix:   *)
-(*     a shipper gap, a detach and re-add, a receiver poison, and the      *)
-(*     re-seed, replay filter and purge holds that bring the saga back.    *)
+(*     a shipper gap, a detach and re-add, a receiver poison, a            *)
+(*     decommission and fresh re-add, both trees off the log at once,      *)
+(*     and the re-seed, replay filter and purge holds that bring the       *)
+(*     saga back;                                                          *)
+(*   - the cross-tree import: its arrival at the receiver barrier, its     *)
+(*     read fence, and the boundary its fence waits on.                    *)
 (*                                                                         *)
 (* Every property here is a claim about the RECEIVER. The origin's own     *)
 (* properties are AtomicCommit.tla's, checked there; nothing below should  *)
@@ -124,6 +128,24 @@ XKeys == Origin!Written(T)
 (*  filt        the replay filter is active (a bootstrap or a rewind).     *)
 (*  verdict     the replay filter's verdict for the saga, taken at first   *)
 (*              sight: "none" until then, "ship" or "withhold".            *)
+(*  afence      tree A's read fence: a cross-tree import raises it, and it *)
+(*              lifts once the sibling tree has passed its boundary and no *)
+(*              barrier of the operation is undecided.                     *)
+(*  ubnd        tree B's records outstanding at the last boundary (the     *)
+(*              upgrade, or tree A's re-add): R1's capture for tree A.     *)
+(*  decom       tree A has been removed from the peer for good.            *)
+(*  afresh      tree A was added back and has not been bootstrapped.       *)
+(*  boff        tree B's shipper is off the log awaiting a re-seed.        *)
+(*  bpur        the origin registry has purged tree B's decision row.      *)
+(*  bfence      tree B's read fence, as afence.                            *)
+(*  bcaught     tree B was imported from an export opened after the        *)
+(*              boundary; acaught likewise for tree A.                     *)
+(*  abnd        tree A's records outstanding at the upgrade: R1's capture  *)
+(*              for tree B.                                                *)
+(*  uimp[tr]    tree tr was imported from an export opened after the       *)
+(*              operation's decision that names nothing of it: a barrier   *)
+(*              opened later takes its arrival with the siblings' verdict  *)
+(*              (#4684's R2).                                              *)
 (***************************************************************************)
 VARIABLES xtree, oext, orcv, outbox, dlv, rconn,
           rpend, rterm, rproj,
@@ -279,15 +301,23 @@ RObserved(k) ==
 \* The instance's bounds. Each variant cfg narrows them to one slice that fits
 \* the TLC budget; the slices of one loss path partition its instance.
 \*   LossPath       0 none, 1 a shipper gap, 2 a detach and re-add, 3 a
-\*                  receiver poison, 4 a detach, decommission and fresh re-add.
-\*   JoinStart      the single-tree receiver: 0 follows the stream from the
-\*                  saga's start, 1 joins through a bootstrap, 2 either.
+\*                  receiver poison, 4 a detach, decommission and fresh re-add,
+\*                  5 both trees off the log while a silo predates the hold.
+\*   JoinStart      the receiver: 0 follows the stream from the saga's start,
+\*                  1 joins through a bootstrap, 2 either. The base follows;
+\*                  joining is checked in the Join variants.
 \*   SagaOutcome    the origin saga: 0 commits, 1 aborts, 2 either.
 \*   Shape          0 the single-tree saga, 1 the cross-tree saga, 2 either.
 \*   PreHold        1 a silo predates the purge hold until UpgradeDone, 0
 \*                  every silo honours it from the start.
 \*   DialFaults     1 the receiver's dial to the barrier can fail, 0 it never
 \*                  does.
+\*   Purges         on path 5, the decision rows a pre-hold silo purges before
+\*                  the boundary: 0 none, 1 tree A's, 2 both trees'. The trees
+\*                  are symmetric on that path, so tree A is the one purged.
+\*   AckLoss        1 the transport may lose an acknowledgement, 0 it never
+\*                  does. Path 5's rewind re-ships every retained record, so it
+\*                  duplicates deliveries without it.
 LossPath == 0
 
 Shape == 2
@@ -300,16 +330,17 @@ Purges == 2
 
 AckLoss == 1
 
-JoinStart == 2
+JoinStart == 0
 
 SagaOutcome == 2
 
 Starts(n) == CASE n = 0 -> {FALSE} [] n = 1 -> {TRUE} [] OTHER -> BOOLEAN
 
-\* The imported tree. A bootstrap, a re-seed and every loss path act on tree
-\* A's stream; in the cross-tree shape tree B stays on its own stream
-\* throughout. Each tree holds one key there and the two are symmetric, so
-\* fixing which tree is imported loses nothing.
+\* The imported tree. A bootstrap, a re-seed and loss paths 1 to 4 act on
+\* tree A's stream, while in the cross-tree shape tree B stays on its own
+\* stream throughout. Each tree holds one key there and the two are
+\* symmetric, so fixing which tree is lost loses nothing. Path 5 takes both
+\* trees off the log and re-seeds each (TreeReseed).
 AKeys == KeysOf("A")
 
 Aff(r) == TreeOf(r.key) = "A"
@@ -470,7 +501,7 @@ OriginForget ==
 (* The transport may deliver any un-acknowledged record at any time        *)
 (* (reorder), may lose a delivery (the record stays in the outbox and is   *)
 (* shipped again), and may lose the acknowledgement of a delivery that did *)
-(* apply (the record stays and is delivered again: a duplicate). It never  *)
+(* apply (AckLoss: the record stays and is delivered again). It never      *)
 (* loses a record by itself: every way production loses one to a peer is   *)
 (* one of the LOSS PATHS below, each with its fix. A receiver that defers a *)
 (* saga record it cannot apply (#4633) neither applies nor acknowledges    *)
@@ -695,8 +726,11 @@ ForeignOriginClaim(tr) ==
 (* the receiver reads none (#4476), and this module ships only saga        *)
 (* records.                                                                *)
 (*                                                                         *)
-(* Modelled for the single-tree shape only: the cross-tree barrier adds    *)
-(* nothing a bootstrap changes, and the state space is kept for it.        *)
+(* In the cross-tree shape every import - a bootstrap, a re-seed, or a     *)
+(* poison's re-seed - also records the tree's arrival with the receiver    *)
+(* barrier (BarrierImport) and raises the tree's read fence (FenceLift),   *)
+(* and no cross-tree export is served while a silo predates the purge      *)
+(* hold (ImportGate).                                                      *)
 (***************************************************************************)
 Snap0 ==
     IF purged THEN {"inflight"}
@@ -725,6 +759,12 @@ Carried(snap) == CarriedOf("A", snap)
 \* point against the tree; any barrier of an operation decided before that
 \* point takes the tree's arrival with its siblings' verdict.
 Bare(tr, snap, pur) == xtree /\ pur /\ snap = "inflight" /\ ~CarriedOf(tr, snap)
+
+\* The imports whose tree must be fenced: one that arrives at the barrier and
+\* one marked for a uniform arrival. Production fences every cross-tree
+\* import, which only hides more; an import that carries the saga as prepared
+\* rows serves it pre-saga, as every sibling still does.
+ImportFences(tr, snap, pur) == ViaBarrier(snap) \/ Bare(tr, snap, pur)
 
 \* No cross-tree export is served while a silo predates the purge hold.
 ImportGate == ~xtree \/ ~preguard
@@ -770,12 +810,12 @@ Bootstrap ==
                         ELSE "none"]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
          /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
          /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
     /\ rconn' = TRUE
     /\ filt' = TRUE
     /\ verdict' = "none"
     /\ afresh' = FALSE
-    /\ afence' = (afence \/ xtree)
     /\ acaught' = (acaught \/ xtree)
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rdeleg, rdial, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, ubnd, decom,
@@ -783,7 +823,8 @@ Bootstrap ==
 
 (***************************************************************************)
 (* LOSS PATHS AND THEIR FIXES. Each path loses one record to the receiver, *)
-(* at most one per behaviour, in the single-tree shape.                    *)
+(* at most one per behaviour, in either shape; path 5 takes both trees     *)
+(* off the log at one boundary.                                            *)
 (***************************************************************************)
 
 \* The origin registry purges a forgotten saga's decision row. A guarded
@@ -801,6 +842,9 @@ OriginPurge ==
     /\ LossPath = 5 => (preguard /\ Purges >= 1)
     /\ ~purged
     /\ purged' = TRUE
+    \* On the mutual path a pre-hold purge of tree B's row reads like tree A's:
+    \* it trims nothing and only an export taken after the boundary sees it.
+    /\ bpur' = (bpur \/ (LossPath = 5 /\ Purges = 2))
     /\ IF preguard
        THEN UNCHANGED <<outbox, ptrim>>
        ELSE /\ ~Held
@@ -811,7 +855,8 @@ OriginPurge ==
             /\ ptrim' = TRUE
             /\ outbox' = {r \in outbox : r.type # "prep" \/ ~Aff(r)}
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
-                   gone, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars>>
+                   gone, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bfence, bcaught, acaught, abnd, uimp>>
 
 \* Every silo comes to host the purge hold.
 UpgradeDone ==
@@ -822,7 +867,7 @@ UpgradeDone ==
                      /\ (Purges = 2 => bpur)
     /\ preguard' = FALSE
     /\ ubnd' = {r \in outbox : ~Aff(r)}
-    /\ abnd' = {r \in outbox \cup gone : Aff(r)}
+    /\ abnd' = IF xtree THEN {r \in outbox \cup gone : Aff(r)} ELSE abnd
     /\ acaught' = FALSE
     /\ bcaught' = FALSE
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
@@ -925,7 +970,7 @@ ReaddFresh ==
     /\ rdeleg' = [rdeleg EXCEPT !["A"] = FALSE]
     /\ rdial' = [rdial EXCEPT !["A"] = FALSE]
     /\ carr' = [carr EXCEPT !["A"] = "none"]
-    \* A tree added to the peer is a boundary like the upgrade's: its import
+    \* A tree added to the peer is a boundary like the upgrade's: its fence
     \* waits until the peer has applied every sibling record written before it.
     /\ ubnd' = ubnd \cup {r \in outbox : ~Aff(r)}
     /\ bcaught' = FALSE
@@ -975,8 +1020,8 @@ PoisonReseed ==
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
          /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
          /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
     /\ rpoison' = FALSE
-    /\ afence' = (afence \/ xtree)
     /\ acaught' = (acaught \/ xtree)
     /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
                    gone, purged, ptrim, rs, detached, losses, preguard, filt, verdict, ubnd, decom, afresh,
@@ -1004,11 +1049,11 @@ ReseedDrain ==
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
          /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
          /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
     \* A drain while any silo predates the purge hold does not settle the
     \* re-seed: a purge it ignores could strand what the export carried
     \* (issue #4664's fix).
     /\ rs' = IF preguard THEN rs ELSE "drained"
-    /\ afence' = (afence \/ xtree)
     /\ acaught' = (acaught \/ xtree)
     /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
                    gone, purged, ptrim, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh,
@@ -1088,21 +1133,6 @@ MutualOffLog ==
                    gone, purged, ptrim, detached, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh,
                    bpur, bfence, bcaught, acaught, abnd, uimp>>
 
-\* The origin purges tree B's sub-saga decision row: on retention alone while
-\* a silo predates the hold, and otherwise only once tree B's peer is on the
-\* log with every prepare acknowledged and the cross-tree hold released.
-BPurge ==
-    /\ LossPath = 5
-    /\ Purges = 2
-    /\ xtree
-    /\ preguard
-    /\ forgotten[T]
-    /\ ~bpur
-    /\ bpur' = TRUE
-    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
-                   boff, bfence, bcaught, acaught, abnd, uimp>>
-
 BKeys == KeysOf("B")
 
 BAppended ==
@@ -1141,11 +1171,11 @@ TreeReseed(tr) ==
                 /\ rdec' = [rdec EXCEPT ![tr] = IF Decided(snap) THEN snap ELSE @]
                 /\ rtodo' = IF Decided(snap) THEN rtodo \cup keys ELSE rtodo
                 /\ BarrierImport(tr, snap, IF tr = "A" THEN purged ELSE bpur)
+                /\ afence' = (afence \/ (tr = "A" /\ ImportFences(tr, snap, purged)))
+                /\ bfence' = (bfence \/ (tr = "B" /\ ImportFences(tr, snap, bpur)))
            /\ outbox' = IF (IF tr = "A" THEN purged ELSE bpur)
                         THEN {r \in outbox : TreeOf(r.key) # tr}
                         ELSE outbox \cup app
-    /\ afence' = (afence \/ tr = "A")
-    /\ bfence' = (bfence \/ tr = "B")
     /\ acaught' = (acaught \/ tr = "A")
     /\ bcaught' = (bcaught \/ tr = "B")
     /\ rs' = IF tr = "A" THEN "none" ELSE rs
@@ -1204,7 +1234,6 @@ Next ==
     \/ FilterClear
     \/ \E tr \in Trees : FenceLift(tr)
     \/ MutualOffLog
-    \/ BPurge
     \/ \E tr \in Trees : TreeReseed(tr)
     \/ Stutter
 
@@ -1246,7 +1275,6 @@ Spec ==
     /\ WF_vars(MutualOffLog)
     /\ WF_vars(LossPath = 5 /\ OriginForget)
     /\ WF_vars(LossPath = 5 /\ OriginPurge)
-    /\ WF_vars(BPurge)
 
 (***************************************************************************)
 (* Safety invariants - claims about the receiver.                          *)

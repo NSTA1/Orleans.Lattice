@@ -28,8 +28,8 @@ BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, Di
 --- END
 --- FIND
            live == WaitSet \ Dropped
-
+           eff ==
 --- REPLACE
            live == WaitSet
-
+           eff ==
 --- END

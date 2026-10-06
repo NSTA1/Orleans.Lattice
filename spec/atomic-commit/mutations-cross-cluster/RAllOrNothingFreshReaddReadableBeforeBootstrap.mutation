@@ -10,24 +10,20 @@ PERTURBS: ReaddFresh
 BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
 
 --- FIND
-    /\ rconn' = FALSE
-    /\ rs' = "none"
-    /\ filt' = FALSE
-    /\ verdict' = "none"
     /\ afence' = FALSE
-
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ rterm' =
 --- REPLACE
-    /\ rconn' = FALSE
-    /\ rs' = "none"
-    /\ filt' = FALSE
-    /\ verdict' = "none"
     /\ afence' = FALSE
 \* MUTATION: the re-added tree is readable at once.
     /\ afresh' = FALSE
-
+    /\ rpend' = [k \in XKeys |-> IF k \in AKeys THEN "none" ELSE rpend[k]]
+    /\ rterm' =
 --- END
 --- FIND
-                   gone, purged, ptrim, rpoison, losses, preguard, afresh>>
+                   gone, purged, ptrim, rpoison, losses, preguard, afresh,
+                   boff, bpur, bfence, acaught, abnd>>
 --- REPLACE
-                   gone, purged, ptrim, rpoison, losses, preguard>>
+                   gone, purged, ptrim, rpoison, losses, preguard,
+                   boff, bpur, bfence, acaught, abnd>>
 --- END

@@ -52,13 +52,20 @@ precisely:
   leftover buckets and drains a decided one's (#4631), the replay that follows
   withholds a purged saga whole while purges are held (#4533, #4534-B), and no
   export drained while a silo predates the purge hold settles a re-seed (issue
-  #4664, fixed by #4666). The module checks each loss path in its own variant
-  configurations, one loss per behaviour.
+  #4664, fixed by #4666). A peer removed from a tree for good is dropped from
+  every undecided cross-tree barrier (#4698) and comes back as a fresh replica
+  (#4701), and a peer that needs a re-seed of two trees at once re-seeds both.
+  The module checks each loss path in its own variant configurations, one loss
+  per behaviour, and both trees off the log at one boundary in their own.
 - It imports a bootstrap atomically. The receiver's drain installs the rows one
   at a time, but behind a read fence for the whole drain (issue #4526, fixed by
   #4594), so no reader observes a partial import, and the export ships a
   decision row for a saga that decided while it ran (issue #4627), so its
-  decision read and its rows are of one instant.
+  decision read and its rows are of one instant. A cross-tree import records the
+  tree's arrival with the receiver barrier and keeps the tree read-fenced until
+  the barrier decides (issue #4683, fixed by #4706); issue #4684 adds the purge
+  hold, the export precondition and the boundary that close the case where the
+  origin purged the tree's half of the operation first.
 - It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
   shipper drops the filtered prepares but ships every terminal, so all-or-nothing
   holds only over the keys that peer replicates.

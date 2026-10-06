@@ -1,7 +1,6 @@
-# Pairs with RAllOrNothing. A detach releases the peer's cross-tree purge hold: the
-# origin purges the sub-saga while the peer's barrier has not decided, and the
-# re-seed after the re-add imports bare committed rows. Only a decommission
-# releases the hold.
+# Pairs with RAllOrNothing. A detach releases the peer's cross-tree purge hold:
+# the origin purges the sub-saga while the peer's barrier has not decided. Only a
+# decommission releases the hold.
 MODULE: RAllOrNothingCrossTreeHoldReleasedOnDetach
 TARGET: RAllOrNothing
 CLASS: Invariant

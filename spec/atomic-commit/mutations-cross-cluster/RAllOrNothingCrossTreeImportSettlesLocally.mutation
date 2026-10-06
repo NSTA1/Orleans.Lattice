@@ -1,9 +1,9 @@
 # Pairs with RAllOrNothing. Regression check for issue #4683. The bootstrap of
 # one participant tree imports its decided sub-saga as committed rows and a local
-# decision row, and never tells the receiver barrier: the sibling tree's key stays
-# hidden behind its delegation while this tree's is served post-saga. The fix
-# records the tree's arrival with the barrier and holds its read fence until the
-# barrier decides.
+# decision row, and neither tells the receiver barrier nor fences the tree: the
+# sibling tree's key stays hidden behind its delegation, or pre-saga, while this
+# tree's is served post-saga. The fix records the tree's arrival with the barrier
+# and holds its read fence until the barrier decides.
 MODULE: RAllOrNothingCrossTreeImportSettlesLocally
 TARGET: RAllOrNothing
 CLASS: Invariant
@@ -12,10 +12,12 @@ PERTURBS: Bootstrap
 BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
 
 --- FIND
-         /\ BarrierImport(snap)
+         /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
          /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
 --- REPLACE
 \* MUTATION: the import neither notifies the barrier nor holds the fence.
-         /\ UNCHANGED <<rout, rstage, afence>>
+         /\ UNCHANGED <<rout, rstage, uimp>>
+         /\ afence' = afence
          /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
 --- END

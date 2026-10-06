@@ -63,20 +63,39 @@ transport assumption or its read view already does.
 | `RAllOrNothingReceiverParksWithoutPoison` | `RAllOrNothing` | Invariant | `ReceiverPoison` | the receiver parks and acknowledges a prepare it gave up on without poisoning its saga (regression check for #4591, fixed by #4633) |
 | `RNoStrandedPrepareFilterClearsBeforeHorizon` | `RNoStrandedPrepare` | Temporal | `FilterClear` | the replay filter clears before every cursor has passed its horizon (before #4533) |
 | `RCommittedEventuallyVisibleUpgradeNeverSeen` | `RCommittedEventuallyVisible` | Temporal | `UpgradeDone` | the shipper never sees every silo honour the purge hold, so a joining receiver waits for ever |
+| `RAllOrNothingCrossTreeImportSettlesLocally` | `RAllOrNothing` | Invariant | `Bootstrap` | a per-tree import settles a cross-tree sub-saga locally, neither telling the receiver barrier nor fencing the tree, as before #4706 (issue #4683) |
+| `RAllOrNothingCrossTreeImportUnfenced` | `RAllOrNothing` | Invariant | `Bootstrap` | a cross-tree import arrives at the barrier but serves the tree with no read fence |
+| `RAllOrNothingUniformArrivalFromExportBeforeDecision` | `RAllOrNothing` | Invariant | `Bootstrap` | the uniform arrival is taken for an import from an export opened before the operation's decision (issue #4684's R2 without its guard) |
+| `RImportFenceLiftsBarrierIgnoresUniformImport` | `RImportFenceLifts` | Temporal | `ReceiverNotify` | the barrier takes a uniform arrival only at import time, so a barrier opened after a bare import waits for it for ever |
+| `RAllOrNothingFenceLiftsBeforeSiblingPasses` | `RAllOrNothing` | Invariant | `FenceLift` | an imported tree's fence lifts before its sibling has passed the boundary (issue #4684's R1 removed) |
+| `RCommittedEventuallyVisibleReseedWaitsOnSibling` | `RCommittedEventuallyVisible` | Temporal | `TreeReseed` | a tree's import waits for its sibling's boundary, R1 as first designed, so two re-seeds wait on each other for ever |
+| `RAllOrNothingMutualReseedUnfenced` | `RAllOrNothing` | Invariant | `TreeReseed` | a tree re-seeded alongside its sibling is served with no read fence |
+| `RAllOrNothingOffLogShipperAcksWithheldRecords` | `RAllOrNothing` | Invariant | `MutualOffLog` | a shipper off the log counts the records it withholds as acknowledged, so its tree reads as past the boundary |
+| `RAllOrNothingCrossTreePurgeBeforeBarrierDecides` | `RAllOrNothing` | Invariant | `OriginPurge` | the origin purges a cross-tree sub-saga's decision before the operation's barrier has decided (issue #4684's hold removed) |
+| `RAllOrNothingCrossTreeHoldReleasedOnDetach` | `RAllOrNothing` | Invariant | `OriginPurge` | a detach releases the cross-tree purge hold |
+| `RNoStrandedPrepareDecommissionKeepsBarrierWaiting` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission leaves the removed tree in the barrier's wait set (#4698 removed) |
+| `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
+| `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
+| `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
+| `RAllOrNothingCrossTreeExportUnderPreHoldSilo` | `RAllOrNothing` | Invariant | `ReseedDrain` | a cross-tree re-seed is served and drained while a silo predates the purge hold (issue #4684's export precondition removed) |
 
-Each loss-path mutation declares `BOUNDS:` to enable its loss path on one slice
-of the instance (`LossPath`, `JoinStart`, `SagaOutcome`): the base cfg enables
-none, so the control arm checks the target on the instance with no loss path,
+Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
+joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
+`SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`): the base
+cfg enables none, so the control arm checks the target on the instance with no
+loss path and a receiver that follows the stream,
 and the variant configurations check every property under each loss path with
 its fix.
 
-Every mutant but one is deadlock-free: run with a cfg naming only `TypeOK` and
+Every mutant but three is deadlock-free: run with a cfg naming only `TypeOK` and
 deadlock checking on, each reports no error (`TypeOkTallyExpectedRunaway`
 reports its own target first), so none races its target against a deadlock
-under TLC's parallel search. `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` is
-the exception by construction - its defect is a terminal that can never be
-delivered, which leaves no enabled action - so it declares `DEADLOCK: off`, and
-the harness's third arm confirms the deadlock is real.
+under TLC's parallel search. The three are deadlocks by construction, so each
+declares `DEADLOCK: off` and the harness's third arm confirms the deadlock is
+real: `RNoStrandedPrepareHoldWaitsOnUnshippedPrepare` holds a terminal that can
+never be delivered, `RCommittedEventuallyVisibleReseedWaitsOnSibling` leaves two
+re-seeds each waiting on the other, and `RImportFenceLiftsBarrierIgnoresUniformImport`
+leaves a barrier waiting for an arrival that never comes.
 
 These mutations are regression checks for defects this module found or
 reproduced and that are now fixed: `RAllOrNothingTerminalOvertakesPrepare`
@@ -108,7 +127,7 @@ and `RAllOrNothingDetachStaysOnLog` show.
 
 ## Liveness fails on protocol defects, under the module's own fairness
 
-All three temporal properties are paired with mutations that leave `Spec`'s
+All four temporal properties are paired with mutations that leave `Spec`'s
 fairness untouched and change a protocol step instead (issue #2321's
 requirement): a prepare or a terminal the origin never replicates, a fan-out
 that never runs or consumes a bucket without draining it, a late prepare staged,
@@ -116,8 +135,10 @@ a re-shipped pre-cut prepare with nothing to settle it against, a decision
 purged while a prepare of its saga can still be re-shipped, and each loss path's
 re-seed missing a step: a stale bucket left, a decision row not fanned out, a
 replay that withholds a live saga or re-ships a purged one, withheld records
-lost, a purge the holds do not stop, and an export that settles a re-seed it
-cannot vouch for. The transport stays fair about
+lost, a purge the holds do not stop, an export that settles a re-seed it
+cannot vouch for, a tree left in a barrier's wait set after a decommission, a
+barrier that never takes a bare import's uniform arrival, and two re-seeds each
+waiting on the other's boundary. The transport stays fair about
 every record it is given; the defect is always in what it is given or in what
 the receiver does with it.
 
@@ -137,6 +158,7 @@ reading the code the refinement note maps.
 | `RMonotonicVisibility` | The fan-out drains a committed bucket into the projection. | A late orphan on a reactivated receiver leaf, which the module does not model: **faithfully inexpressible** on the replication path, where the settle (#4510) and, since #4461, the leaf's registry-consulting late-prepare refusal (#4445's fix) both stand in front of it; recorded as an abstraction gap. |
 | `RCommittedEventuallyVisible` | At-least-once delivery, the tally, the barrier, the fan-out, and each loss path's re-seed. | None: every record production can lose is reached in the variant configurations, and the re-seed brings its saga back. Stated over materialisation so that a dial fault lasting forever, which production also allows, does not make it unfalsifiable-by-construction. |
 | `RNoStrandedPrepare` | Late prepares are refused, a re-shipped pre-cut prepare is settled against the exported decision (#4510), the replay filter withholds a purged saga whole (#4533), and each loss path's re-seed drains or discards every leftover bucket. | A retained pre-cut prepare re-shipped after its terminal was trimmed: **faithfully inexpressible** since #4510 and #4553 (#4482, #4508). |
+| `RImportFenceLifts` | The barrier takes the arrival of every tree imported after the operation's decision that named nothing of it, a decision row's import arrives as a terminal would, and every sibling passes its boundary by acknowledgement or by a re-seed of its own. | None: a fence that never lifts is reached by each of its mutations. |
 
 **Bounded-out.** The instance has two source shards (or two trees) and one
 touched-shard count per saga, so the tally's upward merge of a raised count - a

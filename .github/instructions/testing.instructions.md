@@ -978,14 +978,16 @@ named property by its tag in Coyote's bug report.
 | `RMonotonicVisibility` | A replicated committed value, once served on the receiver, is never served pre-saga again. | `MigrationTerminalCore`, `AtomicVisibilityGate` | Not asserted separately. A single-key reversion is caught by the per-probe `[RAllOrNothing]` and a permanent loss by the drained-end `[RCommittedEventuallyVisible]`; a transient reversion of every key at once is caught by neither. | TLA+ only (`RMonotonicVisibilityFanOutDiscardsCommittedBucket`). |
 | `RCommittedEventuallyVisible` | Under at-least-once delivery every replicated committed saga is eventually materialised on every receiver leaf. | Tally, barrier, `MigrationTerminalCore` | Both models assert `[RCommittedEventuallyVisible]` once the stream drains (bounded progress). | TLA+ only (`RCommittedEventuallyVisiblePrepareNotShipped`, `RCommittedEventuallyVisibleFinalizeSkipsFanOut`). |
 | `RNoStrandedPrepare` | Every bucket the receiver stages is eventually consumed by the saga's terminal. | `MigrationTerminalCore` and the late-prepare refusal | Both models assert `[RNoStrandedPrepare]` once the stream drains. | `A_leaf_staging_a_prepare_that_trails_its_terminal_strands_it`. |
+| `RImportFenceLifts` | An imported tree's read fence lifts: no drain leaves its tree unreadable for good. | `CrossTreeReceiverBarrier` and the bootstrap coordinator's fence | Not encoded in Coyote: the fence and the uniform arrival are grain-level mechanisms of the bootstrap coordinator and the barrier. | TLA+ only (`RImportFenceLiftsBarrierIgnoresUniformImport`, `RCommittedEventuallyVisibleReseedWaitsOnSibling` for the deadlock it rules out). |
 
 Every property above is also paired with mutations of the TLA+ module under
 `spec/atomic-commit/mutations-cross-cluster/`, which is where the properties
 without a Coyote guard of their own are shown able to fail.
 
-The loss paths - a shipper gap, a detach and re-add, a receiver poison - and the
-re-seed, replay filter and purge holds that repair them are modelled in TLA+
-only, in the module's variant configurations, with one regression mutation per
+The loss paths - a shipper gap, a detach and re-add, a receiver poison, a
+decommission and fresh re-add, and both trees off the log at one boundary - the
+re-seed, replay filter and purge holds that repair them, and the cross-tree
+import's barrier arrival, read fence and boundary are modelled in TLA+ only, in the module's variant configurations, with one regression mutation per
 fix. Their fixes are grain-level mechanisms rather than pure cores, so the
 Coyote models above deliver every record and do not encode them; each is pinned
 instead by the real-grain detectors that `spec/atomic-commit/RefinementCrossCluster.md`

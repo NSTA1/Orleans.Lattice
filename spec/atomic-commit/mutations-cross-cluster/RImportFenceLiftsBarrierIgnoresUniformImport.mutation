@@ -1,0 +1,22 @@
+# Pairs with RImportFenceLifts. The uniform arrival is taken only at import time,
+# when the barrier already holds the sibling's arrival (the tally-keyed form of
+# #4684's R2). Tree A is imported first from an export that names nothing of the
+# operation; tree B's re-seed then brings its decision row, which opens a barrier
+# that waits on tree A for ever, and tree B's read fence never lifts. The barrier
+# takes the arrival of every tree imported after the operation's decision.
+MODULE: RImportFenceLiftsBarrierIgnoresUniformImport
+TARGET: RImportFenceLifts
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a barrier opened after a tree's bare import never takes that tree's uniform arrival
+PERTURBS: ReceiverNotify
+BOUNDS: LossPath = 5, JoinStart = 0, SagaOutcome = 2, Shape = 1, PreHold = 1, DialFaults = 0, Purges = 1, AckLoss = 0
+
+--- FIND
+           eff == [w \in Trees |-> IF carr2[w] = "none" /\ uimp[w] THEN carr2[Other(w)] ELSE carr2[w]]
+
+--- REPLACE
+\* MUTATION: the barrier ignores an earlier bare import.
+           eff == carr2
+
+--- END

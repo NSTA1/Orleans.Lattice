@@ -18,6 +18,7 @@ MODULE: RAllOrNothingSettleKeyByKey
 TARGET: RAllOrNothing
 CLASS: Invariant
 SUMMARY: a decided saga's undrained buckets are exported without committed rows, so re-shipped prepares settle it one key at a time
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 
 --- FIND
     IF snap = "committed" THEN "post"

@@ -6,13 +6,22 @@
   ],
   "counts": {
     "invariants": 5,
-    "properties": 3,
-    "actions": 25,
-    "mutations": 41,
-    "behaviourRows": 31,
-    "distinctStates": 13448
+    "properties": 4,
+    "actions": 30,
+    "mutations": 56,
+    "behaviourRows": 37,
+    "distinctStates": 58304
   },
   "variants": {
+    "Join": {
+      "distinctStates": 6740
+    },
+    "XJoinCommit": {
+      "distinctStates": 76744
+    },
+    "XJoinAbort": {
+      "distinctStates": 58576
+    },
     "GapFollow": {
       "distinctStates": 60964
     },
@@ -33,6 +42,63 @@
     },
     "PoisonJoin": {
       "distinctStates": 15984
+    },
+    "DecomFollow": {
+      "distinctStates": 30338
+    },
+    "DecomJoin": {
+      "distinctStates": 40745
+    },
+    "XGapFollowCommit": {
+      "distinctStates": 48295
+    },
+    "XGapFollowAbort": {
+      "distinctStates": 34257
+    },
+    "XGapFollowPreHold": {
+      "distinctStates": 42770
+    },
+    "XGapJoinCommit": {
+      "distinctStates": 68717
+    },
+    "XGapJoinAbort": {
+      "distinctStates": 49661
+    },
+    "XGapJoinPreHold": {
+      "distinctStates": 78263
+    },
+    "XPoisonFollow": {
+      "distinctStates": 23209
+    },
+    "XPoisonJoin": {
+      "distinctStates": 42247
+    },
+    "XPoisonPreHold": {
+      "distinctStates": 15262
+    },
+    "XDetachFollowCommit": {
+      "distinctStates": 45328
+    },
+    "XDetachFollowAbort": {
+      "distinctStates": 32928
+    },
+    "XDecomFollowCommit": {
+      "distinctStates": 91017
+    },
+    "XDecomFollowAbort": {
+      "distinctStates": 67873
+    },
+    "XDecomJoin": {
+      "distinctStates": 38751
+    },
+    "MutualNoPurge": {
+      "distinctStates": 45303
+    },
+    "MutualPurgeOne": {
+      "distinctStates": 13699
+    },
+    "MutualPurgeBoth": {
+      "distinctStates": 3119
     }
   }
 }

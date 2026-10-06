@@ -1,0 +1,23 @@
+# Pairs with RAllOrNothing. The uniform arrival (#4684's R2) is taken for any
+# import that names nothing of the operation, without checking that its export
+# was opened after the operation's decision. A tree bootstrapped before its
+# sub-saga prepared is counted as arrived with the sibling's verdict, so the
+# barrier decides and serves the sibling post-saga while this tree's prepare has
+# not arrived and it still reads pre-saga.
+MODULE: RAllOrNothingUniformArrivalFromExportBeforeDecision
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: an import from an export opened before the operation was decided counts as a uniform arrival
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+         /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- REPLACE
+\* MUTATION: no opened-after-the-decision guard.
+         /\ BarrierImport("A", snap, TRUE)
+         /\ afence' = (afence \/ ImportFences("A", snap, TRUE))
+         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+--- END

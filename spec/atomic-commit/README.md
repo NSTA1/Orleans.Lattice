@@ -32,8 +32,8 @@ the receiver, and the cross-cluster module's properties cover nothing else.
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
 | [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json) | The module manifest: where the mutations and refinement note live, which actions are non-behavioural, and the counts the gates assert (see [Counts](#counts)). |
 | [`AtomicCommitCrossCluster.tla`](AtomicCommitCrossCluster.tla) | The cross-cluster module: the origin saga (this module, instanced) replicated to a receiver. |
-| [`AtomicCommitCrossCluster.cfg`](AtomicCommitCrossCluster.cfg) | Its TLC model: every property, with no loss path. |
-| `AtomicCommitCrossCluster.<Variant>.cfg` | Its variant configurations: each loss path, checked with every property on slices of its instance that partition it (`GapFollow`, `GapJoin`, `DetachFollow`, `DetachJoinCommit`, `DetachJoinAbort`, `PoisonFollow`, `PoisonJoin`). |
+| [`AtomicCommitCrossCluster.cfg`](AtomicCommitCrossCluster.cfg) | Its TLC model: every property, with no loss path and a receiver that follows the stream. |
+| `AtomicCommitCrossCluster.<Variant>.cfg` | Its variant configurations: a receiver joining through a bootstrap, and each loss path, checked with every property on slices of the instance that the cross-cluster refinement note describes. The manifest's `variants` lists them. |
 | [`mutations-cross-cluster/`](mutations-cross-cluster/) | Its mutation catalogue. See [`mutations-cross-cluster/README.md`](mutations-cross-cluster/README.md). |
 | [`RefinementCrossCluster.md`](RefinementCrossCluster.md) | Its refinement note, mapping it to the replication apply seam, the receiver registry and the cross-tree receiver barrier. |
 | [`AtomicCommitCrossCluster.manifest.json`](AtomicCommitCrossCluster.manifest.json) | Its manifest. |
@@ -289,25 +289,32 @@ terminal becomes a replication record, delivered to a receiver by a transport
 that may reorder, lose a delivery (the record is shipped again) and lose an ack
 (the record is delivered again), and never loses a record by itself: every way
 production loses one to a peer is a loss-path action with its fix - a shipper
-gap (#4534, #4651), a detach and re-add (#4652) and a receiver poison (#4633) -
-together with the re-seed, the replay filter and the purge holds that bring the
-saga back (#4577, #4631, #4652, #4666). The receiver stages prepares, tallies terminals
+gap (#4534, #4651), a detach and re-add (#4652), a receiver poison (#4633), a
+decommission and fresh re-add (#4684, #4698, #4701), and both trees off the log
+at one boundary - together with the re-seed, the replay filter and the purge
+holds that bring the saga back (#4577, #4631, #4652, #4666). The receiver stages prepares, tallies terminals
 per source shard (including the legacy path for a terminal with no count),
 hands a cross-tree saga to the receiver barrier through a delegation its
 registry can fail to dial, fans terminals out to its leaves, and may instead join
 through a snapshot bootstrap, after which the origin re-ships whatever its WAL
 retains from before the cut and the receiver settles it against the exported
-decisions. Each behaviour fixes one shape: a single-tree saga
-over two source shards, or a cross-tree saga over two trees. A behaviour takes
-at most one loss path, in the single-tree shape; the base cfg checks the
-instance with none, and each loss path is checked, with every property, in the
-variant configurations, which partition its instance by how the receiver joins
-and by the saga's outcome so every run fits the TLC budget.
+decisions. A cross-tree import - a bootstrap or a re-seed - records the tree's
+arrival with the receiver barrier and holds the tree's read fence until no
+barrier of its operations is undecided and every sibling tree has passed its
+boundary (#4683, fixed by #4706; #4684). Each behaviour fixes one shape: a
+single-tree saga over two source shards, or a cross-tree saga over two trees. A
+behaviour takes at most one loss path, in either shape; the base cfg checks the
+instance with none and a receiver that follows the stream, and a joining
+receiver and each loss path are checked, with every property, in the variant
+configurations, which slice the instance by how the receiver joins, the saga's
+shape and outcome, and the loss path's own bounds so every run fits the TLC
+budget; the refinement note says which bounds each path is checked under.
 
 Its properties are all claims about the receiver: `RAllOrNothing`,
 `RStrictIsolation`, `RLinearizedTerminals` and `DelegationsDisjoint` as
-invariants, and `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
-`RNoStrandedPrepare` as temporal properties under a fair transport. The base
+invariants, and `RMonotonicVisibility`, `RCommittedEventuallyVisible`,
+`RNoStrandedPrepare` and `RImportFenceLifts` as temporal properties under a fair
+transport. The base
 holds with deadlock checking on, and so does every variant configuration.
 
 The module models the protocol's intended design. Every place where
@@ -319,7 +326,12 @@ hold), the snapshot read paths' handling of an undiallable delegation (#4448,
 fixed by #4461), a bootstrap over a stranded origin prepare (#4481, fixed by
 #4501), pre-cut saga records re-shipped after a bootstrap (#4482, fixed by
 #4510's settle), and a decision purged while its saga's prepare could still be
-re-shipped (#4508, fixed by #4553). Every loss path is kept the same way: a
+re-shipped (#4508, fixed by #4553), a per-tree import that settles a cross-tree
+sub-saga without the receiver barrier (#4683, fixed by #4706), and a barrier
+left waiting by a tree that stopped being replicated (#4698). Issue #4684's
+fixes - the cross-tree purge hold, the export precondition, the uniform arrival
+and the boundary the fence waits on - are modelled as designed and are being
+merged. Every loss path is kept the same way: a
 shipper that stays on the log after a gap, a detach that does not take the peer
 off the log, a re-add that does not re-mark, a parked prepare whose saga is not
 poisoned (#4591), a poisoned saga's terminal applied,
@@ -347,4 +359,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 3 | 25 | 41 | 31 | 13,448 |
+| `AtomicCommitCrossCluster` | 5 | 4 | 30 | 56 | 37 | 58,304 |

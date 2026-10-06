@@ -1,0 +1,25 @@
+# Pairs with RAllOrNothing. A shipper that takes the peer off the log treats the
+# saga records it withholds as acknowledged. The sibling's boundary then reads as
+# passed: tree A's fence lifts on a bare import while tree B, never re-seeded,
+# still reads pre-saga. A shipper off the log holds its positions at
+# ReseedRetainFrom until its tree is re-seeded.
+MODULE: RAllOrNothingOffLogShipperAcksWithheldRecords
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a shipper off the log advances its acknowledged positions past the records it withholds
+PERTURBS: MutualOffLog
+BOUNDS: LossPath = 5, JoinStart = 0, SagaOutcome = 2, Shape = 1, PreHold = 1, DialFaults = 0, Purges = 1, AckLoss = 0
+
+--- FIND
+    /\ boff' = TRUE
+    /\ rs' = "marked"
+    /\ losses' = 1
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
+--- REPLACE
+    /\ boff' = TRUE
+    /\ rs' = "marked"
+    /\ losses' = 1
+\* MUTATION: tree B's withheld records count as acknowledged.
+    /\ outbox' = {r \in outbox : Aff(r)}
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
+--- END

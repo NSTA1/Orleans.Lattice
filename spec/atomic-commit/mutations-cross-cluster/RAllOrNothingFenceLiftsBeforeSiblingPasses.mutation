@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. The fence of an imported tree lifts once no barrier is
+# undecided, without waiting for the sibling tree to pass its boundary. After the
+# upgrade, tree A is imported from an export that names nothing of an operation a
+# pre-upgrade silo purged, and serves it post-saga while the sibling's terminal is
+# still outstanding and the sibling serves it pre-saga. #4684's R1 holds the fence
+# until the sibling is acknowledged or imported past the boundary.
+MODULE: RAllOrNothingFenceLiftsBeforeSiblingPasses
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: an imported tree's read fence lifts before its sibling has passed the boundary
+PERTURBS: FenceLift
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 1, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ IF tr = "A" THEN afence ELSE bfence
+    /\ Passed(Other(tr))
+
+--- REPLACE
+    /\ IF tr = "A" THEN afence ELSE bfence
+\* MUTATION: the fence does not wait for the sibling's boundary.
+
+--- END

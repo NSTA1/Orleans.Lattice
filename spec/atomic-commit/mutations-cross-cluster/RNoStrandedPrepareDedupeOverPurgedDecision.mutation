@@ -15,6 +15,7 @@ TARGET: RNoStrandedPrepare
 CLASS: Temporal
 SUMMARY: the origin purges a forgotten saga's decision while a prepare of it is still retained, as before #4553, and no replay filter withholds it
 PERTURBS: OriginPurge
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 
 --- FIND
        ELSE /\ ~Held

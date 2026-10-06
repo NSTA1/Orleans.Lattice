@@ -11,11 +11,13 @@ BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
          /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
-         /\ BarrierImport(snap)
+         /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
     \* A drain while
 --- REPLACE
 \* MUTATION: the decision row is not fanned out.
          /\ rtodo' = rtodo
-         /\ BarrierImport(snap)
+         /\ BarrierImport("A", snap, purged)
+         /\ afence' = (afence \/ ImportFences("A", snap, purged))
     \* A drain while
 --- END

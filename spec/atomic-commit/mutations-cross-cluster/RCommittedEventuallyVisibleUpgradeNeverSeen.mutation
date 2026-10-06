@@ -11,10 +11,8 @@ PERTURBS: UpgradeDone
 BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
 
 --- FIND
-    /\ preguard
     /\ preguard' = FALSE
 --- REPLACE
-    /\ preguard
 \* MUTATION: the upgrade is never observed.
     /\ preguard' = preguard
 --- END

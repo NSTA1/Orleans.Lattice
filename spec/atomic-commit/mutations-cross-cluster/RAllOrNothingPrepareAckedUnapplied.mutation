@@ -18,14 +18,14 @@ PERTURBS: DeliverPrepare
 
 --- FIND
     /\ \/ outbox' = outbox \ {m}
-       \/ outbox' = outbox
+       \/ AckLoss = 1 /\ outbox' = outbox
     /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
                 THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
     /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
 --- REPLACE
 \* MUTATION: a delivery may be acknowledged without being applied.
     /\ \/ /\ \/ outbox' = outbox \ {m}
-             \/ outbox' = outbox
+             \/ AckLoss = 1 /\ outbox' = outbox
           /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
                       THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
           /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
