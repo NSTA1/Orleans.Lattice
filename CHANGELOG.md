@@ -64,6 +64,13 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 - **Retrieval - Exact-scan cost instruments.** Exact kNN gathers publish returned vectors, pages, cumulative wall seconds, outcomes and budget evaluations under `repocontext.retrieval.exact_scan.*`, charted on the overview dashboard, so exact-versus-ANN contention is measurable. ([#3153](https://github.com/NSTA1/Orleans.Lattice/issues/3153)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 
+### Breaking
+
+- **Behaviour default - `SetManyFanOutBudget` is now 30 seconds.** It was `Timeout.InfiniteTimeSpan`. A SetMany fan-out that outlasts the budget now throws `LatticeSaturatedException` (source `SetManyFanOut`) instead of waiting. The refusal does not roll back shards that already committed; outstanding branches run on, so retry the same entries or use `SetManyAtomicAsync` for all-or-nothing. **Migration:** raise the value for slow or very wide batches, or set `Timeout.InfiniteTimeSpan` to keep the old behaviour. Zero and negative values are still rejected. ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)) (`Orleans.Lattice`)
+
+- **Behaviour default - `WalAdmissionSaturationCallBudget` is now 15 seconds.** It was `Timeout.InfiniteTimeSpan`. A call that spends 15 seconds in WAL admission saturation back-off now throws `LatticeSaturatedException` (source `WalAdmission`). **Migration:** tune the value, or set `Timeout.InfiniteTimeSpan` to keep the old behaviour. ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)) (`Orleans.Lattice`)
+
+- **Behaviour default - grain-storage fencing `Mode` is now `Reject`.** It was `Warn`. A storage provider that accepts a stale ETag now fails silo start with `OrleansConfigurationException`; an inconclusive probe still only warns. **Migration:** use an ETag-enforcing provider, or opt out with `ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorageFencingMode.Warn)` (or `Disabled` to skip the probe). ([#4232](https://github.com/NSTA1/Orleans.Lattice/issues/4232)) (`Orleans.Lattice`)
 ### Changed
 
 - **Performance - Tag index orphan checks batch and de-duplicate.** Reconcile probed every orphan candidate row, so a key carrying T tags paid T identical existence checks. Candidates now fold to distinct keys confirmed 32 at a time: 30-84% faster, 72-96% fewer bytes. ([#4495](https://github.com/NSTA1/Orleans.Lattice/pull/4495)) (`Orleans.Lattice`)

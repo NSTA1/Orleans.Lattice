@@ -8,7 +8,8 @@ namespace Orleans.Lattice.Schema.Tests.Chaos;
 /// Process-scope in-memory <see cref="IGrainStorage"/> for the schema chaos suite:
 /// state lives in a static dictionary every silo shares, so a killed silo loses
 /// only its activations and in-process work, exactly as it would over a durable
-/// provider, never the grain state other silos read back.
+/// provider, never the grain state other silos read back. It enforces ETags, as the
+/// silo-start fencing check requires.
 /// </summary>
 internal sealed class ProcessScopeSchemaGrainStorage : IGrainStorage
 {
@@ -34,8 +35,19 @@ internal sealed class ProcessScopeSchemaGrainStorage : IGrainStorage
     /// <inheritdoc />
     public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
     {
+        var key = Key(stateName, grainId);
         var etag = Guid.NewGuid().ToString("N");
-        Store[Key(stateName, grainId)] = (etag, grainState.State!);
+        lock (Store)
+        {
+            var current = Store.TryGetValue(key, out var entry) ? entry.ETag : null;
+            if (!string.Equals(current, grainState.ETag, StringComparison.Ordinal))
+            {
+                throw new InconsistentStateException("ETag mismatch.", current ?? "<none>", grainState.ETag ?? "<none>");
+            }
+
+            Store[key] = (etag, grainState.State!);
+        }
+
         grainState.ETag = etag;
         grainState.RecordExists = true;
         return Task.CompletedTask;

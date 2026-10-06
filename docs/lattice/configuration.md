@@ -25,25 +25,25 @@ Each silo checks the requirement once as it becomes active. It writes a reserved
 
 | Mode | Provider rejects the stale write | Provider accepts the stale write | Probe cannot decide |
 |------|----------------------------------|----------------------------------|---------------------|
-| `Warn` (default) | Logs the posture at `Information`. | Logs a `Warning`; the silo starts. | Logs a `Warning`; the silo starts. |
-| `Reject` | Logs the posture at `Information`. | Logs an `Error` and fails silo start. | Logs a `Warning`; the silo starts. |
+| `Warn` | Logs the posture at `Information`. | Logs a `Warning`; the silo starts. | Logs a `Warning`; the silo starts. |
+| `Reject` (default) | Logs the posture at `Information`. | Logs an `Error` and fails silo start. | Logs a `Warning`; the silo starts. |
 | `Disabled` | No probe runs; the silo logs once that the check is disabled. | | |
 
 The probe cannot decide when the provider faults, throws something other than `InconsistentStateException` on the stale write, keeps losing races to other silos' probes, is not registered, or does not finish within `ProbeTimeout` (30 seconds by default). Those are not evidence the provider is unsafe, so even `Reject` only warns on them rather than turning a transient storage fault into a failed start.
 
-Use `Reject` to make the requirement fail closed:
+`Reject` is the default from 10.0, so the requirement fails closed: a provider that accepts a stale ETag fails silo start with an error naming the provider. Before 10.0 the default was `Warn`. If your provider does not enforce ETags and you cannot change it yet, opt out explicitly to keep the previous behaviour:
 
 ```csharp verify
-siloBuilder.ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorageFencingMode.Reject);
+siloBuilder.ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorageFencingMode.Warn);
 ```
 
-`Warn` is the default so that upgrading never turns a running deployment's next restart into a failed start. Use `Disabled` only for a deliberately non-durable provider, such as a benchmark's no-op storage, where the probe's writes are wasted.
+Prefer fixing the provider (use one that enforces ETags, for example the Azure Table, ADO.NET or Lattice storage providers, or make a custom or test double throw `InconsistentStateException` when the presented ETag is stale). Use `Disabled` only for a deliberately non-durable provider, such as a benchmark's no-op storage, where the probe's writes are wasted.
 
 `LatticeGrainStorageFencingOptions` has these settings:
 
 | Option | Type | Default | Validation |
 |--------|------|---------|------------|
-| `Mode` | `LatticeGrainStorageFencingMode` | `Warn` | Must be a defined `LatticeGrainStorageFencingMode` value: `Warn`, `Reject` or `Disabled`. |
+| `Mode` | `LatticeGrainStorageFencingMode` | `Reject` | Must be a defined `LatticeGrainStorageFencingMode` value: `Warn`, `Reject` or `Disabled`. |
 | `ProbeTimeout` | `TimeSpan` | 30 seconds | Must be positive. |
 
 ## Setting Options
@@ -278,9 +278,9 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalSaturationSampleInterval`](#walsaturationsampleinterval) | `TimeSpan` | 200 milliseconds | Yes (global; read once at silo start) |
 | [`WalSaturationThrottledRatio`](#walsaturationthrottledratio) | `double` | 0.75 | Yes (global; read from the default options) |
 | [`WalAdmissionSaturationWaitBudget`](#waladmissionsaturationwaitbudget) | `TimeSpan` | 5 seconds | Yes |
-| [`SetManyFanOutBudget`](#setmanyfanoutbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
+| [`SetManyFanOutBudget`](#setmanyfanoutbudget) | `TimeSpan` | 30 seconds | Yes |
 | [`SetManyEnvelopeBudget`](#setmanyenvelopebudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
-| [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | `Timeout.InfiniteTimeSpan` (unbounded) | Yes |
+| [`WalAdmissionSaturationCallBudget`](#waladmissionsaturationcallbudget) | `TimeSpan` | 15 seconds | Yes |
 | [`WalThrottledAdmissionPace`](#walthrottledadmissionpace) | `TimeSpan` | 25 milliseconds | Yes |
 | [`WalStorageProvider`](wal-storage-providers.md) | `Func<string, IWalStorageProvider>?` | `null` (DI default) | Yes |
 
@@ -1695,19 +1695,19 @@ This option can be changed freely at any time. The new value takes effect on the
 
 ### `SetManyFanOutBudget`
 
-Wall-clock budget `ILattice.SetManyAsync` spends awaiting its shard fan-out before refusing the call with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) carrying `LatticeSaturationSource.SetManyFanOut` (default: `Timeout.InfiniteTimeSpan`, i.e. unbounded - the bound is opt-in).
+Wall-clock budget `ILattice.SetManyAsync` spends awaiting its shard fan-out before refusing the call with [`LatticeSaturatedException`](api.md#saturation-back-pressure---latticesaturatedexception) carrying `LatticeSaturationSource.SetManyFanOut` (default: 30 seconds; `Timeout.InfiniteTimeSpan` restores the unbounded wait).
 
 `SetManyAsync` splits a batch across the shards its keys route to and awaits every branch, so the call costs the *slowest* branch rather than the typical one. As the shard count rises the probability that at least one branch is in its slow tail rises with it, so the call tracks the branch p99 and can degrade even as branch-level latency improves. That is the collapse measured in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348): widening a cluster from four silos to eight *improved* the branch median 7.7x to 386 ms while the branch p99 degraded 11x to 94 s, and the batch tracked the p99.
 
-Without this budget the wait is unbounded, which means the fan-out queues load it cannot drain instead of shedding it. Bounding it turns the fan-out into a back-pressure seam: once the budget expires with branches still outstanding, the caller is refused in budget time and can back off.
+With an unbounded wait (`Timeout.InfiniteTimeSpan`, the default before 10.0) the fan-out is unbounded, which means the fan-out queues load it cannot drain instead of shedding it. Bounding it turns the fan-out into a back-pressure seam: once the budget expires with branches still outstanding, the caller is refused in budget time and can back off.
 
 **Refusal sheds the caller; it does not roll anything back.** `SetManyAsync` is not atomic across shards, so branches that already committed stay committed, and outstanding branches keep running to completion. The durable outcome is identical to the unbounded wait - only the moment the caller is told changes. This is the same contract the fan-out already had for a *faulted* branch. Callers that need all-or-nothing semantics across shards should use the atomic-write saga instead. The saga's own batched dispatch also goes through `SetManyAsync`, so this budget bounds it too: a refusal there surfaces as `LatticeSaturatedException` with source `AtomicWriteSaga` and leaves the saga resumable on the caller's retry with the same operation id.
 
-**Sizing.** Set the budget above the fan-out latency a healthy cluster actually exhibits and below the latency that characterises collapse, so it discriminates rather than fires indiscriminately. Thirty seconds is the recommended starting point, taken from the multi-silo measurements in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) on the reference rig: healthy four- and six-silo cohorts observed a per-call p99 of 5.5 s and 11.5 s, while collapsed eight-silo cohorts observed a per-call p50 of 34.7-60.2 s. Thirty seconds sits in the gap - roughly 2.6x above the healthy ceiling and below the collapsed floor - so it is inert on a healthy cluster and engages on a collapsed one. It also matches the `WalAppendDispatchTimeout` default, so a single stuck branch surfaces as a saturation refusal rather than an opaque dispatch timeout. Re-measure for your own cluster rather than porting that figure blindly: a deployment that sends larger `SetManyAsync` batches, has slower storage, or runs a much wider shard map has a different healthy ceiling.
+**Sizing.** Set the budget above the fan-out latency a healthy cluster actually exhibits and below the latency that characterises collapse, so it discriminates rather than fires indiscriminately. Thirty seconds is the default, taken from the multi-silo measurements in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) on the reference rig: healthy four- and six-silo cohorts observed a per-call p99 of 5.5 s and 11.5 s, while collapsed eight-silo cohorts observed a per-call p50 of 34.7-60.2 s. Thirty seconds sits in the gap - roughly 2.6x above the healthy ceiling and below the collapsed floor - so it is inert on a healthy cluster and engages on a collapsed one. It also matches the `WalAppendDispatchTimeout` default, so a single stuck branch surfaces as a saturation refusal rather than an opaque dispatch timeout. Re-measure for your own cluster rather than porting that figure blindly: a deployment that sends larger `SetManyAsync` batches, has slower storage, or runs a much wider shard map has a different healthy ceiling.
 
-**The default is unbounded, so this option is opt-in on the 9.x line.** `Orleans.Lattice` has shipped release tags, and a finite default is a behaviour change a *conforming* caller can be caught by: a batch that legitimately takes longer than the budget - a wide shard map, a large batch, or slow storage - would newly throw where it previously blocked and then succeeded. The repository has shipped a breaking change in a minor only where no conforming deployment could regress, which this does not clear, so the default stays at `Timeout.InfiniteTimeSpan` and the flip to a finite default is deferred to the next major ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). Until then, an unbounded fan-out remains the out-of-the-box behaviour and the collapse in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) is only mitigated on deployments that set a finite budget. Set one.
+**The default is finite from 10.0.** Before 10.0 the default was `Timeout.InfiniteTimeSpan` (unbounded), so a batch that legitimately takes longer than 30 seconds - a wide shard map, a very large batch, or slow storage - now throws `LatticeSaturatedException` where it previously blocked and then succeeded ([#3386](https://github.com/NSTA1/Orleans.Lattice/issues/3386)). **Migration:** raise the budget to suit your workload, or set `Timeout.InfiniteTimeSpan` to retain the previous unbounded behaviour. A refusal does not roll anything back, so a refused batch may be partly or fully committed; retry the same entries (a retry is safe) or use `SetManyAtomicAsync` when you need all-or-nothing semantics.
 
-Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **not** a disable sentinel and is rejected by the validator: a zero budget would refuse every batch immediately, which is never a useful configuration and is far more likely to be a mistake than an intention. `Timeout.InfiniteTimeSpan` is the default and awaits every branch however long it takes. The validator rejects every other non-positive value.
+Unlike `WalAdmissionSaturationWaitBudget`, `TimeSpan.Zero` is **not** a disable sentinel and is rejected by the validator: a zero budget would refuse every batch immediately, which is never a useful configuration and is far more likely to be a mistake than an intention. `Timeout.InfiniteTimeSpan` (the default before 10.0) awaits every branch however long it takes. The validator rejects every other non-positive value.
 
 This option can be changed freely at any time. The new value takes effect on the next `SetManyAsync` call that fans out across more than one shard; single-shard batches never consult it, because there is no slowest branch to bound.
 
@@ -1729,7 +1729,7 @@ That has a consequence worth stating plainly, because it determines what a usefu
 
 **Refusal sheds the caller; it does not roll anything back.** `SetManyAsync` is not atomic across shards, so branches that already committed stay committed and outstanding branches run to completion. The durable outcome is identical to the unbounded wait - only the moment the caller is told, and what it is told, changes. Callers needing all-or-nothing semantics across shards should use the atomic-write saga instead. Its batched dispatch goes through `SetManyAsync` as well, so this envelope bounds it too: a refusal there surfaces as `LatticeSaturatedException` with source `AtomicWriteSaga` and leaves the saga resumable on the caller's retry with the same operation id.
 
-**The default is unbounded, so this option is opt-in**, for the same reason as `SetManyFanOutBudget`: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller on a released package. `TimeSpan.Zero` is rejected by the validator - it would refuse every batch write immediately - as is every other non-positive value except `Timeout.InfiniteTimeSpan`.
+**The default is unbounded, so this option remains opt-in**, unlike `SetManyFanOutBudget`, which became finite in 10.0: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller. `TimeSpan.Zero` is rejected by the validator - it would refuse every batch write immediately - as is every other non-positive value except `Timeout.InfiniteTimeSpan`.
 
 This option can be changed freely at any time. The new value takes effect on the next `SetManyAsync` call.
 
@@ -1745,11 +1745,11 @@ Wall-clock budget **one top-level call** may spend waiting at the WAL admission 
 
 **Writes with no ambient call.** Convergence-only and background writes never pass through a public entry point, so they carry no call-start stamp. They keep the per-append bound unchanged rather than being refused instantly against an epoch they never set.
 
-**Sizing.** Set it to a small multiple of `WalAdmissionSaturationWaitBudget` - 15 seconds (3x the 5-second per-append default) is the recommended starting point. Below 1x it would pre-empt the per-append budget and make that option unreachable; far above 3x it stops discriminating, because the multiplication observed in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) was roughly 2x the per-append budget in the worst logged case. Keep it below `SetManyFanOutBudget`, so a batch whose branches are stuck at the gate surfaces as a WAL-admission refusal naming the real seam rather than as a fan-out expiry naming the symptom.
+**Sizing.** Set it to a small multiple of `WalAdmissionSaturationWaitBudget` - 15 seconds (3x the 5-second per-append default) is the default from 10.0. Below 1x it would pre-empt the per-append budget and make that option unreachable; far above 3x it stops discriminating, because the multiplication observed in [#3348](https://github.com/NSTA1/Orleans.Lattice/issues/3348) was roughly 2x the per-append budget in the worst logged case. Keep it below `SetManyFanOutBudget`, so a batch whose branches are stuck at the gate surfaces as a WAL-admission refusal naming the real seam rather than as a fan-out expiry naming the symptom.
 
-`TimeSpan.Zero` is accepted and means "never wait at the gate within a call" - a coherent fail-fast posture, unlike `SetManyFanOutBudget` where zero would refuse every batch outright. `Timeout.InfiniteTimeSpan` is the default and leaves only the per-append bound in force. The validator rejects every other negative value.
+`TimeSpan.Zero` is accepted and means "never wait at the gate within a call" - a coherent fail-fast posture, unlike `SetManyFanOutBudget` where zero would refuse every batch outright. `Timeout.InfiniteTimeSpan` (the default before 10.0) leaves only the per-append bound in force. The validator rejects every other negative value.
 
-**The default is unbounded, so this option is opt-in on the 9.x line**, for the same reason as `SetManyFanOutBudget`: a finite default would change when `LatticeSaturatedException` first surfaces for a conforming caller on a released package, which is a breaking behavioural change. The flip to a finite default is deferred to the next major ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)).
+**The default is finite from 10.0.** Before 10.0 it was `Timeout.InfiniteTimeSpan`, so a call that previously kept waiting through repeated saturation back-off across its retry layers now throws `LatticeSaturatedException` (source `WalAdmission`) once 15 seconds are spent ([#3390](https://github.com/NSTA1/Orleans.Lattice/issues/3390)). **Migration:** tune the value, or set `Timeout.InfiniteTimeSpan` to retain the previous behaviour, where only the per-append `WalAdmissionSaturationWaitBudget` applies.
 
 This option can be changed freely at any time. The new value takes effect at the next admission gate check.
 

@@ -9,14 +9,16 @@ public enum LatticeGrainStorageFencingMode
 {
     /// <summary>
     /// Run the probe and log a warning when the provider accepts a write that
-    /// carries a stale ETag. The silo still starts. This is the default.
+    /// carries a stale ETag. The silo still starts. This was the default
+    /// before 10.0.
     /// </summary>
     Warn = 0,
 
     /// <summary>
     /// Run the probe and fail silo start when the provider accepts a write
     /// that carries a stale ETag. A probe that cannot reach a verdict (for
-    /// example a transient storage fault) still only warns.
+    /// example a transient storage fault) still only warns. This is the
+    /// default.
     /// </summary>
     Reject = 1,
 

@@ -19,12 +19,13 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// <para>
 /// Instance-scoped, so one fixture's rows never mix with another's. State is
 /// deep-copied on the way in and out, as a serialising provider would copy it.
-/// ETags are issued but not enforced: these fixtures run one silo.
+/// ETags are issued and enforced, so the silo-start fencing check, which rejects
+/// a provider that does not enforce them, passes.
 /// </para>
 /// </summary>
 internal sealed class EnumerableMemoryGrainStorage : IGrainStorage
 {
-    private readonly ConcurrentDictionary<(string StateName, GrainId GrainId), object> _rows = new();
+    private readonly ConcurrentDictionary<(string StateName, GrainId GrainId), (string ETag, object State)> _rows = new();
 
     private static readonly Lazy<DeepCopier> Copier = new(static () =>
         new ServiceCollection().AddSerializer().BuildServiceProvider().GetRequiredService<DeepCopier>());
@@ -40,8 +41,8 @@ internal sealed class EnumerableMemoryGrainStorage : IGrainStorage
     {
         if (_rows.TryGetValue((stateName, grainId), out var stored))
         {
-            grainState.State = Copier.Value.Copy((T)stored);
-            grainState.ETag = Guid.NewGuid().ToString("N");
+            grainState.State = Copier.Value.Copy((T)stored.State);
+            grainState.ETag = stored.ETag;
             grainState.RecordExists = true;
         }
         else
@@ -56,8 +57,21 @@ internal sealed class EnumerableMemoryGrainStorage : IGrainStorage
     /// <inheritdoc />
     public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
     {
-        _rows[(stateName, grainId)] = Copier.Value.Copy(grainState.State)!;
-        grainState.ETag = Guid.NewGuid().ToString("N");
+        var key = (stateName, grainId);
+        var copy = Copier.Value.Copy(grainState.State)!;
+        var etag = Guid.NewGuid().ToString("N");
+        lock (_rows)
+        {
+            var current = _rows.TryGetValue(key, out var stored) ? stored.ETag : null;
+            if (!string.Equals(current, grainState.ETag, StringComparison.Ordinal))
+            {
+                throw new InconsistentStateException("ETag mismatch.", current ?? "<none>", grainState.ETag ?? "<none>");
+            }
+
+            _rows[key] = (etag, copy);
+        }
+
+        grainState.ETag = etag;
         grainState.RecordExists = true;
         return Task.CompletedTask;
     }

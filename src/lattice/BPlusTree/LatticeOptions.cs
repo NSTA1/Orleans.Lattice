@@ -4354,17 +4354,19 @@ public class LatticeOptions
     /// individual wait; the effective bound is the lesser of the two.
     /// </para>
     /// <para>
-    /// <b>Default is <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>,
-    /// which disables the per-call bound and preserves the historical
-    /// behaviour exactly.</b> A finite value changes when a caller observes
-    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> - a call held
-    /// under sustained saturation now surfaces it sooner rather than
-    /// accumulating multi-minute latency - so enabling it by default would be a
-    /// behavioural break on a released package. Hosts that want the bound
-    /// should set it explicitly; a small multiple of
-    /// <see cref="WalAdmissionSaturationWaitBudget"/> (three times it, so
-    /// 15 seconds against the 5-second default) removes the pathology while
-    /// leaving ordinary nested retries untouched.
+    /// <b>The default is 15 seconds (#3390), three times the 5-second
+    /// <see cref="WalAdmissionSaturationWaitBudget"/> default.</b> Below 1x it
+    /// would pre-empt the per-append budget entirely; far above 3x it stops
+    /// discriminating, because the worst multiplication logged in #3348 was
+    /// roughly 2x. It also stays below <see cref="DefaultSetManyFanOutBudget"/>,
+    /// so a batch whose branches are stuck at the gate surfaces as a WAL
+    /// admission refusal naming the real seam rather than as a fan-out expiry.
+    /// Before 10.0 the default was
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>; set that value
+    /// to retain the previous unbounded behaviour. A call held under sustained
+    /// saturation now surfaces
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> after the
+    /// allowance rather than accumulating multi-minute latency.
     /// </para>
     /// <para>
     /// Set to <see cref="System.TimeSpan.Zero"/> to refuse at the gate without
@@ -4377,10 +4379,10 @@ public class LatticeOptions
 
     /// <summary>
     /// Default value for <see cref="WalAdmissionSaturationCallBudget"/>
-    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the per-call
-    /// bound is off, preserving pre-#3348 behaviour).
+    /// (15 seconds; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+    /// before 10.0).
     /// </summary>
-    public static readonly TimeSpan DefaultWalAdmissionSaturationCallBudget = Timeout.InfiniteTimeSpan;
+    public static readonly TimeSpan DefaultWalAdmissionSaturationCallBudget = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// How long a batch write's per-shard fan-out may run before the call is
@@ -4399,14 +4401,14 @@ public class LatticeOptions
     /// a batch write is the slowest branch, which is unbounded.
     /// </para>
     /// <para>
-    /// <b>The default is unbounded, and the bound is opt-in.</b>
-    /// <see cref="DefaultSetManyFanOutBudget"/> is
-    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>, which is
-    /// exactly the historical behaviour, so upgrading an existing deployment
-    /// changes nothing and no conforming caller can regress. Enabling the
-    /// bound is a deliberate act. The default is expected to become finite in
-    /// the next major version, because an unbounded scatter-gather fan-out is
-    /// the defect rather than the contract (#3386).
+    /// <b>The default is finite (30 seconds) from 10.0 (#3386).</b> Before
+    /// 10.0 it was <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>,
+    /// because an unbounded scatter-gather fan-out is the defect rather than
+    /// the contract. A caller whose batch legitimately fans out for longer than
+    /// the budget now receives <see cref="LatticeSaturatedException"/> where it
+    /// previously blocked and then succeeded; set
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> to retain the
+    /// previous behaviour.
     /// </para>
     /// <para>
     /// <b>Sizing rule.</b> A finite budget should exceed the fan-out duration
@@ -4435,8 +4437,8 @@ public class LatticeOptions
     /// saga resumable on the caller's retry with the same operation id.
     /// </para>
     /// <para>
-    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> is the default
-    /// and means every branch is awaited however long it takes. The registered
+    /// <see cref="System.Threading.Timeout.InfiniteTimeSpan"/> means every
+    /// branch is awaited however long it takes. The registered
     /// options validator rejects zero and any other negative value: zero would
     /// refuse every fan-out immediately, which is never a useful configuration
     /// and is far more likely to be a mistake.
@@ -4446,11 +4448,10 @@ public class LatticeOptions
 
     /// <summary>
     /// Default value for <see cref="SetManyFanOutBudget"/>
-    /// (<see cref="System.Threading.Timeout.InfiniteTimeSpan"/> - the fan-out
-    /// is unbounded unless a finite budget is configured). Expected to become
-    /// finite in the next major version (#3386).
+    /// (30 seconds; <see cref="System.Threading.Timeout.InfiniteTimeSpan"/>
+    /// before 10.0). Matches <see cref="WalAppendDispatchTimeout"/>.
     /// </summary>
-    public static readonly TimeSpan DefaultSetManyFanOutBudget = Timeout.InfiniteTimeSpan;
+    public static readonly TimeSpan DefaultSetManyFanOutBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Wall-clock budget for the <b>whole</b> measured batched-write envelope. The
