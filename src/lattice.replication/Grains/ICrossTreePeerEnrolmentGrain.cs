@@ -17,7 +17,20 @@ internal interface ICrossTreePeerEnrolmentGrain : IGrainWithStringKey
     [AlwaysInterleave]
     Task<ImmutableArray<string>> GetAsync();
 
-    /// <summary>Durably enrols <paramref name="peerClusterId"/>. Idempotent.</summary>
+    /// <summary>
+    /// Durably enrols <paramref name="peerClusterId"/>. Idempotent.
+    /// Refused silently (no exception; the enrolment is simply not
+    /// recorded) when <paramref name="peerClusterId"/> is both
+    /// permanently decommissioned (<see cref="DecommissionAsync"/>,
+    /// via <c>IReplicationDecommissionedPeerRegistryGrain</c>) and not
+    /// currently configured as a peer: that combination means a stale
+    /// or lagging shipper activation for a peer the operator has not
+    /// re-added, and must not resurrect the hold's wait on it. A peer
+    /// that has been decommissioned and then re-added to the topology
+    /// is allowed through once more - the decommissioned marker clears
+    /// on that re-add (<c>ReplicationDriverActivationService</c>), so a
+    /// fresh bootstrap always re-enrols.
+    /// </summary>
     Task EnrolAsync(string peerClusterId);
 
     /// <summary>

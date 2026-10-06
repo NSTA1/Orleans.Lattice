@@ -2,6 +2,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication;
@@ -53,6 +54,24 @@ namespace Orleans.Lattice.Replication;
 /// (<see cref="IReplicationShipperGrain.DetachFromLogAsync"/>, issue #4534),
 /// so a removed peer no longer holds the log's trims or the tree's saga
 /// decision purges; adding the peer back re-attaches them.
+/// </para>
+/// <para>
+/// A <see cref="PeerChangeKind.Added"/> event also clears that peer's
+/// row, if any, in the <see cref="IReplicationDecommissionedPeerRegistryGrain"/>
+/// singleton (<see cref="IReplicationDecommissionedPeerRegistryGrain.ClearDecommissionedAsync"/>),
+/// fired once per add event rather than once per enrolled tree since the
+/// registry is keyed by peer id alone. This is the only place the marker
+/// left by <see cref="LatticeReplicationPeerDecommissioner"/> is cleared:
+/// clearing it on drain or bootstrap completion instead would leave a
+/// re-added peer's shippers refused by
+/// <see cref="ICrossTreePeerEnrolmentGrain.EnrolAsync"/> while the peer is
+/// still configured, so the cross-tree decision hold would not release
+/// until a subsequent detach - the clear has to race ahead of enrolment,
+/// not follow it. Before clearing the marker, the same step also abandons
+/// every cross-tree receiver barrier the peer still has on this cluster
+/// (<see cref="LatticeReplicationPeerDecommissioner.AbandonOriginBarriersAsync"/>,
+/// issue #4742), so a barrier that a late terminal reopened after the
+/// decommission cannot hold a tree's import fence against the fresh bootstrap.
 /// </para>
 /// <para>
 /// <see cref="IHostedService.StartAsync"/> ordering is not guaranteed
@@ -235,6 +254,53 @@ internal sealed class ReplicationDriverActivationService : BackgroundService
         lock (_gate)
         {
             trees = [.. _enrolledTrees];
+        }
+
+        if (!removed)
+        {
+            // Clear the peer's decommissioned marker exactly once per
+            // peer-add event (the registry is keyed by peer id only, not
+            // tree x peer), BEFORE the per-tree shipper re-activation pass
+            // below. This is what lets a decommissioned peer's shippers
+            // re-enrol via ICrossTreePeerEnrolmentGrain.EnrolAsync on an
+            // operator-driven re-add: the marker is cleared here, on the
+            // topology re-add itself, not on drain/bootstrap completion -
+            // see IReplicationDecommissionedPeerRegistryGrain's remarks.
+            var capturedPeerForClear = change.PeerClusterId;
+            _ = Task.Run(
+                () => ActivateWithRetryAsync(
+                    kind: "decommission-clear",
+                    label: capturedPeerForClear,
+                    activate: async ct =>
+                    {
+                        var registry = _grainFactory.GetGrain<IReplicationDecommissionedPeerRegistryGrain>(IReplicationDecommissionedPeerRegistryGrain.SingletonKey);
+                        var trees = await _grainFactory.GetLatticeRegistry().GetAllTreeIdsAsync();
+                        if (await registry.IsDecommissionedAsync(capturedPeerForClear))
+                        {
+                            // The re-add is a fresh start for the peer as an origin
+                            // too (#4742): every barrier it left on this receiver -
+                            // one a terminal reopened after the decommission
+                            // abandoned it, a decided one, or a tombstone - is reset,
+                            // so none holds a tree's import fence against the fresh
+                            // bootstrap. Done before the marker clears, so a failure
+                            // retries with the marker still set.
+                            await LatticeReplicationPeerDecommissioner.AbandonOriginBarriersAsync(
+                                _grainFactory, trees, capturedPeerForClear, includeDecided: true, ct);
+                            await registry.ClearDecommissionedAsync(capturedPeerForClear);
+                        }
+
+                        // An import whose fence the decommission held is re-driven
+                        // from a fresh export, which decides the fence (#4742).
+                        // A no-op for every other tree, so a retry after the
+                        // marker cleared still reaches every held import.
+                        foreach (var tree in trees)
+                        {
+                            await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(tree)
+                                .RedriveForReAddedSourceAsync(capturedPeerForClear);
+                        }
+                    },
+                    stoppingToken),
+                stoppingToken);
         }
 
         foreach (var treeName in trees)
