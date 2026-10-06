@@ -16,15 +16,15 @@ BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 
 --- FIND
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- REPLACE
 \* MUTATION: the export carries no decision rows.
          /\ rdec' = rdec
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
 --- END
 --- FIND
     /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"

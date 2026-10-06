@@ -151,7 +151,7 @@ VARIABLES xtree, oext, orcv, outbox, dlv, rconn,
           rpend, rterm, rproj,
           rarr, rexp, rdec, rout, rstage, rdeleg, rdial,
           carr, cdec, rfin, rtodo,
-          gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh, boff, bpur, bfence, bcaught, acaught, abnd, uimp
+          gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh, boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs
 
 originVars == <<phase, vote, decision, terminal, pend, orphanDone, forgotten, masked, revision>>
 
@@ -163,7 +163,7 @@ registryVars == <<rarr, rexp, rdec, rout, rstage, rdeleg, rdial>>
 
 barrierVars == <<carr, cdec, rfin, rtodo>>
 
-bVars == <<boff, bpur, bfence, bcaught, acaught, abnd, uimp>>
+bVars == <<boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs>>
 
 lossVars == <<gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
              bVars>>
@@ -251,6 +251,8 @@ TypeOK ==
     /\ acaught \in BOOLEAN
     /\ abnd \subseteq MsgSet
     /\ uimp \in [Trees -> BOOLEAN]
+    /\ xo \in {"none", "undecided", "decided"}
+    /\ xs \in [snap : {"none", "inflight", "indeterminate", "committed", "aborted"}, row : {"pre", "post"}, prep : BOOLEAN, cut : SUBSET MsgSet]
 
 (***************************************************************************)
 (* Receiver reader visibility.                                             *)
@@ -315,6 +317,8 @@ RObserved(k) ==
 \*   Purges         on path 5, the decision rows a pre-hold silo purges before
 \*                  the boundary: 0 none, 1 tree A's, 2 both trees'. The trees
 \*                  are symmetric on that path, so tree A is the one purged.
+\*   SplitExport    1 a cross-tree import of tree A takes its export in two
+\*                  steps, open and close, 0 atomically at the drain.
 \*   AckLoss        1 the transport may lose an acknowledgement, 0 it never
 \*                  does. Path 5's rewind re-ships every retained record, so it
 \*                  duplicates deliveries without it.
@@ -329,6 +333,8 @@ DialFaults == 1
 Purges == 2
 
 AckLoss == 1
+
+SplitExport == 1
 
 JoinStart == 0
 
@@ -453,6 +459,8 @@ Init ==
     /\ acaught = FALSE
     /\ abnd = {}
     /\ uimp = [tr \in Trees |-> FALSE]
+    /\ xo = "none"
+    /\ xs = [snap |-> "none", row |-> "pre", prep |-> FALSE, cut |-> {}]
 
 (***************************************************************************)
 (* ORIGIN ACTIONS. Each is AtomicCommit's action for t1, plus what that    *)
@@ -760,6 +768,36 @@ Carried(snap) == CarriedOf("A", snap)
 \* point takes the tree's arrival with its siblings' verdict.
 Bare(tr, snap, pur) == xtree /\ pur /\ snap = "inflight" /\ ~CarriedOf(tr, snap)
 
+\* The export of a cross-tree import of tree A is taken in two steps (issue
+\* #4685, fixed by #4694): ExportOpen records the export's open point and
+\* takes its purge hold, and ExportClose reads the decision and the rows at
+\* one later instant, which is what the completion from the source WAL makes
+\* of production's passes. The drain imports what the export closed with.
+Split == SplitExport = 1 /\ xtree
+
+NoExport == [snap |-> "none", row |-> "pre", prep |-> FALSE, cut |-> {}]
+
+ASnap == IF Split THEN {xs.snap} ELSE Snap0
+
+ARow(snap, k) == IF Split THEN xs.row ELSE ExportRow(snap, k)
+
+APrep(snap, k) == IF Split THEN xs.prep ELSE ExportsPrepared(snap, k)
+
+ACarried(snap) == \E k \in AKeys : APrep(snap, k)
+
+\* R2's guard for an import of tree A: the export opened after the operation
+\* was decided at the origin (its open epoch past the operation's decision
+\* stamp). Without the split, a purge before the import stands for it.
+AGuard == IF Split THEN xo = "decided" ELSE purged
+
+ABare(snap) == xtree /\ AGuard /\ snap = "inflight" /\ ~ACarried(snap)
+
+\* An export is wanted: a bootstrap, a re-seed or a poison's re-seed of tree A.
+ImportPending ==
+    \/ ~rconn /\ ~decom /\ ~preguard
+    \/ rconn /\ rs = "marked" /\ LossPath # 5
+    \/ rpoison
+
 \* The imports whose tree must be fenced: one that arrives at the barrier and
 \* one marked for a uniform arrival. Production fences every cross-tree
 \* import, which only hides more; an import that carries the saga as prepared
@@ -774,13 +812,15 @@ ImportGate == ~xtree \/ ~preguard
 \* NotifyTerminalAsync, #4683's fix). A bare import arrives at once with the
 \* sibling's verdict when the barrier already holds it, and otherwise marks
 \* the tree, so a barrier opened later takes its arrival (#4684's R2).
-BarrierImport(tr, snap, pur) ==
-    LET bare == Bare(tr, snap, pur)
+BarrierImportBare(tr, snap, bare) ==
+    LET
         now == ViaBarrier(snap) \/ (bare /\ rout[Other(tr)] # "none")
         v == IF ViaBarrier(snap) THEN snap ELSE rout[Other(tr)]
     IN /\ rout' = IF now THEN [rout EXCEPT ![tr] = v] ELSE rout
        /\ rstage' = IF now /\ rstage[tr] = "idle" THEN [rstage EXCEPT ![tr] = "register"] ELSE rstage
        /\ uimp' = IF bare /\ ~now THEN [uimp EXCEPT ![tr] = TRUE] ELSE uimp
+
+BarrierImport(tr, snap, pur) == BarrierImportBare(tr, snap, Bare(tr, snap, pur))
 
 \* A tree has passed its boundary once the peer has acknowledged every record
 \* of it outstanding at the boundary, or has imported it from an export
@@ -797,26 +837,29 @@ BarrierQuiet == cdec # "inflight" \/ \A w \in Trees : rout[w] = "none"
 \* The bootstrap waits while any silo predates the purge hold
 \* (PurgeHoldSupport.AllSilosHonour) and arms the replay filter.
 Bootstrap ==
+    /\ Split => xs.snap # "none"
     /\ ~rconn
     /\ ~decom
     /\ ~preguard
     /\ ImportGate
-    /\ \E kept \in SUBSET {r \in outbox : Aff(r)} :
-       \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> IF k \in AKeys THEN ExportRow(snap, k) ELSE rproj[k]]
+    /\ \E kept \in SUBSET {r \in outbox : Aff(r) /\ (Split => r \in xs.cut)} :
+       \E snap \in ASnap :
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys THEN ARow(snap, k) ELSE rproj[k]]
          /\ rpend' = [k \in XKeys |->
                         IF k \notin AKeys THEN rpend[k]
-                        ELSE IF ExportsPrepared(snap, k) THEN "pending"
+                        ELSE IF APrep(snap, k) THEN "pending"
                         ELSE "none"]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
-         /\ outbox' = {r \in outbox : ~Aff(r)} \cup kept
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
     /\ rconn' = TRUE
     /\ filt' = TRUE
     /\ verdict' = "none"
     /\ afresh' = FALSE
     /\ acaught' = (acaught \/ xtree)
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rterm, rarr, rexp, rdeleg, rdial, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, ubnd, decom,
                    boff, bpur, bfence, bcaught, abnd>>
@@ -849,6 +892,8 @@ OriginPurge ==
        THEN UNCHANGED <<outbox, ptrim>>
        ELSE /\ ~Held
             /\ CrossTreeAcked
+            \* An open export holds the tree's decision purges (#4694).
+            /\ xo = "none"
             /\ \/ ~rconn
                \/ detached
                \/ ~\E p \in outbox : p.type = "prep" /\ Aff(p)
@@ -856,7 +901,7 @@ OriginPurge ==
             /\ outbox' = {r \in outbox : r.type # "prep" \/ ~Aff(r)}
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, leafVars, registryVars, barrierVars,
                    gone, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
-                   boff, bfence, bcaught, acaught, abnd, uimp>>
+                   boff, bfence, bcaught, acaught, abnd, uimp, xo, xs>>
 
 \* Every silo comes to host the purge hold.
 UpgradeDone ==
@@ -872,7 +917,7 @@ UpgradeDone ==
     /\ bcaught' = FALSE
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, filt, verdict, afence, decom, afresh,
-                   boff, bpur, bfence, uimp>>
+                   boff, bpur, bfence, uimp, xo, xs>>
 
 \* The shipper loses an unacknowledged record: a WalRetention trim passed it
 \* (issue #4534) or it could not encode its batch (issue #4651). Since #4577
@@ -915,8 +960,11 @@ Readd ==
     /\ detached
     /\ detached' = FALSE
     /\ rs' = "marked"
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
-                   gone, purged, ptrim, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh, bVars>>
+                   gone, purged, ptrim, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp>>
 
 \* The operator removes the detached peer from tree A's replication for good.
 \* The origin releases the peer's cross-tree holds; the receiver takes tree A
@@ -943,8 +991,11 @@ Decommission ==
     /\ rs' = "none"
     /\ filt' = FALSE
     /\ verdict' = "none"
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, rterm, rproj, registryVars, carr,
-                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd, bVars>>
+                   gone, purged, ptrim, detached, rpoison, losses, preguard, afence, ubnd,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp>>
 
 \* A decommissioned peer is added back as a fresh replica of tree A: the
 \* receiver resets tree A's state from that origin - its buckets, terminal
@@ -975,6 +1026,8 @@ ReaddFresh ==
     /\ ubnd' = ubnd \cup {r \in outbox : ~Aff(r)}
     /\ bcaught' = FALSE
     /\ uimp' = [uimp EXCEPT !["A"] = FALSE]
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, oext, orcv, outbox, dlv, cdec, rfin, rtodo,
                    gone, purged, ptrim, rpoison, losses, preguard, afresh,
                    boff, bpur, bfence, acaught, abnd>>
@@ -1008,21 +1061,24 @@ ReceiverPoison(m) ==
 \* rows, and otherwise discarded with no registry outcome
 \* (IBPlusLeafGrain.DiscardPendingTransactionAsync); the poison retires.
 PoisonReseed ==
+    /\ Split => xs.snap # "none"
     /\ rpoison
     /\ ImportGate
-    /\ \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
+    /\ \E snap \in ASnap :
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ARow(snap, k) = "post" THEN "post" ELSE rproj[k]]
          /\ rpend' = [k \in XKeys |->
                         IF k \notin AKeys THEN rpend[k]
-                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
-                        ELSE IF Carried(snap) THEN rpend[k]
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF ACarried(snap) THEN rpend[k]
                         ELSE "none"]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
          /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
     /\ rpoison' = FALSE
     /\ acaught' = (acaught \/ xtree)
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
                    gone, purged, ptrim, rs, detached, losses, preguard, filt, verdict, ubnd, decom, afresh,
                    boff, bpur, bfence, bcaught, abnd>>
@@ -1035,26 +1091,29 @@ PoisonReseed ==
 \* names in no row is discarded with no registry outcome, and one a decision
 \* row names is drained by it (StalePendingClearer.ClearAsync).
 ReseedDrain ==
+    /\ Split => xs.snap # "none"
     /\ LossPath # 5
     /\ rconn
     /\ rs = "marked"
     /\ ImportGate
-    /\ \E snap \in Snap0 :
-         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ExportRow(snap, k) = "post" THEN "post" ELSE rproj[k]]
+    /\ \E snap \in ASnap :
+         /\ rproj' = [k \in XKeys |-> IF k \in AKeys /\ ARow(snap, k) = "post" THEN "post" ELSE rproj[k]]
          /\ rpend' = [k \in XKeys |->
                         IF k \notin AKeys THEN rpend[k]
-                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
-                        ELSE IF snap = "inflight" /\ ~Carried(snap) THEN "none"
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF snap = "inflight" /\ ~ACarried(snap) THEN "none"
                         ELSE rpend[k]]
          /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
          /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
-         /\ BarrierImport("A", snap, purged)
-         /\ afence' = (afence \/ ImportFences("A", snap, purged))
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
     \* A drain while any silo predates the purge hold does not settle the
     \* re-seed: a purge it ignores could strand what the export carried
     \* (issue #4664's fix).
     /\ rs' = IF preguard THEN rs ELSE "drained"
     /\ acaught' = (acaught \/ xtree)
+    /\ xo' = "none"
+    /\ xs' = NoExport
     /\ UNCHANGED <<originVars, xtree, netVars, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
                    gone, purged, ptrim, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh,
                    boff, bpur, bfence, bcaught, abnd>>
@@ -1099,6 +1158,37 @@ FilterClear ==
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, afence, ubnd, decom, afresh, bVars>>
 
+\* The export of a cross-tree import of tree A opens (LatticeSnapshotProvider.
+\* ExportAsync): it reads the export epoch, its open point C0, and takes the
+\* tree's decision purge hold for its duration. Whether the operation was
+\* already decided there is what R2's guard compares: the decision stamp
+\* against C0. No cross-tree export opens while a silo predates the hold.
+ExportOpen ==
+    /\ Split
+    /\ xo = "none"
+    /\ ImportPending
+    /\ ImportGate
+    /\ xo' = IF decision[T] # "inflight" THEN "decided" ELSE "undecided"
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xs>>
+
+\* The export closes: its decision read and its rows are of one instant, later
+\* than its open (the prepared and committed passes, completed from the source
+\* WAL over the segment from C0 to C1, with every saga that decided between
+\* its passes shipped whole, #4694). cut is tree A's records retained at the
+\* close: the shipper resumes from its own cursors, so it may re-ship any of
+\* them, and every record written after the close it ships.
+ExportClose ==
+    /\ xo # "none"
+    /\ xs = NoExport
+    /\ \E snap \in Snap0 :
+         xs' = [snap |-> snap, row |-> ExportRow(snap, k1), prep |-> ExportsPrepared(snap, k1),
+                cut |-> {r \in outbox : Aff(r)}]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo>>
+
 \* An imported tree's read fence lifts once its sibling has passed its
 \* boundary (#4684's R1) and no barrier of the operation is still undecided
 \* (#4683's fix).
@@ -1110,7 +1200,7 @@ FenceLift(tr) ==
     /\ bfence' = IF tr = "B" THEN FALSE ELSE bfence
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
                    gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh,
-                   boff, bpur, bcaught, acaught, abnd, uimp>>
+                   boff, bpur, bcaught, acaught, abnd, uimp, xo, xs>>
 
 \* Both trees' shippers take the peer off the log while a silo predates the
 \* purge hold: each lost a record of its tree - a WalRetention trim, an
@@ -1131,7 +1221,7 @@ MutualOffLog ==
     /\ losses' = 1
     /\ UNCHANGED <<originVars, xtree, netVars, leafVars, registryVars, barrierVars,
                    gone, purged, ptrim, detached, rpoison, preguard, filt, verdict, afence, ubnd, decom, afresh,
-                   bpur, bfence, bcaught, acaught, abnd, uimp>>
+                   bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs>>
 
 BKeys == KeysOf("B")
 
@@ -1182,7 +1272,7 @@ TreeReseed(tr) ==
     /\ boff' = IF tr = "B" THEN FALSE ELSE boff
     /\ UNCHANGED <<originVars, xtree, oext, orcv, dlv, rconn, rterm, rarr, rexp, rdeleg, rdial, carr, cdec, rfin,
                    gone, purged, ptrim, detached, rpoison, losses, preguard, filt, verdict, ubnd, decom, afresh,
-                   bpur, abnd>>
+                   bpur, abnd, xo, xs>>
 
 (***************************************************************************)
 (* Quiescence: the origin saga is done, every record has been acked, and   *)
@@ -1202,6 +1292,7 @@ Quiesced ==
     /\ ~afence
     /\ ~bfence
     /\ ~boff
+    /\ xo = "none"
 
 Stutter == Quiesced /\ UNCHANGED vars
 
@@ -1232,6 +1323,8 @@ Next ==
     \/ ReseedRewind
     \/ \E m \in MsgSet : ReplayWithhold(m)
     \/ FilterClear
+    \/ ExportOpen
+    \/ ExportClose
     \/ \E tr \in Trees : FenceLift(tr)
     \/ MutualOffLog
     \/ \E tr \in Trees : TreeReseed(tr)
@@ -1268,6 +1361,8 @@ Spec ==
     /\ WF_vars(ReseedDrain)
     /\ WF_vars(ReseedRewind)
     /\ WF_vars(\E m \in MsgSet : ReplayWithhold(m))
+    /\ WF_vars(ExportOpen)
+    /\ WF_vars(ExportClose)
     /\ WF_vars(FenceLift("A"))
     /\ WF_vars(FenceLift("B"))
     /\ WF_vars(TreeReseed("A"))

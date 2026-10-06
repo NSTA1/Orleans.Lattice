@@ -77,7 +77,10 @@ transport assumption or its read view already does.
 | `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
 | `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
 | `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
-| `RAllOrNothingCrossTreeExportUnderPreHoldSilo` | `RAllOrNothing` | Invariant | `ReseedDrain` | a cross-tree re-seed is served and drained while a silo predates the purge hold (issue #4684's export precondition removed) |
+| `RAllOrNothingCrossTreeExportUnderPreHoldSilo` | `RAllOrNothing` | Invariant | `ExportOpen` | a cross-tree export is served while a silo predates the purge hold (issue #4684's export precondition removed) |
+| `RAllOrNothingUniformArrivalGuardAtImport` | `RAllOrNothing` | Invariant | `Bootstrap` | R2's opened-after-the-decision guard is evaluated at the import instead of the export's open point |
+| `RAllOrNothingExportOpenPastEveryDecision` | `RAllOrNothing` | Invariant | `ExportOpen` | the export records no open point and is taken as opened after every decision |
+| `RAllOrNothingExportPassesInterleaveWithSaga` | `RAllOrNothing` | Invariant | `ExportClose` | the export reads the decision before its rows, so a saga deciding between them ships as bare committed rows (issue #4685 before #4694) |
 
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,

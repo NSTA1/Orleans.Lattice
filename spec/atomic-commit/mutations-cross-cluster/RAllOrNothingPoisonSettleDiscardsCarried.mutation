@@ -10,8 +10,8 @@ PERTURBS: PoisonReseed
 BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0, Shape = 0
 
 --- FIND
-                        ELSE IF ExportsPrepared(snap, k) /\ rterm[k] = "none" THEN "pending"
-                        ELSE IF Carried(snap) THEN rpend[k]
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF ACarried(snap) THEN rpend[k]
                         ELSE "none"]
 --- REPLACE
 \* MUTATION: every poisoned bucket is discarded, carried or not.
