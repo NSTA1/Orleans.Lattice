@@ -62,7 +62,7 @@ else
             <ClusterTreeStorage TreeId="@TreeId" Capabilities="access" />
         </LtTab>
         <LtTab Id="lifecycle" Title="Lifecycle">
-            <ClusterTreeLifecycle TreeId="@TreeId" Capabilities="access" />
+            <ClusterTreeLifecycle TreeId="@TreeId" Capabilities="access" OperationSettled="OnOperationSettledAsync" />
         </LtTab>
     </LtTabs>
 }

@@ -357,6 +357,7 @@ public partial class TenancyDirectoryPage
         _createOpen = false;
         _confirmCreate = false;
         Catalog.Invalidate();
+        Suggestions.InvalidateTenants();
         var seeded = created.AdminSubjects.Count == 0 ? "with no admin subject" : "administered by " + string.Join(", ", created.AdminSubjects);
         Toasts.Show($"Tenant {id} created, {seeded}.", LtToastTone.Success);
 

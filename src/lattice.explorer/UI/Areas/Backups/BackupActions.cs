@@ -2,6 +2,7 @@ using System.Globalization;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Backup;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Transport;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
@@ -32,6 +33,7 @@ internal sealed class BackupActions
     private readonly BackupsAccess _access;
     private readonly BackupOperations _operations;
     private readonly BackupOperationList? _list;
+    private readonly ClusterTreeChanges? _treeChanges;
 
     /// <summary>Creates the actions.</summary>
     /// <param name="control">The backup facade.</param>
@@ -39,12 +41,14 @@ internal sealed class BackupActions
     /// <param name="access">The area's probes.</param>
     /// <param name="operations">The circuit's operations.</param>
     /// <param name="list">The recent-operations list, forgotten whenever an operation starts; optional.</param>
+    /// <param name="treeChanges">Forgets the remembered tree lists once a revert has swapped a tree back; optional.</param>
     public BackupActions(
         [FromKeyedServices(ShellFacades.Key)] ILatticeBackupControl control,
         [FromKeyedServices(ShellFacades.Key)] ILatticeBackupOperations clusterOperations,
         BackupsAccess access,
         BackupOperations operations,
-        BackupOperationList? list = null)
+        BackupOperationList? list = null,
+        ClusterTreeChanges? treeChanges = null)
     {
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(clusterOperations);
@@ -55,6 +59,7 @@ internal sealed class BackupActions
         _access = access;
         _operations = operations;
         _list = list;
+        _treeChanges = treeChanges;
     }
 
     /// <summary>Starts capturing a full backup of <paramref name="scope"/>.</summary>
@@ -180,6 +185,7 @@ internal sealed class BackupActions
                 await RequireAsync(scope, static capabilities => capabilities.CanRestore, cancellationToken).ConfigureAwait(false);
                 operation.Advance(1);
                 await _control.RevertRestoreAsync(result, cancellationToken).ConfigureAwait(false);
+                _treeChanges?.Changed();
                 operation.Report(links: [new BackupOperationLink("The reverted restore", BackupsAddresses.Operation(restoreOperationId))]);
                 operation.Succeed("Reverted " + target.Name + " to the tree it held before the restore.");
             },

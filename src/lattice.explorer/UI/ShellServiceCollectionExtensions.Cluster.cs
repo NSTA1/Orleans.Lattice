@@ -19,6 +19,7 @@ internal static partial class ShellServiceCollectionExtensions
     {
         services.TryAddScoped<ClusterFacades>();
         services.TryAddScoped<ClusterTreeCatalog>();
+        services.TryAddScoped<ClusterTreeChanges>();
         services.TryAddScoped<ClusterCommandSignals>();
         services.AddExplorerArea<ClusterArea>();
     }
