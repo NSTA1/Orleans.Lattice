@@ -29,4 +29,15 @@ internal sealed record CrossTreeMembership
     /// export's rows and the shipped terminals of the sub-saga.
     /// </summary>
     [Id(2)] public ImmutableDictionary<string, long>? DecisionStamps { get; init; }
+
+    /// <summary>
+    /// The operation's decision sequences (issue #4733): per participating
+    /// tree, the next value of that tree's monotone decision counter at the
+    /// decision. The origin advertises, per tree, a purge frontier below every
+    /// decision it still stores, and a receiver drops its decided barrier
+    /// tombstone for the operation once every participant's frontier has
+    /// reached its sequence. <see langword="null"/> for an operation decided
+    /// before sequencing, which counts as sequence <c>0</c> on both sides.
+    /// </summary>
+    [Id(3)] public ImmutableDictionary<string, long>? DecisionSequences { get; init; }
 }

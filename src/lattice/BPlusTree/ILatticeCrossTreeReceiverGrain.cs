@@ -94,7 +94,13 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// terminal or decision row that carried them is notified. Returns the
     /// barrier's decision, re-evaluated as <see cref="ReevaluateAsync"/> does.
     /// </summary>
-    Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps);
+    /// <param name="stamps">The decision stamps; empty for an operation decided before stamping.</param>
+    /// <param name="sequences">The decision sequences (issue #4733), or <see langword="null"/>.</param>
+    /// <param name="participants">Every tree the operation touched (issue #4733).</param>
+    Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps,
+        IReadOnlyDictionary<string, long>? sequences = null,
+        IReadOnlyList<string>? participants = null);
 
     /// <summary>
     /// Re-evaluates the barrier against its trees' latest snapshot imports
@@ -127,6 +133,20 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// the caller keeps the fence.
     /// </summary>
     Task<bool> SettleIndexEntryAsync(string treeId);
+
+    /// <summary>
+    /// Whether this barrier must still be kept (issue #4733). A decided
+    /// tombstone - what the barrier's retention compacts it to - is dropped,
+    /// durably, once <paramref name="frontiers"/>, the origin's advertised purge
+    /// frontier per tree, has reached the operation's decision sequence on
+    /// every participant: no arrival of the operation can reach this receiver
+    /// any more, so it can never reopen. Returns <see langword="true"/> while
+    /// the tombstone must be kept; <see langword="false"/> once it was dropped,
+    /// or when this barrier is not a tombstone at all (it holds no state, or it
+    /// reopened), so the caller removes its entry from the tree's tombstone
+    /// list. Not interleaved: it never drops a barrier mid-call.
+    /// </summary>
+    Task<bool> SettleTombstoneAsync(IReadOnlyDictionary<string, long> frontiers);
 }
 
 /// <summary>

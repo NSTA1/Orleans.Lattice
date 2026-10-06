@@ -278,6 +278,12 @@ public partial class TxRegistryGrainTests
                                 new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-a", long.MaxValue),
                                 new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-b", long.MaxValue),
                             ]),
+                        DecisionSequences = System.Collections.Immutable.ImmutableDictionary.CreateRange(
+                            StringComparer.Ordinal,
+                            [
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-a", long.MaxValue),
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-b", long.MaxValue),
+                            ]),
                     };
                     break;
             }

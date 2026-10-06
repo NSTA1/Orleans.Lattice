@@ -144,6 +144,13 @@ public readonly record struct ReplicationBatch
     internal ReplicationSourceFrontier? SourceFrontier { get; init; }
 
     /// <summary>
+    /// A chunk of this cluster's cross-tree purge frontier (issue #4733), or
+    /// <see langword="null"/>. Carried out of band beside the batch (a gRPC call
+    /// header), whatever the batch's tree.
+    /// </summary>
+    internal CrossTreePurgeFrontier? CrossTreePurgeFrontier { get; init; }
+
+    /// <summary>
     /// The source tree lineage the sender read this batch's records under
     /// (issue #4673): <see langword="null"/> when the source registry tracks no
     /// lineage for the tree, <see cref="Guid.Empty"/> when the sender cannot tell

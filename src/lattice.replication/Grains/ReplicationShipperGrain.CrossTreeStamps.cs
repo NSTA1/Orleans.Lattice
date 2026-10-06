@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 
@@ -21,7 +23,59 @@ internal sealed partial class ReplicationShipperGrain
     // The stamps of a cross-tree sub-saga, by transaction id; null for one
     // whose membership carries none (decided before stamping, or no longer
     // stored). Bounded: cleared wholesale when full.
-    private readonly Dictionary<Guid, IReadOnlyDictionary<string, long>?> _crossTreeStamps = new();
+    private readonly Dictionary<Guid, (IReadOnlyDictionary<string, long>? Stamps, IReadOnlyDictionary<string, long>? Sequences)> _crossTreeStamps = new();
+
+    /// <summary>How often a shipper re-reads and re-advertises this cluster's cross-tree purge frontier (issue #4733).</summary>
+    internal static TimeSpan PurgeFrontierInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    // The purge frontier chunk every batch carries until the next refresh, and
+    // where the next chunk starts in the ordered frontier.
+    private CrossTreePurgeFrontier? _currentPurgeFrontier;
+    private int _purgeFrontierCursor;
+    private long _purgeFrontierReadAt = long.MinValue;
+
+    /// <summary>
+    /// Re-reads this cluster's cross-tree purge frontier at most every
+    /// <see cref="PurgeFrontierInterval"/> and takes the next chunk of it, in a
+    /// rotation over the ordered trees, so every tree is re-advertised within a
+    /// bounded number of refreshes however many there are (issue #4733). A
+    /// failed read advertises nothing until the next.
+    /// </summary>
+    private async Task RefreshPurgeFrontierAsync()
+    {
+        if (_purgeFrontierReadAt != long.MinValue
+            && Environment.TickCount64 - _purgeFrontierReadAt < (long)PurgeFrontierInterval.TotalMilliseconds)
+        {
+            return;
+        }
+
+        _purgeFrontierReadAt = Environment.TickCount64;
+        try
+        {
+            var frontiers = await _grainFactory
+                .GetGrain<ICrossTreePurgeFrontierSourceGrain>(ICrossTreePurgeFrontierSourceGrain.Key)
+                .GetAsync();
+            if (frontiers.Count == 0)
+            {
+                _currentPurgeFrontier = null;
+                return;
+            }
+
+            var ordered = frontiers.OrderBy(static f => f.Key, StringComparer.Ordinal).ToList();
+            var start = _purgeFrontierCursor % ordered.Count;
+            var chunk = ordered.Skip(start).Concat(ordered.Take(start)).Take(CrossTreePurgeFrontier.MaxEntries);
+            _purgeFrontierCursor = start + CrossTreePurgeFrontier.MaxEntries;
+            _currentPurgeFrontier = new CrossTreePurgeFrontier
+            {
+                Frontiers = chunk.ToImmutableDictionary(StringComparer.Ordinal),
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _currentPurgeFrontier = null;
+            Logger.LogDebug(ex, "{Context}: reading the cross-tree purge frontier failed; none is advertised until the next read.", LogContext);
+        }
+    }
 
     /// <summary>
     /// Stamps every cross-tree terminal in the drained batch with its
@@ -80,7 +134,9 @@ internal sealed partial class ReplicationShipperGrain
                 var memberships = await registry.GetCrossTreeMembershipsAsync(txids);
                 foreach (var txid in txids)
                 {
-                    _crossTreeStamps[txid] = memberships.TryGetValue(txid, out var membership) ? membership.DecisionStamps : null;
+                    _crossTreeStamps[txid] = memberships.TryGetValue(txid, out var membership)
+                        ? (membership.DecisionStamps, membership.DecisionSequences)
+                        : (null, null);
                 }
             }
         }
@@ -89,13 +145,17 @@ internal sealed partial class ReplicationShipperGrain
         {
             var entry = _drainBuffer[i];
             if (!IsCrossTreeTerminal(in entry)
-                || !_crossTreeStamps.TryGetValue(entry.TransactionId, out var stamps)
-                || stamps is null)
+                || !_crossTreeStamps.TryGetValue(entry.TransactionId, out var recorded)
+                || recorded.Stamps is null)
             {
                 continue;
             }
 
-            var stamped = entry with { CrossTreeDecisionStamps = stamps };
+            var stamped = entry with
+            {
+                CrossTreeDecisionStamps = recorded.Stamps,
+                CrossTreeDecisionSequences = recorded.Sequences,
+            };
             var writer = _coalesceReencodeWriter ??= new System.Buffers.ArrayBufferWriter<byte>();
             writer.Clear();
             _walRecordEncoder.Encode(in stamped, writer);

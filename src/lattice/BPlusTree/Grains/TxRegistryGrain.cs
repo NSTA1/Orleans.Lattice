@@ -523,7 +523,8 @@ internal sealed partial class TxRegistryGrain(
     }
 
     /// <inheritdoc />
-    public async Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps)
+    public async Task RecordCrossTreeDecisionStampsAsync(
+        Guid txid, IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null)
     {
         ArgumentNullException.ThrowIfNull(stamps);
         if (!state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
@@ -531,11 +532,11 @@ internal sealed partial class TxRegistryGrain(
             return;
         }
 
-        if (membership.DecisionStamps is not null)
+        if (membership.DecisionStamps is not null && (sequences is null || membership.DecisionSequences is not null))
         {
             if (!await WhenDurableAsync(txid))
             {
-                await RecordCrossTreeDecisionStampsAsync(txid, stamps);
+                await RecordCrossTreeDecisionStampsAsync(txid, stamps, sequences);
             }
 
             return;
@@ -543,9 +544,31 @@ internal sealed partial class TxRegistryGrain(
 
         state.State.CrossTreeMemberships[txid] = membership with
         {
-            DecisionStamps = stamps.ToImmutableDictionary(StringComparer.Ordinal),
+            DecisionStamps = membership.DecisionStamps ?? stamps.ToImmutableDictionary(StringComparer.Ordinal),
+            DecisionSequences = membership.DecisionSequences ?? sequences?.ToImmutableDictionary(StringComparer.Ordinal),
         };
         await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships[txid] = membership);
+    }
+
+    /// <inheritdoc />
+    public Task<long?> GetCrossTreeSequenceFloorAsync()
+    {
+        long? floor = null;
+        foreach (var (txid, membership) in state.State.CrossTreeMemberships)
+        {
+            if (!state.State.Decisions.ContainsKey(txid))
+            {
+                continue;
+            }
+
+            var sequence = membership.DecisionSequences is { } sequences && sequences.TryGetValue(TreeId, out var own) ? own : 0L;
+            if (floor is not { } current || sequence < current)
+            {
+                floor = sequence;
+            }
+        }
+
+        return Task.FromResult(floor);
     }
 
     /// <inheritdoc />

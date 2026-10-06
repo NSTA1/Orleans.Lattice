@@ -64,12 +64,14 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
         var key = LatticeCrossTreeReceiverGrain.ComputeKey(sourceClusterId, entry.CrossTreeOperationId);
         var barrier = _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key);
-        if (entry.CrossTreeDecisionStamps is { Count: > 0 } stamps)
-        {
-            // Before the arrival, so the barrier judges its other trees' imports
-            // against them from the moment this row opens it (#4684).
-            await barrier.RecordDecisionStampsAsync(stamps).ConfigureAwait(true);
-        }
+        // Before the arrival, so the barrier judges its other trees' imports
+        // against them from the moment this row opens it (#4684), and keeps what
+        // its tombstone is dropped against (#4733).
+        await barrier.RecordDecisionStampsAsync(
+                (IReadOnlyDictionary<string, long>?)entry.CrossTreeDecisionStamps ?? System.Collections.Immutable.ImmutableDictionary<string, long>.Empty,
+                entry.CrossTreeDecisionSequences,
+                entry.CrossTreeParticipants.IsDefaultOrEmpty ? null : entry.CrossTreeParticipants)
+            .ConfigureAwait(true);
 
         var decision = await barrier
             .NotifyTerminalAsync(new CrossTreeReceiverTerminal

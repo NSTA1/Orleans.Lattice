@@ -145,7 +145,18 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// membership is left unchanged. Durable before it returns.
     /// </summary>
     [AlwaysInterleave]
-    Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps);
+    Task RecordCrossTreeDecisionStampsAsync(
+        Guid txid, IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null);
+
+    /// <summary>
+    /// The lowest decision sequence of this tree among the cross-tree
+    /// sub-sagas whose decision this registry still stores (issue #4733), or
+    /// <see langword="null"/> when it stores none. A decided sub-saga recorded
+    /// before sequencing counts as <c>0</c>; an undecided one is skipped, since
+    /// it is sequenced only after the counter a caller reads first. Pure read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<long?> GetCrossTreeSequenceFloorAsync();
 
     /// <summary>
     /// Receiver-side analogue of

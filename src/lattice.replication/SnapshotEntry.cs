@@ -231,6 +231,12 @@ public readonly record struct SnapshotEntry
     [Id(15)] internal ImmutableDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
 
     /// <summary>
+    /// The decision sequences of the cross-tree write
+    /// <see cref="CrossTreeOperationId"/> (issue #4733), or <see langword="null"/>.
+    /// </summary>
+    [Id(16)] internal ImmutableDictionary<string, long>? CrossTreeDecisionSequences { get; init; }
+
+    /// <summary>
     /// Compares two entries by value, with <see cref="Value"/> and
     /// <see cref="Delta"/> compared by content. The compiler-generated
     /// record-struct equality compares each <see cref="byte"/> array with
@@ -259,7 +265,8 @@ public readonly record struct SnapshotEntry
             ? other.CrossTreeParticipants.IsDefaultOrEmpty
             : !other.CrossTreeParticipants.IsDefaultOrEmpty
                 && CrossTreeParticipants.AsSpan().SequenceEqual(other.CrossTreeParticipants.AsSpan()))
-        && StampsEqual(CrossTreeDecisionStamps, other.CrossTreeDecisionStamps);
+        && StampsEqual(CrossTreeDecisionStamps, other.CrossTreeDecisionStamps)
+        && StampsEqual(CrossTreeDecisionSequences, other.CrossTreeDecisionSequences);
 
     private static bool StampsEqual(ImmutableDictionary<string, long>? left, ImmutableDictionary<string, long>? right)
     {

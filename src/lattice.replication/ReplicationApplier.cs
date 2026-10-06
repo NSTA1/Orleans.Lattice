@@ -1209,6 +1209,9 @@ internal sealed partial class ReplicationApplier(
     /// <see cref="WalRecord.Key"/> for back-compat with pre-Option A WAL
     /// records authored before the typed slot was introduced.
     /// </summary>
+    private static readonly IReadOnlyDictionary<string, long> EmptyStamps =
+        new Dictionary<string, long>(StringComparer.Ordinal);
+
     private async Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
@@ -1267,12 +1270,16 @@ internal sealed partial class ReplicationApplier(
             // The decision stamps reach the barrier before the terminal does, so
             // the barrier compares its trees' imports with them from the moment
             // the terminal opens it (#4684).
-            if (entry.CrossTreeDecisionStamps is { Count: > 0 } stamps)
-            {
-                await grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(
-                        LatticeCrossTreeReceiverGrain.ComputeKey(entry.OriginClusterId!, crossTreeOperationId))
-                    .RecordDecisionStampsAsync(stamps);
-            }
+            // The decision sequences and the full participant list, too: what the
+            // barrier's tombstone is dropped against (#4733). Recorded for an
+            // operation decided before stamping as well, so its tombstone can
+            // still be dropped once the origin stores none of its decisions.
+            await grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(
+                    LatticeCrossTreeReceiverGrain.ComputeKey(entry.OriginClusterId!, crossTreeOperationId))
+                .RecordDecisionStampsAsync(
+                    entry.CrossTreeDecisionStamps ?? EmptyStamps,
+                    entry.CrossTreeDecisionSequences,
+                    entry.CrossTreeParticipants);
         }
 
         await apply.ApplyTxTerminalAsync(

@@ -83,15 +83,23 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         // whose terminal was acknowledged long ago. A decided tombstone takes
         // the decided short-circuit instead: it finalizes the arriving tree
         // with the verdict and never re-indexes. The receiver cannot observe
-        // the origin's purge, so the tombstone is kept: identity and verdict
-        // only.
+        // the origin's purge directly; the tombstone keeps what it is dropped
+        // against once the origin's advertised purge frontier passes the
+        // operation on every participant (#4733).
         var tombstone = new CrossTreeReceiverState
         {
             OriginClusterId = state.State.OriginClusterId,
             OperationId = state.State.OperationId,
             Decided = true,
             Committed = state.State.Committed,
+            Participants = state.State.Participants,
+            DecisionSequences = state.State.DecisionSequences,
         };
+
+        // Listed before the frontier is read: either the next frontier advance
+        // sweeps the listing, or the read below sees it (#4733).
+        await ListTombstoneAsync(tombstone.Participants);
+
         var previous = state.State;
         state.State = tombstone;
         try
@@ -102,6 +110,104 @@ internal sealed class LatticeCrossTreeReceiverGrain(
         {
             state.State = previous;
             throw;
+        }
+
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is { } grainFactory
+            && !string.IsNullOrEmpty(tombstone.OriginClusterId))
+        {
+            var frontiers = await grainFactory.GetGrain<ICrossTreePurgeFrontierGrain>(tombstone.OriginClusterId).GetAsync();
+            await SettleTombstoneAsync(frontiers);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> SettleTombstoneAsync(IReadOnlyDictionary<string, long> frontiers)
+    {
+        ArgumentNullException.ThrowIfNull(frontiers);
+        if (!state.State.Decided || state.State.WaitSet.Count > 0 || _decisionAwaitingPersist)
+        {
+            // No state, or a barrier that is not a compacted tombstone: nothing
+            // for the tombstone listing to keep.
+            return false;
+        }
+
+        if (!TombstonePassed(frontiers))
+        {
+            return true;
+        }
+
+        Logger.LogInformation(
+            "Cross-tree receiver {Key}: the origin's purge frontier has passed the operation on every participant; dropping its tombstone.",
+            GrainContext.GrainId.Key);
+        var participants = state.State.Participants;
+        await state.ClearStateAsync();
+        try
+        {
+            await UnlistTombstoneAsync(participants);
+        }
+        catch (Exception ex)
+        {
+            // A listing left behind is removed by the next sweep that finds the
+            // barrier holding no state.
+            Logger.LogDebug(ex, "Cross-tree receiver {Key}: unlisting the dropped tombstone failed.", GrainContext.GrainId.Key);
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether the origin's purge frontier has reached the operation's decision
+    /// sequence on every participant (issue #4733). Every participant counts,
+    /// not only the trees replicated here: a participant that becomes
+    /// replicated here later can still import the operation's decision row
+    /// while the origin stores it, and a dropped tombstone would reopen on it.
+    /// An operation decided before sequencing counts as sequence <c>0</c>; a
+    /// tombstone with no recorded participants is kept.
+    /// </summary>
+    private bool TombstonePassed(IReadOnlyDictionary<string, long> frontiers)
+    {
+        if (state.State.Participants.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var participant in state.State.Participants)
+        {
+            var sequence = state.State.DecisionSequences is { } sequences && sequences.TryGetValue(participant, out var own) ? own : 0L;
+            if (!frontiers.TryGetValue(participant, out var frontier) || frontier < sequence)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private async Task ListTombstoneAsync(IEnumerable<string> participants)
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in participants)
+        {
+            await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).AddTombstoneAsync(key);
+        }
+    }
+
+    private async Task UnlistTombstoneAsync(IEnumerable<string> participants)
+    {
+        if (GrainContext.ActivationServices?.GetService<IGrainFactory>() is not { } grainFactory)
+        {
+            return;
+        }
+
+        var key = GrainContext.GrainId.Key.ToString()!;
+        foreach (var tree in participants)
+        {
+            await grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree).RemoveTombstoneAsync(key);
         }
     }
 
@@ -340,25 +446,50 @@ internal sealed class LatticeCrossTreeReceiverGrain(
     }
 
     /// <inheritdoc />
-    public async Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps)
+    public async Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps,
+        IReadOnlyDictionary<string, long>? sequences = null,
+        IReadOnlyList<string>? participants = null)
     {
         ArgumentNullException.ThrowIfNull(stamps);
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             GrainContext.ActivationServices, state.State.WaitSet.FirstOrDefault() ?? string.Empty, LatticeOperation.Replication);
 
+        var (previousStamps, previousSequences, previousParticipants) =
+            (state.State.DecisionStamps, state.State.DecisionSequences, state.State.Participants);
+        var dirty = false;
         if (state.State.DecisionStamps is null && stamps.Count > 0)
         {
             // Persisted even before the barrier opens: the terminal or decision
             // row that carried the stamps opens it next, and a barrier that lost
             // them would take the operation for one decided before stamping.
             state.State.DecisionStamps = new Dictionary<string, long>(stamps, StringComparer.Ordinal);
+            dirty = true;
+        }
+
+        // What the tombstone is dropped against (#4733). The first recorded stand.
+        if (state.State.DecisionSequences is null && sequences is { Count: > 0 })
+        {
+            state.State.DecisionSequences = new Dictionary<string, long>(sequences, StringComparer.Ordinal);
+            dirty = true;
+        }
+
+        if (state.State.Participants.Count == 0 && participants is { Count: > 0 })
+        {
+            state.State.Participants = CanonicalStringSet.SortedDistinct(participants);
+            dirty = true;
+        }
+
+        if (dirty)
+        {
             try
             {
                 await state.WriteStateAsync();
             }
             catch
             {
-                state.State.DecisionStamps = null;
+                (state.State.DecisionStamps, state.State.DecisionSequences, state.State.Participants) =
+                    (previousStamps, previousSequences, previousParticipants);
                 throw;
             }
         }

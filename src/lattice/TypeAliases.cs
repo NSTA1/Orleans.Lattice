@@ -379,6 +379,8 @@ internal static class TypeAliases
     internal const string CrossTreeBarrierIndexState = "ol.cbs";
     internal const string CrossTreeReceiverStatus = "ol.crq";
     internal const string CrossTreeImportRecord = "ol.cir";
+    internal const string ICrossTreePurgeFrontierGrain = "ol.cpf";
+    internal const string CrossTreePurgeFrontierState = "ol.cps";
     internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
     // Ambient producer-side cross-tree terminal metadata (RequestContext value).
     internal const string CrossTreeTerminalInfo = "ol.cti";

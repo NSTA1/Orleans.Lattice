@@ -604,6 +604,31 @@ internal static class TxRegistryFanOut
     }
 
     /// <summary>
+    /// The lowest decision sequence of <paramref name="treeId"/> among the
+    /// cross-tree sub-sagas whose decision any of its registry shards still
+    /// stores (issue #4733), or <see langword="null"/> when none does. Covers
+    /// every shard the durable high-water names, so a shard that recorded a
+    /// membership before this call is read.
+    /// </summary>
+    public static async Task<long?> CrossTreeSequenceFloorAsync(IGrainFactory grainFactory, string treeId)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var (parts, _) = await FanOutAsync(
+            grainFactory, treeId, TxRegistryHighWaterCache.Get(grainFactory, treeId),
+            static registry => registry.GetCrossTreeSequenceFloorAsync());
+        long? floor = null;
+        foreach (var part in parts)
+        {
+            if (part is { } value && (floor is not { } current || value < current))
+            {
+                floor = value;
+            }
+        }
+
+        return floor;
+    }
+
+    /// <summary>
     /// Runs <paramref name="call"/> on every registry key covering
     /// <paramref name="highWater"/>, re-running over a wider key set until the
     /// durable mark read alongside the fan-out no longer exceeds it. Returns the
