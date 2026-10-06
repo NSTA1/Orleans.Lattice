@@ -11,6 +11,7 @@
   "sources": [
     "docs/lattice.replication/dead-letter-queue.md",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
+    "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs#ILatticeReplicationPeerAdmin",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus",
     "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApiGrpc",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
@@ -50,7 +51,7 @@
     "src/lattice.replication/PeerStatus/ReplicationPeerStatusReadPath.cs#AddReplicationPeerStatusReadPath"
   ],
   "in_process": {
-    "interface": "ILatticeReplicationControl; ILatticeReplicationStatus",
+    "interface": "ILatticeReplicationControl; ILatticeReplicationPeerAdmin; ILatticeReplicationStatus",
     "registration": "ISiloBuilder.AddLatticeReplicationApi after AddLatticeReplication(..., enableRuntimeConfig: true); ISiloBuilder.AddLatticeReplicationStatusApi after AddLatticeReplication(...).",
     "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApi"
   },
@@ -93,7 +94,8 @@
         "registration": "AddLatticeReplicationApi",
         "package": "Orleans.Lattice.Api.Replication",
         "provides": [
-          "ILatticeReplicationControl"
+          "ILatticeReplicationControl",
+          "ILatticeReplicationPeerAdmin"
         ],
         "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationApi"
       },
@@ -1237,7 +1239,7 @@
     },
     {
       "id": "decommission-peer",
-      "in_process": "ILatticeReplicationControl.DecommissionPeerAsync",
+      "in_process": "ILatticeReplicationPeerAdmin.DecommissionPeerAsync",
       "grpc_method": "/orleans.lattice.api.replication/DecommissionPeer",
       "transport_scope": "both",
       "request": "ReplicationDecommissionPeerRequestMessage",
@@ -1275,7 +1277,7 @@
         "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
       },
       "sources": [
-        "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#DecommissionPeerAsync",
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs#DecommissionPeerAsync",
         "src/lattice.replication/ILatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
         "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
         "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#DecommissionPeerMethodName",
