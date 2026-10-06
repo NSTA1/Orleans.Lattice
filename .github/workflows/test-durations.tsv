@@ -90,7 +90,7 @@
 # afterwards, ReplicationLowWatermark and ReplicationCausalDelivery, about 5.5
 # test-minutes measured locally.
 # The atomic-variants row was split out of atomic by #4722: the summed local
-# TLC time of AtomicCommitCrossCluster's 29 variants at two workers, 34
+# TLC time of AtomicCommitCrossCluster's 35 variants at two workers, 33
 # test-minutes, / 3.9. The atomic row is re-priced for its mutants alone,
 # whose controls now run over a larger base, as an estimate.
 lattice	formal-tlc	deterministic	8.9
@@ -99,7 +99,7 @@ lattice	formal-tlc-convergence	deterministic	15.1
 lattice	formal-tlc-replication-wal	deterministic	13.8
 lattice	formal-tlc-rebootstrap	deterministic	16.8
 lattice	formal-tlc-atomic	deterministic	11.5
-lattice	formal-tlc-atomic-variants	deterministic	8.8
+lattice	formal-tlc-atomic-variants	deterministic	8.5
 lattice	formal-tlc-backup	deterministic	7.7
 lattice	bplustree	deterministic	5.0
 lattice	rest	deterministic	2.5

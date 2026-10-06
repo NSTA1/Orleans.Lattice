@@ -362,4 +362,4 @@ This table is the one place this directory states them; see
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
 | `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
-| `AtomicCommitCrossCluster` | 5 | 4 | 32 | 59 | 39 | 58,304 |
+| `AtomicCommitCrossCluster` | 5 | 4 | 34 | 63 | 41 | 58,304 |
