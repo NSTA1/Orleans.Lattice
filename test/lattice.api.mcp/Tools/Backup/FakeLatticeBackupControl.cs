@@ -54,7 +54,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
         }
     }
 
-    public Task<LatticeBackupCaptureResult> CreateBackupAsync(
+    public Task<LatticeBackupCaptureResult> SeedBackupAsync(
         LatticeBackupCaptureRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -66,7 +66,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
         return Task.FromResult(new LatticeBackupCaptureResult(id, manifest));
     }
 
-    public Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
+    internal Task<LatticeBackupCaptureResult> CaptureIncrementalNowAsync(
         LatticeBackupIncrementalCaptureRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -141,7 +141,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
         }
     }
 
-    public Task<LatticeRestoreResult> RestoreBackupAsync(
+    internal Task<LatticeRestoreResult> RestoreNowAsync(
         LatticeRestoreRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -176,11 +176,6 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
         return Task.FromResult(_backups.Remove(backupId));
     }
 
-    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
-        LatticeBackupSetCaptureRequest request,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
     public Task ScheduleBackupAsync(
         LatticeBackupScheduleRequest request,
         CancellationToken cancellationToken = default)
@@ -195,30 +190,12 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupControl
     public IAsyncEnumerable<BackupManifest> StreamBackupsAsync(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 
-    public Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
-    public Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
-        bool pruneOrphans = false,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
-    public Task<LatticeRestoreResult> ColdRestoreAsync(
-        LatticeRestoreRequest request,
-        CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
     public Task<BackupScopeCapabilities> ProbeCapabilitiesAsync(
         BackupScopeSelector scope,
         CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 
     public Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
-
-    public Task<BackupHealthReport> CheckBackupHealthAsync(
-        string backupId,
-        CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
 
     public Task<BackupHealthReport?> GetBackupHealthAsync(

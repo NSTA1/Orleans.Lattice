@@ -861,34 +861,6 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <b>Executes an online move</b> of WAL partition <paramref name="partition"/> of
-    /// <paramref name="treeId"/> to <paramref name="targetProviderKey"/>, after
-    /// authorizing the whole-tree <see cref="LatticeOperation.TreeLifecycle"/> capability
-    /// fail-closed. Only the target partition is briefly quiesced while its tail is
-    /// copied and the placement pin is atomically flipped; the source tail is retained
-    /// (never trimmed by the move) until an explicit
-    /// <see cref="ReclaimMovedWalSourceAsync"/> call, so the move is revertible until
-    /// reclaimed. Idempotent: a partition already pinned to the target is an idempotent
-    /// no-copy repair. Reserved system tree ids are rejected.
-    /// </summary>
-    /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="partition">The WAL partition index to move. Must be in range for the tree.</param>
-    /// <param name="targetProviderKey">The target storage provider key. Must not be <c>null</c> or empty, and must resolve on the executing silo.</param>
-    /// <param name="options">Optional move tunables; <c>null</c> takes the conventional defaults.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The move receipt, recording the copied range and the new placement version.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> or <paramref name="targetProviderKey"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="partition"/> is out of range for the tree.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the tree-lifecycle capability.</exception>
-    [Obsolete("ExecuteWalMoveAsync blocks until the work completes, so a long move is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartWalMoveAsync and poll GetOperationStatusAsync instead. ExecuteWalMoveAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
-        string treeId,
-        int partition,
-        string targetProviderKey,
-        TreeWalMoveOptions? options = null,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// <b>Reclaims</b> the orphaned source tail left behind by a completed
     /// <see cref="ExecuteWalMoveAsync"/> - discarding partition
     /// <paramref name="partition"/>'s retained log on
@@ -980,48 +952,6 @@ public interface ILatticeTreeAdmin
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// <b>Rebuilds</b> the materialised view named <paramref name="viewName"/> from
-    /// current source state using a shadow-swap - a complete new generation tree is
-    /// built and the active generation is atomically flipped over in a single durable
-    /// commit, so readers never observe a half-built view - after resolving the view's
-    /// source tree and authorizing whole-tree <see cref="LatticeOperation.Admin"/> over
-    /// that source fail-closed. Online: the source keeps serving reads and writes
-    /// throughout.
-    /// </summary>
-    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The view's status after the rebuild.</returns>
-    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
-    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
-    [Obsolete("RebuildViewAsync blocks until the work completes, so a long rebuild is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartViewRebuildAsync and poll GetOperationStatusAsync instead. RebuildViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    Task<TreeViewStatus> RebuildViewAsync(
-        string viewName,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// <b>Reconciles</b> the materialised view named <paramref name="viewName"/> against
-    /// current source state - view anti-entropy that builds the expected view into a
-    /// shadow generation, compares it to the live view via a content digest, and swaps
-    /// the shadow in only when they diverge - after resolving the view's source tree and
-    /// authorizing whole-tree <see cref="LatticeOperation.Admin"/> over that source
-    /// fail-closed. Online and idempotent: a view that already matches its source is left
-    /// untouched.
-    /// </summary>
-    /// <param name="viewName">The logical view name. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The reconcile result, reporting whether drift was detected and repaired.</returns>
-    /// <exception cref="ArgumentException"><paramref name="viewName"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="InvalidOperationException">The materialised-view subsystem is not enabled on this cluster.</exception>
-    /// <exception cref="KeyNotFoundException">No view named <paramref name="viewName"/> is registered (or its source cannot be resolved).</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the view's source tree.</exception>
-    [Obsolete("ReconcileViewAsync blocks until the work completes, so a long reconcile is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartViewReconcileAsync and poll GetOperationStatusAsync instead. ReconcileViewAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    Task<TreeViewReconcileResult> ReconcileViewAsync(
-        string viewName,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// <b>Drops</b> the materialised view named <paramref name="viewName"/> - stopping
     /// and decommissioning its maintainer, deleting every backing <c>view-{name}</c>
     /// generation, and removing its catalog entry and durable runtime registration -
@@ -1074,29 +1004,6 @@ public interface ILatticeTreeAdmin
     /// <exception cref="KeyNotFoundException">No tag index named <paramref name="indexName"/> is registered on this cluster.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the index's backing membership tree.</exception>
     Task<TreeTagIndexStatus> GetTagIndexStatusAsync(
-        string indexName,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// <b>Reconciles</b> the tag index named <paramref name="indexName"/> against current
-    /// source state - an online, digest-gated live sweep that removes membership rows
-    /// whose subject key no longer exists - after authorizing whole-tree
-    /// <see cref="LatticeOperation.Admin"/> over its backing membership tree
-    /// (<c>tag-{indexName}</c>) fail-closed. Reconcile writes only to the backing
-    /// membership tree, so it authorizes on that tree; the covered subject trees are
-    /// scanned as read-only infrastructure. Online and idempotent: an index that already
-    /// matches its source is left untouched (no rows removed) and covered trees are never
-    /// paused.
-    /// </summary>
-    /// <param name="indexName">The logical tag-index name to reconcile. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The reconcile report, pairing the index identity with the sweep's counts.</returns>
-    /// <exception cref="ArgumentException"><paramref name="indexName"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="InvalidOperationException">The tag-index subsystem is not available on this cluster.</exception>
-    /// <exception cref="KeyNotFoundException">No tag index named <paramref name="indexName"/> is registered on this cluster.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller lacks the admin capability over the index's backing membership tree.</exception>
-    [Obsolete("ReconcileTagIndexAsync blocks until the work completes, so a long sweep is cut off by the caller's timeout. Use ILatticeTreeAdminOperations.StartTagIndexReconcileAsync and poll GetOperationStatusAsync instead. ReconcileTagIndexAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.treeadmin/operations.html#migrating-from-the-blocking-verbs")]
-    Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
         string indexName,
         CancellationToken cancellationToken = default);
 

@@ -26,9 +26,8 @@ transports bind over it, and it costs nothing until it is registered.
   breaks that increment's restore chain - delete an incremental chain tip-first.
 - **Accept-then-poll operations.** `ILatticeBackupOperations` starts backup and
   restore work, returns a handle, and lets callers poll progress or cancel. The
-  older blocking verbs are deprecated and will be removed in the next major
-  version; migrate at
-  https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs.
+  blocking `LATTICE0002` verbs were removed in this major version; migrate at
+  https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-removed-blocking-verbs.
 
 ## Security
 

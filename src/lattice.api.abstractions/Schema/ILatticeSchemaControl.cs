@@ -24,14 +24,6 @@ namespace Orleans.Lattice.Api.Schema;
 /// listing is streamed as <see cref="IAsyncEnumerable{T}"/> so a large queue
 /// enumerates with bounded memory.
 /// </para>
-/// <para>
-/// The blocking remediation and migration verbs (<see cref="RemediateAsync"/>,
-/// <see cref="MigrateToTargetVersionAsync"/> and <see cref="AdvanceAndMigrateAsync"/>)
-/// are deprecated (diagnostic <c>LATTICE0002</c>) in favour of the accept-then-poll
-/// <see cref="ILatticeSchemaOperations"/>, and will be removed in the next major
-/// version. They still work: each drives the same bounded, resumable remediation
-/// slices and waits for the terminal report, as it always has.
-/// </para>
 /// </remarks>
 public interface ILatticeSchemaControl
 {
@@ -136,37 +128,6 @@ public interface ILatticeSchemaControl
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Advances <paramref name="treeId"/>'s target schema version to
-    /// <paramref name="newTargetVersion"/> and kicks off a background eager migration,
-    /// after authorizing schema-management on the tree fail-closed.
-    /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="newTargetVersion">The new target version. Must be greater than the current target.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal migration report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">The tree is unversioned, the target does not advance, or schema versioning is not registered.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to manage the tree's schema.</exception>
-    [Obsolete("AdvanceAndMigrateAsync blocks until the work completes, so a long remediation or migration is cut off by the caller's timeout. Use ILatticeSchemaOperations.StartAdvanceAndMigrateAsync and poll GetOperationStatusAsync instead. AdvanceAndMigrateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Runs (or idempotently resumes / no-ops) an eager migration that re-stamps every
-    /// existing value of <paramref name="treeId"/> to the tree's current target
-    /// version, after authorizing schema-management on the tree fail-closed.
-    /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal migration report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved.</exception>
-    /// <exception cref="InvalidOperationException">The tree is unversioned, or schema versioning is not registered.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to manage the tree's schema.</exception>
-    [Obsolete("MigrateToTargetVersionAsync blocks until the work completes, so a long remediation or migration is cut off by the caller's timeout. Use ILatticeSchemaOperations.StartMigrationAsync and poll GetOperationStatusAsync instead. MigrateToTargetVersionAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
-        string treeId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Opts <paramref name="treeId"/> back out of envelope versioning, after
     /// authorizing schema-management on the tree fail-closed. Returns <c>true</c> when
     /// a config was removed.
@@ -180,27 +141,6 @@ public interface ILatticeSchemaControl
     Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Starts (or idempotently resumes) a background remediation of
-    /// <paramref name="treeId"/>, after authorizing schema-management on the tree
-    /// fail-closed.
-    /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c>, empty, or reserved.</param>
-    /// <param name="transform">The per-value remediation transform.</param>
-    /// <param name="targetPolicy">The policy the transformed values must satisfy. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The terminal remediation report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c>, empty, or reserved, or <paramref name="targetPolicy"/> is invalid.</exception>
-    /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
-    /// <exception cref="InvalidOperationException">A remediation with different parameters is already in flight.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to manage the tree's schema.</exception>
-    [Obsolete("RemediateAsync blocks until the work completes, so a long remediation or migration is cut off by the caller's timeout. Use ILatticeSchemaOperations.StartRemediationAsync and poll GetOperationStatusAsync instead. RemediateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Reads the current or last-known remediation status for
     /// <paramref name="treeId"/>, after authorizing read on the tree fail-closed.
     /// </summary>
@@ -210,21 +150,6 @@ public interface ILatticeSchemaControl
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree's schema.</exception>
     Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(
-        string treeId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Scans every current value of <paramref name="treeId"/> against its current
-    /// compiled policy and returns a per-tree compliance report, after authorizing
-    /// read on the tree fail-closed. A pure read: it never mutates data. Cancellable,
-    /// with best-effort progress via <see cref="LatticeSchemaComplianceReport.ScannedCount"/>.
-    /// </summary>
-    /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The compliance report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the tree's schema.</exception>
-    [Obsolete("ScanComplianceAsync blocks until every value of the tree has been read, so a large scan is cut off by the caller's timeout. Use ILatticeSchemaComplianceOperations.StartComplianceScanAsync and poll GetOperationStatusAsync instead. ScanComplianceAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-scan")]
-    Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
         string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>

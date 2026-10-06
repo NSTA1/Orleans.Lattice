@@ -88,13 +88,11 @@ static async Task<string?> CaptureAsync(ILatticeBackupOperations operations, Can
 }
 ```
 
-## Migrating from the blocking verbs
+## Migrating from the removed blocking verbs
 
-`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, `CheckBackupHealthAsync`, `RebuildCatalogFromSinkAsync` and `ScrubCatalogAgainstSinkAsync` on `ILatticeBackupControl`, plus the matching blocking calls that exist on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs.
+`CreateBackupAsync`, `CreateIncrementalBackupAsync`, `CreateBackupSetAsync`, `RestoreBackupAsync`, `ColdRestoreAsync`, `CheckBackupHealthAsync`, `RebuildCatalogFromSinkAsync` and `ScrubCatalogAgainstSinkAsync` on `ILatticeBackupControl`, plus the matching blocking calls that previously existed on the gRPC client and MCP surface, were deprecated in 9.9.0 with warning `LATTICE0002` and are removed in this major version. Migrate to the accept-then-poll operations below:
 
-Each deprecated verb is now a thin wrapper that starts the matching operation and waits for its in-process completion, so it behaves as before - same result, same exceptions, and cancelling its token cancels the work - and its work also appears in `ListOperationsAsync`. It still waits, though, so a long run is still exposed to the caller's timeout. To migrate:
-
-| Deprecated | Replacement |
+| Removed blocking verb | Replacement |
 |---|---|
 | `CreateBackupAsync(request)` | `StartBackupAsync(request)`, then poll `GetOperationStatusAsync`; the backup id is `ResultReference`. |
 | `CreateIncrementalBackupAsync(request)` | `StartIncrementalBackupAsync(request)`. |
@@ -105,15 +103,7 @@ Each deprecated verb is now a thin wrapper that starts the matching operation an
 | `RebuildCatalogFromSinkAsync()` | `StartCatalogRebuildAsync()`; rebuild the report with `BackupOperationResults.TryReadCatalogRebuildReport`. |
 | `ScrubCatalogAgainstSinkAsync(pruneOrphans)` | `StartCatalogScrubAsync(pruneOrphans)`; rebuild the report with `BackupOperationResults.TryReadCatalogScrubReport`. |
 
-Over gRPC, the `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `RestoreBackup` and `CheckBackupHealth` RPCs stay on the wire, deprecated, until the next major version; use `StartBackup`, `StartIncrementalBackup`, `StartBackupSet`, `StartRestore`, `StartColdRestore`, `StartBackupHealthCheck`, `StartCatalogRebuild`, `StartCatalogScrub`, `GetBackupOperationStatus`, `ListBackupOperations` and `CancelBackupOperation` (see the [gRPC API reference](../lattice.api.backup.grpc/api.md)). The catalog rebuild and scrub had no blocking RPC; they reach the wire only as tracked operations. Over MCP, use the `lattice_backup_start*` and `lattice_backup_operation_*` tools; the old `lattice_backup_create`, `lattice_backup_create_incremental` and `lattice_backup_restore` names are kept as aliases of the start tools for one release (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
-
-To keep a deliberate use of a deprecated verb building warning-free, suppress the diagnostic locally:
-
-```text
-#pragma warning disable LATTICE0002
-var result = await control.CreateBackupAsync(request, cancellationToken);
-#pragma warning restore LATTICE0002
-```
+Over gRPC, use `StartBackup`, `StartIncrementalBackup`, `StartBackupSet`, `StartRestore`, `StartColdRestore`, `StartBackupHealthCheck`, `StartCatalogRebuild`, `StartCatalogScrub`, `GetBackupOperationStatus`, `ListBackupOperations` and `CancelBackupOperation` (see the [gRPC API reference](../lattice.api.backup.grpc/api.md)). Over MCP, use the `lattice_backup_start*` and `lattice_backup_operation_*` tools; the `lattice_backup_create`, `lattice_backup_create_incremental` and `lattice_backup_restore` aliases are removed with the same major-version change (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
 
 ## See also
 

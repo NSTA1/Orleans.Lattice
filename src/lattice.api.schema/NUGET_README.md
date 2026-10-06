@@ -19,8 +19,7 @@ transports bind over it, and it costs nothing until it is registered.
 - **Accept-then-poll compliance audit.** `ILatticeSchemaComplianceOperations.StartComplianceScanAsync`
   starts a read-only scan and returns a handle at once; poll
   `GetOperationStatusAsync` for entry progress and rebuild the report with
-  `SchemaComplianceScanResults.TryReadReport`. The blocking `ScanComplianceAsync`
-  still runs the same pure audit, but is deprecated.
+  `SchemaComplianceScanResults.TryReadReport`.
 - **Bounded-memory enumeration.** Dead-letter listing is streamed, so a large
   strict-mode queue enumerates with bounded memory.
 - **Accept-then-poll remediation and migration.** `ILatticeSchemaOperations`
@@ -28,14 +27,15 @@ transports bind over it, and it costs nothing until it is registered.
   once; poll `GetOperationStatusAsync` for the phase (dry run, build, cutover) and
   the values processed, and cancel before cutover with `CancelOperationAsync`.
 
-## Deprecated
+## Migration
 
-`ScanComplianceAsync`, `RemediateAsync`, `MigrateToTargetVersionAsync` and
-`AdvanceAndMigrateAsync` on `ILatticeSchemaControl` block until the run ends, so a
-large scan or long run is cut off by the caller's timeout. They raise warning
-`LATTICE0002` and **will be removed in the next major version**; use
-`ILatticeSchemaComplianceOperations` or the `ILatticeSchemaOperations` start verbs
-instead.
+The blocking `LATTICE0002` facade verbs were removed in this major version. Use
+`ILatticeSchemaComplianceOperations` for compliance scans, and the
+`ILatticeSchemaOperations` start verbs for remediation and migration. The
+old-to-new mapping lives at
+https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-removed-blocking-scan
+and
+https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-removed-blocking-verbs.
 
 ## Security
 

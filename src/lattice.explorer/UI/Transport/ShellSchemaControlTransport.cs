@@ -85,31 +85,6 @@ internal sealed partial class ShellSchemaControlTransport(ShellTransportChannel 
             cancellationToken);
     }
 
-    // The shipped ILatticeSchemaControl still carries the deprecated blocking verbs
-    // (LATTICE0002), so this adapter forwards them to the client's deprecated calls.
-    // Nothing in the Explorer calls them: it starts tracked operations instead.
-#pragma warning disable LATTICE0002
-    /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        string treeId,
-        uint newTargetVersion,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        return CallAsync(
-            (TreeId: treeId, Version: newTargetVersion),
-            static (client, state, ct) => client.AdvanceAndMigrateAsync(state.TreeId, state.Version, ct),
-            null,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        return CallAsync(treeId, static (client, state, ct) => client.MigrateToTargetVersionAsync(state, ct), null, cancellationToken);
-    }
-
     /// <inheritdoc />
     public Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
     {
@@ -118,37 +93,10 @@ internal sealed partial class ShellSchemaControlTransport(ShellTransportChannel 
     }
 
     /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentNullException.ThrowIfNull(targetPolicy);
-        return CallAsync(
-            (TreeId: treeId, Transform: transform, Policy: targetPolicy),
-            static (client, state, ct) => client.RemediateAsync(state.TreeId, state.Transform, state.Policy, ct),
-            null,
-            cancellationToken);
-    }
-#pragma warning restore LATTICE0002
-
-    /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return CallAsync(treeId, static (client, state, ct) => client.GetRemediationStatusAsync(state, ct), null, cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeSchemaComplianceReport> ScanComplianceAsync(string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        // Forwards the deprecated verb to the client's deprecated twin (LATTICE0002).
-#pragma warning disable LATTICE0002
-        return CallAsync(treeId, static (client, state, ct) => client.ScanComplianceAsync(state, ct), null, cancellationToken);
-#pragma warning restore LATTICE0002
     }
 
     /// <inheritdoc />

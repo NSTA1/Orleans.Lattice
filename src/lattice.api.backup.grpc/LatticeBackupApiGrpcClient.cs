@@ -57,71 +57,11 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>Captures a full backup of the request's scope.</summary>
-    [Obsolete("CreateBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartBackupAsync and poll GetBackupOperationStatusAsync instead. CreateBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeBackupCaptureResult> CreateBackupAsync(
-        LatticeBackupCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var response = await UnaryAsync(
-            _methods.CreateBackup,
-            new BackupCaptureRequestMessage { Name = request.Name, Scope = request.Scope, PageSize = request.PageSize },
-            cancellationToken).ConfigureAwait(false);
-
-        return new LatticeBackupCaptureResult(response.BackupId, response.Manifest);
-    }
-
     /// <summary>Captures an incremental backup layered on a base backup.</summary>
-    [Obsolete("CreateIncrementalBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartIncrementalBackupAsync and poll GetBackupOperationStatusAsync instead. CreateIncrementalBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
-        LatticeBackupIncrementalCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var response = await UnaryAsync(
-            _methods.CreateIncrementalBackup,
-            new BackupIncrementalCaptureRequestMessage
-            {
-                Name = request.Name,
-                Scope = request.Scope,
-                BaseBackupId = request.BaseBackupId,
-                PageSize = request.PageSize,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        return new LatticeBackupCaptureResult(response.BackupId, response.Manifest);
-    }
-
     /// <summary>
     /// Captures a backup set - one full backup per scope, grouped under a single
     /// set manifest - optionally at a single cross-tree causal fence.
     /// </summary>
-    [Obsolete("CreateBackupSetAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartBackupSetAsync and poll GetBackupOperationStatusAsync instead. CreateBackupSetAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
-        LatticeBackupSetCaptureRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var response = await UnaryAsync(
-            _methods.CreateBackupSet,
-            new BackupSetCaptureRequestMessage
-            {
-                Name = request.Name,
-                Scopes = request.Scopes,
-                CrossTreeConsistent = request.CrossTreeConsistent,
-                PageSize = request.PageSize,
-            },
-            cancellationToken).ConfigureAwait(false);
-
-        var members = response.Members
-            .Select(m => new LatticeBackupCaptureResult(m.BackupId, m.Manifest))
-            .ToList();
-        return new LatticeBackupSetCaptureResult(response.SetManifest, members);
-    }
-
     /// <summary>
     /// Starts a tracked full capture and returns its handle at once; poll
     /// <see cref="GetBackupOperationStatusAsync"/> for progress and the outcome.
@@ -384,21 +324,6 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>Restores a backup into its target tree.</summary>
-    [Obsolete("RestoreBackupAsync calls a blocking RPC, so a long capture or restore is cut off by the call deadline. Use StartRestoreAsync and poll GetBackupOperationStatusAsync instead. RestoreBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeRestoreResult> RestoreBackupAsync(
-        LatticeRestoreRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-
-        var response = await UnaryAsync(
-            _methods.RestoreBackup,
-            ToRestoreMessage(request, trackingOperationId: null),
-            cancellationToken).ConfigureAwait(false);
-
-        return RestoreResponseMapping.ToRestoreResult(response);
-    }
-
     /// <summary>Reverts a shadow-cutover restore. Idempotent.</summary>
     public async Task RevertRestoreAsync(
         LatticeRestoreResult restore,
@@ -565,20 +490,6 @@ public sealed class LatticeBackupApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The fresh health report.</returns>
     /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
-    [Obsolete("CheckBackupHealthAsync calls a blocking RPC, so a large backup's check is cut off by the call deadline. Use StartBackupHealthCheckAsync and poll GetBackupOperationStatusAsync instead. CheckBackupHealthAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<BackupHealthReport> CheckBackupHealthAsync(
-        string backupId,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(backupId);
-        var response = await UnaryAsync(
-            _methods.CheckBackupHealth,
-            new BackupHealthCheckRequestMessage { BackupId = backupId },
-            cancellationToken).ConfigureAwait(false);
-
-        return response.Report!;
-    }
-
     /// <summary>
     /// Reads the latest stored health report for the backup identified by
     /// <paramref name="backupId"/>, or <see langword="null"/> when no verification

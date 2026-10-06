@@ -17,17 +17,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </summary>
 /// <remarks>
 /// <para>
-/// The status and list tools are reads and are always contributed. The start tools,
-/// the cancel tool and the three deprecated aliases
-/// (<c>lattice_treeadmin_schema_remediate</c>,
-/// <c>lattice_treeadmin_schema_migrate_to_target</c> and
-/// <c>lattice_treeadmin_schema_advance_and_migrate</c>) change a tree's schema or
-/// stop that change, so they are contributed only when schema control is opted in.
-/// </para>
-/// <para>
-/// The aliases keep their old names and arguments for one release. They now start
-/// the operation and return its handle at once rather than blocking until the
-/// terminal report, and they are removed in the next major version.
+/// The status and list tools are reads and are always contributed. The start tools
+/// and the cancel tool change a tree's schema or stop that change, so they are
+/// contributed only when schema control is opted in.
 /// </para>
 /// </remarks>
 internal static class TreeAdminSchemaOperationTools
@@ -50,15 +42,6 @@ internal static class TreeAdminSchemaOperationTools
     /// <summary>The schema operation cancel tool.</summary>
     public const string CancelToolName = "lattice_treeadmin_schema_operation_cancel";
 
-    /// <summary>The deprecated alias of <see cref="RemediationStartToolName"/>.</summary>
-    public const string RemediateAliasToolName = "lattice_treeadmin_schema_remediate";
-
-    /// <summary>The deprecated alias of <see cref="MigrationStartToolName"/>.</summary>
-    public const string MigrateAliasToolName = "lattice_treeadmin_schema_migrate_to_target";
-
-    /// <summary>The deprecated alias of <see cref="AdvanceAndMigrateStartToolName"/>.</summary>
-    public const string AdvanceAndMigrateAliasToolName = "lattice_treeadmin_schema_advance_and_migrate";
-
     private const string PageSizeDescription = "Maximum operations per page; <= 0 uses the server default (50, at most 500).";
     private const string PageTokenDescription = "Continuation cursor from a previous page's nextPageToken; null starts at the newest.";
     private const string OperationIdDescription =
@@ -72,9 +55,6 @@ internal static class TreeAdminSchemaOperationTools
         + "fails on the first value the transform cannot make compliant.";
     private const string NewTargetVersionDescription =
         "The new target version. Must be strictly greater than the tree's current target.";
-    private const string DeprecatedAliasNote =
-        " Deprecated alias kept for one release and removed in the next major version: it now starts the operation and "
-        + "returns a handle at once rather than blocking until the terminal report.";
 
     /// <summary>Builds the read-only status and list tools.</summary>
     /// <returns>The tools.</returns>
@@ -113,7 +93,7 @@ internal static class TreeAdminSchemaOperationTools
                 destructive: false)),
     ];
 
-    /// <summary>Builds the start, cancel and deprecated alias tools.</summary>
+    /// <summary>Builds the start and cancel tools.</summary>
     /// <returns>The tools.</returns>
     public static IReadOnlyList<McpServerTool> CreateControlTools() =>
     [
@@ -151,21 +131,6 @@ internal static class TreeAdminSchemaOperationTools
                 + "authority over the tree. Reports found=false when the operation is not visible.",
                 readOnly: false,
                 destructive: false)),
-        RemediationTool(
-            RemediateAliasToolName,
-            "Remediate a tree's values (deprecated alias)",
-            "Use " + RemediationStartToolName + ". Starts a tracked remediation and returns an operation handle; poll "
-            + StatusToolName + "." + DeprecatedAliasNote),
-        MigrationTool(
-            MigrateAliasToolName,
-            "Migrate a tree's values (deprecated alias)",
-            "Use " + MigrationStartToolName + ". Starts a tracked eager migration and returns an operation handle; poll "
-            + StatusToolName + "." + DeprecatedAliasNote),
-        AdvanceAndMigrateTool(
-            AdvanceAndMigrateAliasToolName,
-            "Advance and migrate a tree's schema (deprecated alias)",
-            "Use " + AdvanceAndMigrateStartToolName + ". Starts a tracked advance and eager migration and returns an "
-            + "operation handle; poll " + StatusToolName + "." + DeprecatedAliasNote),
     ];
 
     private static McpServerTool RemediationTool(string name, string title, string description) =>

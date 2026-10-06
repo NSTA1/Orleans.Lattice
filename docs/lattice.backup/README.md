@@ -108,7 +108,7 @@ The scope key passed to `ConfigureLatticeBackupSchedule` is the value returned b
 
 ## Migration note
 
-The backup API facade now exposes accept-then-poll backup and restore operations with progress. Prefer `ILatticeBackupOperations.StartBackupAsync`, `StartIncrementalBackupAsync`, `StartBackupSetAsync`, `StartRestoreAsync`, `StartColdRestoreAsync`, `StartBackupHealthCheckAsync`, `StartCatalogRebuildAsync`, and `StartCatalogScrubAsync` for operator surfaces. The older blocking facade verbs are deprecated and will be removed in the next major version; see [Backup operations](../lattice.api.backup/operations.md#migrating-from-the-blocking-verbs). The engine service interfaces in this package (`ILatticeBackupCaptureService`, `ILatticeBackupRestoreService`, `ILatticeBackupColdRestoreService`, and related seams) are not deprecated.
+The backup API facade now exposes accept-then-poll backup and restore operations with progress. Prefer `ILatticeBackupOperations.StartBackupAsync`, `StartIncrementalBackupAsync`, `StartBackupSetAsync`, `StartRestoreAsync`, `StartColdRestoreAsync`, `StartBackupHealthCheckAsync`, `StartCatalogRebuildAsync`, and `StartCatalogScrubAsync` for operator surfaces. The old blocking facade verbs were removed in this major version; see [Backup operations](../lattice.api.backup/operations.md#migrating-from-the-removed-blocking-verbs). The engine service interfaces in this package (`ILatticeBackupCaptureService`, `ILatticeBackupRestoreService`, `ILatticeBackupColdRestoreService`, and related seams) are not deprecated.
 
 ## Reference
 

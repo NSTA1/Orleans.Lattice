@@ -140,8 +140,6 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     public abstract Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context);
 
     /// <summary>Executes a WAL move on the wrapped facade.</summary>
-    public abstract Task<TreeWalMoveReceipt> ExecuteWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context);
-
     /// <summary>Reclaims a moved WAL source on the wrapped facade.</summary>
     public abstract Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context);
 
@@ -155,11 +153,7 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     public abstract Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context);
 
     /// <summary>Rebuilds a materialised view on the wrapped facade.</summary>
-    public abstract Task<TreeViewStatus> RebuildView(TreeAdminViewRequest request, ServerCallContext context);
-
     /// <summary>Reconciles a materialised view on the wrapped facade.</summary>
-    public abstract Task<TreeViewReconcileResult> ReconcileView(TreeAdminViewRequest request, ServerCallContext context);
-
     /// <summary>Drops a materialised view on the wrapped facade.</summary>
     public abstract Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context);
 
@@ -170,8 +164,6 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     public abstract Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context);
 
     /// <summary>Reconciles a tag index on the wrapped facade.</summary>
-    public abstract Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context);
-
     /// <summary>Triggers a shard tombstone-compaction pass on the wrapped facade.</summary>
     public abstract Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context);
 
@@ -279,17 +271,13 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
             binder.AddMethod(methods.AuditOrphanedLeaves, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>?)null);
             binder.AddMethod(methods.RepairOrphanedLeaves, (UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>?)null);
             binder.AddMethod(methods.PlanWalMove, (UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>?)null);
-            binder.AddMethod(methods.ExecuteWalMove, (UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ReclaimMovedWalSource, (UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>?)null);
             binder.AddMethod(methods.ListViews, (UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>?)null);
             binder.AddMethod(methods.CreateView, (UnaryServerMethod<TreeAdminCreateViewRequest, TreeViewStatus>?)null);
             binder.AddMethod(methods.GetViewStatus, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
-            binder.AddMethod(methods.RebuildView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>?)null);
-            binder.AddMethod(methods.ReconcileView, (UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>?)null);
             binder.AddMethod(methods.DropView, (UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>?)null);
         binder.AddMethod(methods.ListTagIndexes, (UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>?)null);
         binder.AddMethod(methods.GetTagIndexStatus, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>?)null);
-        binder.AddMethod(methods.ReconcileTagIndex, (UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>?)null);
         binder.AddMethod(methods.TriggerShardCompaction, (UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>?)null);
         binder.AddMethod(methods.GetHistoryRetention, (UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>?)null);
         binder.AddMethod(methods.SetHistoryRetention, (UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>?)null);
@@ -347,17 +335,13 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
         binder.AddMethod(methods.AuditOrphanedLeaves, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(serviceImpl.AuditOrphanedLeaves));
         binder.AddMethod(methods.RepairOrphanedLeaves, new UnaryServerMethod<TreeAdminOrphanedLeafRequest, TreeOrphanedLeafReport>(serviceImpl.RepairOrphanedLeaves));
         binder.AddMethod(methods.PlanWalMove, new UnaryServerMethod<TreeAdminWalMovePlanRequest, TreeWalMovePlan>(serviceImpl.PlanWalMove));
-        binder.AddMethod(methods.ExecuteWalMove, new UnaryServerMethod<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(serviceImpl.ExecuteWalMove));
         binder.AddMethod(methods.ReclaimMovedWalSource, new UnaryServerMethod<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(serviceImpl.ReclaimMovedWalSource));
         binder.AddMethod(methods.ListViews, new UnaryServerMethod<TreeAdminViewListRequest, TreeViewCatalog>(serviceImpl.ListViews));
         binder.AddMethod(methods.CreateView, new UnaryServerMethod<TreeAdminCreateViewRequest, TreeViewStatus>(serviceImpl.CreateView));
         binder.AddMethod(methods.GetViewStatus, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.GetViewStatus));
-        binder.AddMethod(methods.RebuildView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewStatus>(serviceImpl.RebuildView));
-        binder.AddMethod(methods.ReconcileView, new UnaryServerMethod<TreeAdminViewRequest, TreeViewReconcileResult>(serviceImpl.ReconcileView));
         binder.AddMethod(methods.DropView, new UnaryServerMethod<TreeAdminViewRequest, TreeAdminViewRequest>(serviceImpl.DropView));
         binder.AddMethod(methods.ListTagIndexes, new UnaryServerMethod<TreeAdminTagIndexListRequest, TreeTagIndexCatalog>(serviceImpl.ListTagIndexes));
         binder.AddMethod(methods.GetTagIndexStatus, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagIndexStatus>(serviceImpl.GetTagIndexStatus));
-        binder.AddMethod(methods.ReconcileTagIndex, new UnaryServerMethod<TreeAdminTagIndexRequest, TreeTagReconcileReport>(serviceImpl.ReconcileTagIndex));
         binder.AddMethod(methods.TriggerShardCompaction, new UnaryServerMethod<TreeAdminShardRequest, TreeCompactionTriggerResult>(serviceImpl.TriggerShardCompaction));
         binder.AddMethod(methods.GetHistoryRetention, new UnaryServerMethod<TreeAdminTreeRequest, TreeHistoryRetention>(serviceImpl.GetHistoryRetention));
         binder.AddMethod(methods.SetHistoryRetention, new UnaryServerMethod<TreeAdminSetRetentionRequest, TreeHistoryRetention>(serviceImpl.SetHistoryRetention));
@@ -617,13 +601,8 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.PlanWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, ct));
 
-    // The deprecated blocking RPCs (LATTICE0002) are served by the deprecated facade
     // verbs, which now start the matching operation and wait for it in-process.
-#pragma warning disable LATTICE0002
     /// <inheritdoc />
-    public override Task<TreeWalMoveReceipt> ExecuteWalMove(TreeAdminWalMoveExecuteRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.ExecuteWalMoveAsync(req.TreeId, req.Partition, req.TargetProviderKey, req.Options, ct));
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context)
@@ -660,15 +639,9 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetViewStatusAsync(req.ViewName, ct));
 
-#pragma warning disable LATTICE0002 // Deprecated blocking RPCs; see ExecuteWalMove.
     /// <inheritdoc />
-    public override Task<TreeViewStatus> RebuildView(TreeAdminViewRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.RebuildViewAsync(req.ViewName, ct));
 
     /// <inheritdoc />
-    public override Task<TreeViewReconcileResult> ReconcileView(TreeAdminViewRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileViewAsync(req.ViewName, ct));
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context)
@@ -688,11 +661,7 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     public override Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => control.GetTagIndexStatusAsync(req.IndexName, ct));
 
-#pragma warning disable LATTICE0002 // Deprecated blocking RPC; see ExecuteWalMove.
     /// <inheritdoc />
-    public override Task<TreeTagReconcileReport> ReconcileTagIndex(TreeAdminTagIndexRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static (control, req, ct) => control.ReconcileTagIndexAsync(req.IndexName, ct));
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context)

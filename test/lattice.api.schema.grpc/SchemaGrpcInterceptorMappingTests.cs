@@ -32,12 +32,8 @@ public sealed class SchemaGrpcInterceptorMappingTests
             AssertOp(LatticeSchemaGrpcMethods.SetVersionConfigMethodName, LatticeSchemaApiOperation.SetVersionConfig);
             AssertOp(LatticeSchemaGrpcMethods.GetVersionConfigMethodName, LatticeSchemaApiOperation.GetVersionConfig);
             AssertOp(LatticeSchemaGrpcMethods.AdvanceTargetVersionMethodName, LatticeSchemaApiOperation.AdvanceTargetVersion);
-            AssertOp(LatticeSchemaGrpcMethods.AdvanceAndMigrateMethodName, LatticeSchemaApiOperation.AdvanceAndMigrate);
-            AssertOp(LatticeSchemaGrpcMethods.MigrateToTargetVersionMethodName, LatticeSchemaApiOperation.MigrateToTargetVersion);
             AssertOp(LatticeSchemaGrpcMethods.ClearVersionConfigMethodName, LatticeSchemaApiOperation.ClearVersionConfig);
-            AssertOp(LatticeSchemaGrpcMethods.RemediateMethodName, LatticeSchemaApiOperation.Remediate);
             AssertOp(LatticeSchemaGrpcMethods.GetRemediationStatusMethodName, LatticeSchemaApiOperation.GetRemediationStatus);
-            AssertOp(LatticeSchemaGrpcMethods.ScanComplianceMethodName, LatticeSchemaApiOperation.ScanCompliance);
             AssertOp(LatticeSchemaGrpcMethods.ProbeCapabilitiesMethodName, LatticeSchemaApiOperation.ProbeCapabilities);
             AssertOp(LatticeSchemaGrpcMethods.StartRemediationMethodName, LatticeSchemaApiOperation.StartRemediation);
             AssertOp(LatticeSchemaGrpcMethods.StartMigrationMethodName, LatticeSchemaApiOperation.StartMigration);
@@ -114,10 +110,6 @@ public sealed class SchemaGrpcInterceptorMappingTests
             Assert.That(
                 LatticeSchemaApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
                     Method(LatticeSchemaGrpcMethods.SetPolicyMethodName)),
-                Is.False);
-            Assert.That(
-                LatticeSchemaApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
-                    Method(LatticeSchemaGrpcMethods.ScanComplianceMethodName)),
                 Is.False);
         });
     }

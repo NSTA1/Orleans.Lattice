@@ -137,11 +137,6 @@ public sealed class LatticeBackupApiGrpcAuthInterceptorUnitTests
             LatticeBackupApiOperation.IsHealthMonitoringAvailable,
             (string?)null).SetName("IsHealthMonitoringAvailable_no_target");
         yield return new TestCaseData(
-            LatticeBackupGrpcMethods.CheckBackupHealthMethodName,
-            (object)new BackupHealthCheckRequestMessage { BackupId = "b-check" },
-            LatticeBackupApiOperation.CheckBackupHealth,
-            (string?)"b-check").SetName("CheckBackupHealth_targets_backup");
-        yield return new TestCaseData(
             LatticeBackupGrpcMethods.GetBackupHealthMethodName,
             (object)new BackupHealthGetRequestMessage { BackupId = "b-get" },
             LatticeBackupApiOperation.GetBackupHealth,

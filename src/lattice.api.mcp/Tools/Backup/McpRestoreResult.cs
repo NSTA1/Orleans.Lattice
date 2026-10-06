@@ -1,7 +1,7 @@
 namespace Orleans.Lattice.Api.Mcp;
 
 /// <summary>
-/// The MCP structured-content result of the <c>lattice_backup_restore</c> and
+/// The MCP structured-content result of the <c>lattice_backup_start_restore</c> and
 /// <c>lattice_backup_revert_restore</c> tools: the applied backup and target, the
 /// resolved idempotency key, the base-first replayed chain, the entry count, and
 /// - for a shadow-cutover restore - the physical tree ids retained for revert.

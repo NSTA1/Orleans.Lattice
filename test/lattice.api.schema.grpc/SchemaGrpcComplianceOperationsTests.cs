@@ -188,8 +188,8 @@ public sealed class SchemaGrpcComplianceOperationsTests
     {
         Assert.Multiple(() =>
         {
-            Assert.That((int)LatticeSchemaApiOperation.ProbeCapabilities, Is.EqualTo(14));
-            Assert.That((int)LatticeSchemaApiOperation.Unknown, Is.EqualTo(15));
+            Assert.That((int)LatticeSchemaApiOperation.ProbeCapabilities, Is.EqualTo(10));
+            Assert.That((int)LatticeSchemaApiOperation.Unknown, Is.EqualTo(11));
             Assert.That((int)LatticeSchemaApiOperation.StartComplianceScan, Is.GreaterThan((int)LatticeSchemaApiOperation.Unknown));
         });
     }

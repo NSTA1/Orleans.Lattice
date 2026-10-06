@@ -139,8 +139,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     public const string PlanWalMoveMethodName = "PlanWalMove";
 
     /// <summary>The unary WAL move execute trigger RPC method name.</summary>
-    public const string ExecuteWalMoveMethodName = "ExecuteWalMove";
-
     /// <summary>The unary WAL move reclaim RPC method name.</summary>
     public const string ReclaimMovedWalSourceMethodName = "ReclaimMovedWalSource";
 
@@ -154,11 +152,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
     public const string GetViewStatusMethodName = "GetViewStatus";
 
     /// <summary>The unary materialised-view rebuild trigger RPC method name.</summary>
-    public const string RebuildViewMethodName = "RebuildView";
-
     /// <summary>The unary materialised-view reconcile trigger RPC method name.</summary>
-    public const string ReconcileViewMethodName = "ReconcileView";
-
     /// <summary>The unary materialised-view drop RPC method name.</summary>
     public const string DropViewMethodName = "DropView";
 
@@ -169,8 +163,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     public const string GetTagIndexStatusMethodName = "GetTagIndexStatus";
 
     /// <summary>The unary tag-index reconcile trigger RPC method name.</summary>
-    public const string ReconcileTagIndexMethodName = "ReconcileTagIndex";
-
     /// <summary>The unary shard tombstone-compaction trigger RPC method name.</summary>
     public const string TriggerShardCompactionMethodName = "TriggerShardCompaction";
 
@@ -621,12 +613,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMovePlanRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMovePlanSerializer));
 
-        ExecuteWalMove = new Method<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: ExecuteWalMoveMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveExecuteRequestSerializer),
-            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(walMoveReceiptSerializer));
 
         ReclaimMovedWalSource = new Method<TreeAdminWalReclaimRequest, TreeWalMoveReceipt>(
             type: MethodType.Unary,
@@ -656,19 +642,7 @@ internal sealed class LatticeTreeAdminGrpcMethods
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewStatusSerializer));
 
-        RebuildView = new Method<TreeAdminViewRequest, TreeViewStatus>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: RebuildViewMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
-            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewStatusSerializer));
 
-        ReconcileView = new Method<TreeAdminViewRequest, TreeViewReconcileResult>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: ReconcileViewMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewRequestSerializer),
-            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(viewReconcileResultSerializer));
 
         DropView = new Method<TreeAdminViewRequest, TreeAdminViewRequest>(
             type: MethodType.Unary,
@@ -691,12 +665,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
             requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer),
             responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexStatusSerializer));
 
-        ReconcileTagIndex = new Method<TreeAdminTagIndexRequest, TreeTagReconcileReport>(
-            type: MethodType.Unary,
-            serviceName: ServiceName,
-            name: ReconcileTagIndexMethodName,
-            requestMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagIndexRequestSerializer),
-            responseMarshaller: LatticeTreeAdminGrpcMarshallers.Create(tagReconcileReportSerializer));
 
         TriggerShardCompaction = new Method<TreeAdminShardRequest, TreeCompactionTriggerResult>(
             type: MethodType.Unary,
@@ -903,9 +871,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>PlanWalMove</c> read-only WAL move plan RPC.</summary>
     public Method<TreeAdminWalMovePlanRequest, TreeWalMovePlan> PlanWalMove { get; }
 
-    /// <summary>The unary <c>ExecuteWalMove</c> WAL move execute trigger RPC.</summary>
-    public Method<TreeAdminWalMoveExecuteRequest, TreeWalMoveReceipt> ExecuteWalMove { get; }
-
     /// <summary>The unary <c>ReclaimMovedWalSource</c> WAL move reclaim RPC.</summary>
     public Method<TreeAdminWalReclaimRequest, TreeWalMoveReceipt> ReclaimMovedWalSource { get; }
 
@@ -918,12 +883,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary <c>GetViewStatus</c> read-only materialised-view status RPC.</summary>
     public Method<TreeAdminViewRequest, TreeViewStatus> GetViewStatus { get; }
 
-    /// <summary>The unary <c>RebuildView</c> materialised-view rebuild trigger RPC.</summary>
-    public Method<TreeAdminViewRequest, TreeViewStatus> RebuildView { get; }
-
-    /// <summary>The unary <c>ReconcileView</c> materialised-view reconcile trigger RPC.</summary>
-    public Method<TreeAdminViewRequest, TreeViewReconcileResult> ReconcileView { get; }
-
     /// <summary>The unary <c>DropView</c> materialised-view drop RPC. The request is echoed back as the completion ack.</summary>
     public Method<TreeAdminViewRequest, TreeAdminViewRequest> DropView { get; }
 
@@ -932,9 +891,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
 
     /// <summary>The unary <c>GetTagIndexStatus</c> read-only tag-index status RPC.</summary>
     public Method<TreeAdminTagIndexRequest, TreeTagIndexStatus> GetTagIndexStatus { get; }
-
-    /// <summary>The unary <c>ReconcileTagIndex</c> tag-index reconcile trigger RPC.</summary>
-    public Method<TreeAdminTagIndexRequest, TreeTagReconcileReport> ReconcileTagIndex { get; }
 
     /// <summary>The unary <c>TriggerShardCompaction</c> tombstone-compaction trigger RPC.</summary>
     public Method<TreeAdminShardRequest, TreeCompactionTriggerResult> TriggerShardCompaction { get; }

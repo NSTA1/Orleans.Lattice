@@ -42,22 +42,14 @@ The facade exposes the blocking `ILatticeBackupControl` surface and the accept-t
 | Get operation status (`GetOperationStatusAsync`) | takes an operation id | `LatticeOperationStatus?` |
 | List operations (`ListOperationsAsync`) | takes a `LatticeOperationListRequest` | `LatticeOperationPage` |
 | Cancel operation (`CancelOperationAsync`) | takes an operation id | `LatticeOperationStatus?` |
-| Create backup (`CreateBackupAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `LatticeBackupCaptureResult` |
-| Create incremental backup (`CreateIncrementalBackupAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `LatticeBackupCaptureResult` |
-| Create backup set (`CreateBackupSetAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `LatticeBackupSetCaptureResult` |
 | List backups (`ListBackupsAsync`) | takes a `BackupCatalogRequest` | `BackupCatalogPage` |
 | Stream backups (`StreamBackupsAsync`) | streams | `IAsyncEnumerable<BackupManifest>` in backup-id order |
 | Describe backup (`DescribeBackupAsync`) | takes a backup id | `BackupChainDescription?` (null when absent) |
 | Delete backup (`DeleteBackupAsync`) | takes a backup id | `bool` (true when one was deleted) |
-| Restore backup (`RestoreBackupAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `LatticeRestoreResult` |
-| Cold restore (`ColdRestoreAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `LatticeRestoreResult` |
 | Revert restore (`RevertRestoreAsync`) | takes a `LatticeRestoreResult` | (void) |
 | Export artifact (`ExportArtifactAsync`) | takes a backup id and artifact id | `IAsyncEnumerable<ReadOnlyMemory<byte>>` |
 | Get inventory (`GetInventoryAsync`) | (none) | `BackupInventoryReport` |
-| Rebuild catalog from sink (`RebuildCatalogFromSinkAsync`) | deprecated `LATTICE0002` blocking wrapper; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupCatalogRebuildReport` |
-| Scrub catalog against sink (`ScrubCatalogAgainstSinkAsync`) | deprecated `LATTICE0002` blocking wrapper taking a `bool pruneOrphans`; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupCatalogScrubReport` |
 | Is health monitoring available (`IsHealthMonitoringAvailableAsync`) | (none) | `bool` (true when the sink is durable) |
-| Check backup health (`CheckBackupHealthAsync`) | deprecated `LATTICE0002` blocking wrapper taking a backup id; [will be removed in the next major version](operations.md#migrating-from-the-blocking-verbs) | `BackupHealthReport` (verifies and persists) |
 | Get backup health (`GetBackupHealthAsync`) | takes a backup id | `BackupHealthReport?` (last stored, null when none/absent) |
 | Configure backup health (`ConfigureBackupHealthAsync`) | takes a backup id and a `BackupHealthConfig` | (void) |
 | Get scope status (`GetScopeStatusAsync`) | takes a `BackupScopeSelector` | `BackupScopeStatus?` (null when unknown) |
@@ -65,7 +57,7 @@ The facade exposes the blocking `ILatticeBackupControl` surface and the accept-t
 | Schedule backup (`ScheduleBackupAsync`) | takes a `LatticeBackupScheduleRequest` | (void) |
 | Cancel schedule (`CancelScheduleAsync`) | takes a `BackupScopeSelector` and `bool incremental` | (void) |
 
-The eight deprecated blocking verbs are thin wrappers over the matching start operation that wait for in-process completion, so existing callers still see the same results and exceptions while the tracked operation also appears in `ListOperationsAsync`. New code should call a start verb, poll `GetOperationStatusAsync`, and read the operation's `ResultReference` / `Result` map. See [Backup operations](operations.md) for kind names, progress phases, result keys, cancellation, retention, and migration details.
+Long-running backup and restore flows start through `ILatticeBackupOperations`, then report progress and outcomes through `GetOperationStatusAsync` / `ListOperationsAsync`. The blocking `LATTICE0002` verbs were removed in this major version; see [Backup operations](operations.md#migrating-from-the-removed-blocking-verbs) for the migration table and result-map guidance.
 
 Create backup set captures one full backup per distinct tree scope under a single set manifest, so an operator can back up several trees as one unit; it authorizes every member scope fail-closed before any capture, so a set that names one forbidden scope is rejected whole. When cross-tree consistency is requested the members share one consistency fence. The returned `BackupSetManifest.SetId` is the value each member's `BackupCatalogIndexRow.SetId` carries, so a consumer can group the `ListBackupsAsync` rows of one set by it; a **single-scope** capture stamps no membership and so reports `SetId` as `null`, matching the `null` its catalog row reports. The `LatticeBackupSetCaptureRequest` / `LatticeBackupSetCaptureResult` and `BackupSetManifest` types are defined in [`Orleans.Lattice.Backup`](../lattice.backup/api.md).
 

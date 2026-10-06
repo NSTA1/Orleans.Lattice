@@ -7,7 +7,7 @@ surfaces:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#SnapshotTreeAsync"
   grpc:
     api: "/orleans.lattice.api.treeadmin/SnapshotTree and orleans.lattice.api.backup/StartBackup"
-    source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CreateBackupMethodName"
+    source: "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#StartBackupMethodName"
   mcp_tool:
     api: "lattice_treeadmin_tree_snapshot and lattice_backup_start"
     source: "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs"
@@ -109,7 +109,7 @@ concurrency:
   - rule: "A completed online snapshot releases shadow-forward before reporting complete; the internal snapshot used by ResizeAsync leaves release to the resize coordinator."
     source: "docs/lattice/snapshots.md"
   - rule: "Backup set capture can use one causal fence so a cross-tree atomic write is not torn across the set boundary."
-    source: "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CreateBackupSetAsync"
+    source: "src/lattice.api.abstractions/Backup/ILatticeBackupOperations.cs#StartBackupSetAsync"
   - rule: "Tracked backup operations run on the accepting silo and are marked Failed on silo loss or lease lapse; resumption is not supported."
     source: "docs/lattice.api.abstractions/operations.md"
 sources:

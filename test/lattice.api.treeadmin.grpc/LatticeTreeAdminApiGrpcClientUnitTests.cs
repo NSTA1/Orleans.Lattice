@@ -2,9 +2,7 @@ using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Serialization;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
 // they stay supported until the next major version.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
@@ -176,59 +174,6 @@ public sealed class LatticeTreeAdminApiGrpcClientUnitTests
         var (client, _) = Create(new TreeWalMovePlan { TreeId = "orders" });
 
         Assert.ThrowsAsync<ArgumentException>(async () => await client.PlanWalMoveAsync("orders", 0, string.Empty));
-    }
-
-    // ----- Materialised views -----
-
-    [Test]
-    public async Task RebuildViewAsync_projects_the_view_name()
-    {
-        var (client, invoker) = Create(new TreeViewStatus { ViewName = "by-region", SourceTreeId = "orders" });
-
-        var status = await client.RebuildViewAsync("by-region");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(status.ViewName, Is.EqualTo("by-region"));
-            Assert.That(((TreeAdminViewRequest)invoker.LastRequest!).ViewName, Is.EqualTo("by-region"));
-            Assert.That(invoker.LastMethodName, Is.EqualTo(LatticeTreeAdminGrpcMethods.RebuildViewMethodName));
-        });
-    }
-
-    [Test]
-    public void RebuildViewAsync_rejects_an_empty_view_name()
-    {
-        var (client, _) = Create(new TreeViewStatus { ViewName = "by-region", SourceTreeId = "orders" });
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await client.RebuildViewAsync(string.Empty));
-    }
-
-    [Test]
-    public async Task ReconcileViewAsync_projects_the_view_name_and_returns_the_drift_verdict()
-    {
-        var (client, invoker) = Create(new TreeViewReconcileResult
-        {
-            ViewName = "by-region",
-            SourceTreeId = "orders",
-            DriftRepaired = true,
-        });
-
-        var result = await client.ReconcileViewAsync("by-region");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.DriftRepaired, Is.True);
-            Assert.That(((TreeAdminViewRequest)invoker.LastRequest!).ViewName, Is.EqualTo("by-region"));
-            Assert.That(invoker.LastMethodName, Is.EqualTo(LatticeTreeAdminGrpcMethods.ReconcileViewMethodName));
-        });
-    }
-
-    [Test]
-    public void ReconcileViewAsync_rejects_an_empty_view_name()
-    {
-        var (client, _) = Create(new TreeViewReconcileResult { ViewName = "by-region", SourceTreeId = "orders" });
-
-        Assert.ThrowsAsync<ArgumentException>(async () => await client.ReconcileViewAsync(string.Empty));
     }
 
     [Test]

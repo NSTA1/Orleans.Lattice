@@ -2,9 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
-// These tests exercise the deprecated blocking CheckBackupHealthAsync (LATTICE0002) on
 // purpose: they prove the client call still behaves exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
@@ -39,32 +37,6 @@ public sealed class LatticeBackupApiGrpcClientUnitTests
         var available = await client.IsHealthMonitoringAvailableAsync();
 
         Assert.That(available, Is.True);
-    }
-
-    [Test]
-    public async Task CheckBackupHealthAsync_returns_the_report_from_the_response()
-    {
-        var report = new BackupHealthReport(
-            "b1",
-            BackupHealthStatus.Healthy,
-            manifestPresent: true,
-            Array.Empty<string>(),
-            Array.Empty<string>(),
-            DateTimeOffset.UtcNow,
-            "ok");
-        var client = ClientReturning(new BackupHealthReportResponse { Found = true, Report = report });
-
-        var result = await client.CheckBackupHealthAsync("b1");
-
-        Assert.That(result, Is.SameAs(report));
-    }
-
-    [Test]
-    public void CheckBackupHealthAsync_empty_backupId_throws()
-    {
-        var client = ClientReturning(new BackupHealthReportResponse());
-
-        Assert.That(async () => await client.CheckBackupHealthAsync(string.Empty), Throws.ArgumentException);
     }
 
     [Test]

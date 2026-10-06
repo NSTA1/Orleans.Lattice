@@ -3,17 +3,17 @@ id: view-rebuild
 name: "Rebuild or reconcile a materialised view"
 surfaces:
   in_process:
-    api: "ILatticeTreeAdmin.RebuildViewAsync and ReconcileViewAsync"
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#RebuildViewAsync"
+    api: "ILatticeTreeAdminOperations.StartViewRebuildAsync and StartViewReconcileAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartViewRebuildAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/RebuildView and ReconcileView"
-    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#RebuildViewMethodName"
+    api: "/orleans.lattice.api.treeadmin/StartViewRebuild and StartViewReconcile"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartViewRebuildMethodName"
   mcp_tool:
-    api: "lattice_treeadmin_view_rebuild and lattice_treeadmin_view_reconcile"
+    api: "lattice_treeadmin_view_rebuild_start and lattice_treeadmin_view_reconcile_start"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_view_rebuild, lattice_treeadmin_view_rebuild_start, lattice_treeadmin_view_reconcile, lattice_treeadmin_view_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_view_rebuild_start, lattice_treeadmin_view_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/treeadmin.json"
   - id: runtime-view
     check: "Target is a runtime-registered view for runtime control."

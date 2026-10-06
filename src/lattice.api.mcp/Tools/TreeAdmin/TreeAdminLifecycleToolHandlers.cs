@@ -449,35 +449,6 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.PlanWalMoveAsync(treeId, partition, targetProviderKey, cancellationToken);
     }
 
-    /// <summary>Executes an online move of a WAL partition to a target provider key; the source tail is retained until reclaimed.</summary>
-    public static Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
-        ILatticeTreeAdmin treeAdmin,
-        [Description("The tree whose WAL partition to move. Must not be null, empty, or a reserved system tree id.")]
-        string treeId,
-        [Description("The WAL partition index to move. Must be in range for the tree.")]
-        int partition,
-        [Description("The target storage provider key to move the partition to. Must not be null or empty, and must resolve on every silo.")]
-        string targetProviderKey,
-        [Description("Optional quiesce lease in seconds for the fenced cutover. Zero or omitted takes the conventional 30-second default.")]
-        double quiesceLeaseSeconds = 0,
-        [Description("Optional entries copied per page. Zero or omitted takes the conventional 256-entry default.")]
-        int copyPageSize = 0,
-        [Description("Set true to skip verifying the copied target tail before flipping the placement pin. Defaults to false (verify enabled).")]
-        bool disableVerifyAfterCopy = false,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(treeAdmin);
-        var options = new TreeWalMoveOptions
-        {
-            QuiesceLeaseSeconds = quiesceLeaseSeconds,
-            CopyPageSize = copyPageSize,
-            DisableVerifyAfterCopy = disableVerifyAfterCopy,
-        };
-#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
-        return treeAdmin.ExecuteWalMoveAsync(treeId, partition, targetProviderKey, options, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
-
     /// <summary>Reclaims the orphaned source tail left by a completed WAL move; this is the irreversible finalisation step.</summary>
     public static Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
         ILatticeTreeAdmin treeAdmin,
@@ -568,32 +539,6 @@ internal static class TreeAdminLifecycleToolHandlers
         return treeAdmin.GetViewStatusAsync(viewName, cancellationToken);
     }
 
-    /// <summary>Rebuilds a materialised view from current source state via an online shadow-swap.</summary>
-    public static Task<TreeViewStatus> RebuildViewAsync(
-        ILatticeTreeAdmin treeAdmin,
-        [Description("The logical materialised-view name to rebuild. Must not be null or empty.")]
-        string viewName,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(treeAdmin);
-#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
-        return treeAdmin.RebuildViewAsync(viewName, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
-
-    /// <summary>Reconciles a materialised view against current source state, repairing drift only when detected.</summary>
-    public static Task<TreeViewReconcileResult> ReconcileViewAsync(
-        ILatticeTreeAdmin treeAdmin,
-        [Description("The logical materialised-view name to reconcile. Must not be null or empty.")]
-        string viewName,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(treeAdmin);
-#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
-        return treeAdmin.ReconcileViewAsync(viewName, cancellationToken);
-#pragma warning restore LATTICE0002
-    }
-
     /// <summary>Drops a materialised view (decommissions its maintainer and deletes its backing generations); returns the dropped view name.</summary>
     public static async Task<string> DropViewAsync(
         ILatticeTreeAdmin treeAdmin,
@@ -624,19 +569,6 @@ internal static class TreeAdminLifecycleToolHandlers
     {
         ArgumentNullException.ThrowIfNull(treeAdmin);
         return treeAdmin.GetTagIndexStatusAsync(indexName, cancellationToken);
-    }
-
-    /// <summary>Reconciles a tag index against current source state, removing orphaned membership rows; returns the reconcile counts.</summary>
-    public static Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
-        ILatticeTreeAdmin treeAdmin,
-        [Description("The logical tag-index name to reconcile. Must not be null or empty.")]
-        string indexName,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(treeAdmin);
-#pragma warning disable LATTICE0002 // The blocking tool is kept; the *_start tools are the accept-then-poll path.
-        return treeAdmin.ReconcileTagIndexAsync(indexName, cancellationToken);
-#pragma warning restore LATTICE0002
     }
 
     /// <summary>Triggers an out-of-cycle tombstone-compaction pass on one physical shard of a tree; reaps only tombstones and expired entries, never live data. Returns whether the coordinator accepted the pass.</summary>

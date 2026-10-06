@@ -1496,34 +1496,6 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     }
 
     /// <inheritdoc />
-    public async Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(
-        string treeId, int partition, string targetProviderKey,
-        TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
-
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        if (_operationRunner is not null)
-        {
-            var (tenantId, launch) = await StartWalMoveCoreAsync(
-                treeId, partition, targetProviderKey, options, LatticeOperationKey.NewId(), cancellationToken)
-                .ConfigureAwait(false);
-            return await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-        }
-
-        var effectiveTreeId = await EffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        ThrowIfReserved(effectiveTreeId);
-        await _authorizer.AuthorizeTreeLifecycleAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
-
-        var receipt = await _grainFactory.GetGrain<ILatticeAdmin>(LatticeConstants.AdminGrainKey)
-            .ExecuteWalMoveAsync(effectiveTreeId, partition, targetProviderKey, ToWalMoveOptions(options), cancellationToken)
-            .ConfigureAwait(false);
-
-        return ToWalMoveReceipt(receipt, treeId);
-    }
-
-    /// <inheritdoc />
     public async Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(
         string treeId, int partition, string sourceProviderKey,
         CancellationToken cancellationToken = default)
@@ -1676,73 +1648,6 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     }
 
     /// <inheritdoc />
-    public async Task<TreeViewStatus> RebuildViewAsync(
-        string viewName, CancellationToken cancellationToken = default)
-    {
-        RequireViews();
-
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        if (_operationRunner is not null)
-        {
-            var start = await StartViewCoreAsync(rebuild: true, viewName, LatticeOperationKey.NewId(), cancellationToken)
-                .ConfigureAwait(false);
-            await AwaitOperationAsync(start.TenantId, start.Launch, cancellationToken).ConfigureAwait(false);
-            return await CaptureViewStatusAsync(start.EffectiveViewName, viewName, start.Resolved, cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
-        var resolved =
-            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
-
-        await _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName)
-            .RebuildAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return await CaptureViewStatusAsync(effectiveViewName, viewName, resolved, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<TreeViewReconcileResult> ReconcileViewAsync(
-        string viewName, CancellationToken cancellationToken = default)
-    {
-        RequireViews();
-
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        if (_operationRunner is not null)
-        {
-            var start = await StartViewCoreAsync(rebuild: false, viewName, LatticeOperationKey.NewId(), cancellationToken)
-                .ConfigureAwait(false);
-            var driftRepaired = await AwaitOperationAsync(start.TenantId, start.Launch, cancellationToken)
-                .ConfigureAwait(false);
-            return new TreeViewReconcileResult
-            {
-                ViewName = viewName,
-                SourceTreeId = start.Resolved.SourceTreeId,
-                DriftRepaired = driftRepaired,
-            };
-        }
-
-        var effectiveViewName = await EffectiveViewNameAsync(viewName, cancellationToken).ConfigureAwait(false);
-        var resolved =
-            await ResolveViewAsync(effectiveViewName, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeTreeAdminAsync(resolved.SourceTreeId, cancellationToken).ConfigureAwait(false);
-
-        var repaired = await _grainFactory.GetGrain<IViewMaintainerGrain>(effectiveViewName)
-            .ReconcileAsync(cancellationToken)
-            .ConfigureAwait(false);
-
-        return new TreeViewReconcileResult
-        {
-            ViewName = viewName,
-            SourceTreeId = resolved.SourceTreeId,
-            DriftRepaired = repaired,
-        };
-    }
-
-    /// <inheritdoc />
     public async Task DropViewAsync(
         string viewName, CancellationToken cancellationToken = default)
     {
@@ -1851,54 +1756,6 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
                 ? ImmutableArray<string>.Empty
                 : covered.ToImmutableArray(),
             ReconcileIdle = idle,
-        };
-    }
-
-    /// <inheritdoc />
-    public async Task<TreeTagReconcileReport> ReconcileTagIndexAsync(
-        string indexName, CancellationToken cancellationToken = default)
-    {
-        RequireTagIndex();
-        ArgumentException.ThrowIfNullOrEmpty(indexName);
-
-        // Deprecated blocking verb (LATTICE0002): start, then wait.
-        if (_operationRunner is not null)
-        {
-            var (tenantId, launch, indexTreeId) = await StartTagIndexReconcileCoreAsync(
-                indexName, LatticeOperationKey.NewId(), cancellationToken).ConfigureAwait(false);
-            var swept = await AwaitOperationAsync(tenantId, launch, cancellationToken).ConfigureAwait(false);
-            return new TreeTagReconcileReport
-            {
-                IndexName = indexName,
-                TreeId = indexTreeId,
-                TreesCovered = swept.TreesCovered,
-                KeysScanned = swept.KeysScanned,
-                MembershipRowsScanned = swept.MembershipRowsScanned,
-                OrphanRowsRemoved = swept.OrphanRowsRemoved,
-            };
-        }
-
-        // Derived, not caller-supplied: see GetTagIndexStatusAsync - nothing here
-        // is a tenant-local tree name, so nothing is composed.
-        var treeId = ResolveTagIndexTreeId(indexName);
-        await _authorizer.AuthorizeTreeAdminAsync(treeId, cancellationToken).ConfigureAwait(false);
-
-        // Confirm the index exists before running the sweep, so an unknown index is a
-        // clean KeyNotFound rather than a silent empty pass.
-        await ResolveTagIndexEntryAsync(treeId, cancellationToken).ConfigureAwait(false);
-
-        var report = await _grainFactory.GetGrain<ITagIndexReconcileGrain>(indexName)
-            .RunSweepAsync()
-            .ConfigureAwait(false);
-
-        return new TreeTagReconcileReport
-        {
-            IndexName = indexName,
-            TreeId = treeId,
-            TreesCovered = report.TreesCovered,
-            KeysScanned = report.KeysScanned,
-            MembershipRowsScanned = report.MembershipRowsScanned,
-            OrphanRowsRemoved = report.OrphanRowsRemoved,
         };
     }
 

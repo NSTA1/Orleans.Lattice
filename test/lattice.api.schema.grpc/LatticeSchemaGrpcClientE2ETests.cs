@@ -1,8 +1,6 @@
 using Orleans.Lattice.Schema;
 
-// These tests exercise the deprecated blocking compliance scan (LATTICE0002) on purpose:
 // it is still served, unchanged, until the next major version removes it (#4126).
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Schema.Grpc.Tests;
 
@@ -68,34 +66,6 @@ public sealed class LatticeSchemaGrpcClientE2ETests
         var policy = await _host.Client.GetPolicyAsync("never-configured");
 
         Assert.That(policy, Is.Null);
-    }
-
-    [Test]
-    public async Task scan_compliance_reports_compliant_and_non_compliant_counts()
-    {
-        await _host.Client.SetPolicyAsync(Tree, new LatticeSchemaPolicy(new[] { LatticeSchemaRule.Json() }));
-
-        var report = await _host.Client.ScanComplianceAsync(Tree);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.TreeId, Is.EqualTo(Tree));
-            Assert.That(report.HasPolicy, Is.True);
-            Assert.That(report.ScannedCount, Is.EqualTo(report.CompliantCount + report.NonCompliantCount));
-            Assert.That(report.NonCompliantCount, Is.GreaterThan(0));
-        });
-    }
-
-    [Test]
-    public async Task scan_compliance_reports_ungoverned_when_no_policy_is_set()
-    {
-        var report = await _host.Client.ScanComplianceAsync("never-configured");
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.TreeId, Is.EqualTo("never-configured"));
-            Assert.That(report.HasPolicy, Is.False);
-        });
     }
 
     [Test]

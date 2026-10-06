@@ -1,9 +1,6 @@
 using System.Text;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -48,22 +45,22 @@ public sealed class LatticeBackupControlStoreDriftTests
         var tree = _fixture.GrainFactory.GetGrain<ILattice>(Source);
         await tree.SetAsync("k1", Encoding.UTF8.GetBytes("v1"));
 
-        var first = await _fixture.Control.CreateBackupAsync(
+        var first = await CaptureBackupIdAsync(
             new LatticeBackupCaptureRequest("first", BackupScopeSelector.WholeTree(Source)));
 
         await tree.SetAsync("k2", Encoding.UTF8.GetBytes("v2"));
-        var second = await _fixture.Control.CreateBackupAsync(
+        var second = await CaptureBackupIdAsync(
             new LatticeBackupCaptureRequest("second", BackupScopeSelector.WholeTree(Source)));
 
         // Delete from the SINK only. The catalogue row survives, which is the
         // asymmetry the probe has to notice.
-        var deleted = await _fixture.Sink.DeleteManifestAsync(first.BackupId);
+        var deleted = await _fixture.Sink.DeleteManifestAsync(first);
         Assert.That(deleted, Is.True, "The precondition must actually hold.");
         Assert.That(
-            await _fixture.Catalog.GetAsync(first.BackupId), Is.Not.Null,
+            await _fixture.Catalog.GetAsync(first), Is.Not.Null,
             "The catalogue row must survive, or the test proves nothing about the probe.");
 
-        return (second.BackupId, first.BackupId);
+        return (second, first);
     }
 
     [Test]
@@ -125,5 +122,23 @@ public sealed class LatticeBackupControlStoreDriftTests
         Assert.That(
             streamed.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
             Is.EqualTo(paged));
+    }
+
+    private ILatticeBackupOperations Operations => (ILatticeBackupOperations)_fixture.Control;
+
+    private static async Task<LatticeOperationStatus> UntilTerminalAsync(ILatticeBackupOperations operations, string operationId)
+    {
+        LatticeOperationStatus? status = null;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () => (status = await operations.GetOperationStatusAsync(operationId)) is { IsTerminal: true },
+            $"operation {operationId} to finish");
+        return status!;
+    }
+
+    private async Task<string> CaptureBackupIdAsync(LatticeBackupCaptureRequest request)
+    {
+        var handle = await Operations.StartBackupAsync(request);
+        var status = await UntilTerminalAsync(Operations, handle.OperationId);
+        return status.ResultReference!;
     }
 }
