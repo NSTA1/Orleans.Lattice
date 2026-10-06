@@ -956,9 +956,6 @@ internal sealed class TreeShardSplitGrain(
         var physicalTreeId = await GetPhysicalTreeIdAsync();
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
-        var walk = await BoundedLeafWalk.StartAsync(grainFactory, source, resumeFromInclusive, budget);
-        if (!walk.HasLeaf) return (true, null, 0);
-
         var movedSlotsArray = state.State.MovedSlots.ToArray();
         Array.Sort(movedSlotsArray);
         var virtualShardCount = state.State.OriginalShardMap!.Slots.Length;
@@ -966,38 +963,67 @@ internal sealed class TreeShardSplitGrain(
         if (batchSize <= 0) batchSize = LatticeOptions.DefaultSplitDrainBatchSize;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.TargetShardIndex}");
-        var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var emptyVector = new VersionVector();
 
-        while (walk.HasLeaf)
+        // Bounded retry: BoundedLeafWalk's cursor is always a key, so
+        // restarting from the pass's ORIGINAL resumeFromInclusive (never a
+        // partial cursor this attempt advanced to) re-descends the shard root
+        // fresh and routes around a leaf a concurrent fold retired mid-walk.
+        // A retired-then-reactivated leaf has no persisted row and no
+        // in-memory create-intent for this caller, so BPlusLeafGrain's
+        // row-loss guard cannot tell it apart from a genuinely lost row and
+        // fails closed with LeafStateRowLostException - correctly, since the
+        // guard has no way to recognise "legitimately retired" from here.
+        // Entries already flushed to target before the fault are idempotent
+        // re-merges under LWW on retry, so re-walking from the original
+        // resume key never double-applies or loses an entry. See the
+        // matching rationale on RetroactiveSweepPreparedMutationsAsync.
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
         {
-            var leaf = walk.CurrentLeaf;
-            // Slot filtering is pushed into the leaf so only moved-slot
-            // entries are serialised on the response - saves bandwidth and
-            // coordinator-side allocations on hot shards where moved slots
-            // are a minority of the keyspace.
-            var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
-            foreach (var (key, lww) in delta.Entries)
+            var walk = await BoundedLeafWalk.StartAsync(grainFactory, source, resumeFromInclusive, budget);
+            if (!walk.HasLeaf) return (true, null, 0);
+
+            var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
+
+            try
             {
-                batch[key] = lww;
-                if (batch.Count >= batchSize)
+                while (walk.HasLeaf)
                 {
-                    await target.MergeManyAsync(batch, isCrossShardMigration: true);
-                    batch.Clear();
+                    var leaf = walk.CurrentLeaf;
+                    // Slot filtering is pushed into the leaf so only
+                    // moved-slot entries are serialised on the response -
+                    // saves bandwidth and coordinator-side allocations on
+                    // hot shards where moved slots are a minority of the
+                    // keyspace.
+                    var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
+                    foreach (var (key, lww) in delta.Entries)
+                    {
+                        batch[key] = lww;
+                        if (batch.Count >= batchSize)
+                        {
+                            await target.MergeManyAsync(batch, isCrossShardMigration: true);
+                            batch.Clear();
+                        }
+                    }
+
+                    if (!await walk.MoveNextAsync()) break;
                 }
+
+                // Flush before returning, so the cursor this pass persists is
+                // never ahead of the entries the target has actually
+                // accepted. Persisting a cursor past an unflushed batch would
+                // drop those entries permanently: the next pass resumes
+                // beyond them and no later sweep re-reads them.
+                if (batch.Count > 0)
+                    await target.MergeManyAsync(batch, isCrossShardMigration: true);
+
+                return (walk.Completed, walk.ResumeFromInclusive, walk.LeavesVisited);
             }
-
-            if (!await walk.MoveNextAsync()) break;
+            catch (LeafStateRowLostException) when (attempt < maxAttempts)
+            {
+            }
         }
-
-        // Flush before returning, so the cursor this pass persists is never
-        // ahead of the entries the target has actually accepted. Persisting a
-        // cursor past an unflushed batch would drop those entries permanently:
-        // the next pass resumes beyond them and no later sweep re-reads them.
-        if (batch.Count > 0)
-            await target.MergeManyAsync(batch, isCrossShardMigration: true);
-
-        return (walk.Completed, walk.ResumeFromInclusive, walk.LeavesVisited);
     }
 
     /// <summary>
@@ -1117,8 +1143,7 @@ internal sealed class TreeShardSplitGrain(
         Array.Sort(sortedSlots);
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
-        var leafId = await source.GetLeftmostLeafIdAsync();
-        if (leafId is null) return;
+        if (await source.GetLeftmostLeafIdAsync() is null) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{targetShardIndex}");
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -1159,9 +1184,42 @@ internal sealed class TreeShardSplitGrain(
 
         try
         {
-            await PreparedBucketSweep.RunAsync(
-                grainFactory, TreeId, leafId.Value, target, sortedSlots, virtualShardCount, progress,
-                carryOriginalStamps: true);
+            // Bounded retry: the walk's own leftmost-leaf id can name a leaf a
+            // concurrent fold retires mid-sweep. A retired-then-reactivated
+            // leaf has no persisted row and no in-memory create-intent for
+            // this caller, so BPlusLeafGrain's row-loss guard cannot tell it
+            // apart from a genuinely lost row and fails closed with
+            // LeafStateRowLostException - correctly, since the guard has no
+            // way to recognise "legitimately retired" from here. Retirement
+            // itself is refused while any prepared/pending mutation remains
+            // on the leaf (see BPlusLeafGrain.Reclaim.HasReclaimBlockingState),
+            // so a leaf this sweep still needed to visit can never have been
+            // retired out from under it - the exception marks a stale chain
+            // read, never a dropped mutation. PreparedBucketSweep.RunAsync's
+            // own contract is "re-run the whole sweep" on any fault; re-
+            // resolving the leftmost leaf id on each attempt re-reads the
+            // sibling chain the retirement already repointed, routing the
+            // retry around the retired leaf.
+            const int maxAttempts = 5;
+            for (var attempt = 1; ; attempt++)
+            {
+                var attemptLeafId = await source.GetLeftmostLeafIdAsync();
+                if (attemptLeafId is null) break;
+
+                progress.Replayed = 0;
+                progress.LeavesVisited = 0;
+
+                try
+                {
+                    await PreparedBucketSweep.RunAsync(
+                        grainFactory, TreeId, attemptLeafId.Value, target, sortedSlots, virtualShardCount,
+                        progress, carryOriginalStamps: true);
+                    break;
+                }
+                catch (LeafStateRowLostException) when (attempt < maxAttempts)
+                {
+                }
+            }
         }
         finally
         {
