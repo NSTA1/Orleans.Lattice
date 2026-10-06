@@ -334,7 +334,7 @@ sub-saga without the receiver barrier (#4683, fixed by #4706), and a barrier
 left waiting by a tree that stopped being replicated (#4698). Issue #4684's
 fixes - the cross-tree purge hold, the export precondition, the uniform arrival
 and the boundary the fence waits on - are fixed by #4716 and #4721; the hold's
-release on a decommission is issue #4723. Every loss path is kept the same way: a
+release on a decommission by #4724 (issue #4723). Every loss path is kept the same way: a
 shipper that stays on the log after a gap, a detach that does not take the peer
 off the log, a re-add that does not re-mark, a parked prepare whose saga is not
 poisoned (#4591), a poisoned saga's terminal applied,
