@@ -1048,7 +1048,7 @@ reported under that fix's own assertion tag, not merely some violation.
 | `PersistedBeliefHonest` | A failed checkpoint persist is rolled back (#4017). | - | `[PersistedBeliefHonest]` after every step. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(NoRollbackOnFailedPersist)`. | Net-new. |
 | `ReleaseBackedBySnapshot` | Every published trim entitlement is backed by durable snapshot coverage. | `LeafDurablePinCore` | `[ReleaseBackedBySnapshot]` after every step, in both ownerships. | `Removing_the_never_written_release_bound_is_caught_by_the_release_backing_assertion`; also `LeafDurablePinCoreTests.The_never_written_release_is_bounded_by_snapshot_coverage_issue_4456` (unit). | Net-new; #4523's fix. |
 | `LogPrefixApplied` | No entry becomes readable below a reader's position, so an abandoned append that lands late lands above every reader (#4621). | `WalShippingWatermark` | Not encoded in Coyote: the lifecycle model has no abandoned call. | `WalShardGrainTests.ReadAsync_never_exposes_an_offset_above_an_abandoned_flush_that_can_still_land` and `WalShardGrainTests.A_trailing_hole_is_not_exposed_when_the_post_failure_resync_fails` (unit). | Gap: TLA+ only in the models; production detectors named in `spec/wal/Refinement.md`. |
-| `ClearRecorded` | A leaf a purge cleared stays nameable by recovery until it is re-created (#4654, #4700). | - | Not encoded in Coyote. | The purge detectors named in `spec/wal/Refinement.md`. | Gap: TLA+ only. |
+| `ClearRecorded` | A leaf a purge cleared keeps its own purge marker until recovery re-creates it, so recovery can always name it (#4654, #4700). | - | Not encoded in Coyote. | The purge detectors named in `spec/wal/Refinement.md`. | Gap: TLA+ only. |
 | `AckedWriteDurable` across partitions, HLC stamps and retention (F08, #4622, #4641, #4669) | No acknowledged write leaves durable state when a leaf spans two partitions, releases one empty, writes below its clock, and the GC trims by stamp and by age. | `LeafDurablePinCore`, `WalGcTrimCore` | `WalPartitionReleaseModel` `[AckedWriteDurable]` after every step; TLA+ abstracts stamps and partitions away. | `WalPartitionReleaseCoyoteTests`: the replay barrier (#4669), the TTL cap (#4622), the override hold, its store-side prune, its trigger and the GC's read order (#4641), each removed in turn. | Net-new; TLA+ cannot express it. |
 | `SnapshotCoverageMonotonic` | Durable snapshot coverage never regresses. | - | Not encoded in Coyote. | `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key` (unit). | Cited. |
 | `PublishedPinWithinPersistedBelief` | A published pin never exceeds the persisted checkpoint (#3476). | `LeafDurablePinCore` | `[PublishedPinWithinPersistedBelief]` at every publication. | `Removing_one_fix_is_caught_by_the_assertion_it_protects(PinFromPendingCheckpoint)`. | Net-new. |
@@ -1066,11 +1066,11 @@ not, and each now has its own). `SnapshotCoverageMonotonic`,
 `StreamEventuallyComplete`, `FenceEventuallyReleased`, `LogPrefixApplied` and
 `ClearRecorded` are not encoded in Coyote at all; the TLA+ catalogue pairs every
 one of them with a firing mutation, and the refinement notes name their production
-detectors. Every defect the models found is fixed except #4700 (a purge's
-shard-wide recovery flag), whose fix is in review: #4450, #4451, #4456 and #4467 from
-the first version; #4523 and #4525 from the review; and #4621, #4622, #4634, #4641,
-#4654, #4669 and #4699 since. Their mutations and guards are ordinary regression
-checks.
+detectors. Every defect the models found is fixed: #4450, #4451, #4456 and #4467
+from the first version; #4523 and #4525 from the review; and #4621, #4622, #4634,
+#4641, #4654, #4669, #4699 and #4700 since. Their mutations and guards are ordinary
+regression checks.
+
 ### Shard-ownership property catalogue (epic #4430, issue #4434)
 
 Key ownership across adaptive split, reshard, online resize and undo is

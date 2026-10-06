@@ -104,11 +104,17 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*  row[l]    the leaf row (LeafNodeState) exists. Grouped with the pin     *)
 (*            variables for the same reason as hadSnap; it changes only     *)
 (*            under SnapshotLoss (LeafRowVanish, issue #4654).              *)
-(*  purgeBegun the shard's durable record that a purge has begun clearing  *)
-(*            its leaves (ShardRootState.LeafClearsBegun, issue #4654).     *)
-(*            Grouped with the pin variables like row; it changes only     *)
-(*            under SnapshotLoss (PurgeClear).                             *)
-(*  cleared[l] a ghost: the purge has deliberately cleared the leaf.       *)
+(*  purgeRec[l] the leaf's durable purge marker (PurgeCleared on its row   *)
+(*            record, the issue #4700 fix): written first when a purge     *)
+(*            reaches the leaf, kept through the clear, and reset by       *)
+(*            recovery only once the leaf's row is durable again. Grouped  *)
+(*            with the pin variables like row; changes only under          *)
+(*            SnapshotLoss.                                                *)
+(*  cleared[l] a ghost: the purge cleared the leaf's row and recovery has  *)
+(*            not re-created it yet.                                       *)
+(*  deleted   a ghost: the acknowledged writes a purge deleted, those the  *)
+(*            leaf owned when the purge marked it.                         *)
+(*  purged    a ghost bounding the instance to one purge per behaviour.    *)
 (*  pinHlc[l] "gone" once the GC retired the entry (PinRetire); otherwise  *)
 (*            "zero" while only Zero-frontier pins were published (a       *)
 (*            block pin), "clock" once a real frontier was.                *)
@@ -117,14 +123,14 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (***************************************************************************)
 VARIABLES next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
-          pinOff, pinHlc, hadSnap, row, purgeBegun, cleared, faults
+          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults
 
 walVars  == <<next, inflight, durable, tail, acked, orphans>>
 leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
-pinVars  == <<pinOff, pinHlc, hadSnap, row, purgeBegun, cleared>>
+pinVars  == <<pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged>>
 vars == <<next, inflight, durable, tail, acked, orphans,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale,
-          pinOff, pinHlc, hadSnap, row, purgeBegun, cleared, faults>>
+          pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults>>
 
 Pos == -1..(MaxOff - 1)
 
@@ -150,8 +156,10 @@ TypeOK ==
    /\ pinHlc \in [Leaves -> {"zero", "clock", "gone"}]
    /\ hadSnap \in [Leaves -> BOOLEAN]
    /\ row \in [Leaves -> BOOLEAN]
-   /\ purgeBegun \in BOOLEAN
+   /\ purgeRec \in [Leaves -> BOOLEAN]
    /\ cleared \in [Leaves -> BOOLEAN]
+   /\ deleted \subseteq Offs
+   /\ purged \in BOOLEAN
    /\ faults \in 0..MaxFaults
 
 (***************************************************************************)
@@ -195,7 +203,7 @@ Recoverable(l, o) ==
 \* taken back).
 MergePin(l, hlc, off) ==
     /\ pinOff' = [pinOff EXCEPT ![l] = IF off > @ THEN off ELSE @]
-    /\ pinHlc' = [pinHlc EXCEPT ![l] = IF hlc = "clock" THEN "clock" ELSE @]
+    /\ pinHlc' = [pinHlc EXCEPT ![l] = IF hlc = "clock" THEN "clock" ELSE IF @ = "gone" THEN "zero" ELSE @]
 
 \* The GC's view of the pin store. A pin that has never left Zero with no
 \* offset is a block pin and stops every trim; a real frontier with no
@@ -229,8 +237,10 @@ Init ==
     \* Every modelled leaf was created through an explicit create path, which
     \* wrote its row before the leaf became routable (issue #4654).
     /\ row = [l \in Leaves |-> TRUE]
-    /\ purgeBegun = FALSE
+    /\ purgeRec = [l \in Leaves |-> FALSE]
     /\ cleared = [l \in Leaves |-> FALSE]
+    /\ deleted = {}
+    /\ purged = FALSE
     /\ faults = 0
 
 (***************************************************************************)
@@ -460,7 +470,7 @@ PublishPin(l) ==
     /\ hadSnap' = IF SnapshotLoss
                   THEN [hadSnap EXCEPT ![l] = @ \/ cov[l] # NoSnap]
                   ELSE hadSnap
-    /\ UNCHANGED <<row, purgeBegun, cleared>>
+    /\ UNCHANGED <<row, purgeRec, cleared, deleted, purged>>
     /\ LET safe == IF stCp[l] < cov[l] THEN stCp[l] ELSE cov[l]
        IN IF ~ClockLive(l)
           THEN MergePin(l, "zero", NeverWrittenRelease(l))
@@ -485,6 +495,11 @@ GcTrim ==
     /\ \A l \in Leaves : ~Blocking(l)
     /\ \E t \in (tail + 1)..next :
          /\ t - 1 <= Floor
+         \* Never past an append still in flight. Implied while any pin holds the
+         \* floor; once a purge or a row loss has retired every pin, production may
+         \* trim past it, and the provider then refuses the append below its trim
+         \* watermark (#4621), so it fails unacknowledged: safe, and not explored.
+         /\ t <= Watermark
          /\ tail' = t
          /\ durable' = {o \in durable : o >= t}
     /\ UNCHANGED <<next, inflight, acked>>
@@ -536,15 +551,13 @@ SnapshotVanished(l) == snapCov[l] = NoSnap /\ hadSnap[l]
 \* a rowless cold start cannot tell a trimmed prefix from an empty one. The
 \* create paths that pass the intent - tree bootstrap, a split's sibling, a
 \* bulk-load seed, an append graft - each name a leaf that does not exist yet,
-\* and the recovery reseed passes it only on a shard whose purge recorded
-\* ShardRootState.LeafClearsBegun (purgeBegun), where the operator has deleted
-\* the data and a leaf re-created empty is the contract. The #1744 write-path
-\* self-heal never passes it. Evidence from the pin store
+\* so none reaches a modelled leaf, which already exists. The one path that
+\* re-creates an existing leaf is recovery after a purge, which is Recover: it
+\* re-creates only a leaf carrying its own purge marker (issue #4700). The #1744
+\* write-path self-heal never passes an intent. Evidence from the pin store
 \* cannot stand in for the intent: the GC retires a rowless leaf's pin
-\* (PinRetire), after which the leaf reads exactly like one never created. A
-\* leaf refuses an intent while its snapshot survives: that is a creator about to
-\* replace a lost row with an empty one, and it fails closed instead.
-CreateIntent(l) == purgeBegun /\ snapCov[l] = NoSnap
+\* (PinRetire), after which the leaf reads exactly like one never created.
+CreateIntent(l) == FALSE
 
 Activate(l) ==
     /\ ~up[l]
@@ -576,7 +589,7 @@ Activate(l) ==
     /\ UNCHANGED <<durCp, clk, snapCov, snapRows>>
     \* The create path writes the row before the leaf takes a write.
     /\ row' = [row EXCEPT ![l] = TRUE]
-    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeBegun, cleared>>
+    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeRec, cleared, deleted, purged>>
     /\ UNCHANGED faults
 
 (***************************************************************************)
@@ -654,7 +667,7 @@ LeafRowVanish(l) ==
     /\ faults' = faults + 1
     /\ UNCHANGED walVars
     /\ UNCHANGED <<snapCov, snapRows, stale>>
-    /\ UNCHANGED <<pinOff, pinHlc, purgeBegun, cleared>>
+    /\ UNCHANGED <<pinOff, pinHlc, purgeRec, cleared, deleted, purged>>
 
 (***************************************************************************)
 (* PinRetire(l): the WAL GC retires the pin of a leaf whose drive reports   *)
@@ -663,7 +676,7 @@ LeafRowVanish(l) ==
 (* GC nor joins the offset floor, so the GC may trim past the leaf's       *)
 (* coverage. Safe only because the rowless leaf never activates again      *)
 (* without a create intent. Not a fault: it is the GC's own behaviour,     *)
-(* reachable only after a LeafRowVanish.                                   *)
+(* reachable only after a LeafRowVanish or a purge's row clear.            *)
 (***************************************************************************)
 PinRetire(l) ==
     /\ ~row[l]
@@ -672,31 +685,48 @@ PinRetire(l) ==
     /\ pinHlc' = [pinHlc EXCEPT ![l] = "gone"]
     /\ UNCHANGED walVars
     /\ UNCHANGED leafVars
-    /\ UNCHANGED <<hadSnap, row, purgeBegun, cleared>>
+    /\ UNCHANGED <<hadSnap, row, purgeRec, cleared, deleted, purged>>
     /\ UNCHANGED faults
 
 (***************************************************************************)
-(* PurgeClear(l): the operator's purge of a soft-deleted tree              *)
-(* (PurgeTreeAsync) clears a leaf. ClearTopologyAsync makes the shard's     *)
-(* ShardRootState.LeafClearsBegun durable before its first leaf clear, then *)
-(* clears each routed leaf's row, its snapshot and its record, whichever of *)
-(* them still exist; the model records the flag in the same step as each   *)
-(* clear. A crash between the flag and the first clear leaves a shard whose *)
-(* recovery may re-create a rowless leaf with no snapshot, which is inside  *)
-(* the carve-out. A recovery reseed can run between clears; a leaf whose   *)
-(* snapshot survives refuses the re-create (CreateIntent) until its clear  *)
-(* removes it. Once the purge has begun the checked configurations follow  *)
-(* only the purge's own steps (PurgeFreezesProtocol): a deleted tree refuses *)
-(* data operations, and every property the purged data could falsify is   *)
-(* carved out for it (Purging). The flag is absorbing here; production     *)
-(* clears it after the reseed, which begins a fresh lifecycle the model    *)
-(* does not follow. An operator action, not a fault, enabled only under    *)
-(* SnapshotLoss.                                                            *)
+(* MarkPurge(l) / PurgeClear(l) / Recover(l): the operator's purge of a     *)
+(* soft-deleted tree reaches a leaf (ClearGrainStateForPurgeAsync, the     *)
+(* issue #4700 fix). It first makes the leaf's purge marker durable on its *)
+(* row record (MarkPurge): that is the commit point, and the writes the    *)
+(* leaf owns are deleted from then on (deleted). It then clears the row and *)
+(* snapshot and, last, retires the pin, keeping the marker (PurgeClear); a  *)
+(* purge stopped between the row clear and the pin retirement leaves a      *)
+(* rowless leaf's pin, which the GC retires (PinRetire). Retiring the pin   *)
+(* before the row clear would let the GC trim past a marked leaf whose row  *)
+(* survives, which recovery keeps and which then latches stale. The mark   *)
+(* and the clear are separate steps, so a purge can stop between them. Recovery after the purge (RecoverBindingAsync, from the reseed of  *)
+(* RecoverTreeAsync) visits every routed leaf: a marked leaf whose row      *)
+(* survived is re-bound and its marker reset; a marked rowless leaf has any *)
+(* remnant snapshot deleted, its row re-created empty with a fresh Zero     *)
+(* block pin (SetTreeIdAsync), and only then its marker reset; an unmarked  *)
+(* rowless leaf - one the purge never reached, whose row was lost to a      *)
+(* fault - is refused and stays failed closed. Operator actions, not        *)
+(* faults, enabled only under SnapshotLoss.                                 *)
 (***************************************************************************)
-PurgeClear(l) ==
+MarkPurge(l) ==
     /\ SnapshotLoss
+    /\ ~purgeRec[l]
+    \* One purge per behaviour bounds the instance; it may mark both leaves.
+    \* It is charged to the fault budget once, so it composes with one
+    \* environment fault, not two.
+    /\ \/ \E k \in Leaves : purgeRec[k]
+       \/ ~purged /\ faults < MaxFaults
+    /\ purged' = TRUE
+    /\ faults' = IF purged THEN faults ELSE faults + 1
+    /\ purgeRec' = [purgeRec EXCEPT ![l] = TRUE]
+    /\ deleted' = deleted \cup Owned(l)
+    /\ UNCHANGED walVars
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, row, cleared>>
+
+PurgeClear(l) ==
+    /\ purgeRec[l]
     /\ row[l] \/ snapCov[l] # NoSnap
-    /\ purgeBegun' = TRUE
     /\ cleared' = [cleared EXCEPT ![l] = TRUE]
     /\ row' = [row EXCEPT ![l] = FALSE]
     /\ up' = [up EXCEPT ![l] = FALSE]
@@ -710,16 +740,61 @@ PurgeClear(l) ==
     /\ snapCov' = [snapCov EXCEPT ![l] = NoSnap]
     /\ snapRows' = [snapRows EXCEPT ![l] = {}]
     /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
+    /\ pinOff' = [pinOff EXCEPT ![l] = -1]
+    /\ pinHlc' = [pinHlc EXCEPT ![l] = "gone"]
     /\ UNCHANGED walVars
     /\ UNCHANGED stale
-    /\ UNCHANGED <<pinOff, pinHlc>>
+    /\ UNCHANGED <<purgeRec, deleted, purged>>
     /\ UNCHANGED faults
 
-\* The action constraint the checked configurations apply: once a purge has
-\* begun, only the purge's clears and the recovery's re-creates (or their
-\* refusals) are explored.
+Recover(l) ==
+    /\ purgeRec[l]
+    /\ purgeRec' = [purgeRec EXCEPT ![l] = FALSE]
+    /\ cleared' = [cleared EXCEPT ![l] = FALSE]
+    /\ IF row[l]
+       THEN /\ UNCHANGED leafVars
+            /\ UNCHANGED <<pinOff, pinHlc, hadSnap, row>>
+       ELSE /\ row' = [row EXCEPT ![l] = TRUE]
+            /\ cache' = [cache EXCEPT ![l] = {}]
+            /\ rp' = [rp EXCEPT ![l] = -1]
+            /\ stCp' = [stCp EXCEPT ![l] = -1]
+            /\ durCp' = [durCp EXCEPT ![l] = -1]
+            /\ anchor' = [anchor EXCEPT ![l] = -1]
+            /\ clk' = [clk EXCEPT ![l] = FALSE]
+            /\ cov' = [cov EXCEPT ![l] = NoSnap]
+            /\ snapCov' = [snapCov EXCEPT ![l] = NoSnap]
+            /\ snapRows' = [snapRows EXCEPT ![l] = {}]
+            /\ stale' = [stale EXCEPT ![l] = FALSE]
+            /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
+            /\ pinOff' = [pinOff EXCEPT ![l] = -1]
+            /\ pinHlc' = [pinHlc EXCEPT ![l] = "zero"]
+            /\ UNCHANGED up
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<deleted, purged>>
+    /\ UNCHANGED faults
+
+\* PurgeSettled: a modelling device. One purge per behaviour bounds the
+\* instance, so a behaviour can exhaust it after recovery with nothing left to
+\* do: both leaves re-created empty over a fully trimmed stream. That is
+\* quiescence, not a protocol deadlock, and this stutter keeps TLC's deadlock
+\* check meaningful everywhere else.
+PurgeSettled ==
+    /\ purged
+    /\ UNCHANGED vars
+
+\* The action constraint the checked configurations apply. While a purge marker
+\* is outstanding the tree is deleted and refuses data operations, so only the
+\* purge, the recovery, the GC, environment faults and leaf (de)activation are
+\* explored; once recovery has reset every marker, the whole lifecycle resumes.
+PurgeInProgress == \E l \in Leaves : purgeRec[l]
+
 PurgeFreezesProtocol ==
-    purgeBegun => \E l \in Leaves : PurgeClear(l) \/ Activate(l) \/ ActivateRowless(l)
+    PurgeInProgress =>
+        \/ GcTrim
+        \/ \E l \in Leaves :
+            \/ MarkPurge(l) \/ PurgeClear(l) \/ Recover(l) \/ PinRetire(l)
+            \/ LeafRowVanish(l) \/ SnapshotVanish(l) \/ LeafStop(l)
+            \/ Activate(l) \/ ActivateLoadFail(l) \/ ActivateRowless(l)
 
 (***************************************************************************)
 (* ReplayFaultRearm(l): an active leaf's cold rebuild faults part-way (a   *)
@@ -758,7 +833,10 @@ Next ==
     \/ \E l \in Leaves : SnapshotVanish(l)
     \/ \E l \in Leaves : LeafRowVanish(l)
     \/ \E l \in Leaves : PinRetire(l)
+    \/ \E l \in Leaves : MarkPurge(l)
     \/ \E l \in Leaves : PurgeClear(l)
+    \/ \E l \in Leaves : Recover(l)
+    \/ PurgeSettled
 
 (***************************************************************************)
 (* Fairness: the protocol's own steps are weakly fair - appends complete,  *)
@@ -798,14 +876,12 @@ TrimCoveredBySnapshot ==
 
 \* An active leaf's read position never passes an acknowledged write it owns
 \* that its projection does not hold: a leaf never serves a projection that
-\* has silently lost a write it has read past.
-\* The single carve-out is a leaf whose shard has begun a purge (issue #4654):
-\* the operator deleted that data, so recovery re-creating the leaf empty is
-\* the intended outcome. Every modelled leaf shares one shard.
-Purging(l) == purgeBegun
-
+\* has silently lost a write it has read past. The single carve-out is a write
+\* a purge deleted (issue #4700): the leaf's own purge marker is the commit
+\* point, and recovery re-creating that leaf empty is the intended outcome. A
+\* leaf the purge never reached keeps every write.
 ReadPositionHonest ==
-    \A l \in {k \in Leaves : ~Purging(k)} : \A o \in Owned(l) :
+    \A l \in Leaves : \A o \in Owned(l) \ deleted :
         (up[l] /\ o <= rp[l]) => o \in cache[l]
 
 \* No entry ever becomes readable below a reader's position: every readable
@@ -816,11 +892,12 @@ LogPrefixApplied ==
     \A l \in Leaves : \A o \in Readable :
         (up[l] /\ ~stale[l] /\ Owner[o] = l /\ o <= rp[l]) => o \in cache[l]
 
-\* Every leaf a purge deliberately cleared is on a shard that recorded the
-\* purge first (ShardRootState.LeafClearsBegun), so recovery can re-create it;
-\* a clear without the record leaves a leaf no create path may ever name.
+\* Every leaf a purge deliberately cleared keeps its own purge marker until
+\* recovery has re-created it, so recovery can always name it (issue #4700); a
+\* clear without the marker, or a marker dropped first, leaves a leaf no create
+\* path may ever name, failing closed for ever.
 ClearRecorded ==
-    \A l \in Leaves : cleared[l] => purgeBegun
+    \A l \in Leaves : cleared[l] => purgeRec[l]
 
 \* No reader is ever shown an offset above a still-unfilled prefix hole.
 ShippingNeverSkips ==

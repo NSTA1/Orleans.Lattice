@@ -20,7 +20,7 @@ PERTURBS: SnapshotVanish
     /\ UNCHANGED walVars
     /\ UNCHANGED <<up, cache, rp, stCp, durCp, anchor, clk, cov, stale>>
     /\ hadSnap' = [hadSnap EXCEPT ![l] = FALSE]
-    /\ UNCHANGED <<pinOff, pinHlc, row, purgeBegun, cleared>>
+    /\ UNCHANGED <<pinOff, pinHlc, row, purgeRec, cleared, deleted, purged>>
 --- END
 --- FIND
 SnapshotLoss == FALSE

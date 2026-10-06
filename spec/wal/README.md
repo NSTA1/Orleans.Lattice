@@ -23,7 +23,7 @@ properties exhaustively within the CI fixture's per-run ceiling.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `WalDurability` | 11 | 4 | 22 | 39 | 36 | 111,154 |
+| `WalDurability` | 11 | 4 | 25 | 42 | 38 | 111,154 |
 | `WalMove` | 5 | 2 | 13 | 18 | 18 | 1,617 |
 
 `Actions` counts the disjuncts of `Next`, including `WalMove`'s non-behavioural
@@ -43,8 +43,11 @@ leaf's durable snapshot (`SnapshotVanish`, issue #4634) or its state row
 (`LeafRowVanish`, issue #4654), and the operator purge the tree (`PurgeClear`), at two
 faults so a snapshot and a row can both vanish. Destroyed data is outside the durability
 properties by construction, so it checks the properties that say the loss is never
-silent - `ReadPositionHonest` above all, carved out only for a shard whose purge has
-begun - with the other safety invariants that still apply: 1,365,609 distinct states.
+silent - `ReadPositionHonest` above all, carved out only for the writes a purge
+deleted (issue #4700) - with the other safety invariants that still apply: 3,277,793
+distinct states. A purge marks a leaf before clearing it, and recovery re-creates only
+a marked leaf (`MarkPurge`, `PurgeClear`, `Recover`); the lifecycle resumes once
+recovery has reset every marker.
 
 `WalMove` has one too, `WalMove.TwoMoves.cfg`: two moves of the same stream, each
 with its own coordinator, so one can take over the other's lapsed fence while the

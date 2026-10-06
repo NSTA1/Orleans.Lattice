@@ -137,6 +137,43 @@ public class CrossTreeImportBarrierIntegrationTests
     }
 
     /// <summary>Reads <paramref name="key"/>, or reports the tree read-fenced.</summary>
+    /// <summary>
+    /// A window longer than two ticks of the coordinator's 2 s phase timer
+    /// (<c>CoordinatorGrain.PhaseTimerPeriod</c>), each of which re-checks the
+    /// import's cross-tree hold.
+    /// </summary>
+    private static readonly TimeSpan HeldWindow = TimeSpan.FromSeconds(5);
+
+    /// <summary>The fewest samples a <see cref="HeldWindow"/> must yield to count as sampled throughout.</summary>
+    private const int MinimumHeldSamples = 8;
+
+    /// <summary>
+    /// Samples, every 250 ms for <paramref name="window"/>, whether a read of
+    /// <paramref name="tree"/> is fenced and whether its coordinator reports
+    /// the fence. Returns how many samples were taken and in how many the fence
+    /// was down by either measure.
+    /// </summary>
+    private async Task<(int Samples, int Lifted)> SampleFenceAsync(string tree, TimeSpan window)
+    {
+        var samples = 0;
+        var lifted = 0;
+        var end = Environment.TickCount64 + (long)window.TotalMilliseconds;
+        while (Environment.TickCount64 < end)
+        {
+            var read = await ReadAsync(tree, "k");
+            var status = await Coordinator(tree).GetStatusAsync(CancellationToken.None);
+            samples++;
+            if (!read.Fenced || !status.ReadFenced)
+            {
+                lifted++;
+            }
+
+            await Task.Delay(250);
+        }
+
+        return (samples, lifted);
+    }
+
     private async Task<(bool Fenced, byte[]? Value)> ReadAsync(string tree, string key)
     {
         try
@@ -186,10 +223,13 @@ public class CrossTreeImportBarrierIntegrationTests
         // Tree A is imported while tree B's terminal is still on its own stream.
         await StartBootstrapAsync(treeA);
         var heldPhase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
-        await Task.Delay(1500);
-        var whileHeld = await ReadAsync(treeA, "k");
         var siblingWhileHeld = await ReadAsync(treeB, "k");
-        var statusWhileHeld = await Coordinator(treeA).GetStatusAsync(CancellationToken.None);
+
+        // The drain keeps the fence up, and every phase tick re-checks it
+        // (ReleaseCrossTreeHoldAsync) on the coordinator's 2 s phase timer. A
+        // single early sample would miss a tick that lifted it too soon, so the
+        // fence is sampled throughout a window spanning more than two ticks.
+        var (samples, liftedSamples) = await SampleFenceAsync(treeA, HeldWindow);
 
         await DeliverTreeBAsync(treeA, treeB, operationId);
         var released = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
@@ -200,9 +240,9 @@ public class CrossTreeImportBarrierIntegrationTests
         {
             Assert.That(heldPhase, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(siblingWhileHeld, Is.EqualTo((false, (byte[]?)null)), "precondition: tree B is pre-saga");
-            Assert.That(whileHeld.Fenced, Is.True,
-                "tree A must not be served post-saga while tree B is pre-saga: it stays read-fenced until the barrier decides");
-            Assert.That(statusWhileHeld.ReadFenced, Is.True);
+            Assert.That(samples, Is.GreaterThanOrEqualTo(MinimumHeldSamples), "precondition: the window was sampled throughout");
+            Assert.That(liftedSamples, Is.Zero,
+                "tree A must not be served post-saga while tree B is pre-saga: it stays read-fenced, on every phase tick, until the barrier decides");
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the fence lifts once tree B's terminal decides the barrier");
             Assert.That(a, Is.EqualTo((false, (byte[]?)new byte[] { 1 })));
             Assert.That(b, Is.EqualTo((false, (byte[]?)new byte[] { 2 })));
