@@ -1254,6 +1254,10 @@
         {
           "error_id": "failed-precondition",
           "condition": "The peer is still present in the configured replication peer set (ReplicationPeers / IReplicationTopology.CurrentPeers); it must be removed from ReplicationPeers before it can be decommissioned."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The replication engine is not hosted in this process (ILatticeReplicationPeerDecommissioner is not registered), so the facade cannot carry out the decommission."
         }
       ],
       "retry": {

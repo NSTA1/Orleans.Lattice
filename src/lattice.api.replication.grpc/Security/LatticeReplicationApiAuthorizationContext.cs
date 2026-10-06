@@ -21,14 +21,6 @@ public enum LatticeReplicationApiOperation
     GetReplicationConfig,
 
     /// <summary>
-    /// The <c>DecommissionPeer</c> RPC. Its
-    /// <see cref="LatticeReplicationApiAuthorizationContext.TargetId"/> is the
-    /// peer cluster id being decommissioned, not a tree id - the operation is
-    /// cluster-wide and acts across every registered tree's enrolment.
-    /// </summary>
-    DecommissionPeer,
-
-    /// <summary>
     /// A replication control-API method the interceptor does not recognise (for
     /// example a future RPC added without updating the operation map). Presented
     /// to the authorizer so a deny-by-default policy can refuse an unmapped call
@@ -42,6 +34,16 @@ public enum LatticeReplicationApiOperation
     /// is the query's tree filter, or <see langword="null"/> for a whole-estate read.
     /// </summary>
     GetPeerStatus,
+
+    /// <summary>
+    /// The <c>DecommissionPeer</c> RPC. Its
+    /// <see cref="LatticeReplicationApiAuthorizationContext.TargetId"/> is the
+    /// peer cluster id being decommissioned, not a tree id - the operation is
+    /// cluster-wide and acts across every registered tree's enrolment. Appended
+    /// after <see cref="Unknown"/> and <see cref="GetPeerStatus"/> so those
+    /// members' wire-stable ordinal values are preserved.
+    /// </summary>
+    DecommissionPeer,
 }
 
 /// <summary>

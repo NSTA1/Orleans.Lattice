@@ -390,14 +390,48 @@ public sealed class LatticeReplicationControlTests
     }
 
     [Test]
-    public void Constructor_null_decommissioner_throws()
+    public void Constructor_null_decommissioner_is_accepted()
     {
+        // The decommissioner is the only dependency registered by the replication
+        // engine package rather than the facade, so a facade-only host (no engine
+        // registered) must still resolve the control. The verb itself fails
+        // closed later, in DecommissionPeerAsync.
         Assert.That(
             () => new LatticeReplicationControl(
                 Substitute.For<ILatticeReplicationConfigAuthority>(),
                 new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
                 new DefaultTenantContextResolver(),
-                null!),
-            Throws.ArgumentNullException);
+                decommissioner: null),
+            Throws.Nothing);
+    }
+
+    [Test]
+    public void DecommissionPeerAsync_authorized_without_decommissioner_fails_closed()
+    {
+        var control = new LatticeReplicationControl(
+            Substitute.For<ILatticeReplicationConfigAuthority>(),
+            new ReplicationAccessAuthorizer(new AllowingAccessGate(), membership: null),
+            new DefaultTenantContextResolver(),
+            decommissioner: null);
+
+        Assert.That(
+            async () => await control.DecommissionPeerAsync("site-b"),
+            Throws.TypeOf<LatticeReplicationEngineNotHostedException>());
+    }
+
+    [Test]
+    public void DecommissionPeerAsync_unauthorized_without_decommissioner_still_denies()
+    {
+        // Authorization is checked before the missing-decommissioner guard, so an
+        // unauthorized caller is refused even when no replication engine is hosted.
+        var control = new LatticeReplicationControl(
+            Substitute.For<ILatticeReplicationConfigAuthority>(),
+            new ReplicationAccessAuthorizer(new DenyingAccessGate("no grant"), membership: null),
+            new DefaultTenantContextResolver(),
+            decommissioner: null);
+
+        Assert.That(
+            async () => await control.DecommissionPeerAsync("site-b"),
+            Throws.TypeOf<LatticeAuthorizationDeniedException>());
     }
 }

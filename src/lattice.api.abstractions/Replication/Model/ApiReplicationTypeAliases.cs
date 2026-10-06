@@ -55,4 +55,7 @@ public static class ApiReplicationTypeAliases
     /// <summary>Alias for <see cref="ReplicationDecommissionPeerResult"/>.</summary>
     public const string ReplicationDecommissionPeerResult = "oir.dp";
 
+    /// <summary>Alias for <see cref="LatticeReplicationEngineNotHostedException"/>.</summary>
+    public const string LatticeReplicationEngineNotHostedException = "oir.nh";
+
 }

@@ -122,6 +122,7 @@ public interface ILatticeReplicationControl
     /// <exception cref="ArgumentException"><paramref name="peerClusterId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to administer replication.</exception>
     /// <exception cref="InvalidOperationException">The peer is still present in the configured replication peer set.</exception>
+    /// <exception cref="LatticeReplicationEngineNotHostedException">No replication engine is hosted in this process, so the peer cannot be decommissioned.</exception>
     Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(
         string peerClusterId,
         CancellationToken cancellationToken = default);

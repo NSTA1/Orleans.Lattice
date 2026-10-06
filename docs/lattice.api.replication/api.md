@@ -145,6 +145,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for authoring the change was not met: no local replica id is configured - the config entry's flag dots are stamped with it, so both an enable and the disable of an enabled tree need one - or a flag-based merge mode is requested without one. (Defined in `Orleans.Lattice.Replication`.) |
 | `InvalidOperationException` | An enable that requests a snapshot bootstrap finds a bootstrap for the same tree already in progress from a different source cluster. The enable itself has already been written to the config tree by the time this is raised. |
 | `LatticeReplicationPeerStillConfiguredException` | `DecommissionPeerAsync` is called while the peer is still present in `ReplicationPeers`. (`InvalidOperationException`-derived; defined in `Orleans.Lattice.Replication`.) |
+| `LatticeReplicationEngineNotHostedException` | `DecommissionPeerAsync` is called in a process that registered `AddLatticeReplicationApi` without the replication engine (`ILatticeReplicationPeerDecommissioner` is not registered), so the facade cannot carry out the decommission. Raised after authorization succeeds. (`InvalidOperationException`-derived; defined in `Orleans.Lattice.Api.Abstractions`.) |
 
 ## See also
 
