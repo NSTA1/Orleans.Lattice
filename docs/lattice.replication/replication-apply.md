@@ -362,8 +362,34 @@ decision: a rewind re-ships its terminals, and an export carries its decision
 row while the cross-tree decision purge hold is unreleased. A cleared barrier
 would reopen on such an arrival and wait for ever for a sibling whose terminal
 was acknowledged long ago. The tombstone finalizes the arriving tree with the
-verdict instead. The receiver cannot observe the origin's purge, so a
-tombstone is kept indefinitely: one small row per cross-tree operation.
+verdict instead.
+
+A tombstone is dropped once no arrival of its operation can reach this
+receiver any more
+([#4733](https://github.com/NSTA1/Orleans.Lattice/issues/4733)). The origin
+advertises a **cross-tree purge frontier** per tree: a decision sequence at or
+below which it stores no cross-tree decision of the tree and never will again
+(see [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+It sends a chunk of it beside every push, as the
+`x-lattice-replication-cross-tree-purge-frontier` header. That header is read
+only on a push whose origin is authenticated and a configured peer, and parsed
+strictly and bounded. The receiver keeps the highest value per (origin, tree)
+(`ICrossTreePurgeFrontierGrain`). A tombstone records the operation's decision
+sequences and **every** participant the operation named, not only the trees
+replicated here: a participant that becomes replicated here later can still
+import the operation's decision row while the origin stores it. The tombstone
+is listed under each participant, and is dropped once every participant's
+frontier has reached its sequence:
+- when a frontier advance sweeps the listing; or
+- when the retention that creates it reads the frontier itself, after listing
+  it, so neither can miss the other.
+
+An operation decided before sequencing counts as sequence 0 on every
+participant: its tombstone drops once the origin stores no such decision. A
+tombstone with no recorded participants (an older build's) is kept. Dropping
+relies on the purge hold: the origin purges a cross-tree decision only after
+every peer acknowledged the operation's terminals, so no terminal can be
+re-shipped after the frontier passes it.
 
 A shipped cross-tree terminal carries the operation's **decision stamps**:
 per participating tree, the export epoch the origin read after the decision
