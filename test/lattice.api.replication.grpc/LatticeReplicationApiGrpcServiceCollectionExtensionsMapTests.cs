@@ -36,6 +36,7 @@ public sealed class LatticeReplicationApiGrpcServiceCollectionExtensionsMapTests
             {
                 new ReplicationTreeConfigEntry("orders", enabled: true, mode: LatticeMergeMode.RwFlag, ambiguous: false),
             }));
+        var peerAdmin = Substitute.For<ILatticeReplicationPeerAdmin>();
 
         using var host = await new HostBuilder()
             .ConfigureWebHost(web =>
@@ -45,6 +46,7 @@ public sealed class LatticeReplicationApiGrpcServiceCollectionExtensionsMapTests
                 {
                     services.AddSerializer();
                     services.AddSingleton(control);
+                    services.AddSingleton(peerAdmin);
                     // Opt in to a permissive authorizer before the binding registers
                     // the default-deny one, so the mapped RPC is reachable.
                     services.AddSingleton<ILatticeReplicationApiAuthorizer, AllowAllReplicationApiAuthorizer>();

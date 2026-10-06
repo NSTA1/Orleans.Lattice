@@ -34,14 +34,25 @@ public enum LatticeReplicationApiOperation
     /// is the query's tree filter, or <see langword="null"/> for a whole-estate read.
     /// </summary>
     GetPeerStatus,
+
+    /// <summary>
+    /// The <c>DecommissionPeer</c> RPC. Its
+    /// <see cref="LatticeReplicationApiAuthorizationContext.TargetId"/> is the
+    /// peer cluster id being decommissioned, not a tree id - the operation is
+    /// cluster-wide and acts across every registered tree's enrolment. Appended
+    /// after <see cref="Unknown"/> and <see cref="GetPeerStatus"/> so those
+    /// members' wire-stable ordinal values are preserved.
+    /// </summary>
+    DecommissionPeer,
 }
 
 /// <summary>
 /// Describes an inbound replication control-API gRPC call to
 /// <see cref="ILatticeReplicationApiAuthorizer.IsAuthorizedAsync"/>. Carries the
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/>
-/// (the target tree id for a tree-scoped enable / disable call or a
-/// <c>GetPeerStatus</c> tree filter; <see langword="null"/> for a whole-estate
+/// (the target tree id for a tree-scoped enable / disable call, a
+/// <c>GetPeerStatus</c> tree filter, or the peer cluster id for a
+/// <c>DecommissionPeer</c> call; <see langword="null"/> for a whole-estate
 /// config or peer-status read or an unrecognised replication-control call), and
 /// the underlying gRPC <see cref="ServerCallContext"/> for header / identity /
 /// peer inspection.
@@ -53,8 +64,9 @@ public readonly struct LatticeReplicationApiAuthorizationContext
     /// <param name="operation">The replication control-API operation being invoked.</param>
     /// <param name="targetId">
     /// The target tree id the call targets (including a <c>GetPeerStatus</c> tree
-    /// filter), or <see langword="null"/> for operations that are not scoped to a
-    /// single tree.
+    /// filter), the peer cluster id for a <c>DecommissionPeer</c> call, or
+    /// <see langword="null"/> for operations that are not scoped to a single
+    /// tree or peer.
     /// </param>
     public LatticeReplicationApiAuthorizationContext(
         ServerCallContext call,
@@ -75,8 +87,9 @@ public readonly struct LatticeReplicationApiAuthorizationContext
 
     /// <summary>
     /// The target tree id the call targets (including a <c>GetPeerStatus</c> tree
-    /// filter), or <see langword="null"/> for operations that are not scoped to a
-    /// single tree.
+    /// filter), the peer cluster id for a <c>DecommissionPeer</c> call, or
+    /// <see langword="null"/> for operations that are not scoped to a single
+    /// tree or peer.
     /// </summary>
     public string? TargetId { get; }
 }

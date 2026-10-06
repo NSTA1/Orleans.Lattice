@@ -57,7 +57,7 @@ public sealed class LatticeReplicationGrpcServiceBaseBindServiceTests
     }
 
     [Test]
-    public void BindService_metadata_pass_registers_four_null_handler_methods()
+    public void BindService_metadata_pass_registers_five_null_handler_methods()
     {
         var binder = new RecordingServiceBinder();
 
@@ -65,17 +65,17 @@ public sealed class LatticeReplicationGrpcServiceBaseBindServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.NullHandlerCount, Is.EqualTo(4));
+            Assert.That(binder.NullHandlerCount, Is.EqualTo(5));
             Assert.That(binder.HandlerCount, Is.EqualTo(0));
             Assert.That(binder.MethodNames, Is.EquivalentTo(new[]
             {
-                "EnableReplication", "DisableReplication", "GetReplicationConfig", "GetAuthScheme",
+                "EnableReplication", "DisableReplication", "GetReplicationConfig", "GetAuthScheme", "DecommissionPeer",
             }));
         });
     }
 
     [Test]
-    public void BindService_instance_pass_registers_four_bound_handlers()
+    public void BindService_instance_pass_registers_five_bound_handlers()
     {
         var binder = new RecordingServiceBinder();
 
@@ -83,11 +83,11 @@ public sealed class LatticeReplicationGrpcServiceBaseBindServiceTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(binder.HandlerCount, Is.EqualTo(4));
+            Assert.That(binder.HandlerCount, Is.EqualTo(5));
             Assert.That(binder.NullHandlerCount, Is.EqualTo(0));
             Assert.That(binder.MethodNames, Is.EquivalentTo(new[]
             {
-                "EnableReplication", "DisableReplication", "GetReplicationConfig", "GetAuthScheme",
+                "EnableReplication", "DisableReplication", "GetReplicationConfig", "GetAuthScheme", "DecommissionPeer",
             }));
         });
     }
@@ -133,5 +133,9 @@ public sealed class LatticeReplicationGrpcServiceBaseBindServiceTests
         public override Task<AuthSchemeAdvertisement> GetAuthScheme(
             AuthSchemeAdvertisementRequest request, ServerCallContext context) =>
             Task.FromResult(new AuthSchemeAdvertisement());
+
+        public override Task<ReplicationDecommissionPeerResponse> DecommissionPeer(
+            ReplicationDecommissionPeerRequestMessage request, ServerCallContext context) =>
+            Task.FromResult(new ReplicationDecommissionPeerResponse { PeerClusterId = string.Empty });
     }
 }

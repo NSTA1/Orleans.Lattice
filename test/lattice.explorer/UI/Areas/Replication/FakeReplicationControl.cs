@@ -85,4 +85,17 @@ internal sealed class FakeReplicationControl : ILatticeReplicationControl
             ? Task.FromException<ReplicationConfigReport>(ReadFailure)
             : Task.FromResult(new ReplicationConfigReport([.. Trees]));
     }
+
+    public List<string> Decommissions { get; } = [];
+
+    public Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)
+    {
+        Decommissions.Add(peerClusterId);
+        if (ChangeFailure is not null)
+        {
+            return Task.FromException<ReplicationDecommissionPeerResult>(ChangeFailure);
+        }
+
+        return Task.FromResult(new ReplicationDecommissionPeerResult(peerClusterId, Trees.Count, alreadyDecommissioned: false));
+    }
 }

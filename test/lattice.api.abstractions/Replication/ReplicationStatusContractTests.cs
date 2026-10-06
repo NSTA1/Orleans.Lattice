@@ -5,10 +5,11 @@ namespace Orleans.Lattice.Api.Abstractions.Tests.Replication;
 
 /// <summary>
 /// Pins the shape of the replication facade contracts. The peer-status read
-/// contract was added as a <b>separate</b> interface precisely so that
+/// contract and the peer-decommission verb were each added as a
+/// <b>separate</b> interface precisely so that
 /// <see cref="ILatticeReplicationControl"/> stays byte-identical; this fixture
 /// fails if a member is added to, removed from, or re-signed on the control
-/// interface, and if the status interface drifts from its one read verb.
+/// interface, and if either satellite interface drifts from its one verb.
 /// </summary>
 [TestFixture]
 public sealed class ReplicationStatusContractTests
@@ -47,6 +48,32 @@ public sealed class ReplicationStatusContractTests
             Assert.That(status.GetInterfaces(), Is.Empty, "the status contract must not extend another facade");
             Assert.That(typeof(ILatticeReplicationControl).IsAssignableFrom(status), Is.False);
             Assert.That(status.IsAssignableFrom(typeof(ILatticeReplicationControl)), Is.False);
+        });
+    }
+
+    [Test]
+    public void ILatticeReplicationPeerAdmin_exposes_exactly_the_decommission_verb()
+    {
+        Assert.That(Signatures(typeof(ILatticeReplicationPeerAdmin)), Is.EqualTo(new[]
+        {
+            "Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(String peerClusterId, CancellationToken cancellationToken = default)",
+        }));
+    }
+
+    [Test]
+    public void ILatticeReplicationPeerAdmin_is_a_public_interface_separate_from_the_control_facade()
+    {
+        var peerAdmin = typeof(ILatticeReplicationPeerAdmin);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(peerAdmin.IsInterface, Is.True);
+            Assert.That(peerAdmin.IsPublic, Is.True);
+            Assert.That(peerAdmin.Namespace, Is.EqualTo("Orleans.Lattice.Api.Replication"));
+            Assert.That(peerAdmin.Assembly, Is.EqualTo(typeof(ILatticeReplicationControl).Assembly));
+            Assert.That(peerAdmin.GetInterfaces(), Is.Empty, "the peer-admin contract must not extend another facade");
+            Assert.That(typeof(ILatticeReplicationControl).IsAssignableFrom(peerAdmin), Is.False);
+            Assert.That(peerAdmin.IsAssignableFrom(typeof(ILatticeReplicationControl)), Is.False);
         });
     }
 

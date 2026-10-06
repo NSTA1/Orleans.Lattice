@@ -30,4 +30,26 @@ internal sealed class CrossTreePeerEnrolmentGrain(
             throw;
         }
     }
+
+    /// <inheritdoc />
+    public async Task<bool> DecommissionAsync(string peerClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
+        if (!state.State.Peers.Remove(peerClusterId))
+        {
+            return false;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.Peers.Add(peerClusterId);
+            throw;
+        }
+
+        return true;
+    }
 }
