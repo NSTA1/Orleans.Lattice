@@ -74,6 +74,7 @@ transport assumption or its read view already does.
 | `RAllOrNothingCrossTreePurgeBeforeBarrierDecides` | `RAllOrNothing` | Invariant | `OriginPurge` | the origin purges a cross-tree sub-saga's decision before the operation's barrier has decided (issue #4684's hold removed) |
 | `RAllOrNothingCrossTreeHoldReleasedOnDetach` | `RAllOrNothing` | Invariant | `OriginPurge` | a detach releases the cross-tree purge hold |
 | `RNoStrandedPrepareDecommissionKeepsBarrierWaiting` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission leaves the removed tree in the barrier's wait set (#4698 removed) |
+| `RNoStrandedPrepareDecommissionKeepsBuckets` | `RNoStrandedPrepare` | Temporal | `Decommission` | a decommission keeps the peer's pending buckets, staged before their terminals arrived (issue #4736) |
 | `RAllOrNothingFreshReaddReadableBeforeBootstrap` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission is readable before its fresh bootstrap |
 | `RAllOrNothingFreshReaddNoBoundary` | `RAllOrNothing` | Invariant | `ReaddFresh` | a tree added back after a decommission takes no boundary on its sibling |
 | `RAllOrNothingRewindWhileDetached` | `RAllOrNothing` | Invariant | `ReseedRewind` | a detached shipper rewinds on the peer's echo of a later export epoch |
