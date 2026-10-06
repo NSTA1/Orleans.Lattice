@@ -86,6 +86,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
         frontier.PinAsync(default, default!, default!, default).ReturnsForAnyArgs(true);
         factory.GetGrain<IReplicationTreeFrontierGrain>(Tree).Returns(frontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive").Returns(Task.FromResult<IGrainReminder?>(null));
 
         await grain.ProcessNextPhaseAsync();
@@ -104,6 +105,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var frontier = Substitute.For<IReplicationTreeFrontierGrain>();
         frontier.PinAsync(default, default!, default!, default).ReturnsForAnyArgs(true);
         factory.GetGrain<IReplicationTreeFrontierGrain>(Tree).Returns(frontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive").Returns(Task.FromResult<IGrainReminder?>(null));
 
         await grain.ProcessNextPhaseAsync();

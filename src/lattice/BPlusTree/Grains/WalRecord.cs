@@ -511,5 +511,17 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(29)] public bool IsCarriedStamp { get; init; }
+
+    /// <summary>
+    /// The decision stamps of the cross-tree write a shipped terminal belongs to
+    /// (issue #4684): per participating tree, that tree's snapshot export epoch
+    /// read after the decision was durable. Set by the replication shipper on
+    /// the wire copy of a terminal only, never in the write-ahead log; a
+    /// receiver's cross-tree barrier compares a participant's stamp with the
+    /// export it imported that participant from. Strictly additive on the wire:
+    /// an older decoder skips the unknown id, and a record without it decodes as
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(30)] internal IReadOnlyDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
 }
 

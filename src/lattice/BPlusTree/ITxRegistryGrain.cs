@@ -139,6 +139,15 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task<Dictionary<Guid, CrossTreeMembership>> GetCrossTreeMembershipsAsync(IReadOnlyList<Guid> txids);
 
     /// <summary>
+    /// Records the decision stamps of the cross-tree write sub-saga
+    /// <paramref name="txid"/> belongs to (issue #4684) on its cross-tree
+    /// membership. The first recorded stamps stand; a sub-saga with no
+    /// membership is left unchanged. Durable before it returns.
+    /// </summary>
+    [AlwaysInterleave]
+    Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps);
+
+    /// <summary>
     /// Receiver-side analogue of
     /// <see cref="RegisterExternalDecisionAuthorityAsync"/>: registers that the
     /// replicated cross-tree sub-saga identified by <paramref name="txid"/>

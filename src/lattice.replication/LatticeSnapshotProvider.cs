@@ -1214,6 +1214,7 @@ internal sealed class LatticeSnapshotProvider(
                 {
                     CrossTreeOperationId = membership.OperationId,
                     CrossTreeParticipants = membership.Participants,
+                    CrossTreeDecisionStamps = membership.DecisionStamps,
                 };
         }
     }

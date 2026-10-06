@@ -1054,9 +1054,15 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var carriedSagas = new HashSet<Guid>();
         var decidedSagas = new Dictionary<Guid, bool>();
         var crossTreeBarriers = new HashSet<string>(StringComparer.Ordinal);
+        var namedCrossTreeOperations = new HashSet<string>(StringComparer.Ordinal);
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
+            if (!string.IsNullOrEmpty(entry.CrossTreeOperationId))
+            {
+                namedCrossTreeOperations.Add(entry.CrossTreeOperationId);
+            }
+
             if (entry.TransactionId != Guid.Empty)
             {
                 if (entry.SettledDecision is { } settled)
@@ -1225,9 +1231,17 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         }
 
         // The import settled cross-tree sub-sagas whose sibling trees may still
-        // be pre-saga here: the tree stays read-fenced until every barrier it
-        // arrived at has decided (#4683). Persisted with the phase below.
-        state.State.PendingCrossTreeBarriers = await UndecidedBarriersAsync(crossTreeBarriers).ConfigureAwait(true);
+        // be pre-saga here (#4683), and may have settled one it names nowhere
+        // because the source purged it (#4684): record the import, let every
+        // barrier waiting for the tree judge it, and keep the tree read-fenced
+        // while any barrier indexed under it is undecided. Persisted with the
+        // phase below.
+        await RecordCrossTreeImportAsync(
+                treeName, sourceClusterId, snapshot, namedCrossTreeOperations, cancellationToken)
+            .ConfigureAwait(true);
+        state.State.PendingCrossTreeBarriers = await UndecidedBarriersAsync(
+                crossTreeBarriers.Union(await IndexedBarriersAsync(treeName).ConfigureAwait(true), StringComparer.Ordinal))
+            .ConfigureAwait(true);
 
         // Every snapshot entry is applied: the import is whole, so lift the read
         // fence before leaving the drain (issue #4526) - unless a cross-tree

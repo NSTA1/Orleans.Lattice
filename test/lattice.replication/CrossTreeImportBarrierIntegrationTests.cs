@@ -32,6 +32,9 @@ public class CrossTreeImportBarrierIntegrationTests
     private const string SiteAClusterId = "xtib-site-a";
     private const string SiteBClusterId = "xtib-site-b";
 
+    /// <summary>A site-B tree configured with a cluster id of its own, so a barrier spanning it is refused.</summary>
+    private const string ElsewhereTree = "xtib-ack-elsewhere";
+
     private static readonly ConcurrentDictionary<string, IRemoteSnapshotTransport> SiteATransports = new();
 
     private TestCluster _siteA = null!;
@@ -50,10 +53,15 @@ public class CrossTreeImportBarrierIntegrationTests
             _siteA.Client,
             new InMemoryWalCursorRegistry(),
             LatticeSnapshotProviderUnitTests.TestOptions());
-        SiteATransports[SiteAClusterId] = new LatticeRemoteSnapshotService(
+        // Served under site A's real cross-tree export gate (#4684), so the
+        // import carries the premise the receiver's barrier relies on.
+        SiteATransports[SiteAClusterId] = new PausableTransport(new LatticeRemoteSnapshotService(
             _siteAProvider,
             new StubReplicationContext(SiteAClusterId, LatticeMergeMode.LwwRegister),
-            NullLogger<LatticeRemoteSnapshotService>.Instance);
+            NullLogger<LatticeRemoteSnapshotService>.Instance)
+        {
+            ExportGate = new CrossTreeExportGate(_siteA.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services),
+        });
 
         var bBuilder = new TestClusterBuilder(initialSilosCount: 1);
         bBuilder.AddSiloBuilderConfigurator<SiteBSiloConfigurator>();
@@ -245,8 +253,250 @@ public class CrossTreeImportBarrierIntegrationTests
             Assert.That(named, Has.Count.EqualTo(1), "only the cross-tree sub-saga's row names an operation");
             Assert.That(named[0].CrossTreeOperationId, Is.EqualTo(operationId));
             Assert.That(named[0].CrossTreeParticipants, Is.EqualTo(new[] { treeA, treeB }));
+            Assert.That(named[0].CrossTreeDecisionStamps?.Keys, Is.EquivalentTo(new[] { treeA, treeB }),
+                "the decision row carries the full decision stamp vector (#4684)");
         });
     }
+
+    [Test]
+    public async Task An_import_that_names_no_row_of_an_operation_a_sibling_already_arrived_at_records_its_arrival()
+    {
+        // Issue #4684: the origin purged tree A's sub-saga before the export, so
+        // the export carries tree A's outcome as a bare committed row and names
+        // the operation nowhere. Tree B's terminal reached site B before the
+        // export opened, so the barrier records tree A's arrival with tree B's
+        // verdict, and neither tree is served split.
+        const string treeA = "xtib-purged-a";
+        const string treeB = "xtib-purged-b";
+        const string operationId = "xtib-purged-op";
+        await _siteA.Client.GetGrain<ILattice>(treeA).SetAsync("k", [1]);
+
+        await DeliverTreeBAsync(treeA, treeB, operationId);
+        await StartBootstrapAsync(treeA);
+        var phase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+
+        var a = await ReadAsync(treeA, "k");
+        var b = await ReadAsync(treeB, "k");
+        var barrier = await Barrier(operationId).GetStatusAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+            Assert.That(a, Is.EqualTo((false, (byte[]?)new byte[] { 1 })), "tree A is imported post-saga");
+            Assert.That(b, Is.EqualTo((false, (byte[]?)new byte[] { 2 })),
+                "tree B must flip with tree A: an import that names the operation nowhere is tree A's arrival");
+            Assert.That(barrier.Decided, Is.True);
+        });
+    }
+
+    /// <summary>
+    /// Delivers tree B's sub-saga on site B through the real replication
+    /// applier, its terminal carrying the operation's decision stamps as the
+    /// shipper stamps it.
+    /// </summary>
+    private async Task DeliverStampedTreeBAsync(string treeA, string treeB, string operationId, IReadOnlyDictionary<string, long> stamps)
+    {
+        var txid = Guid.NewGuid();
+        var stamp = HybridLogicalClock.Tick(new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks });
+        await _siteB.Client.GetGrain<IReplicationApplyGrain>(treeB).ApplyPreparedSetAsync(
+            "k", [2], stamp, SiteAClusterId,
+            sourceVectorClock: null, expiresAtTicks: 0, txid, atomicBatchSize: 0, atomicBatchIndex: 0);
+        var applier = _siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services.GetRequiredService<IReplicationApplier>();
+        var applied = await applier.ApplyAsync(Terminal(treeB, operationId, [treeA, treeB], txid, stamps));
+        Assert.That(applied.Applied, Is.True, "precondition: tree B's terminal applies");
+    }
+
+    /// <summary>Site A's current export epoch of <paramref name="tree"/>.</summary>
+    private Task<long> SiteAEpochAsync(string tree) =>
+        _siteA.Client.GetGrain<IReplicationExportEpochGrain>(tree).GetAsync();
+
+    [Test]
+    public async Task A_stamped_barrier_that_opens_after_an_unnaming_import_from_after_the_decision_records_the_arrival()
+    {
+        // Issue #4684, the liveness half (the model's RImportFenceLifts): tree A
+        // is imported first, from an export that opened after the operation's
+        // decision and names it nowhere (its sub-saga was purged at the origin).
+        // Tree B's stamped terminal then opens the barrier, which must record
+        // tree A's arrival itself rather than wait for it for ever.
+        const string treeA = "xtib-late-open-a";
+        const string treeB = "xtib-late-open-b";
+        const string operationId = "xtib-late-open-op";
+        await _siteA.Client.GetGrain<ILattice>(treeA).SetAsync("k", [1]);
+        var stamps = new Dictionary<string, long> { [treeA] = await SiteAEpochAsync(treeA), [treeB] = await SiteAEpochAsync(treeB) };
+
+        await StartBootstrapAsync(treeA);
+        var phase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+        await DeliverStampedTreeBAsync(treeA, treeB, operationId, stamps);
+
+        var barrier = await Barrier(operationId).GetStatusAsync();
+        Assert.Multiple(async () =>
+        {
+            Assert.That(phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+            Assert.That(barrier.Decided, Is.True, "the barrier records the unnaming import's arrival when it opens");
+            Assert.That(await ReadAsync(treeA, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 1 })));
+            Assert.That(await ReadAsync(treeB, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 2 })),
+                "tree B flips with tree A");
+        });
+    }
+
+    [Test]
+    public async Task An_import_whose_export_opened_before_the_decision_leaves_the_tree_pending()
+    {
+        // Issue #4684, the opened-after guard: tree A's export opened before the
+        // operation's decision (its export epoch is not past tree A's decision
+        // stamp), so its bare rows can be pre-saga. Tree A stays pending in the
+        // barrier however the import names the operation.
+        const string treeA = "xtib-early-a";
+        const string treeB = "xtib-early-b";
+        const string operationId = "xtib-early-op";
+        await _siteA.Client.GetGrain<ILattice>(treeA).SetAsync("k", [7]);
+
+        await StartBootstrapAsync(treeA);
+        var phase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+
+        // The decision is stamped after tree A's export opened.
+        var stamps = new Dictionary<string, long> { [treeA] = await SiteAEpochAsync(treeA), [treeB] = await SiteAEpochAsync(treeB) };
+        await DeliverStampedTreeBAsync(treeA, treeB, operationId, stamps);
+
+        var barrier = await Barrier(operationId).GetStatusAsync();
+        var b = await ReadAsync(treeB, "k");
+        Assert.Multiple(() =>
+        {
+            Assert.That(phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+            Assert.That(barrier.Decided, Is.False, "an export that opened before the decision decides nothing");
+            Assert.That(barrier.ArrivedTrees, Is.EqualTo(new[] { treeB }), "tree A stays pending in the barrier");
+            Assert.That(b, Is.EqualTo((false, (byte[]?)null)), "tree B stays pre-saga");
+        });
+    }
+
+    [Test]
+    public async Task An_imported_tree_stays_read_fenced_while_any_barrier_indexed_under_it_is_undecided()
+    {
+        // Issue #4684, fence condition 2 (the model's BarrierQuiet): a barrier
+        // that waits for tree A holds tree A's fence even when the import did not
+        // arrive at it.
+        const string treeA = "xtib-quiet-a";
+        const string treeB = "xtib-quiet-b";
+        const string operationId = "xtib-quiet-op";
+        await _siteA.Client.GetGrain<ILattice>(treeA).SetAsync("k", [5]);
+
+        // Stamped as decided after any export tree A can serve in this test, so
+        // tree A's import never settles the operation.
+        await DeliverStampedTreeBAsync(treeA, treeB, operationId, new Dictionary<string, long> { [treeA] = long.MaxValue - 1, [treeB] = 0 });
+        await StartBootstrapAsync(treeA);
+        var phase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
+        await Task.Delay(1500);
+
+        var a = await ReadAsync(treeA, "k");
+        var status = await Coordinator(treeA).GetStatusAsync(CancellationToken.None);
+        Assert.Multiple(() =>
+        {
+            Assert.That(phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "the bootstrap waits for the barrier");
+            Assert.That(a.Fenced, Is.True, "tree A is not served while a barrier waiting for it is undecided");
+            Assert.That(status.ReadFenced, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task An_import_that_opened_after_the_decision_but_named_the_operation_leaves_the_tree_to_its_rows()
+    {
+        // Issue #4684: an import that carried a row of the operation settles the
+        // tree through that row (a decision row arrives at the barrier; a
+        // prepared row waits for the tree's terminal), never as a purged sub-saga.
+        const string treeA = "xtib-named-a";
+        const string treeB = "xtib-named-b";
+        const string operationId = "xtib-named-op";
+        var index = _siteB.Client.GetGrain<ICrossTreeBarrierIndexGrain>(treeA);
+        await index.RecordImportAsync(SiteAClusterId, new CrossTreeImportRecord
+        {
+            ExportEpoch = long.MaxValue,
+            NamedOperations = [operationId],
+        });
+
+        await DeliverStampedTreeBAsync(treeA, treeB, operationId, new Dictionary<string, long> { [treeA] = 0, [treeB] = 0 });
+
+        var barrier = await Barrier(operationId).GetStatusAsync();
+        Assert.That(barrier.ArrivedTrees, Is.EqualTo(new[] { treeB }),
+            "an import that named the operation does not count as tree A's arrival");
+    }
+
+    [Test]
+    public async Task A_barrier_registers_under_every_tree_it_waits_for_and_withdraws_once_decided()
+    {
+        const string treeA = "xtib-index-a";
+        const string treeB = "xtib-index-b";
+        const string operationId = "xtib-index-op";
+        var key = LatticeCrossTreeReceiverGrain.ComputeKey(SiteAClusterId, operationId);
+        await AuthorCrossTreeWriteAsync(treeA, treeB, operationId);
+
+        await DeliverTreeBAsync(treeA, treeB, operationId);
+        var whileOpen = await _siteB.Client.GetGrain<ICrossTreeBarrierIndexGrain>(treeA).GetAsync();
+        await StartBootstrapAsync(treeA);
+        await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+        var afterDecision = await _siteB.Client.GetGrain<ICrossTreeBarrierIndexGrain>(treeA).GetAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(whileOpen, Does.Contain(key), "an import of tree A must find the barrier that waits for it");
+            Assert.That(afterDecision, Does.Not.Contain(key), "a decided barrier withdraws");
+        });
+    }
+
+    [Test]
+    public async Task The_receiver_acknowledges_a_cross_tree_terminal_only_after_the_barrier_recorded_it()
+    {
+        // Issue #4684: the origin purges a cross-tree decision once every peer
+        // has acknowledged past the terminal, on the premise that an
+        // acknowledged terminal reached the barrier. An applied result is
+        // returned only after the barrier recorded the arrival, and a terminal
+        // the barrier refuses is never acknowledged.
+        const string treeA = "xtib-ack-a";
+        const string treeB = "xtib-ack-b";
+        const string operationId = "xtib-ack-op";
+        var applier = _siteB.Silos.OfType<InProcessSiloHandle>().First().SiloHost.Services.GetRequiredService<IReplicationApplier>();
+
+        var applied = await applier.ApplyAsync(Terminal(treeB, operationId, [treeA, treeB]));
+        var barrier = await Barrier(operationId).GetStatusAsync();
+
+        // A wait set whose trees disagree on cluster identity is refused at the
+        // barrier: the notify fails, so the terminal must not be acknowledged.
+        Exception? refusal = null;
+        ApplyResult? refused = null;
+        try
+        {
+            refused = await applier.ApplyAsync(Terminal(treeA, "xtib-ack-refused-op", [treeA, ElsewhereTree]));
+        }
+        catch (Exception ex)
+        {
+            refusal = ex;
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(applied.Applied, Is.True);
+            Assert.That(barrier.ArrivedTrees, Does.Contain(treeB), "an applied terminal has reached the barrier");
+            Assert.That(refusal is not null || refused is { Applied: false, Deferred: true }, Is.True,
+                "a terminal whose barrier notify failed must not be acknowledged");
+        });
+    }
+
+    private static WalRecord Terminal(
+        string tree, string operationId, IReadOnlyList<string> participants,
+        Guid? txid = null, IReadOnlyDictionary<string, long>? stamps = null) => new()
+    {
+        TreeId = tree,
+        Op = MutationKind.TxCommit,
+        Key = ShardOf("k").ToString(System.Globalization.CultureInfo.InvariantCulture),
+        ShardIndex = ShardOf("k"),
+        Timestamp = HybridLogicalClock.Tick(new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks }),
+        OriginClusterId = SiteAClusterId,
+        TransactionId = txid ?? Guid.NewGuid(),
+        CrossTreeOperationId = operationId,
+        CrossTreeParticipants = participants,
+        CrossTreeDecisionStamps = stamps,
+    };
+
+    private ILatticeCrossTreeReceiverGrain Barrier(string operationId) =>
+        _siteB.Client.GetGrain<ILatticeCrossTreeReceiverGrain>(LatticeCrossTreeReceiverGrain.ComputeKey(SiteAClusterId, operationId));
 
     private async Task<SnapshotEntry> ExportedCrossTreeDecisionAsync(string tree, string operationId) =>
         (await ExportAsync(tree)).Single(e => e.IsDecision && e.CrossTreeOperationId == operationId);
@@ -281,12 +531,62 @@ public class CrossTreeImportBarrierIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteBClusterId);
+            siloBuilder.ConfigureLatticeReplication(ElsewhereTree, opts => opts.ClusterId = "xtib-site-elsewhere");
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
                 siloBuilder.Services.AddSingleton(transport);
             }
 
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
+        }
+    }
+
+    /// <summary>
+    /// Delegates to site A's remote snapshot service, and can hold one tree's
+    /// export stream after its first item: the source export has opened, and
+    /// nothing has been applied at site B yet.
+    /// </summary>
+    private sealed class PausableTransport(IRemoteSnapshotItemTransport inner) : IRemoteSnapshotItemTransport
+    {
+        private static readonly ConcurrentDictionary<string, (TaskCompletionSource Reached, TaskCompletionSource Release)> Paused = new(StringComparer.Ordinal);
+
+        public static void Pause(string tree, TaskCompletionSource reached, TaskCompletionSource release) => Paused[tree] = (reached, release);
+
+        public static void Resume(string tree) => Paused.TryRemove(tree, out _);
+
+        public Task<RemoteSnapshotMetadata> GetMetadataAsync(
+            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken cancellationToken = default) =>
+            inner.GetMetadataAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken);
+
+        public async IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(
+            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            await foreach (var item in RequestSnapshotItemsAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken))
+            {
+                if (item.Entry is { } entry)
+                {
+                    yield return entry;
+                }
+            }
+        }
+
+        public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+            string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc,
+            [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            var first = true;
+            await foreach (var item in inner.RequestSnapshotItemsAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken))
+            {
+                if (first && Paused.TryGetValue(treeName, out var pause))
+                {
+                    pause.Reached.TrySetResult();
+                    await pause.Release.Task.WaitAsync(cancellationToken);
+                }
+
+                first = false;
+                yield return item;
+            }
         }
     }
 

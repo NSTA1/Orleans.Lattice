@@ -417,6 +417,8 @@ internal sealed class LatticeCrossTreeTxGrain(
         var commit = state.State.Phase == CrossTreeTxPhase.Committed;
         var participants = state.State.Participants;
 
+        await StampDecisionAsync();
+
         var finalizeTasks = new List<Task>(participants.Count);
         foreach (var p in participants)
         {
@@ -439,6 +441,50 @@ internal sealed class LatticeCrossTreeTxGrain(
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
         _terminalRetentionEnsured = true;
+    }
+
+    /// <summary>
+    /// Stamps the durable decision (issue #4684) and records the stamps on every
+    /// prepared participant's cross-tree membership, before any participant
+    /// finalizes: so before any terminal of the operation is appended and before
+    /// any of its decisions can be purged. The stamps are read once, after the
+    /// decision is durable, and persisted, so a re-driven finalize re-records the
+    /// same ones. A failure propagates and the keepalive retries the phase.
+    /// </summary>
+    private async Task StampDecisionAsync()
+    {
+        if (context.ActivationServices?.GetService<ICrossTreeDecisionStamper>() is not { } stamper)
+        {
+            return;
+        }
+
+        var participants = state.State.Participants;
+        if (state.State.DecisionStamps is null)
+        {
+            var trees = CanonicalStringSet.SortedDistinctArray(participants.Select(p => p.TreeId));
+            var stamps = await stamper.StampAsync(OperationId, trees);
+            state.State.DecisionStamps = new Dictionary<string, long>(stamps, StringComparer.Ordinal);
+            try
+            {
+                await WriteCoordinatorStateAsync("decision-stamps");
+            }
+            catch
+            {
+                state.State.DecisionStamps = null;
+                throw;
+            }
+        }
+
+        var recorded = state.State.DecisionStamps;
+        var tasks = new List<Task>(participants.Count);
+        foreach (var p in participants)
+        {
+            if (p.Vote != CrossTreePrepareVote.Prepared) continue;
+            tasks.Add(grainFactory.GetGrain<IAtomicWriteGrain>($"{p.TreeId}/{OperationId}")
+                .RecordCrossTreeDecisionStampsAsync(recorded));
+        }
+
+        await Task.WhenAll(tasks);
     }
 
     /// <summary>

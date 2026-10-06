@@ -137,7 +137,8 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // delegate their inbound metadata/stream RPCs to the local
         // ISnapshotProvider without duplicating the contract-level
         // argument validation or the cut-point semantics.
-        builder.Services.TryAddSingleton<LatticeRemoteSnapshotService>();
+        builder.Services.TryAddSingleton<CrossTreeExportGate>();
+        builder.Services.TryAddSingleton(LatticeRemoteSnapshotService.Create);
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
         // The receiver bootstrap read fence the coordinator arms around every
         // snapshot drain (issue #4526).
@@ -354,6 +355,15 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // replication frontier, so a late older write cannot resurrect its key.
         // Replaces the core's ungated default.
         builder.Services.AddSingleton<ITombstoneReapGate, ReplicationTombstoneReapGate>();
+
+        // Issue #4684: the origin keeps a cross-tree sub-saga's decision until
+        // every peer of every participant tree acknowledged past its terminal.
+        builder.Services.AddSingleton<ICrossTreeDecisionHold, ReplicationCrossTreeDecisionHold>();
+
+        // ... and stamps each cross-tree decision with the participants' export
+        // epochs, so a receiver can tell an export opened after it (#4684).
+        // Ships with the hold, under the same capability check.
+        builder.Services.AddSingleton<ICrossTreeDecisionStamper, ReplicationCrossTreeDecisionStamper>();
 
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'

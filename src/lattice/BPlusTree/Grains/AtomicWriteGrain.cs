@@ -599,6 +599,24 @@ internal sealed partial class AtomicWriteGrain(
     }
 
     /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+        var txid = state.State.TransactionId;
+        if (txid == Guid.Empty || string.IsNullOrEmpty(state.State.TreeId))
+        {
+            return;
+        }
+
+        var registry = RegistryFor(state.State.TreeId, txid);
+        await TxRegistryWriteRetry.RunAsync(
+            (registry, txid, stamps),
+            static s => s.registry.RecordCrossTreeDecisionStampsAsync(s.txid, s.stamps));
+    }
+
+    /// <inheritdoc />
     public async Task FinalizeAsync(bool commit)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(

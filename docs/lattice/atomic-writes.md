@@ -691,7 +691,12 @@ GC takes one too, for a shipper, before a `WalRetention` trim passes that
 shipper's unshipped read position, and the shipper releases it once its
 durable position covers the trim or its peer is re-seeded
 ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A failed
-read of the holds holds too. On such a host
+read of the holds holds too. A tree's part of a cross-tree atomic write is
+held longer still: until every peer of every participating tree has
+acknowledged past that participant's part, because a receiver that imports
+one participant settles the cross-tree barrier from the decision row
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Cross-tree decision purge hold](../lattice.replication/replication-drivers.md#cross-tree-decision-purge-hold)). On such a host
 `TxDecisionRetention = TimeSpan.Zero` still tombstones the decision
 (masked at once) rather than dropping it.
 

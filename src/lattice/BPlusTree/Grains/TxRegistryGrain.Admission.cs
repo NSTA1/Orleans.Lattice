@@ -33,7 +33,7 @@ internal sealed partial class TxRegistryGrain
     internal const long AdmissionEstimateSnapshotPinBytes = 384;
     internal const long AdmissionEstimatePinnedTxidBytes = 48;
     internal const long AdmissionEstimateWalGenerationBytes = 64;
-    internal const long AdmissionEstimateCrossTreeMembershipBytes = 512;
+    internal const long AdmissionEstimateCrossTreeMembershipBytes = 1024;
 
     /// <summary>
     /// Count-weighted estimate of the registry's persisted row size. Reads
@@ -115,6 +115,7 @@ internal sealed partial class TxRegistryGrain
     {
         await RefreshWalPurgeGuardAsync();
         await RefreshWalPurgeHoldAsync();
+        await RefreshCrossTreeHoldAsync();
         var pruned = PruneExpired(TimeProvider.GetUtcNow(), Retention);
         if (!pruned.Any)
         {

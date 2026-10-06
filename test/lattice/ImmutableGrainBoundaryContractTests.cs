@@ -106,6 +106,9 @@ public sealed class ImmutableGrainBoundaryContractTests : ImmutableGrainBoundary
             ["Orleans.Lattice.ViewDigest"] = ContentDigest,
 
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverDecision"] = ReadModel,
+            // Built fresh on every GetStatusAsync from copies of the barrier's
+            // wait set and arrivals, and only read by its caller (#4684).
+            ["Orleans.Lattice.BPlusTree.CrossTreeReceiverStatus"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTerminal"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.CrossTreeReceiverTreeFinalize"] = ReadModel,
             ["Orleans.Lattice.BPlusTree.DirtyLeavesSnapshot"] = ReadModel,

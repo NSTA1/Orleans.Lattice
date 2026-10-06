@@ -329,6 +329,36 @@ sibling that is still pre-saga
 ([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683); see
 [Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
 
+The receiver acknowledges a cross-tree terminal only once the barrier has
+recorded it: the apply hop returns after the coordinator persisted the
+arrival, and a notify that fails fails the apply, so the batch is not
+accepted. The origin relies on this when it purges a cross-tree decision
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+Saga terminals are never parked in the causal apply buffer or dead-lettered
+(a terminal that exhausts its retries is deferred instead), and a
+multi-shard sub-saga notifies on its final source shard's terminal. The one
+terminal acknowledged without reaching the barrier is the enrollment gate's
+drop of a tree no longer replicated here, which removes the tree from the
+barrier instead (above). A barrier also registers itself, before it persists
+its wait set, under every tree it waits for (`ICrossTreeBarrierIndexGrain`,
+keyed by the receiver tree), and withdraws once decided, so an import of one
+of those trees can find it.
+
+A shipped cross-tree terminal carries the operation's **decision stamps**:
+per participating tree, the export epoch the origin read after the decision
+was durable (`WalRecord.CrossTreeDecisionStamps`, on the wire only). The
+applier records them on the barrier before it applies the terminal. A
+barrier compares each tree that has not arrived with the tree's latest
+snapshot import, which the same index records, and records the tree's
+arrival with the operation's verdict when that import named the operation
+nowhere and its export opened after the decision
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
+Such an arrival finalizes nothing, because the import already settled the
+tree; a real terminal of the tree that arrives later replaces it, so its
+pending bucket is still finalized.
+
 Public readers therefore observe the receiver-side same-cluster
 atomic-visibility property end-to-end: at every point in time,
 either every key the saga prepared on the receiver is at its

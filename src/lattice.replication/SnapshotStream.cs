@@ -128,6 +128,13 @@ public sealed class SnapshotStream
     internal long ExportEpoch { get; init; }
 
     /// <summary>
+    /// Whether the source served the export under the cross-tree decision purge
+    /// hold and decision stamping (issue #4684); see
+    /// <see cref="RemoteSnapshotMetadata.CrossTreeHoldHonoured"/>.
+    /// </summary>
+    internal bool CrossTreeHoldHonoured { get; init; }
+
+    /// <summary>
     /// Constructs a new <see cref="SnapshotStream"/>. The constructor
     /// takes ownership of the supplied
     /// <paramref name="causalStableFrontier"/> reference; callers

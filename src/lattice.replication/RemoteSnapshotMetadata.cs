@@ -99,4 +99,14 @@ public readonly record struct RemoteSnapshotMetadata
     /// A receiver that predates the slot ignores it.
     /// </summary>
     [Id(6)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the source served the export only once every
+    /// silo of its cluster honoured the cross-tree decision purge hold and
+    /// decision stamping (issue #4684). A receiver relies on it to treat a
+    /// cross-tree operation that carries no decision stamps as decided before
+    /// the export opened; a source that predates the slot reports
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(7)] internal bool CrossTreeHoldHonoured { get; init; }
 }

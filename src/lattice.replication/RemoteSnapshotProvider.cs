@@ -139,6 +139,7 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             OpenGeneration = metadata.OpenGeneration,
             OpenFrontier = metadata.SourceFrontier,
             ExportEpoch = metadata.ExportEpoch,
+            CrossTreeHoldHonoured = metadata.CrossTreeHoldHonoured,
         };
         return stream;
     }

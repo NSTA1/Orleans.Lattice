@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree;
@@ -62,7 +63,15 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         }
 
         var key = LatticeCrossTreeReceiverGrain.ComputeKey(sourceClusterId, entry.CrossTreeOperationId);
-        var decision = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key)
+        var barrier = _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key);
+        if (entry.CrossTreeDecisionStamps is { Count: > 0 } stamps)
+        {
+            // Before the arrival, so the barrier judges its other trees' imports
+            // against them from the moment this row opens it (#4684).
+            await barrier.RecordDecisionStampsAsync(stamps).ConfigureAwait(true);
+        }
+
+        var decision = await barrier
             .NotifyTerminalAsync(new CrossTreeReceiverTerminal
             {
                 OriginClusterId = sourceClusterId,
@@ -85,6 +94,50 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
 
         return key;
     }
+
+    /// <summary>
+    /// Records the import in the tree's barrier index (issue #4684) - the
+    /// export's epoch and every cross-tree operation one of its rows named -
+    /// then has every barrier indexed under the tree re-evaluate, materializing
+    /// any that decides. Recorded only for an export the source served under
+    /// the cross-tree hold and decision stamping, the premise a barrier's
+    /// judgement of the import rests on.
+    /// </summary>
+    private async Task RecordCrossTreeImportAsync(
+        string treeName,
+        string sourceClusterId,
+        SnapshotStream snapshot,
+        HashSet<string> namedOperations,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(sourceClusterId) || !snapshot.CrossTreeHoldHonoured || snapshot.ExportEpoch <= 0)
+        {
+            return;
+        }
+
+        var index = _grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(treeName);
+        await index.RecordImportAsync(sourceClusterId, new CrossTreeImportRecord
+            {
+                ExportEpoch = snapshot.ExportEpoch,
+                NamedOperations = namedOperations.ToImmutableHashSet(StringComparer.Ordinal),
+            })
+            .ConfigureAwait(true);
+
+        foreach (var key in await index.GetAsync().ConfigureAwait(true))
+        {
+            var decision = await _grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(key)
+                .ReevaluateAsync()
+                .ConfigureAwait(true);
+            if (decision.Decided)
+            {
+                await FinalizeCrossTreeTreesAsync(decision, cancellationToken).ConfigureAwait(true);
+            }
+        }
+    }
+
+    /// <summary>Every barrier indexed under <paramref name="treeName"/>, decided or not.</summary>
+    private async Task<IReadOnlyCollection<string>> IndexedBarriersAsync(string treeName) =>
+        await _grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(treeName).GetAsync().ConfigureAwait(true);
 
     /// <summary>
     /// Materializes every participant of a decided barrier, as the terminal
@@ -136,10 +189,16 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     {
         if (state.State.PendingCrossTreeBarriers.Count == 0)
         {
+            // The drain lifted the fence: nothing was waiting.
             return true;
         }
 
-        var undecided = await UndecidedBarriersAsync(state.State.PendingCrossTreeBarriers).ConfigureAwait(true);
+        // While the fence is held, every barrier indexed under the tree counts,
+        // including one that opened after the drain: the tree is served only
+        // once none waits (#4684).
+        var undecided = await UndecidedBarriersAsync(
+                state.State.PendingCrossTreeBarriers.Union(await IndexedBarriersAsync(TreeName).ConfigureAwait(true), StringComparer.Ordinal))
+            .ConfigureAwait(true);
         if (undecided.Count > 0)
         {
             if (undecided.Count != state.State.PendingCrossTreeBarriers.Count)

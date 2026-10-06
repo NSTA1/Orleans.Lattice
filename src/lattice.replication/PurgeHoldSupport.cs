@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Replication.Grains;
 using Orleans.Metadata;
 using Orleans.Runtime;
 
@@ -19,7 +20,20 @@ internal static class PurgeHoldSupport
     /// runtime services (a bare unit-test activation) has no other silo and
     /// answers <see langword="true"/>.
     /// </summary>
-    public static bool AllSilosHonour(IServiceProvider? services)
+    public static bool AllSilosHonour(IServiceProvider? services) => AllSilosHost(services, typeof(IWalPurgeHoldGrain));
+
+    /// <summary>
+    /// <see langword="true"/> when every silo in the current cluster manifest
+    /// hosts <see cref="ICrossTreeHoldTrackerGrain"/>, which shipped with the
+    /// cross-tree decision purge hold (issue #4684). A silo that predates it
+    /// purges a cross-tree sub-saga's decision with no regard for the peers of
+    /// its sibling trees, so no cross-tree export is served and the hold
+    /// releases nothing until every silo honours it.
+    /// </summary>
+    public static bool AllSilosHonourCrossTreeHold(IServiceProvider? services) =>
+        AllSilosHost(services, typeof(ICrossTreeHoldTrackerGrain));
+
+    private static bool AllSilosHost(IServiceProvider? services, Type grainInterface)
     {
         var manifests = services?.GetService<IClusterManifestProvider>();
         var interfaces = services?.GetService<GrainInterfaceTypeResolver>();
@@ -28,7 +42,7 @@ internal static class PurgeHoldSupport
             return true;
         }
 
-        var holdInterface = interfaces.GetGrainInterfaceType(typeof(IWalPurgeHoldGrain));
+        var holdInterface = interfaces.GetGrainInterfaceType(grainInterface);
         var silos = manifests.Current.Silos;
         if (silos.Count == 0)
         {
