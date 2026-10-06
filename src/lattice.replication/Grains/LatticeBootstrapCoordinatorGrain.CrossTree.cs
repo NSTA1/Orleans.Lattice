@@ -213,9 +213,14 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
             return true;
         }
 
-        // While the fence is held, every barrier indexed under the tree counts,
-        // including one that opened after the drain: the tree is served only
-        // once none waits (#4684).
+        // While any barrier the drain recorded still waits, every barrier indexed
+        // under the tree counts too, including one that opened after the drain
+        // (#4684). Once the drain's own barriers have decided, a barrier that
+        // opens under the tree later does not hold the fence: the import did not
+        // arrive at it, so its import either opened before that operation's
+        // decision or named it, and the tree's keys of it are still pending or
+        // pre-saga, which no sibling contradicts. The sibling boundaries below
+        // hold the fence in their own right.
         var undecided = state.State.PendingCrossTreeBarriers.Count == 0
             ? []
             : await UndecidedBarriersAsync(
