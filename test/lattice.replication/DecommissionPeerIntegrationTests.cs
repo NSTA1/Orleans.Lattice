@@ -377,6 +377,84 @@ public sealed class DecommissionPeerIntegrationTests
         });
     }
 
+    [Test]
+    public async Task Decommission_drains_a_decided_cross_tree_operation_whose_finalize_never_ran_on_every_tree()
+    {
+        // Issue #4742's second phase: a barrier from the peer that had already
+        // decided commit when the peer was decommissioned, but whose finalize
+        // of its trees never ran (it failed, and no redelivery will come), so
+        // both trees still hold the operation's buckets under a delegation to
+        // the barrier. The decommission leaves a decided barrier alone and
+        // settles each tree's buckets by the verdict its registry resolves -
+        // through the delegation, the barrier's commit - so both trees are
+        // drained post-saga. A tree's own row is undecided here, so settling
+        // by it would discard both buckets and lose a committed write.
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var peer = PeerClusterId + "-" + suffix;
+        var treeA = $"dcp-decided-a-{suffix}";
+        var treeB = $"dcp-decided-b-{suffix}";
+        var client = _cluster.Client;
+        foreach (var tree in new[] { treeA, treeB })
+        {
+            await client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(tree, new TreeRegistryEntry());
+        }
+
+        var applier = SiloServices.GetRequiredService<ReplicationApplier>();
+        var (txA, txB) = (Guid.NewGuid(), Guid.NewGuid());
+        var operationId = "dcp-decided-op-" + suffix;
+        await applier.ApplyBatchAsync([PeerPrepare(peer, treeA, "k", txA, size: 1, index: 0, ticks: 1_000)]);
+        await applier.ApplyBatchAsync([PeerPrepare(peer, treeB, "k", txB, size: 1, index: 0, ticks: 1_000)]);
+
+        // Tree A's terminal arrives through the applier and delegates tree A to
+        // the barrier, which waits for tree B.
+        await applier.ApplyBatchAsync([PeerCommit(peer, treeA, "k", txA, 1_100) with
+        {
+            AtomicShardCount = 1,
+            CrossTreeOperationId = operationId,
+            CrossTreeParticipants = [treeA, treeB],
+        }]);
+
+        // Tree B's terminal registers and notifies, deciding the barrier commit,
+        // and then its finalize of both trees fails: the returned finalize set
+        // is never acted on.
+        var barrierKey = LatticeCrossTreeReceiverGrain.ComputeKey(peer, operationId);
+        var barrier = client.GetGrain<ILatticeCrossTreeReceiverGrain>(barrierKey);
+        await TxRegistryRouting.GetRegistry(client, treeB, txB).RegisterReceiverDecisionAuthorityAsync(txB, barrierKey);
+        var decided = await barrier.NotifyTerminalAsync(new CrossTreeReceiverTerminal
+        {
+            OriginClusterId = peer,
+            OperationId = operationId,
+            TreeId = treeB,
+            TransactionId = txB,
+            Committed = true,
+            WaitSet = [treeA, treeB],
+            ObservedSourceShards = [LatticeSharding.GetShardIndex("k", LatticeConstants.DefaultShardCount)],
+            TerminalHlc = Hlc(1_100),
+        });
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(decided.Decided && decided.Committed, Is.True, "precondition: the barrier decided commit");
+            Assert.That(await CountPendingAsync(treeA, peer), Is.GreaterThan(0), "precondition: tree A's finalize never ran");
+            Assert.That(await CountPendingAsync(treeB, peer), Is.GreaterThan(0), "precondition: tree B's finalize never ran");
+            Assert.That(await TxRegistryRouting.GetRegistry(client, treeA, txA).GetRecordedStatusAsync(txA), Is.Not.EqualTo(TxStatus.Committed),
+                "precondition: tree A's own row is undecided, so only the delegation carries the verdict");
+        });
+
+        await SiloServices.GetRequiredService<ILatticeReplicationPeerDecommissioner>().DecommissionPeerAsync(peer, CancellationToken.None);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await CountPendingAsync(treeA, peer), Is.Zero, "tree A's bucket is settled");
+            Assert.That(await CountPendingAsync(treeB, peer), Is.Zero, "tree B's bucket is settled");
+            Assert.That(await client.GetGrain<ILattice>(treeA).GetAsync("k"), Is.EqualTo(new byte[] { 1 }),
+                "tree A is drained post-saga by the barrier's commit, not discarded by its own undecided row");
+            Assert.That(await client.GetGrain<ILattice>(treeB).GetAsync("k"), Is.EqualTo(new byte[] { 1 }),
+                "tree B is drained post-saga with it");
+            Assert.That(await barrier.GetDecisionAsync(), Is.EqualTo(TxStatus.Committed), "a decided barrier is not abandoned");
+        });
+    }
+
     [TestCase("z", "a", TestName = "Decommission_serves_a_cross_tree_operation_all_or_nothing_when_its_arrived_tree_is_walked_last")]
     [TestCase("a", "z", TestName = "Decommission_serves_a_cross_tree_operation_all_or_nothing_when_its_arrived_tree_is_walked_first")]
     public async Task Decommission_serves_a_cross_tree_operation_all_or_nothing_whatever_the_tree_order(string arrivedTag, string missingTag)

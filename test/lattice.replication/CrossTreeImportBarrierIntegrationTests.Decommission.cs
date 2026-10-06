@@ -66,4 +66,64 @@ public partial class CrossTreeImportBarrierIntegrationTests
             await registry.ClearDecommissionedAsync(SiteAClusterId);
         }
     }
+
+    [Test]
+    public async Task Re_adding_a_decommissioned_source_re_drives_its_held_import_and_the_fence_lifts()
+    {
+        // The re-add half of #4742's fence latch, end to end: site A is added
+        // back to site B's topology at runtime, and the driver activation
+        // service - not a direct grain call - re-drives the import the
+        // decommission held, so the fresh drain decides the fence. Without the
+        // re-drive the latch keeps tree A fenced for ever, even once its
+        // sibling is imported and the operation's barrier decides.
+        const string treeA = "xtib-readd-a";
+        const string treeB = "xtib-readd-b";
+        const string operationId = "xtib-readd-op";
+        await AuthorCrossTreeWriteAsync(treeA, treeB, operationId);
+
+        await StartBootstrapAsync(treeA);
+        var heldPhase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
+        Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "precondition: the import is held by the barrier");
+        var drainedBefore = await Coordinator(treeA).GetDrainedExportEpochAsync(SiteAClusterId);
+        Assert.That(drainedBefore, Is.Not.Null, "precondition: tree A was drained once");
+
+        var registry = _siteB.Client.GetGrain<IReplicationDecommissionedPeerRegistryGrain>(IReplicationDecommissionedPeerRegistryGrain.SingletonKey);
+        try
+        {
+            await SiteBServices.GetRequiredService<ILatticeReplicationPeerDecommissioner>()
+                .DecommissionPeerAsync(SiteAClusterId, CancellationToken.None);
+            Assert.That((await ReadAsync(treeA, "k")).Fenced, Is.True, "precondition: the decommission holds tree A's fence");
+
+            SiteBTopology.EmitAdded(SiteAClusterId);
+
+            long? drainedAfter = drainedBefore;
+            var deadline = Environment.TickCount64 + (long)TimeSpan.FromSeconds(60).TotalMilliseconds;
+            while ((drainedAfter is null || drainedAfter <= drainedBefore) && Environment.TickCount64 < deadline)
+            {
+                await Task.Delay(250);
+                drainedAfter = await Coordinator(treeA).GetDrainedExportEpochAsync(SiteAClusterId);
+            }
+
+            // The sibling is imported too, so the operation's barrier can decide.
+            await StartBootstrapAsync(treeB);
+            var bPhase = await AwaitPhaseAsync(treeB, LatticeBootstrapState.LiveIncremental);
+            var aPhase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
+
+            Assert.Multiple(async () =>
+            {
+                Assert.That(drainedAfter, Is.GreaterThan(drainedBefore),
+                    "the runtime re-add re-drives tree A's held import from a fresh export");
+                Assert.That(await registry.IsDecommissionedAsync(SiteAClusterId), Is.False, "the re-add clears the decommissioned mark");
+                Assert.That(bPhase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
+                Assert.That(aPhase, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the fresh drain decides tree A's fence, which lifts");
+                Assert.That(await ReadAsync(treeA, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 1 })), "tree A is served post-saga");
+                Assert.That(await ReadAsync(treeB, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 2 })), "with tree B");
+            });
+        }
+        finally
+        {
+            SiteBTopology.EmitRemoved(SiteAClusterId);
+            await registry.ClearDecommissionedAsync(SiteAClusterId);
+        }
+    }
 }
