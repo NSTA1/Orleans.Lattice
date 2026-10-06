@@ -54,7 +54,7 @@ public sealed partial class AppPageTests
         Workspace.Grant(Workspace());
         cut.FindAll("[data-lt-holding] button").Single(button => button.TextContent.Trim() == "Check again").Click();
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-app-actions a").Select(link => link.TextContent), Does.Contain("Open CRM")));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-app-actions a").Select(link => link.TextContent), Does.Contain("Open CRM (opens in a new window)")));
         Assert.That(cut.FindAll("[data-lt-holding]"), Is.Empty);
     }
 
@@ -67,7 +67,7 @@ public sealed partial class AppPageTests
 
         var cut = RenderAt("apps/crm");
 
-        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-app-actions a").Select(link => link.TextContent), Does.Contain("Open CRM")));
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-app-actions a").Select(link => link.TextContent), Does.Contain("Open CRM (opens in a new window)")));
         Assert.That(cut.FindAll("[data-lt-holding]"), Is.Empty);
     }
 
@@ -105,7 +105,7 @@ public sealed partial class AppPageTests
         CallerIn("admins");
         Control.Administer(Admin(), CoveringConsent());
 
-        var cut = RenderAt("apps/crm/open");
+        var cut = RenderAt("apps/crm/window");
 
         cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-holding=none]"), Has.Count.EqualTo(1)));
         Assert.Multiple(() =>

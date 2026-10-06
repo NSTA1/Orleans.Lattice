@@ -54,6 +54,10 @@ internal sealed class AppsArea(
     public IReadOnlyList<ExplorerCommand> Commands => access.Current is { } snapshot ? BuildCommands(snapshot) : [];
 
     /// <inheritdoc />
+    /// <remarks>An app's window, <c>/apps/{slug}/window</c>, is the one standalone page in the area.</remarks>
+    public bool IsStandaloneAt(ExplorerAddress address) => AppsRoutes.IsWindow(address);
+
+    /// <inheritdoc />
     public async ValueTask<AreaAvailability> GetAvailabilityAsync(CancellationToken cancellationToken)
     {
         var snapshot = await access.GetAsync(cancellationToken).ConfigureAwait(false);

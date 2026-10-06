@@ -9,7 +9,7 @@ namespace Orleans.Lattice.Explorer.UiTests;
 /// </summary>
 internal static class AppFrames
 {
-    /// <summary>The frame host's section on an app's Open tab.</summary>
+    /// <summary>The frame host's section in an app's window.</summary>
     public static ILocator Host(IPage page) => page.Locator("section.appframe");
 
     /// <summary>The app's sandboxed frame element.</summary>
@@ -22,7 +22,7 @@ internal static class AppFrames
     public static ILocator Failure(IPage page) => Host(page).GetByRole(AriaRole.Alert);
 
     /// <summary>
-    /// Opens <paramref name="slug"/>'s Open tab and waits until its frame document is up.
+    /// Opens <paramref name="slug"/>'s window and waits until its frame document is up.
     /// A role grant reaches the workspace a moment after an install is enabled, so a page
     /// that still says the app is not open yet is loaded again, a bounded number of times.
     /// </summary>
@@ -33,7 +33,7 @@ internal static class AppFrames
     {
         for (var attempt = 0; ; attempt++)
         {
-            await Shell.GotoAsync(page, head, $"/apps/{slug}/open");
+            await Shell.GotoAsync(page, head, $"/apps/{slug}/window");
             var opened = Element(page);
             var closed = Shell.Content(page).GetByRole(AriaRole.Heading, new() { NameRegex = new System.Text.RegularExpressions.Regex("is not open to you yet") });
             await Expect(opened.Or(closed).Or(Failure(page))).ToBeVisibleAsync();
@@ -47,7 +47,7 @@ internal static class AppFrames
     }
 
     /// <summary>The frame document of the app on <paramref name="page"/>, once it has loaded.</summary>
-    /// <param name="page">A page showing an app's Open tab.</param>
+    /// <param name="page">A page showing an app's window.</param>
     public static async Task<IFrame> DocumentAsync(IPage page)
     {
         var bootstrap = new System.Text.RegularExpressions.Regex("_apps/frame/");

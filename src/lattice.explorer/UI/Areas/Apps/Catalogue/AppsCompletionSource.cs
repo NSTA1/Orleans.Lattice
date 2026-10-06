@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
 
 /// <summary>
 /// The Apps area's address completions: <c>a/{slug}</c> (an installed app's
-/// overview) and <c>a/{slug}/open</c> (its UI) for apps the caller can see, and
+/// overview) and <c>a/{slug}/window</c> (its UI, alone in the window) for apps the caller can see, and
 /// <c>app:{slug}</c> catalogue entries - one per offering source - only for an
 /// <c>AppInstall</c> holder.
 /// </summary>
@@ -66,7 +66,7 @@ internal sealed class AppsCompletionSource(AppsAccess access, ExplorerTenancy te
 
     private static void AddInstalled(List<AddressCompletion> results, AppsAccessSnapshot snapshot, string? tenant, string text, AddressQuery query)
     {
-        // "crm/o" completes the UI of exactly crm; anything else matches slugs and names.
+        // "crm/w" completes the window of exactly crm; anything else matches slugs and names.
         var slash = text.IndexOf('/', StringComparison.Ordinal);
         var slugText = slash < 0 ? text : text[..slash];
         var rest = slash < 0 ? null : text[(slash + 1)..];
@@ -89,9 +89,9 @@ internal sealed class AppsCompletionSource(AppsAccess access, ExplorerTenancy te
             if (app.HasUi
                 && results.Count < query.Limit
                 && (rest is null ? Matches(app.Slug, name, slugText) : string.Equals(app.Slug, slugText, StringComparison.Ordinal)
-                    && AppsRoutes.OpenSegment.StartsWith(rest, StringComparison.OrdinalIgnoreCase)))
+                    && AppsRoutes.WindowSegment.StartsWith(rest, StringComparison.OrdinalIgnoreCase)))
             {
-                results.Add(new AddressCompletion($"a/{app.Slug}/{AppsRoutes.OpenSegment}", AppsRoutes.Open(tenant, app.Slug), "Open " + name));
+                results.Add(new AddressCompletion($"a/{app.Slug}/{AppsRoutes.WindowSegment}", AppsRoutes.Window(tenant, app.Slug), "Open " + name));
             }
         }
 

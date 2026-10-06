@@ -76,13 +76,13 @@ dialog, then:
 4. **Install, then enable.** Install records the consent and the bindings;
    enabling the install is what lets role holders open it.
 5. **Open it.** **Sign out**, then sign in as a member of `task-editors`
-   (`alice`), open **Apps**, then Task board, then its **Open** tab. The board loads in a
-   sandboxed frame. Add a task, select it, move it between **To do**,
-   **Doing** and **Done**, and delete it. Selecting a card updates the address
-   line, so the link to a task can be copied and reopened. The board is drawn in
-   Paper whatever the console's theme: the Explorer currently gives every app
-   frame the default appearance and does not tell it when the console's theme
-   changes.
+   (`alice`), open **Apps**, then Task board, and choose **Open Task board** on its
+   overview. The board opens in a new browser window, alone in a sandboxed frame. Add a
+   task, select it, move it between **To do**,
+   **Doing** and **Done**, and delete it. Selecting a card updates the window's address,
+   so the link to a task can be copied and reopened. The board opens in the console's
+   own appearance (Paper or Board, contrast and density); an open board keeps the
+   appearance it started with until it is opened again.
 
 ### The same app under different groups
 

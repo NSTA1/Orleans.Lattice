@@ -90,7 +90,7 @@ public sealed partial class AppPageTests
     {
         Control.Administer(Admin(ui: true, state: AppLifecycleState.Enabled), CoveringConsent());
 
-        var cut = RenderAt("apps/crm/open");
+        var cut = RenderAt("apps/crm/window");
 
         Assert.Multiple(() =>
         {

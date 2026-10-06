@@ -40,10 +40,10 @@
     "assets": [
       { "path": "index.html", "mediaType": "text/html", "digest": "48e16d67c058dd9f19f64f7b27bd03fc1dfb33d39d9774be88acd988df2b8bf2" },
       { "path": "app.css", "mediaType": "text/css", "digest": "a2ad7151751a9261c28b05c7a7888bc3e6033eee044666d923a750fe22e2873b" },
-      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "935cc197b6148e8d984e9d7adafccbf7ced3a6f45984487bbdd04b44f867775f" },
+      { "path": "app.mjs", "mediaType": "text/javascript", "digest": "b7ed4f42e3d83ff257e1f14da22cf0edc18ba19ba72c023c3f79db6a3926952a" },
       { "path": "icon.svg", "mediaType": "image/svg+xml", "digest": "c367e956895304c28f0936bd8f80db36308cfd837e8827c71ebe87940b4403a6" }
     ],
-    "bundleDigest": "753d0f676b30113bd014d54b8dc0508bed711a2c904ac13ba88a8a2a10555c36",
+    "bundleDigest": "9fc2b6363b01c55f69ec7bdda7ef5cfd12b14494115e5af8eed34697106b57b1",
     "bridge": [
       { "operation": "context.read" },
       { "operation": "data.read", "trees": ["tasks"] },

@@ -47,7 +47,7 @@ else if (_load.Kind == AppPageLoadKind.Unavailable)
         </LtEmptyState>
     </div>
 }
-else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && Tab == AppPageTabs.Open && !enabled.CanOpen)
+else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && IsSectionAddress && IsWindow && !enabled.CanOpen)
 {
     @* The administrative read proves the install exists, so this is not "nothing here": the caller's own access is what is missing, or has not caught up yet. *@
     <PageTitle>@enabled.DisplayName - Apps - Orleans.Lattice Explorer</PageTitle>
@@ -66,6 +66,18 @@ else if (_load.Model is { Admin.State: AppLifecycleState.Enabled } enabled && Is
 else if (_load.Model is not { } model || !IsSectionAddress || !AppPageTabs.IsOffered(model, Tab))
 {
     <NotFoundPage />
+}
+else if (IsWindow)
+{
+    @* The app alone in a window of its own: the layout draws no chrome here, so nothing but the frame is rendered. *@
+    <PageTitle>@model.DisplayName - Orleans.Lattice Explorer</PageTitle>
+    <h1 class="lt-visually-hidden">@model.DisplayName</h1>
+    <div class="lt-app-window">
+        <AppFrame AppSlug="@model.Slug"
+                  Path="@FramePath"
+                  OnNavSync="HandleNavSync"
+                  LeaveHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Overview))" />
+    </div>
 }
 else
 {
@@ -126,12 +138,6 @@ else
                         case AppPageTabs.Consent:
                             @RenderConsent(model)
                             break;
-                        case AppPageTabs.Open:
-                            <AppFrame AppSlug="@model.Slug"
-                                      Path="@FramePath"
-                                      OnNavSync="HandleNavSync"
-                                      LeaveHref="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Overview))" />
-                            break;
                     }
                 </LtTab>
             }
@@ -182,7 +188,12 @@ else
         @if (model.CanOpen)
         {
             <p class="lt-app-actions">
-                <a class="lt-btn" href="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Open))">Open @model.DisplayName</a>
+                @* The app's UI never runs inside the console: it opens in a window of its own, which shares nothing with this one. *@
+                <a class="lt-btn"
+                   href="@Href(AppPageAddresses.Page(Address.Tenant, model.Slug, AppPageTabs.Window))"
+                   target="@AppsRoutes.NewWindowTarget"
+                   rel="@AppsRoutes.NewWindowRel"
+                   data-lt-open-app>Open @model.DisplayName<span class="lt-visually-hidden"> (opens in a new window)</span></a>
             </p>
         }
         else
