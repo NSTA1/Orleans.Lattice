@@ -69,11 +69,10 @@ public partial class LatticeCrossTreeReceiverGrainTests
     [Test]
     public async Task NotifyTerminalAsync_does_not_re_check_cluster_agreement_after_the_freeze()
     {
-        // Only the freeze checks. A later terminal on an already-frozen barrier
-        // must be able to complete it: refusing there would strand a barrier
-        // whose participants have already had their writes staged, and the
-        // frozen-wait-set check below it already rejects a changed participant
-        // set on its own reasoning.
+        // Only the freeze, and a tree joining the frozen set, check. A later
+        // terminal of a frozen participant must be able to complete the
+        // barrier: refusing there would strand a barrier whose participants
+        // have already had their writes staged.
         var (grain, state) = CreateGrain();
         await grain.NotifyTerminalAsync(Terminal("orders", true, ["orders", "inventory"]));
 
@@ -93,6 +92,47 @@ public partial class LatticeCrossTreeReceiverGrainTests
             Assert.That(decision.Decided, Is.True);
             Assert.That(decision.Committed, Is.True);
         });
+    }
+
+    [Test]
+    public async Task NotifyTerminalAsync_refuses_a_joining_tree_whose_cluster_id_disagrees_and_leaves_the_barrier_unchanged()
+    {
+        // Issue #4692: a tree outside the frozen wait set joins it, so it must
+        // meet the same premise the freeze checks.
+        var (grain, state) = CreateGrain();
+        await grain.NotifyTerminalAsync(Terminal("orders", true, ["orders", "inventory"]));
+
+        var (divergent, _) = CreateGrain(
+            existingState: state,
+            clusterIds: new Dictionary<string, string>
+            {
+                ["orders"] = "cluster-a",
+                ["inventory"] = "cluster-a",
+                ["ledger"] = "cluster-b",
+            });
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            divergent.NotifyTerminalAsync(Terminal("ledger", true, ["orders", "inventory", "ledger"])));
+        Assert.That(state.State.WaitSet, Is.EqualTo(new[] { "inventory", "orders" }));
+    }
+
+    [Test]
+    public async Task NotifyTerminalAsync_refuses_a_tree_joining_a_decided_barrier_whose_cluster_id_disagrees()
+    {
+        var (grain, state) = CreateGrain();
+        await grain.NotifyTerminalAsync(Terminal("orders", true, ["orders"]));
+
+        var (divergent, _) = CreateGrain(
+            existingState: state,
+            clusterIds: new Dictionary<string, string>
+            {
+                ["orders"] = "cluster-a",
+                ["ledger"] = "cluster-b",
+            });
+
+        Assert.ThrowsAsync<InvalidOperationException>(() =>
+            divergent.NotifyTerminalAsync(Terminal("ledger", true, ["orders", "ledger"])));
+        Assert.That(state.State.Arrived.Keys, Is.EquivalentTo(new[] { "orders" }), "the late tree is not finalized with a verdict it cannot share");
     }
 
     [Test]

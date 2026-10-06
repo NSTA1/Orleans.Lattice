@@ -88,6 +88,60 @@ public class LeafRowRecordGrainTests
     }
 
     [Test]
+    public async Task MarkPurgeClearedAsync_marks_the_record_and_RecordAsync_resets_it()
+    {
+        var state = new FakePersistentState<LeafRowRecordState>();
+        state.State.TreeId = "tree-a";
+        var grain = new LeafRowRecordGrain(state);
+
+        await grain.MarkPurgeClearedAsync();
+        Assert.That((await grain.GetAsync())?.PurgeCleared, Is.True);
+
+        await grain.RecordAsync("tree-a");
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await grain.GetAsync())?.PurgeCleared, Is.False, "re-recording the row resets the purge mark");
+            Assert.That(state.WriteCount, Is.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public async Task MarkPurgeClearedAsync_creates_a_marked_record_when_none_exists()
+    {
+        // A leaf that predates row records, or lost its record, is still marked.
+        var state = new FakePersistentState<LeafRowRecordState> { RecordExistsValue = false };
+        var grain = new LeafRowRecordGrain(state);
+
+        await grain.MarkPurgeClearedAsync();
+        state.RecordExistsValue = true;
+
+        Assert.That((await grain.GetAsync())?.PurgeCleared, Is.True);
+    }
+
+    [Test]
+    public async Task MarkPurgeClearedAsync_twice_writes_once()
+    {
+        var state = new FakePersistentState<LeafRowRecordState>();
+        var grain = new LeafRowRecordGrain(state);
+
+        await grain.MarkPurgeClearedAsync();
+        await grain.MarkPurgeClearedAsync();
+
+        Assert.That(state.WriteCount, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void MarkPurgeClearedAsync_that_fails_to_write_leaves_the_record_unmarked()
+    {
+        var state = new FakePersistentState<LeafRowRecordState>();
+        state.ThrowOnWrite = new InvalidOperationException("storage down");
+        var grain = new LeafRowRecordGrain(state);
+
+        Assert.ThrowsAsync<InvalidOperationException>(async () => await grain.MarkPurgeClearedAsync());
+        Assert.That(state.State.PurgeCleared, Is.False);
+    }
+
+    [Test]
     public async Task ClearAsync_removes_the_record()
     {
         var state = new FakePersistentState<LeafRowRecordState>();

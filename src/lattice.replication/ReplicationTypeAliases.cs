@@ -30,6 +30,12 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-origin HWM persistent state class.</summary>
     internal const string ReplicationHighWaterMarkState = "olr.hs";
 
+    /// <summary>Alias for the bootstrap drop floor persisted on the high-water-mark state (issue #4549).</summary>
+    internal const string ReplicationBootstrapFloor = "olr.hf";
+
+    /// <summary>Alias for the high-water-mark grain's per-origin admission read (issue #4549).</summary>
+    internal const string ReplicationApplyAdmission = "olr.hm";
+
     // Inbound apply pipeline
 
     /// <summary>Alias for the apply-result return value.</summary>
@@ -100,6 +106,7 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
     internal const string SnapshotSourceGeneration = "olr.sg";
+    internal const string SnapshotSourceFrontier = "olr.sx";
 
     // Production replication drivers
 
@@ -135,6 +142,9 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
     internal const string ReceiverSagaPoisonRecord = "olr.yr";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonClassification"/>.</summary>
+    internal const string ReceiverSagaPoisonClassification = "olr.yq";
 
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
@@ -317,11 +327,27 @@ public static class ReplicationTypeAliases
     internal const string ReplicationTreeFrontierState = "olr.ts";
     internal const string ReplicationTreeOriginFrontier = "olr.to";
     internal const string ReplicationTreeFrontierSnapshot = "olr.tn";
-    internal const string SnapshotSourceFrontier = "olr.sx";
 
     // The sender's per-peer aggregate of its trees' applied low watermarks (#4586 part 2b).
     internal const string IReplicationSourceFrontierAggregateGrain = "olr.fa";
     internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
     internal const string SourceFrontierShipperState = "olr.fw";
     internal const string SourceFrontierPrepare = "olr.fx";
+
+    // A receiver's record of the source lineage it last drained (#4673).
+    internal const string ReplicationDrainedLineage = "olr.dn";
+
+    // Origin cross-tree decision purge hold (#4684).
+    internal const string ICrossTreeHoldTrackerGrain = "olr.ch";
+    internal const string CrossTreeHoldTrackerState = "olr.cs";
+    internal const string CrossTreeHoldBoundary = "olr.ck";
+    internal const string CrossTreeHoldSnapshot = "olr.cn";
+    internal const string ICrossTreePeerEnrolmentGrain = "olr.pe";
+    internal const string CrossTreePeerEnrolmentState = "olr.pn";
+    internal const string ReplicationAckedPositions = "olr.ap";
+    internal const string CrossTreeSiblingBoundary = "olr.sb";
+
+    // The source lineage a sender stamped on an entry, carried with it into the
+    // causal-apply buffer and the dead-letter queue (#4707).
+    internal const string ReplicationSourceLineageStamp = "olr.ls";
 }

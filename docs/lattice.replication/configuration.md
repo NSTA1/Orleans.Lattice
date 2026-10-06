@@ -207,7 +207,7 @@ Retry budget before a poison inbound entry is moved to the dead-letter queue. Ra
 
 ### `SagaDeferralTimeout`
 
-Wall-clock bound for a receiver-side deferred saga prepare. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. The bound applies only to prepares: a deferred `TxCommit` or `TxAbort` terminal is never poisoned by timeout and stays deferred until the apply failure clears or the tree is re-bootstrapped.
+Wall-clock bound for a receiver-side deferred saga record. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. A deferred `TxCommit` or `TxAbort` terminal gets the same bound (#4692): its saga is poisoned and re-seeded the same way, and the terminal itself is withheld, never parked.
 
 ### `DeadLetterQueueCapacity`
 
@@ -256,6 +256,8 @@ Optional wall-clock hard ceiling on retained WAL. `null` means consumers and cur
 For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - the receiver-side fall-off detector only compares against the receiver's own local WAL, so it never sees entries it never received from the sender. The source shipper therefore detects sender WAL trims itself: if a shipping read returns a first sequence greater than the requested cursor, it records a re-seed epoch, withholds saga records, and asks the receiver to re-seed through `ReplicationBatch.ReseedAfterEpoch`. A custom transport that drops that field fails closed: saga records remain withheld and the link stays stalled until an operator re-seeds or the transport carries the request.
 
 To prevent that footgun, the silo **refuses to start** when a replicated tree (declared in [`ReplicatedTrees`](#replicatedtrees)) has an effective `WalRetention` set while the anti-entropy detection backstop [`DigestProbeEnabled`](#digestprobeenabled) is off. Resolve it by one of: enable `DigestProbeEnabled` (and, for automatic repair, the remaining [anti-entropy stages](automatic-drift-remediation.md)) so the divergence is detected and healed out-of-band; remove `WalRetention` from the tree so a lagging shipper pins the WAL until it catches up; or set [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) to acknowledge the risk explicitly. The effective retention is read from the per-tree core `LatticeOptions.WalRetention`, which already reflects any value mirrored from this replication-side `WalRetention`, so the rule catches retention configured on either surface.
+
+A peer that is unreachable for good holds more than the log. It also holds every tombstone of the trees it replicates: the [tombstone reap gate](replication-drivers.md#tombstone-reap-gate) reaps nothing a peer may still lack, so those tombstones accumulate until the peer is removed from `ReplicationPeers` and its shipper detaches from the log ([#4615](https://github.com/NSTA1/Orleans.Lattice/issues/4615)). `WalRetention` does not bound that growth.
 
 ### `AllowWalRetentionWithoutAntiEntropy`
 

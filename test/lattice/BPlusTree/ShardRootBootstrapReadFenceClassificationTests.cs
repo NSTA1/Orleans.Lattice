@@ -53,6 +53,7 @@ public sealed class ShardRootBootstrapReadFenceClassificationTests
     [
         nameof(IShardRootGrain.AbortSplitAsync),
         nameof(IShardRootGrain.AppendTxTerminalAsync),
+        nameof(IShardRootGrain.ArmReplicationFloorEpochAsync),
         nameof(IShardRootGrain.ApplyCrdtDeltaAsync),
         nameof(IShardRootGrain.ApplyCrdtDeltaManyAsync),
         nameof(IShardRootGrain.BeginShadowForwardAsync),

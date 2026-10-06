@@ -60,7 +60,17 @@ VARIABLES
 
 vars == <<authored, known, log, cursor, applied, hwm, buf, wake>>
 
-DepsOk(w) == IF w.d = NoDep THEN TRUE ELSE hwm[w.d.o] >= w.d.h
+(***************************************************************************)
+(* A dependency names one write: the other writer's write at that HLC,    *)
+(* which the author provably held. It is met once the receiver has merged *)
+(* that write. The per-origin high-water mark cannot answer that: it is   *)
+(* the maximum HLC applied, and an origin's HLCs arrive out of order       *)
+(* (#1060), so production's check hwm >= t (CausalApplyBuffer.            *)
+(* DependenciesSatisfied) releases an entry before its dependency (#4586,  *)
+(* mutation CausalOrderMaxHlcFrontier). How the receiver remembers applied *)
+(* identities, and for how long, is #4586's design; the model keeps them.  *)
+(***************************************************************************)
+DepsOk(w) == IF w.d = NoDep THEN TRUE ELSE \E v \in applied : v.o = w.d.o /\ v.h = w.d.h
 
 DepChoices(o) ==
     LET seen == {v.h : v \in {u \in known[o] : u.o = Other(o)}}
@@ -120,7 +130,10 @@ Learn(x, w) ==
 (* Deliver(s): s's shipper delivers the entry at the head of its line and  *)
 (* the receiver runs its pipeline: an entry it holds already is a          *)
 (* duplicate; one whose dependency is met is merged and the high-water     *)
-(* mark advances; one whose dependency is not met is parked. Every outcome *)
+(* mark advances, and a drain is re-armed: an apply below the mark can    *)
+(* still meet a parked entry's dependency (mutation                        *)
+(* EventualConvergenceDrainWakesOnlyOnAdvance); one whose dependency is   *)
+(* not met is parked. Every outcome                                        *)
 (* is acknowledged, which moves the head of the line - the intended        *)
 (* design, under which a parked entry is held durably. A shipper sends     *)
 (* one entry at a time: a larger batch could carry an entry past one the   *)
@@ -137,7 +150,7 @@ Deliver(s) ==
              /\ DepsOk(w)
              /\ applied' = applied \cup {w}
              /\ hwm' = [hwm EXCEPT ![w.o] = Max({@, w.h})]
-             /\ wake' = (wake \/ (w.h > hwm[w.o] /\ buf # {}))
+             /\ wake' = (wake \/ buf # {})
              /\ cursor' = [cursor EXCEPT ![s] = i]
              /\ UNCHANGED buf
           \/ /\ w \notin applied \cup buf
@@ -184,6 +197,11 @@ Next ==
 (* and learning are environment events.                                    *)
 (***************************************************************************)
 Spec == Init /\ [][Next]_vars /\ \A s \in Writers : WF_vars(Deliver(s)) /\ WF_vars(Drain)
+
+(* CausalOrder: the receiver never merges a write before the write its    *)
+(* dependency names.                                                       *)
+CausalOrder ==
+    \A w \in applied : w.d # NoDep => \E v \in applied : v.o = w.d.o /\ v.h = w.d.h
 
 (* EventualConvergence: every write is eventually merged at the receiver. *)
 EventualConvergence == <>[](authored \subseteq applied)

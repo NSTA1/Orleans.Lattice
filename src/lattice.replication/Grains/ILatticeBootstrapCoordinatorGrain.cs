@@ -113,6 +113,17 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     Task<bool> IsReseedPendingAsync(string sourceClusterId);
 
     /// <summary>
+    /// The source lineage of the last whole-tree export from
+    /// <paramref name="sourceClusterId"/> this receiver began draining, with the
+    /// tree frontier epoch it began in, or <see langword="null"/> when none was
+    /// recorded (issue #4673). A pushed batch the source stamped with another
+    /// lineage, or arriving once the frontier epoch has moved on, is refused.
+    /// </summary>
+    /// <param name="sourceClusterId">The sender's cluster id.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId);
+
+    /// <summary>
     /// Returns the export epoch of the last full bootstrap from
     /// <paramref name="sourceClusterId"/> that reached
     /// <see cref="LatticeBootstrapState.LiveIncremental"/>, or
@@ -122,6 +133,20 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     /// <param name="sourceClusterId">The sending cluster.</param>
     [Orleans.Concurrency.AlwaysInterleave]
     Task<long?> GetCompletedExportEpochAsync(string sourceClusterId);
+
+    /// <summary>
+    /// Returns the export epoch of the last snapshot from
+    /// <paramref name="sourceClusterId"/> whose drain applied every entry -
+    /// including one whose bootstrap still holds its read fence - or
+    /// <see langword="null"/> when none has (issue #4684). A drain records the
+    /// arrival of every cross-tree sub-saga it settles at its barrier before it
+    /// ends, so a sibling import that waits on this one is served by the drain,
+    /// not by the fence lifting: two imports that wait on each other's
+    /// completion would never complete.
+    /// </summary>
+    /// <param name="sourceClusterId">The sending cluster.</param>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<long?> GetDrainedExportEpochAsync(string sourceClusterId);
 
     /// <summary>
     /// Operator override (issue #4526): lifts the read fence a failed bootstrap

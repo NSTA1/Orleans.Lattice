@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -491,6 +492,105 @@ internal sealed partial class TxRegistryGrain(
             else state.State.ExternalAuthorities.Remove(txid);
             state.State.CrossTreeRegistrationEpoch = prevEpoch;
         });
+    }
+
+    /// <inheritdoc />
+    public async Task RecordCrossTreeMembershipAsync(Guid txid, string operationId, IReadOnlyList<string> participants)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(participants);
+        if (txid == Guid.Empty)
+        {
+            throw new ArgumentException("A cross-tree membership needs a non-empty transaction id.", nameof(txid));
+        }
+
+        if (state.State.CrossTreeMemberships.ContainsKey(txid))
+        {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RecordCrossTreeMembershipAsync(txid, operationId, participants);
+            }
+
+            return;
+        }
+
+        state.State.CrossTreeMemberships[txid] = new CrossTreeMembership
+        {
+            OperationId = operationId,
+            Participants = [.. CanonicalStringSet.SortedDistinct(participants)],
+        };
+        await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships.Remove(txid));
+    }
+
+    /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(Guid txid, IReadOnlyDictionary<string, long> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        if (!state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
+        {
+            return;
+        }
+
+        if (membership.DecisionStamps is not null)
+        {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RecordCrossTreeDecisionStampsAsync(txid, stamps);
+            }
+
+            return;
+        }
+
+        state.State.CrossTreeMemberships[txid] = membership with
+        {
+            DecisionStamps = stamps.ToImmutableDictionary(StringComparer.Ordinal),
+        };
+        await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships[txid] = membership);
+    }
+
+    /// <inheritdoc />
+    public Task<Dictionary<Guid, CrossTreeMembership>> GetCrossTreeMembershipsAsync(IReadOnlyList<Guid> txids)
+    {
+        ArgumentNullException.ThrowIfNull(txids);
+        var found = new Dictionary<Guid, CrossTreeMembership>();
+        foreach (var txid in txids)
+        {
+            if (state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
+            {
+                found[txid] = membership;
+            }
+        }
+
+        return Task.FromResult(found);
+    }
+
+    /// <summary>
+    /// Drops the cross-tree membership of every saga whose decision and
+    /// delegation are both gone (issue #4683): the saga was purged, so no export
+    /// can ship its decision row. In memory only; the caller's write persists
+    /// it, and losing it to a failed write keeps a few stale rows a later pass
+    /// drops.
+    /// </summary>
+    private void DropPurgedCrossTreeMemberships()
+    {
+        if (state.State.CrossTreeMemberships.Count == 0)
+        {
+            return;
+        }
+
+        List<Guid>? purged = null;
+        foreach (var txid in state.State.CrossTreeMemberships.Keys)
+        {
+            if (!state.State.Decisions.ContainsKey(txid) && !state.State.ExternalAuthorities.ContainsKey(txid))
+            {
+                (purged ??= []).Add(txid);
+            }
+        }
+
+        foreach (var txid in purged ?? [])
+        {
+            state.State.CrossTreeMemberships.Remove(txid);
+        }
     }
 
     /// <inheritdoc />
@@ -1219,6 +1319,7 @@ internal sealed partial class TxRegistryGrain(
         // so the prune below sees its latest cleared generation (#4508).
         await RefreshWalPurgeGuardAsync();
         await RefreshWalPurgeHoldAsync();
+        await RefreshCrossTreeHoldAsync();
 
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;
@@ -2279,6 +2380,10 @@ internal sealed partial class TxRegistryGrain(
     /// </summary>
     private PruneResult PruneExpired(DateTimeOffset now, TimeSpan retention)
     {
+        // Memberships of sagas an earlier pass purged (#4683); persisted by
+        // the caller's write with whatever this pass removes.
+        DropPurgedCrossTreeMemberships();
+
         // First sweep: drop expired pins. Their txids fall out of the
         // pin union and become candidates for the tombstone sweep
         // below. The dropped-pin list is folded into the parent caller's

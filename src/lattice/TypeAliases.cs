@@ -375,9 +375,14 @@ internal static class TypeAliases
     internal const string CrossTreeReceiverState = "ol.crs";
     internal const string CrossTreeReceiverTerminal = "ol.crt";
     internal const string CrossTreeReceiverDecision = "ol.crd";
+    internal const string ICrossTreeBarrierIndexGrain = "ol.cbi";
+    internal const string CrossTreeBarrierIndexState = "ol.cbs";
+    internal const string CrossTreeReceiverStatus = "ol.crq";
+    internal const string CrossTreeImportRecord = "ol.cir";
     internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
     // Ambient producer-side cross-tree terminal metadata (RequestContext value).
     internal const string CrossTreeTerminalInfo = "ol.cti";
+    internal const string CrossTreeMembership = "ol.ctm";
 
     // Distributed lock / lease (#1608)
     internal const string LockToken = "ol.lkt";
@@ -874,6 +879,9 @@ internal static class TypeAliases
 
     /// <summary>Alias for the closed-copy replication apply refusal.</summary>
     internal const string CopyReceiveFenced = "ol.qfx";
+
+    /// <summary>Alias for the stale replication floor-admission refusal (issue #4549).</summary>
+    internal const string ReplicationFloorAdmissionStale = "ol.rae";
 
     /// <summary>Alias for the per-physical-copy receive fence status.</summary>
     internal const string CopyReceiveFenceStatus = "ol.qft";

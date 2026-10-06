@@ -11,7 +11,7 @@ stays bound to the physical copy it prepared on. Ownership is what keeps all of
 that consistent: at every moment each key has exactly one place that answers for
 it, and no move loses or resurrects a value.
 
-This document describes the formal coverage of that ownership protocol: two TLA+
+This document describes the formal coverage of that ownership protocol: four TLA+
 modules checked by TLC, the pure cores production is routed through, and the
 Coyote models that check those cores. It is an assurance document; the runtime
 behaviour it protects is documented in the pages linked above.
@@ -31,16 +31,22 @@ reader is most likely to over-read are these.
   report a decision, retiring its row), a late forwarded prepare and a leaf
   reactivation do to a saga bound across a split and a resize. A behaviour that
   needs a retention event together with a stale writer, a saga re-bind, a
-  reshard, a refused flip or an undo before a flip is checked by **neither**
-  module's CI gate. Their composition was checked once, all properties of both
-  modules included, and is clean in this instance; it costs about ten minutes
-  of TLC, which is why it is not a gate
+  reshard, a refused flip, an undo before a flip, a write
+  stamp that disagrees with real time or a migrated row is checked by **neither**
+  module's CI gate. Their composition is clean in this instance: every action
+  of both, `ShardOwnership`'s write stamps and migrated rows, and all their
+  properties. It costs about nineteen minutes of TLC, which is why it is not
+  a gate
   ([the seam](../../spec/shard-ownership/README.md#two-modules-and-the-seam-between-them)).
   A third module, `ShardOwnershipCrdt`, checks that the same moves join a
   CRDT-mode key's copies rather than overwrite them.
-- **Alias moves other than a resize are not modelled.** A shadow-cutover
-  restore, an explicit alias change and schema remediation move the alias too;
-  none is covered here.
+- **A shadow-cutover restore has its own module.** `ShardOwnershipCutover`
+  checks an atomic write bound to the previous copy across a shadow-cutover
+  restore and its revert. That move is not a resize, so the copy the write leaves
+  mirrors nowhere. The write re-binds, and it discards the prepares it left on
+  the previous copy before it decides (#4689, fixed).
+- **Other alias moves are not modelled.** An explicit alias change and schema
+  remediation move the alias too, and neither is covered here.
 - **Shard consolidation is not modelled.** The reshard here only grows.
 - **Cross-cluster replication is not modelled.** Unlike the
   [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
@@ -66,10 +72,13 @@ reader is most likely to over-read are these.
 | `ReadableOnceComplete` | Once an atomic write has completed, no read of its keys is held back by a leftover shadow marker. | `ShardOwnershipRetention` |
 | `NoLiveBucketAfterForget` | No copy that can still become the tree keeps a prepared bucket of an atomic write the registry has forgotten. | `ShardOwnershipRetention` |
 | `NoLostContribution` | A CRDT-mode key keeps every acknowledged contribution across a leaf split, a shard split and an online resize. | `ShardOwnershipCrdt` |
+| `AtomicAcrossCutover` | No reader, fresh or stale, is served an atomic write's batch on one key and not the other across a shadow-cutover restore or its revert. | `ShardOwnershipCutover` |
+| `CommittedBatchOnBoundCopy` | A committed atomic write holds prepared buckets only on the copy it is bound to: every copy it re-bound away from was discarded. | `ShardOwnershipCutover` |
+| `SagaSettles` | An atomic write settles however a restore and its revert interleave with it. | `ShardOwnershipCutover` |
 
 Every property has a mutation that breaks it, run as a two-arm experiment: the
 property holds on the unmutated module and fails on the mutant. Every action in
-each module is perturbed by at least one mutation. All three run in CI through
+each module is perturbed by at least one mutation. All four run in CI through
 `TlcModelCheckTests`.
 
 ## Defects the coverage found
@@ -89,7 +98,10 @@ terminal (#4545, fixed), a late forward of an atomic write the registry has forg
 left stranded (#4619, fixed), CRDT copies overwritten rather than joined by the
 terminal's backstop, a split or a resize (#4611, #4613, #4618, all fixed), and,
 found by the review of this coverage, a router that cached the old copy reading
-empty and losing writes once that copy is purged (#4503, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
+empty and losing writes once that copy is purged (#4503, fixed). The cutover
+module found one more: an atomic write that re-binds across a shadow-cutover
+restore left its prepares on the previous copy, and a revert served them torn
+(#4689, fixed). The modules' [README](../../spec/shard-ownership/README.md#defects-this-area-found)
 maps each to its mutation.
 
 ## The cores production is routed through

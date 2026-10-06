@@ -140,12 +140,13 @@ Absorbed(x, w) ==
 (* CausalApplyBuffer.DependenciesSatisfied: the entry's own origin and the *)
 (* receiver's own cluster are exempt; any other coordinate must be met.    *)
 DepsOk(x, w) ==
-    IF w.d = NoDep \/ w.d.o = w.o \/ w.d.o = x THEN TRUE ELSE hwm[x][w.d.o] >= w.d.h
+    IF w.d = NoDep \/ w.d.o = w.o \/ w.d.o = x THEN TRUE
+    ELSE \E k \in Keys : \E v \in val[x][k] : v.o = w.d.o /\ v.h = w.d.h
 
 (* ReplicationShipperGrain.ShouldShip's origin clauses. *)
 ShouldShip(s, w) == w.o = s
 
-DepChoices(o) == {NoDep} \cup {[o |-> p, h |-> hwm[o][p]] : p \in {q \in Writers \ {o} : hwm[o][q] > 0}}
+DepChoices(o) == {NoDep} \cup {[o |-> v.o, h |-> v.h] : v \in {u \in UNION {val[o][k] : k \in Keys} : u.o # o}}
 DelChoices(o, k) == IF o = BootSource /\ Mode(k) = "lww" /\ val[o][k] # {} THEN BOOLEAN ELSE {FALSE}
 
 Merged(x, w) == [val EXCEPT ![x][w.k] = @ \cup {w}]
@@ -308,7 +309,7 @@ Deliver(e, i) ==
              /\ val' = Merged(x, w)
              /\ wal' = Logged(x, w)
              /\ hwm' = Advanced(x, w)
-             /\ wake' = [wake EXCEPT ![x] = @ \/ (w.h > hwm[x][w.o] /\ buf[x] # {})]
+             /\ wake' = [wake EXCEPT ![x] = @ \/ buf[x] # {}]
              /\ cursor' = acked
              /\ UNCHANGED parking
        /\ UNCHANGED <<authored, pinned, buf, dlq, faults, booted, skipped, requested>>
@@ -377,7 +378,7 @@ ApplyFails(e, i) ==
        /\ cursor' = IF i = cursor[e] + 1 THEN [cursor EXCEPT ![e] = i] ELSE cursor
        /\ faults' = faults + 1
        /\ hwm' = Advanced(x, w)
-       /\ wake' = [wake EXCEPT ![x] = @ \/ (w.h > hwm[x][w.o] /\ buf[x] # {})]
+       /\ wake' = [wake EXCEPT ![x] = @ \/ buf[x] # {}]
        /\ UNCHANGED <<authored, wal, val, pinned, cache, parking, buf, booted, skipped, requested>>
 
 (***************************************************************************)
@@ -425,7 +426,7 @@ Replay(x, r) ==
           /\ val' = Merged(x, r)
           /\ wal' = Logged(x, r)
           /\ hwm' = Advanced(x, r)
-          /\ wake' = [wake EXCEPT ![x] = @ \/ (r.h > hwm[x][r.o] /\ buf[x] # {})]
+          /\ wake' = [wake EXCEPT ![x] = @ \/ buf[x] # {}]
           /\ UNCHANGED <<parking>>
     /\ UNCHANGED <<authored, cursor, pinned, buf, faults, booted, skipped, requested>>
 
@@ -476,10 +477,19 @@ Restart(x) ==
 (* later writes to the key carry higher HLCs; and an earlier frontier is a *)
 (* smaller one, which only satisfies fewer dependencies.                   *)
 (*                                                                         *)
-(* The design pins NO drop floor, because no HLC is a cut below which     *)
-(* every write of an origin is provably in the snapshot: per-leaf clocks   *)
-(* are unordered. Production pinned the floor at the frontier until #4476  *)
-(* (mutation BootstrapHandoffLosesNothingPinnedFloor). The intended design *)
+(* The pin installs NO drop floor, because no frontier coordinate is a cut *)
+(* below which every write of an origin is provably in the snapshot:       *)
+(* per-leaf clocks are unordered. Production pinned the floor at the       *)
+(* frontier until #4476 (mutation                                          *)
+(* BootstrapHandoffLosesNothingPinnedFloor). Since #4675 (the fix for      *)
+(* #4549) the drain does install one other floor: the source's per-origin  *)
+(* applied low watermark, which is downward-closed (#4586), so a write of  *)
+(* that origin below it and not held at the source is reflected in the     *)
+(* export, and a late delivery of it is dropped. This module does not      *)
+(* model that floor: with no tombstone reaped, dropping a write the export *)
+(* reflects and applying it reach the same value.                          *)
+(* ReplicationReBootstrap.tla checks it, in its Floor variant, where a     *)
+(* reaped delete makes the difference. The intended design                 *)
 (* also takes the pointwise maximum with the vector already held, where    *)
 (* production replaced it until #4464 (mutation                            *)
 (* EventualConvergencePinRegressesVector), and re-arms a drain, because    *)
@@ -659,6 +669,13 @@ NoRelay ==
 (* into its apply pipeline. Every entry the pipeline admits is reserved   *)
 (* in the identity cache first, so the cache is where admission shows.    *)
 NoReflection == \A x \in Clusters : \A id \in cache[x] : id[1] # x
+
+(* CausalOrder: a replica never holds a write without the write its       *)
+(* dependency names (#4586).                                              *)
+CausalOrder ==
+    \A x \in Clusters, k \in Keys : \A w \in val[x][k] :
+        (w.d # NoDep /\ w.d.o # x) =>
+            \E j \in Keys : \E v \in val[x][j] : v.o = w.d.o /\ v.h = w.d.h
 
 (* CursorNeverSkipsUnshipped: every ship-worthy entry at or below a       *)
 (* shipper's acknowledged cursor has been absorbed by the destination,    *)

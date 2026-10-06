@@ -25,7 +25,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// </summary>
 [TestFixture]
 [Category("Integration")]
-public class ReceiverSagaDeferralIntegrationTests
+public partial class ReceiverSagaDeferralIntegrationTests
 {
     private const string Origin = "rsd-origin";
     private const int MaxApplyRetries = 3;
@@ -377,31 +377,6 @@ public class ReceiverSagaDeferralIntegrationTests
     }
 
     [Test]
-    public async Task Deferred_terminal_is_never_poisoned_and_stays_deferred()
-    {
-        const string tree = "rsd-terminal-never-poison";
-        var (keyA, keyB) = KeysOnDistinctShards("terminal-never");
-        var txid = Guid.NewGuid();
-        var commitB = Commit(tree, keyB, txid, 8_101);
-
-        Assert.That(await DeliverAsync(Prepare(tree, keyA, 1, txid, index: 0, ticks: 8_000)), Is.True);
-        Assert.That(await DeliverAsync(Prepare(tree, keyB, 2, txid, index: 1, ticks: 8_001)), Is.True);
-        Assert.That(await DeliverAsync(Commit(tree, keyA, txid, 8_100)), Is.True);
-
-        _failing.Fail = r => r.Op == MutationKind.TxCommit && r.ShardIndex == commitB.ShardIndex && r.TransactionId == txid;
-        Assert.That(await DeliverAsync(commitB), Is.False);
-        await WaitPastSagaDeferralTimeoutAsync();
-
-        Assert.That(await PushAsync(commitB), Is.False,
-            "terminals stay deferred past the prepare poison bound");
-        Assert.Multiple(async () =>
-        {
-            Assert.That(await GetPoisonedAsync(tree), Is.Empty);
-            Assert.That((await _deadLetters.ListAsync(tree)).Where(e => e.Entry.TransactionId == txid), Is.Empty);
-        });
-    }
-
-    [Test]
     public async Task Operator_poison_of_a_saga_parks_its_records_and_resumes_the_link()
     {
         const string tree = "rsd-operator-poison";
@@ -503,14 +478,21 @@ public class ReceiverSagaDeferralIntegrationTests
                 opts.AutoBootstrapOnFallOffLog = false;
             });
             siloBuilder.Services.Configure<LatticeReplicationOptions>(FullQueueTree, o => o.DeadLetterQueueCapacity = 1);
+            siloBuilder.Services.Configure<LatticeReplicationOptions>(OtherClusterTree, o => o.ClusterId = "rsd-receiver-other");
             siloBuilder.Services.AddSingleton<ILatticeMergeModeResolver, AllowAllLwwRegisterResolver>();
         }
     }
 
     private const string FullQueueTree = "rsd-poison-dlq-full";
 
+    /// <summary>
+    /// Every tree is replicated here as last-writer-wins, except the ones a test
+    /// takes out of <see cref="NotReplicatedHere"/> mid-operation: the live
+    /// replicated-tree configuration the applier scopes a cross-tree wait set by.
+    /// </summary>
     private sealed class AllowAllLwwRegisterResolver : ILatticeMergeModeResolver
     {
-        public LatticeMergeMode? Resolve(string treeId) => LatticeMergeMode.LwwRegister;
+        public LatticeMergeMode? Resolve(string treeId) =>
+            NotReplicatedHere.ContainsKey(treeId) ? null : LatticeMergeMode.LwwRegister;
     }
 }

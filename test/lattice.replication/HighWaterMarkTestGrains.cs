@@ -29,6 +29,14 @@ internal static class HighWaterMarkTestGrains
             .Returns(call => (bool)call[3]
                 ? hwm.TryAdvanceAsync((string)call[0], (HybridLogicalClock)call[1], (CancellationToken)call[4])
                 : Task.FromResult(false));
+        // The applier reads the high-water mark through the admission read
+        // (issue #4549); route it to GetAsync so a stubbed mark keeps working.
+        hwm.GetAdmissionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(async call => new ReplicationApplyAdmission
+            {
+                HighWaterMark = await hwm.GetAsync((string)call[0], (CancellationToken)call[1]),
+                HeldBelowFloor = Array.Empty<HybridLogicalClock>(),
+            });
         return hwm;
     }
 
@@ -67,6 +75,17 @@ internal static class HighWaterMarkTestGrains
         frontier.ObserveAsync(Arg.Any<string>(), Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>())
             .Returns(Guid.Empty);
         return frontier;
+    }
+
+    /// <summary>
+    /// A cross-tree barrier index that names no barrier (issue #4684), for a
+    /// bootstrap coordinator under test whose tree no cross-tree barrier waits for.
+    /// </summary>
+    public static Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain EmptyBarrierIndex()
+    {
+        var index = NSubstitute.Substitute.For<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>();
+        index.GetAsync().Returns(System.Collections.Immutable.ImmutableArray<string>.Empty);
+        return index;
     }
 
     /// <summary>A real origin-frontier grain for <paramref name="origin"/>.</summary>

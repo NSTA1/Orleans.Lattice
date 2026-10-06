@@ -230,6 +230,7 @@ public partial class TxRegistryGrainTests
     [TestCase(nameof(TxRegistryState.ExpectedTerminals))]
     [TestCase(nameof(TxRegistryState.ExternalAuthorities))]
     [TestCase(nameof(TxRegistryState.SnapshotPins))]
+    [TestCase(nameof(TxRegistryState.CrossTreeMemberships))]
     public void Admission_estimate_weight_covers_the_measured_bytes_per_entry(string map)
     {
         const int entries = 200;
@@ -266,6 +267,19 @@ public partial class TxRegistryGrainTests
                 case nameof(TxRegistryState.SnapshotPins):
                     registry.SnapshotPins[txid] = new SnapshotPin { ExpiresAt = now, Txids = [Guid.NewGuid()] };
                     break;
+                case nameof(TxRegistryState.CrossTreeMemberships):
+                    registry.CrossTreeMemberships[txid] = new CrossTreeMembership
+                    {
+                        OperationId = "tree-with-a-realistically-long-physical-tree-id/" + Guid.NewGuid(),
+                        Participants = ["tree-with-a-realistically-long-tree-id-a", "tree-with-a-realistically-long-tree-id-b"],
+                        DecisionStamps = System.Collections.Immutable.ImmutableDictionary.CreateRange(
+                            StringComparer.Ordinal,
+                            [
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-a", long.MaxValue),
+                                new KeyValuePair<string, long>("tree-with-a-realistically-long-tree-id-b", long.MaxValue),
+                            ]),
+                    };
+                    break;
             }
         }
         weight = map switch
@@ -277,6 +291,7 @@ public partial class TxRegistryGrainTests
             nameof(TxRegistryState.TerminalArrivals) => TxRegistryGrain.AdmissionEstimateTerminalArrivalsBytes,
             nameof(TxRegistryState.ExpectedTerminals) => TxRegistryGrain.AdmissionEstimateExpectedTerminalsBytes,
             nameof(TxRegistryState.ExternalAuthorities) => TxRegistryGrain.AdmissionEstimateAuthorityBytes,
+            nameof(TxRegistryState.CrossTreeMemberships) => TxRegistryGrain.AdmissionEstimateCrossTreeMembershipBytes,
             _ => TxRegistryGrain.AdmissionEstimateSnapshotPinBytes + TxRegistryGrain.AdmissionEstimatePinnedTxidBytes,
         };
 

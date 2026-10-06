@@ -194,10 +194,9 @@ public partial class TreeDeletionIntegrationTests
         // clears, and ClearGrainStateAsync is exactly the call it makes, so this
         // is the state a PurgeTreeAsync that blew the grain-call timeout leaves
         // behind: node state gone, shard root untouched, no purge flags set on
-        // the deletion grain - but the shard recorded that it began clearing its
-        // leaves before the first clear (issue #4654).
-        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
-        await leaf.ClearGrainStateAsync();
+        // the deletion grain. The purge clears a leaf with the purge clear, which
+        // marks the leaf's row record as cleared by the purge (issue #4700).
+        await leaf.ClearGrainStateForPurgeAsync();
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
 
         await router.RecoverTreeAsync();
@@ -248,9 +247,8 @@ public partial class TreeDeletionIntegrationTests
         var sibling = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(siblingId!.Value);
 
         await router.DeleteTreeAsync();
-        await PurgeInterruptionStaging.MarkLeafClearsBegunAsync(shard);
-        await leaf.ClearGrainStateAsync();
-        await sibling.ClearGrainStateAsync();
+        await leaf.ClearGrainStateForPurgeAsync();
+        await sibling.ClearGrainStateForPurgeAsync();
         Assert.That(await leaf.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the leaf");
         Assert.That(await sibling.GetTreeIdAsync(), Is.Null, "precondition: the simulated purge unbound the sibling");
 

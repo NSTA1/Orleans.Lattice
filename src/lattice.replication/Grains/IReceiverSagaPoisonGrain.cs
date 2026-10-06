@@ -43,6 +43,45 @@ internal interface IReceiverSagaPoisonGrain : IGrainWithStringKey
     Task RetireAsync(string originClusterId, IReadOnlyCollection<Guid> transactionIds);
 
     /// <summary>
+    /// Which of <paramref name="transactionIds"/> from
+    /// <paramref name="originClusterId"/> are poisoned and which are quarantined
+    /// (issue #4692), in one read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<ReceiverSagaPoisonClassification> ClassifyAsync(string originClusterId, IReadOnlyCollection<Guid> transactionIds);
+
+    /// <summary>
+    /// Whether a completed re-seed has already retired a poison of
+    /// <paramref name="transactionId"/> from <paramref name="originClusterId"/>
+    /// (issue #4692), so poisoning it again could not settle it.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsRetiredAsync(string originClusterId, Guid transactionId);
+
+    /// <summary>
+    /// Quarantines <paramref name="transactionId"/> from
+    /// <paramref name="originClusterId"/> durably (issue #4692): its records are
+    /// parked without being applied, and it is never re-seeded again for that
+    /// cause. Returns <see langword="false"/> when the bounded quarantine set is
+    /// full; the caller then holds the record unacknowledged rather than
+    /// poisoning the saga again.
+    /// </summary>
+    Task<bool> QuarantineAsync(string originClusterId, Guid transactionId, string reason);
+
+    /// <summary>
+    /// Releases the quarantine of <paramref name="transactionId"/> from
+    /// <paramref name="originClusterId"/> durably, once an operator has fixed its
+    /// cause (issue #4692). The saga stays retired, so a record of it that fails
+    /// again is quarantined again rather than re-seeded. Returns
+    /// <see langword="false"/> when the saga was not quarantined.
+    /// </summary>
+    Task<bool> ReleaseQuarantineAsync(string originClusterId, Guid transactionId);
+
+    /// <summary>The quarantined sagas from <paramref name="originClusterId"/>.</summary>
+    [AlwaysInterleave]
+    Task<IReadOnlyCollection<Guid>> GetQuarantinedAsync(string originClusterId);
+
+    /// <summary>
     /// Returns origins whose poisoned saga set still requires a re-seed kickoff.
     /// </summary>
     [ReadOnly]

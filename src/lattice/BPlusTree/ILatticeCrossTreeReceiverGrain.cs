@@ -24,7 +24,9 @@ namespace Orleans.Lattice.BPlusTree;
 /// </para>
 /// <para>
 /// <b>Deadlock-freedom.</b> <see cref="NotifyTerminalAsync"/> never calls back
-/// into any grain - it only returns the set of trees to finalize. The calling
+/// into a participant grain - it only returns the set of trees to finalize; the
+/// one grain it calls, the trees' <see cref="ICrossTreeBarrierIndexGrain"/>,
+/// calls nothing. The calling
 /// <c>LatticeGrain</c> performs the finalizes after the call returns (self-tree
 /// inline, sibling trees via their own apply grains), so no circular grain wait
 /// is possible.
@@ -39,13 +41,31 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// persists its state before returning, so the registration that precedes
     /// this call is linearized against a durable decision. The first terminal
     /// freezes the wait set (the participant tree-ids replicated on this
-    /// receiver); later terminals must carry an identical wait set or are
-    /// rejected. Returns a <see cref="CrossTreeReceiverDecision"/> whose
+    /// receiver), and the frozen set is authoritative: a later terminal's
+    /// differing wait set - the receiver's replicated trees changed mid-operation
+    /// - is ignored, and a terminal for a tree outside the frozen set joins it,
+    /// or, once the barrier has decided, is finalized with its verdict (issue
+    /// #4692). Returns a <see cref="CrossTreeReceiverDecision"/> whose
     /// <see cref="CrossTreeReceiverDecision.Decided"/> is <c>false</c> while the
     /// wait set is incomplete, and otherwise carries the global commit/abort
     /// verdict plus the per-tree finalize records the caller must materialize.
     /// </summary>
     Task<CrossTreeReceiverDecision> NotifyTerminalAsync(CrossTreeReceiverTerminal terminal);
+
+    /// <summary>
+    /// Records that participating tree <paramref name="treeId"/> is no longer
+    /// replicated on this receiver (issue #4692): its terminal was dropped at the
+    /// receiver's enrollment gate, so it will never arrive. An undecided barrier
+    /// that still waits for the tree removes it from its wait set and decides if
+    /// every remaining tree has arrived, by the usual rule (commit iff every
+    /// arrival committed). A tree that already arrived, a tree outside the wait
+    /// set, a barrier that has not opened, and a decided barrier are left
+    /// unchanged. Call it only for a tree that has really stopped being
+    /// replicated here - never because a terminal was dropped for another reason.
+    /// Returns the barrier's decision, including the finalize records the caller
+    /// must materialize when this call decided it.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> NotifyParticipantAbsentAsync(string treeId);
 
     /// <summary>
     /// The single global decision for this cross-tree batch on this receiver,
@@ -57,6 +77,40 @@ internal interface ILatticeCrossTreeReceiverGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<TxStatus> GetDecisionAsync();
+
+    /// <summary>
+    /// Whether the barrier has opened and decided, its identity, frozen wait
+    /// set and arrived trees (issue #4684). A decision still awaiting its
+    /// persist reads as undecided. Pure read, safe to interleave.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<CrossTreeReceiverStatus> GetStatusAsync();
+
+    /// <summary>
+    /// Records the operation's decision stamps (issue #4684): per participating
+    /// tree, that tree's snapshot export epoch read at the origin after the
+    /// decision was durable. Every terminal and decision row of the operation
+    /// carries the same stamps; the first recorded stand. Call it before the
+    /// terminal or decision row that carried them is notified. Returns the
+    /// barrier's decision, re-evaluated as <see cref="ReevaluateAsync"/> does.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> RecordDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps);
+
+    /// <summary>
+    /// Re-evaluates the barrier against its trees' latest snapshot imports
+    /// (issue #4684), as it does whenever it opens or records an arrival. A tree
+    /// of the wait set that has not arrived arrives with its siblings' verdict -
+    /// one cross-tree operation has one verdict - when its latest import from
+    /// the origin came from an export that opened after the operation's
+    /// decision (an export epoch greater than the tree's decision stamp; an
+    /// operation decided by a silo that predates stamping counts as decided
+    /// before every export the origin serves) and named the operation on no
+    /// row. Such an export carried the sub-saga's outcome as plain rows,
+    /// because the origin had purged it, so the import left nothing to
+    /// finalize. Called by an import after it records itself. A barrier that
+    /// has not opened is left unchanged. Returns the barrier's decision.
+    /// </summary>
+    Task<CrossTreeReceiverDecision> ReevaluateAsync();
 }
 
 /// <summary>
@@ -87,7 +141,7 @@ internal sealed record CrossTreeReceiverTerminal
     /// <summary>
     /// The set of participant tree-ids that are replicated on this receiver
     /// (<c>participants ∩ trees-replicated-here</c>). Frozen on the first
-    /// terminal and validated for exact match on later terminals. A tree that
+    /// terminal; a later terminal's value is advisory (issue #4692). A tree that
     /// the cross-tree batch touched but which is <i>not</i> replicated on this
     /// receiver is absent, so the barrier completes without waiting for it -
     /// partial-replication cross-tree batches are valid and flip on the subset

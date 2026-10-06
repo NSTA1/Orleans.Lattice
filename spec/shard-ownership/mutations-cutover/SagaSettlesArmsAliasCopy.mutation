@@ -1,0 +1,15 @@
+# Pairs with SagaSettles. The restore arms the redirect on the shadow the alias
+# now names instead of the copy it left, so a saga re-bound to the shadow is
+# refused by the copy the tree resolves to.
+MODULE: SagaSettlesArmsAliasCopy
+TARGET: SagaSettles
+CLASS: Temporal
+SUMMARY: the cutover arms the copy the alias moved onto
+PERTURBS: Arm
+
+--- FIND
+    /\ redir' = [redir EXCEPT ![P] = S]
+--- REPLACE
+    \* MUTATION: the wrong copy is armed.
+    /\ redir' = [redir EXCEPT ![S] = P]
+--- END

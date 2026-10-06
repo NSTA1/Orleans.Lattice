@@ -1,0 +1,32 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4654 as it was before
+# #4671: a lost leaf row reads back as a fresh default row (the storage read's
+# record-exists signal is not consulted), so the leaf looks like one that never
+# held a snapshot. With the snapshot lost too, it starts cold from a WAL the GC
+# trimmed under that snapshot. The base sees the row as gone.
+MODULE: ReadPositionHonestLostRowReadsAsFresh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a lost leaf row reads as a fresh one, so the leaf starts cold from a trimmed WAL
+PERTURBS: LeafRowVanish
+
+--- FIND
+    /\ faults < MaxFaults
+    /\ row' = [row EXCEPT ![l] = FALSE]
+--- REPLACE
+\* MUTATION: the loss is not detected; an absent row reads as a fresh one.
+    /\ faults < MaxFaults
+    /\ row' = row
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

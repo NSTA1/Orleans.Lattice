@@ -192,7 +192,7 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         services.Replace(ServiceDescriptor.Singleton<IRemoteSnapshotTransport, GrpcRemoteSnapshotTransport>());
 
         // Snapshot sender service (inbound, server side).
-        services.TryAddSingleton<LatticeRemoteSnapshotService>();
+        services.TryAddSingleton(LatticeRemoteSnapshotService.Create);
         services.TryAddSingleton<LatticeRemoteSnapshotGrpcService>();
         services.TryAddSingleton<LatticeRemoteSnapshotGrpcServiceBase>(
             sp => sp.GetRequiredService<LatticeRemoteSnapshotGrpcService>());

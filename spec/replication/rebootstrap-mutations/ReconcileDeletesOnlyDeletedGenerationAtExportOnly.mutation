@@ -10,8 +10,8 @@ SUMMARY: the source's tree generation is compared only between export open and c
 PERTURBS: EndExport
 
 --- FIND
-                 /\ ex.gen0 = AlignedGen
+           okSrc == orphan /\ stable /\ ex.gen0 = aligned
 --- REPLACE
 \* MUTATION: no comparison with the aligned generation.
-                 /\ TRUE
+           okSrc == orphan /\ stable
 --- END

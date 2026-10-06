@@ -1,0 +1,20 @@
+# Pairs with AtomicAcrossCutover. The terminal is routed through the logical
+# alias, so the retained redirect refuses it and it follows the alias to the
+# shadow, where it installs the committed value of one key at a time.
+MODULE: AtomicAcrossCutoverTerminalRoutedThroughAlias
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: a terminal the bound copy's redirect refuses is delivered to the alias copy
+PERTURBS: Terminal
+
+--- FIND
+    /\ row' = IF dec = "committed" THEN [row EXCEPT ![bound][k] = New] ELSE row
+    /\ pend' = [pend EXCEPT ![bound][k] = FALSE]
+    /\ term' = [term EXCEPT ![bound][k] = TRUE]
+--- REPLACE
+    \* MUTATION: a routed terminal follows the alias past a redirect.
+    /\ LET tc == IF RoutedAdmits(bound) THEN bound ELSE alias IN
+        /\ row' = IF dec = "committed" THEN [row EXCEPT ![tc][k] = New] ELSE row
+        /\ pend' = [pend EXCEPT ![tc][k] = FALSE]
+        /\ term' = [term EXCEPT ![tc][k] = TRUE]
+--- END

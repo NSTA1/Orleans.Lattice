@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. An export of a soft-deleted
+# tree carries nothing, so the pass must be repeated after recovery; otherwise a
+# delete behind the trim point is never applied.
+MODULE: EventualConvergenceSoftDeleteSkipNotRetried
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a pass that ran while the source was soft-deleted is not retried, so its rows and reconcile are lost
+PERTURBS: EndExport
+
+--- FIND
+               ELSE \/ topo # ex.topo0 \/ phys # ex.phys0 \/ ex.del0 \/ deleted \/ delDone # ex.dep0
+--- REPLACE
+\* MUTATION: a soft delete does not leave the pass owed.
+               ELSE \/ topo # ex.topo0 \/ phys # ex.phys0
+--- END

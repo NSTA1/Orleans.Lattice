@@ -90,7 +90,13 @@ before calling `AddLatticeReplication`.
   adopts the export's lineage when every source-origin key it held was
   carried by the export, because there is then nothing it could wrongly
   delete; otherwise it skips, counted as `skipped_never_aligned` or
-  `skipped_lineage_mismatch`, and keeps every key.
+  `skipped_lineage_mismatch`, and keeps every key. Every alignment - this
+  one and the one a receiver that held no source row records - also
+  needs a scan at the end of the drain to find no live, non-expiring
+  source-origin row the export lacks (#4549). A source-origin row that
+  arrived during the drain, perhaps one the source shipped under an older
+  lineage before a restore, is absent from the pre-capture; aligning over
+  it would let a later pass delete a value the source never deleted.
 
   An unknown generation (a sender that predates generations), a generation
   that moved during the export, or a deleted or purging source records a
@@ -100,8 +106,67 @@ before calling `AddLatticeReplication`.
   one minute to a six-hour cap, so a sender that never reports a
   generation does not re-bootstrap the tree on every tick. Source-origin
   keys carrying an expiry are not captured because they expire on their
-  own, and receiver-local or third-origin stale keys remain the residual
-  tracked by #4549.
+  own.
+
+  Rows of any other origin - the receiver's own writes and a third
+  cluster's - converge through the source's applied frontier (#4549). The
+  export carries, when it opens and after its opening generation, the
+  source tree's per-origin applied low watermark `S(o)` and the writes
+  below it the source holds without applying `H(o)` (lost marks
+  included); the source's own origin is never part of it, because its
+  writes are re-shipped in offset order with their deletes. A write of
+  origin `o` stamped below `S(o)` and not in `H(o)` was applied at the
+  source before the export opened, so the export already reflects it:
+  carried, or superseded by a later write or a delete.
+
+  Before the drain, once the import is recorded (and once the tree is
+  registered, so its lineage stamp cannot reset anything mid-drain), the
+  receiver installs `(S, H)` as a durable **bootstrap drop floor** on its
+  high-water-mark grain, provided the frontier was read under the
+  export's opening lineage; otherwise it clears any earlier floor. The
+  floor starts **provisional**: a delivery below it - a third cluster's
+  write still in flight, a dead-letter replay, or a causal-buffer drain -
+  is deferred (`outcome=bootstrap-floor-deferred`), not acknowledged,
+  because an import that turns out unstable clears the floor and a
+  dropped delivery would never be re-sent. The drain's own rows, saga
+  terminals, and range deletes are exempt.
+
+  Every install bumps the tree's **floor epoch**. The applier stamps each
+  replicated write with the epoch it was admitted under, the epoch is
+  raised in the tree registry
+  (`TreeRegistryEntry.ReplicationFloorEpoch`), and every shard root of the
+  tree is armed with it. Arming is a serial shard-root turn that returns
+  only once the writes the shard admitted under an older epoch have
+  finished their leaf merges; from then on the shard refuses an
+  older-stamped write, which the applier defers. A shard root that
+  activates later - a split or reshard target included - reads the epoch
+  from the registry before it admits its first stamped write. So no write
+  admitted before the floor existed can land after the reconcile scan.
+
+  After the drain the coordinator scans the receiver's live, non-expiring
+  last-writer-wins rows of every origin other than the source (a local
+  row counts as this cluster's id), and deletes, at the row's own HLC and
+  stamped with the source's id, each one whose key the export did not
+  carry and whose write is below `S(o)` and not in `H(o)`. A pending saga
+  prepare matching the same test belongs to a saga the source had already
+  decided - one still open there is exported as prepared rows - so its
+  bucket on that leaf is discarded, durably, and its later commit
+  installs nothing. A row of another origin the export lacks whose write
+  is at or above `S(o)` - or of an origin the frontier carries no
+  watermark for - proves nothing: the source may have applied it during
+  the export and then deleted it, or not have received it yet. It is kept
+  and the reconcile is owed a retry, which settles it once the watermark
+  has risen past it. The reconcile needs a stable generation like the
+  source-origin reconcile, but not the aligned-lineage record: the
+  frontier itself proves the source applied the write. A stable close
+  then makes the floor final, and from then on a delivery below it is
+  acknowledged without being merged (`outcome=bootstrap-floor-dropped`).
+  An export whose generation moved clears the floor instead, so the
+  deferred deliveries apply when re-shipped, and owes a retry that
+  installs a fresh one. The floor belongs to the receiver's lineage of
+  the tree: the tree frontier's re-stamp clears it with the tree's
+  applied identities. A sender that carries no frontier installs no floor
+  and reconciles no other origin.
 
   An in-flight saga's prepared delete ships as a prepared row with
   `IsTombstone` set (see
@@ -817,6 +882,25 @@ if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
 }
 ```
 
+### Source lineage gate
+
+When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
+
+From then on, the receiver refuses an entry stamped by that source in two cases:
+- the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
+- the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
+
+A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
+- A sender whose binding is stale rebinds and never re-sends the old log.
+- A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
+
+The check runs at the applier's admission seam (`ReplicationSourceLineageGate.AdmitAsync`), which every apply entry passes through, so it covers more than the push that delivered a batch ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707)). An entry that parks in the causal-apply buffer, or is dead-lettered, keeps the stamp it arrived under. It is checked again when the buffer drains it or an operator replays it, against the lineage the tree has drained by then:
+- The drain discards a refused entry. It belongs to a lineage the tree no longer replicates, as a refused push would have.
+- A refused replay returns `ApplyResult.SourceLineageRefused` and leaves the entry parked for the operator to discard.
+- A failure to read the record keeps a drained entry parked, and defers a replay.
+
+The gate refuses more than the reconcile strictly needs, because a lineage cannot be ordered and a refusal only costs a re-seed. A batch with no stamp (a sender that predates the header), or from a source this tree never drained, applies as before. A failure to read the record refuses the batch for now without asking for a re-seed.
+
 ### Sample usage
 
 ```csharp verify
@@ -1073,11 +1157,99 @@ recorded verdict behind an aged-out row):
 A receiver that predates the decision slot sees a row with no value
 that is neither prepared nor a tombstone, which its drain skips.
 
+**Cross-tree sub-sagas.** A tree's part of a cross-tree atomic write (see
+[Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier))
+is settled on a receiver by a barrier that waits for every participating
+tree's terminal. An import of one participant settles that tree's
+sub-saga from the export instead, and its terminal may never be shipped
+again: it is often trimmed, which is why the peer fell off the log. So
+([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683)):
+
+- **The export names the operation.** The authoring tree's transaction
+  registry records each sub-saga's cross-tree operation id and
+  participating trees when it parks prepared, and keeps them for exactly
+  as long as it stores the decision. Every decision row and prepared row
+  of such a sub-saga carries them.
+- **The drain records the arrival.** For a decision row that names an
+  operation, the drain records the tree's arrival at the receiver's barrier
+  for it, with the row's verdict, as the tree's terminal would. The wait
+  set is the participants replicated here, plus the tree. If that completes
+  the barrier, every participant is finalized.
+- **The tree stays fenced until the barrier decides.** The imported tree
+  serves the sub-saga post-saga, while a sibling whose terminal has not
+  arrived serves it pre-saga. So the drain does not lift the read fence
+  while any barrier it arrived at is undecided. The bootstrap stays in its
+  incremental-handoff phase, re-checks on each tick, and lifts the fence
+  and completes once every one has decided.
+  - The cost is availability: the imported tree is unreadable until the
+    sibling's own terminal reaches this receiver.
+  - A re-driven drain records the same arrival again, and a terminal of the
+    tree shipped later overwrites it. Both are no-ops.
+- **An import that names the operation nowhere can still arrive.** The
+  origin keeps a cross-tree sub-saga's decision until every peer of every
+  participant has acknowledged past it (see
+  [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)),
+  but a decision purged before that hold existed reaches an export only as
+  the sub-saga's committed rows
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). So at the
+  end of every drain from an export the source served under the hold, the
+  drain records the import in the tree's barrier index: the export's epoch
+  and every cross-tree operation one of its rows named. It then has every
+  barrier waiting for the tree re-evaluate. A barrier does the same whenever
+  it opens or records an arrival, so the order of the import and the sibling's
+  terminal does not matter. A tree that has not arrived arrives with its
+  siblings' verdict - one operation has one verdict - when its latest import
+  named the operation nowhere and its export opened after the operation's
+  decision: the export's epoch is greater than the tree's **decision stamp**,
+  the tree's export epoch the origin read after the decision was durable
+  (see [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+  An export that opened before the decision can predate the sub-saga's
+  prepare, so its rows can be pre-saga, and the tree stays pending. An
+  operation decided by a silo that predates stamping carries no stamps; the
+  source serves no export while such a silo is up, so every export it served
+  opened after that decision.
+- **The tree stays fenced while any barrier waits for it.** The drain does
+  not lift the read fence, and the bootstrap does not complete, while any
+  barrier indexed under the tree is undecided, including one that opened
+  after the drain while the fence was still up.
+- **Nor while a sibling tree may still owe a terminal.** An import can
+  settle a sub-saga from bare rows before the sibling tree's terminal of the
+  same operation has reached this cluster, and then no barrier exists yet to
+  hold the fence. So the export captures, after its last row, every other
+  tree the source replicates: its physical write-ahead log, each partition's
+  next sequence, and its export epoch. The tree stays read-fenced until
+  every such sibling that this cluster replicates and whose log held
+  anything has passed its boundary
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)), by either
+  of two routes:
+  - **Acknowledged.** The sibling's shipper vouched acknowledged read
+    positions on the same log at or past every captured tail (see
+    [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)).
+    This cluster acknowledges a cross-tree terminal only once its barrier
+    has it.
+  - **Re-imported.** A drain of the sibling here ended from an export
+    numbered above the captured epoch, so opened after the capture. It
+    counts once the drain ends, while the sibling's own fence may still be
+    held, so two imports that wait on each other both pass.
+
+  A sibling that has not passed within five minutes is re-seeded
+  automatically when `AutoBootstrapOnFallOffLog` is on. With it off, the
+  tree stays fenced until an operator re-seeds the sibling, the same
+  availability caveat a fall-off off the log carries. An export from a source
+  that did not serve it under the cross-tree hold carries no boundaries.
+
 A saga whose decision the source has already purged cannot be
 exported. The source never re-ships such a saga: its shipper's
 [replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
 withholds it whole (#4533). A pending bucket the receiver staged for it
-before a re-seed is cleared by that re-seed's drain (below). A saga the
+before a re-seed is cleared by that re-seed's drain (below). Any other
+full bootstrap clears one too (#4692) - a tree re-added to replication,
+which must come back holding no leftover bucket from the origin, among
+them - but only for a saga that was already pending from the origin when
+the export opened and that the export neither carries in flight nor
+decides. The sender holds nothing back during such a bootstrap, so a saga
+staged after the export opened is not stale: its terminal is still to
+come, and it keeps its bucket. A saga the
 source still knows but cannot settle (an `Indeterminate` row with no
 recorded verdict) ships as a value-less row that names it with no
 `SettledDecision`, so the receiver does not take it for a purged one;
@@ -1092,6 +1264,53 @@ prepared rows on the receiver, which would serve the saga split
 once the passes are done the export re-reads the decision of every saga
 it shipped as prepared rows, and ships a decision row for each one that
 decided meanwhile.
+
+<a id="export-completion"></a>
+**Completion: sagas that decide while the export reads.** The passes
+read each leaf at its own instant, so a saga can decide between two of
+those reads: one of its keys is read before it prepared there (pre-saga),
+another after its terminal drained there (post-saga). A saga that started
+after snap0 and staged its prepares after the prepared pass read their
+leaves ships no prepared row at all, so no decision row names it either,
+and the receiver would serve it split until the incremental stream
+delivered its last source-shard terminal
+([#4685](https://github.com/NSTA1/Orleans.Lattice/issues/4685)). The
+export therefore:
+
+1. Records a decision-purge hold on the tree
+   ([`IWalPurgeHoldGrain`](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas))
+   before snap0, and releases it once the completion has read the log, so a
+   saga that decides during the export is still recorded at close. A crashed
+   export's hold is released by the tree's next export after 24 hours.
+2. Captures every write-ahead-log partition's readable head (C0) before
+   snap0.
+3. Once the passes and the decision rows are done, takes a second
+   registry snapshot (snap1) and then every partition's head (C1). Every
+   saga decided in snap1 that snap0 did not have decided ships a decision
+   row, and each one that committed also ships every prepare of it the log
+   holds in [C0, C1), as a committed row at the prepare's own stamp. The
+   segment is read page by page, keeping only those sagas' prepares.
+
+Each saga then reaches the receiver whole:
+
+- A saga still undecided at snap1 drained nothing before the passes
+  ended, so its keys shipped pre-saga or as buckets, and the receiver's
+  tally hides it until the stream settles it.
+- A prepare below C0 of a saga that decided during the export was staged
+  before the passes read its key. The passes therefore captured that key as
+  its bucket, which the decision row settles, or as its drained value.
+- A prepare at or above C0 precedes the saga's decision, snap1 and C1, so
+  it ships committed.
+
+Last-writer-wins at the prepare's stamp keeps the committed row above any
+pre-saga value the passes shipped. Over a drained value it is a no-op,
+because the stamp is the same. A typed CRDT prepare ships its delta, and
+CRDT deltas are joins, so a key whose drained state already includes the
+delta counts it once.
+
+The export fails with a retryable `TimeoutException`, and the bootstrap
+retries it whole, when a trim reached into [C0, C1) before the completion
+read it or the tree moved to another physical copy while it was exported.
 
 <a id="re-seed-stale-pending-clear"></a>
 **Re-seed: clearing stale pending buckets.** A sender that took its
@@ -1149,5 +1368,8 @@ prepare and left pre-saga beside its siblings (issue #4526).
 Modelled in `AtomicCommitCrossCluster`: the real drain, with
 incremental replication interleaved and the fence, is clean on every
 property, and lifting the fence early or on failure fires
-`RAllOrNothing`.
+`RAllOrNothing`. For a cross-tree sub-saga the fence is held past the
+drain until the receiver's barrier decides (see
+[Cross-tree sub-sagas](#snapshot-and-in-flight-atomic-visibility) above),
+which the cross-tree slice of the model checks clean.
 

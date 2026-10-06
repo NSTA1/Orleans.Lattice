@@ -1,0 +1,16 @@
+# Pairs with CausalOrder. The tree's watermark is the maximum over its partition shippers rather than
+# the minimum, so it vouches for writes a slower partition has not had acknowledged.
+MODULE: CausalOrderLowWatermarkMaxOverShippers
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: S is the maximum over the tree's partition shippers, so it passes a partition that has not acknowledged
+PERTURBS: Heartbeat
+
+--- FIND
+    /\ SOf > srcv
+    /\ srcv' = SOf
+--- REPLACE
+    \* MUTATION: the maximum over shippers.
+    /\ Min({Max({spart[p] : p \in Parts})} \cup OpenIn(AckedEntries)) > srcv
+    /\ srcv' = Min({Max({spart[p] : p \in Parts})} \cup OpenIn(AckedEntries))
+--- END

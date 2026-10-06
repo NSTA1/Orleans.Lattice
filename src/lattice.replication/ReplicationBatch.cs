@@ -142,4 +142,15 @@ public readonly record struct ReplicationBatch
     /// unchanged and a receiver that predates it ignores it.
     /// </summary>
     internal ReplicationSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// The source tree lineage the sender read this batch's records under
+    /// (issue #4673): <see langword="null"/> when the source registry tracks no
+    /// lineage for the tree, <see cref="Guid.Empty"/> when the sender cannot tell
+    /// yet. A receiver that drained the source under another lineage refuses the
+    /// batch. Carried out of band by the transport (the gRPC transport sends it
+    /// as a call header), so the batch framing is unchanged and a receiver that
+    /// predates it ignores it.
+    /// </summary>
+    internal Guid? SourceLineage { get; init; }
 }

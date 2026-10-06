@@ -400,8 +400,9 @@ new alias is durably persisted and **only** when the effective physical id
 actually changed. The replication package registers an observer that fans the
 `TreeAliasChange` to the affected per-`(tree, peer)` shipper grains via
 `IReplicationShipperGrain.NotifySourceIdentityChangedAsync`, which rebinds
-immediately - the new physical id travels in the notification itself, so the
-rebind reads the registry **zero** times. Because the observer runs on the
+immediately - the new physical id travels in the notification itself, and the
+rebind reads only the tree's registry row, once, for the lineage the new
+binding is stamped with (see [Source lineage stamp](#source-lineage-stamp)). Because the observer runs on the
 source silo as an ordinary grain call, it reaches the shipper even while the
 inter-site delivery edge is partitioned, so the rebind is applied the moment
 the swap commits rather than after the edge heals.
@@ -470,6 +471,25 @@ the shipper's options instance or effective dictionary id changes), not on
 every pump tick. Together with the source-identity rebind this removes
 steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
+
+### Source lineage stamp
+
+A restore, revert, purge and recreate, or alias move re-stamps the source tree's registry lineage (`TreeRegistryEntry.Lineage`, #4537). A batch the source read before that re-stamp can still reach a peer afterwards, as a push already in flight or a retry. If the peer has meanwhile drained the new lineage, the batch plants a source-origin row the new lineage never held, and the peer's next delete reconcile, aligned with the new lineage, would delete it on the source's behalf although the source never deleted it ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). So:
+
+- **Every push is stamped.** It carries the lineage the shipper's binding was read under (`ReplicationBatch.SourceLineage`, sent as the `x-lattice-replication-source-lineage` call header). The shipper reads the physical id and the lineage from one registry row, which an alias move re-stamps in the same write, so the pair is consistent.
+  - The stamp is `Guid.Empty` while the lineage is unknown, which happens briefly when a notified rebind finds the registry already moved on.
+  - There is no stamp when the registry tracks no lineage for the tree.
+  - A liveness probe carries no records and is not stamped.
+- **A binding whose lineage changes forces a gap.** The shipper first reads each partition's next sequence of the newly bound log as a boundary, then takes the peer off the log ([Forced gap](#forced-gap-a-peer-taken-off-the-log)).
+  - Only a move from one lineage to another is a change. A tree first registered after its shipper bound it replaced nothing, and a restart or backstop re-resolve that reads the same lineage is no change. A read that finds no lineage, such as a tree unregistered for a recreate, keeps the last lineage seen, so the recreate's new lineage is still compared against it.
+  - Every record below the boundary was appended before the re-seed marker, so the export that settles the re-seed carries it.
+  - The shipper consumes such a record without shipping it for as long as the binding holds, the re-seed rewind included, so the rewind cannot loop on it.
+  - This covers a purge and recreate too, whose old-lineage records stay in the same log. No old-lineage write lands after the re-stamp, so they are all below the boundary.
+  - A move of the physical log under an unchanged lineage, such as a resize, is no gap and keeps the replay it always had.
+- **A refusal re-resolves the binding.** A peer refuses a batch stamped with a lineage it did not drain (see [Snapshot bootstrap](snapshot-bootstrap.md#source-lineage-gate)). The ack reports `ReplicationAck.SourceLineageRefused` and the cursor holds. At the end of the tick the shipper resolves its binding again:
+  - A stale binding rebinds, and never re-sends the old log.
+  - A current, known binding means the peer drained another lineage, so the shipper takes the peer off the log, and the re-seed drains the current lineage.
+  - An unknown binding only backs off until the next resolve.
 
 ### Doorbell
 
@@ -760,6 +780,18 @@ The shipper releases its own hold, conditionally in the hold grain so a hold a c
 
 An old silo never records a hold, and a host that has none behaves exactly as before.
 
+#### Cross-tree decision purge hold
+
+A receiver settles a cross-tree atomic write with a barrier that waits for every participating tree (see [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)). A tree that reaches it by a bootstrap or re-seed arrives through the decision row its export carries; once the origin has purged that row, the export carries only the sub-saga's committed rows, and a sibling that already delegated to the barrier waits for ever ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). So on a replicating host the transaction registry keeps a cross-tree sub-saga's expired tombstone, after the WAL guard above has cleared it, until `ICrossTreeDecisionHold` releases it:
+
+- **Boundary.** Each participant tree records, the first time its own registry asks, every WAL partition's next sequence (`ICrossTreeHoldTrackerGrain`, keyed by the operation id). Its decision is forgotten by then, so its terminals lie below. A participant whose log was rebound since is re-recorded against the new log.
+- **Peers.** For each participant, the configured peers when the tree is replicated, together with every peer that ever attached a shipper to it (`ICrossTreePeerEnrolmentGrain`, keyed by the tree). Removing a peer from the topology only detaches it, so a detached peer still holds: it can be added back against barriers that still need the decision.
+- **Acknowledged.** Each such peer's shipper must publish durable read positions at or past the participant's boundary on every partition it reads. A receiver acknowledges a cross-tree terminal only once its barrier recorded it, so an acknowledgement past the boundary means the peer's barrier has the participant's arrival. A detached shipper, one bound to another log, and one that has published nothing all hold.
+
+The coordinator also **stamps** the decision before any participant finalizes: it reads each participating tree's snapshot export epoch (`IReplicationExportEpochGrain`, which every export advances before it opens) after the decision is durable, and records the stamps on every participant's cross-tree membership. Every decision row and every shipped terminal of the operation carries the full stamp vector, so a receiver can tell an export that opened after the decision from one that opened before it (see [Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)). A failed stamp read fails the finalize, which the coordinator retries. Stamping ships with the hold and is covered by the same capability check, so an operation without stamps was decided by a silo that predates both.
+
+The decision is purged only once every participant has a boundary and every peer of every participant is past it; once every participant was released, the tracker keeps only a completed marker. A failed check holds. While any silo of the cluster predates the hold (does not host `ICrossTreeHoldTrackerGrain`), the hold releases nothing, and the snapshot export refuses every request with a transient deferral (gRPC `Unavailable`) that the receiver's bootstrap retries, because an older registry can purge a cross-tree decision on its own rules and the export would then carry the participant as bare committed rows.
+
 ### Replay filter: a non-contiguous stream over purged sagas
 
 A host that ran without replication, or before the decision-purge guard ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) existed, purged saga decisions on retention alone while the write-ahead log kept their records. So does a registry activation on a silo that predates the guard, during a rolling upgrade. Re-shipping such a saga to a peer strands it there: nothing can settle it ([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A stream that delivers the log in order delivers every saga whole, prepares before terminals, and is never filtered. Only a **replay** is: after a re-seed rewinds the shipper to the lowest retained entry, or after a source-identity rebind restarts it on a new log.
@@ -803,6 +835,34 @@ Beside every batch, and on an idle link's liveness probe, the shipper ships `Rep
   - The receiver ignores an aggregate from an older generation than one it has seen.
 
 A rebind discards the floors of the retired log. A replay filter a rebind begins clears once every partition has passed its horizon. A partition never consumed counts as being at offset 0, so it no longer holds the filter open ([#4656](https://github.com/NSTA1/Orleans.Lattice/issues/4656)).
+
+### Tombstone reap gate
+
+[Tombstone compaction](../lattice/tombstone-compaction.md) reaps a tombstone once it is older than `TombstoneGracePeriod`. On its own that is a wall-clock bound. A write older than a delete can be delivered after the delete's tombstone was reaped, after a partition, a paused shipper or a stalled link that lasted longer than the grace period. It then finds no tombstone and resurrects the key on that replica only ([#4615](https://github.com/NSTA1/Orleans.Lattice/issues/4615)).
+
+`AddLatticeReplication` therefore registers a reap gate (`ReplicationTombstoneReapGate`). Each compaction batch of a replicated tree reads a ceiling from it. A tombstone, or a TTL-expired entry, is reaped only when it is past the grace period **and** stamped strictly below the ceiling `min(D, P)`:
+
+- **D: nothing it beats is still on its way here.** This bound covers every origin that has pushed the tree here, and every configured peer.
+  - It is the receiver tree frontier's applied low watermark for the origin: every write of the origin below it is applied here.
+  - It is clamped below every write of the origin that the tree's causal-apply buffer or dead-letter queue still holds, or that the last installed export lacked.
+  - A write marked lost is never applied, so it holds nothing back. A dead letter clamps until an operator discards it, at which point it is lost.
+  - An origin with no exact watermark makes D zero: the tree is degraded, the origin is pending, or its re-seed is outstanding.
+  - An origin's clock floor also bounds every write it authors later, so D covers a write that has not been authored yet.
+- **P: every peer applied every delete this cluster stamped below it.** This bound covers every configured peer.
+  - It is the peer's shipper reap watermark: the [applied low watermark](#applied-low-watermark-what-the-shipper-vouches-for), computed the same way but never shipped. It is withheld while the peer is off the log.
+  - A peer whose re-seed rewind passed a trimmed delete record counts once its watermark resumes past it, because the re-seed export carried the tombstone as a committed delete.
+  - A peer that has no watermark yet makes P zero.
+  - The reap watermark is not frozen by a key filter: it claims only the peer's in-scope writes, and the peer never holds an out-of-scope key. Any change to the filter withholds it until the cursor covers a floor read under the new scope, so a key brought into scope is never reaped on the strength of the old one.
+
+A tombstone the ceiling keeps counts as still inside the grace window, so its leaf re-scans it on a later pass. A tree replication is not enabled for, or a replicated tree with no peer and no origin, reaps on the grace period alone. A failure to read the ceiling reaps nothing.
+
+The gate trades storage for convergence. Tombstones accumulate on a replicated tree for as long as:
+- any origin is degraded or pending;
+- a write is parked or dead-lettered;
+- a peer is off the log;
+- a peer is unreachable.
+
+A peer that is gone for good blocks every reap of its trees until it is removed from the topology and detached (see [`WalRetention`](configuration.md#walretention)). The `orleans.lattice.replication.tombstone_reap.bound` counter reports which constraint bounds each ceiling (see [Observability](observability.md)).
 
 ### Deferred cursor persistence
 

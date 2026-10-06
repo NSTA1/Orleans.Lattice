@@ -47,7 +47,13 @@ public interface ILatticeReplicationDeadLetters
     /// retry or discard. A replay the durable receive fence of an
     /// in-flight restore saga defers (<see cref="ApplyResult.Deferred"/>
     /// is <see langword="true"/>) applied nothing, so the entry also stays
-    /// parked and can be replayed again once the fence lifts. Returns
+    /// parked and can be replayed again once the fence lifts. The replay
+    /// runs under the source lineage the entry's sender stamped
+    /// (<see cref="DeadLetterEntry.SourceLineage"/>); a replay refused
+    /// because that lineage is not the one the tree has drained since
+    /// (<see cref="ApplyResult.SourceLineageRefused"/> is
+    /// <see langword="true"/>) applied nothing either, and the entry stays
+    /// parked for the operator to discard. Returns
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
@@ -63,6 +69,25 @@ public interface ILatticeReplicationDeadLetters
     /// registry decision is written.
     /// </summary>
     Task<bool> PoisonSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator resolution of a quarantined receiver-side saga
+    /// (issue #4692): once the cause - a malformed record, a contradictory
+    /// decision, a misconfigured cluster id - is fixed, removes
+    /// <paramref name="transactionId"/> from <paramref name="originClusterId"/>
+    /// from <paramref name="treeId"/>'s durable quarantine set, so its records
+    /// are applied again instead of parked at once, and the bounded set regains
+    /// capacity. The saga stays recorded as retired by its re-seed, so a record
+    /// of it that keeps failing is quarantined again, never re-seeded. The
+    /// records already parked are not touched: inspect them with
+    /// <see cref="ListAsync"/> and remove them with <see cref="DiscardAsync"/>.
+    /// Returns <see langword="false"/> when the saga was not quarantined.
+    /// </summary>
+    Task<bool> ReleaseQuarantinedSagaAsync(
         string treeId,
         string originClusterId,
         Guid transactionId,

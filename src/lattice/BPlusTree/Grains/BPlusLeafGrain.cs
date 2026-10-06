@@ -3092,7 +3092,24 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod)
+    /// <summary>
+    /// Whether an entry stamped <paramref name="timestamp"/> may be reaped under
+    /// <paramref name="reapCeiling"/> (issue #4615): an ungated pass reaps on the
+    /// grace period alone; a gated one also needs the stamp strictly below the
+    /// ceiling, below which no write the entry beats can still arrive. An entry
+    /// the ceiling keeps counts as still inside the grace window, so the leaf
+    /// does not stamp its compaction version and a later pass re-scans it.
+    /// </summary>
+    private static bool BelowReapCeiling(HybridLogicalClock timestamp, HybridLogicalClock? reapCeiling) =>
+        reapCeiling is not { } ceiling || timestamp.CompareTo(ceiling) < 0;
+
+    public Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling: null);
+
+    public Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling);
+
+    private async Task<LeafCompactionResult> CompactTombstonesCoreAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling)
     {
         // Clock starts here, not at the scan loop. The replay barrier below is
         // part of the time this call holds the leaf, and on a cold activation it
@@ -3244,7 +3261,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (lww.IsTombstone)
                 {
-                    if (lww.Timestamp.WallClockTicks <= cutoff)
+                    if (lww.Timestamp.WallClockTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, false));
                     }
@@ -3263,7 +3280,7 @@ internal sealed partial class BPlusLeafGrain(
                 // whose clock is behind could re-send the pre-expiry LwwValue).
                 if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
                 {
-                    if (lww.ExpiresAtTicks <= cutoff)
+                    if (lww.ExpiresAtTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, true));
                     }
@@ -4562,9 +4579,24 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private bool _leafStateCleared;
 
-    public async Task ClearGrainStateAsync()
+    public Task ClearGrainStateAsync() => ClearGrainStateCoreAsync(forPurge: false);
+
+    /// <inheritdoc />
+    public Task ClearGrainStateForPurgeAsync() => ClearGrainStateCoreAsync(forPurge: true);
+
+    private async Task ClearGrainStateCoreAsync(bool forPurge)
     {
         using var routingMutation = EnterLeafRoutingMutation();
+
+        // A purge commits to clearing this leaf before anything is cleared (issue
+        // #4700): the mark is what lets a recovery of the tree re-create the leaf
+        // empty, and tell it apart from a leaf whose row was lost. A failure here
+        // clears nothing, and the purge retries.
+        if (forPurge && RowRecord is { } purgeRecord)
+        {
+            await purgeRecord.MarkPurgeClearedAsync();
+        }
+
         // Retire the replay BEFORE the clear (issue #2871). The replay now runs
         // concurrently with requests, so an in-flight one would otherwise
         // re-hydrate the cache from the WAL immediately after this clear -
@@ -4578,7 +4610,24 @@ internal sealed partial class BPlusLeafGrain(
         // they cannot be computed at all. A pin left behind here is a permanent
         // WAL retention floor: the GC resolves the leaf, activates it, finds no
         // tree id bound, and gets NotDriven for the life of the deployment.
-        await UnregisterMaterialiserPinsAsync();
+        //
+        // A purge only NAMES the pins here and retires them last, once the row is
+        // gone (issue #4700). A purge interrupted between the two leaves the leaf
+        // marked but rowful, and recovery hands its data back: had its pins gone
+        // first, the WAL GC - floored by the tree's other leaves alone - could trim
+        // past its durable checkpoint, and the recovered leaf would latch
+        // LeafProjectionStaleException. Once the row is gone the pins protect
+        // nothing; one left by an interruption is retired by the GC's orphan sweep,
+        // which finds no tree id bound, or replaced by the block pin a re-create seeds.
+        MaterialiserPinRetirement? purgePins = null;
+        if (forPurge)
+        {
+            purgePins = await ResolveMaterialiserPinRetirementAsync();
+        }
+        else
+        {
+            await UnregisterMaterialiserPinsAsync();
+        }
 
         // Stop any new snapshot capture, and let one already under way land,
         // before the snapshot storage is deleted below (issue #4383). A capture
@@ -4629,7 +4678,16 @@ internal sealed partial class BPlusLeafGrain(
             // The row record goes last of all (issue #4654): until it is deleted, a
             // rowless activation of this leaf fails closed, so an interrupted clear
             // never leaves a leaf that reads as empty while its snapshot survives.
-            await ClearRowRecordAsync();
+            // A purge keeps it, marked as cleared by the purge, for recovery to
+            // find (issue #4700); the purge deletes it once the shard is purged.
+            if (!forPurge)
+            {
+                await ClearRowRecordAsync();
+            }
+            else
+            {
+                await RetireMaterialiserPinsAsync(purgePins);
+            }
         }
         finally
         {

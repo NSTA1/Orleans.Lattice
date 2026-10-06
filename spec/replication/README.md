@@ -23,9 +23,12 @@ replication says nothing about it.
 | [`ReplicationCausalDelivery.tla`](ReplicationCausalDelivery.tla), [`.cfg`](ReplicationCausalDelivery.cfg), [`.manifest.json`](ReplicationCausalDelivery.manifest.json) | The focused companion module: causal-dependency delivery under head-of-line blocking (below). |
 | [`causal-delivery-mutations/`](causal-delivery-mutations/) | The companion module's mutation catalogue. |
 | [`ReplicationCausalDelivery.Refinement.md`](ReplicationCausalDelivery.Refinement.md) | The companion module's refinement note. |
-| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) | The second companion module: an in-place re-bootstrap after the source reaped a delete (below). |
+| [`ReplicationReBootstrap.tla`](ReplicationReBootstrap.tla), [`.cfg`](ReplicationReBootstrap.cfg), [`.manifest.json`](ReplicationReBootstrap.manifest.json) and the [`Floor`](ReplicationReBootstrap.Floor.cfg) variant configuration | The second companion module: an in-place re-bootstrap after the source reaped a delete, and the bootstrap drop floor (below). |
 | [`rebootstrap-mutations/`](rebootstrap-mutations/) | The second companion module's mutation catalogue. |
 | [`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md) | The second companion module's refinement note. |
+| [`ReplicationLowWatermark.tla`](ReplicationLowWatermark.tla), [`.cfg`](ReplicationLowWatermark.cfg), [`.manifest.json`](ReplicationLowWatermark.manifest.json) and four variant configurations | The third companion module: the low watermark that makes the causal-dependency check sound (below). |
+| [`lowwatermark-mutations/`](lowwatermark-mutations/) | The third companion module's mutation catalogue. |
+| [`ReplicationLowWatermark.Refinement.md`](ReplicationLowWatermark.Refinement.md) | The third companion module's refinement note. |
 
 ## What is modelled
 
@@ -73,6 +76,7 @@ holds.
 | `NoReflection` | Invariant | No cluster admits its own write, received from a peer, into its apply pipeline. |
 | `CursorNeverSkipsUnshipped` | Invariant | Every ship-worthy entry at or below a shipper's cursor has been absorbed by its destination. |
 | `BootstrapHandoffLosesNothing` | Invariant | After the handoff, every write the bootstrapped cluster did not author is absorbed there or still on its way and will be accepted. |
+| `CausalOrder` | Invariant | No replica holds a write without the write its dependency names. |
 | `NoRelay` | Action property | No delivery carries a third cluster's write. |
 | `DedupNeverDropsNew` | Action property | An entry is dropped as a duplicate only if the receiver has absorbed it. The #1060 class. |
 | `EventualConvergence` | Liveness | Once writing stops, every replica of every key reaches the value of all its writes. |
@@ -114,21 +118,57 @@ can carry every delete the source ever made. Production reaps a tombstone after
 a trim that did not wait for it. A delete that is both behind the trim point and
 reaped then reaches the receiver by no path: not the stream, not the export.
 
-`ReplicationReBootstrap.tla` checks the design of #4537, a reconcile in the
-re-bootstrap's drain, over one key and two clusters. Before the export opens,
-the receiver pre-captures each live entry whose origin is the source. A
-pre-captured key the export does not carry is deleted, attributed to the source
-at the captured HLC. The reconcile fabricates a write, so it is gated on every
-other way a key can be missing from an export: the export's scope, a reshard
-during the scan, and a restore, purge or rebind since the receiver's copy was
-aligned with the source. `ReconcileDeletesOnlyDeleted` checks that every
+`ReplicationReBootstrap.tla` checks the reconcile in the re-bootstrap's
+drain, over one key and two clusters. A live source-origin entry the receiver
+pre-captured at export open, and the export does not carry, is deleted at the
+captured HLC when the receiver is aligned with the source's lineage (#4537,
+built by #4647). A row of another origin the export does not carry is deleted
+when its HLC is below the source's low watermark for that origin at open
+(#4549, built by #4675). The reconcile fabricates a write, so it is gated on every other way a
+key can be missing from an export: the export's scope, a reshard, resize or
+soft delete during the scan, and a restore, purge or rebind since the
+receiver's copy was aligned. `ReconcileDeletesOnlyDeleted` checks that every
 fabricated tombstone is dominated by a delete the source really authored.
-`EventualConvergenceReapedDeleteNotReconciled` is current production, with no
-reconcile.
 
-A key the receiver holds under another origin cannot be reconciled: the
-receiver cannot prove the source held that value. The module states that
-residual exactly, as `Residual`, and #4549 owns it.
+A full re-bootstrap also installs a drop floor at the source's per-origin
+applied low watermark (#4549, built by #4675), so a third cluster's write
+still on its way to the receiver, which the source had applied, deleted and
+reaped, cannot resurrect the key. The floor defers rather than drops until
+its import closes stable, is cleared when the import closes unstable, never
+covers the source's own origin, and arms the receiver's shard roots so a
+write admitted before it is refused rather than land after the reconcile
+scan. The Floor variant configuration adds the third cluster that needs.
+
+The module also checks the reap guard (#4615, built by #4678), the refusal of
+a batch read under a source lineage the receiver has left (#4673, built by
+#4681), the re-seed a receiver
+restore and a detach force, and the source-restore contract: a unilateral
+source restore never fabricates a delete, peers may diverge after one, and a
+coordinated restore converges them. `EventualConvergence` holds on every
+behaviour with no unilateral source restore, with no other carve-out, and
+after one the receiver keeps every write of another origin until a
+coordinated restore runs.
+
+## The low-watermark companion
+
+A causal dependency names one write: the other origin's write at an HLC the
+author held. `Replication.tla` and `ReplicationCausalDelivery.tla` check
+`CausalOrder` with dependencies met on the exact write merged, which is how
+production meets them since #4640. The per-origin high-water mark used before
+cannot answer the question, because an origin's HLCs arrive out of order
+(#1060); `CausalOrderMaxHlcFrontier` reproduces it.
+
+Production also meets a dependency once its HLC is strictly below the low
+watermark the origin ships and the write is not held back unapplied, so a
+receiver that has forgotten an identity still releases its dependents.
+`ReplicationLowWatermark.tla` checks that half (#4586): one origin shipping over
+two WAL partitions, each sealing a clock floor and refusing a fresh stamp
+below it, the watermark published with its offset and counted only once the
+acknowledged cursor passes it, the minimum over partitions clamped below open
+prepares, the capability gate, dead-letter backpressure and lost marks
+(#4603), the bounded identity record, and the bootstrap pin. Four variant
+configurations each add sagas, transport loss, a second dead letter or a
+bootstrap on one partition.
 
 ## Production defects this module found
 
@@ -144,8 +184,9 @@ lands as the check that reintroducing it is caught:
   held only in memory, a bootstrap pin that replaced the vector, and a pin
   that did not drain (`EventualConvergenceParkLostWakeup`,
   `EventualConvergenceVolatileCausalBuffer`,
-  `EventualConvergencePinRegressesVector`,
-  `EventualConvergencePinSkipsDrain`).
+  `EventualConvergencePinSkipsDrain`). The pin's vector is no longer read by
+  the dependency check, so `EventualConvergencePinRegressesVector` was
+  retired with #4586's fix.
 - #4465, fixed by #4477 - a duplicate of an entry still in flight was
   acknowledged, so an aborted first delivery was lost
   (`CursorNeverSkipsUnshippedDuplicateOfParkingAcked`).
@@ -167,24 +208,34 @@ lands as the check that reintroducing it is caught:
   deferred (a coordinated restore's receive fence, an in-flight duplicate) was
   dropped and the handoff pinned past it
   (`BootstrapHandoffLosesNothingDrainDropsDeferred`).
+- #4586, fixed by #4650, #4640, #4663, #4658 and #4674 - a dependency was met
+  once the origin's high-water mark reached its HLC, which is not
+  downward-closed, so a dependent was released before its dependency
+  (`CausalOrderMaxHlcFrontier`, `CausalOrderDeliveryMaxHlcFrontier` in the
+  causal-delivery companion, and `CausalOrderBootstrapInstallsHighWaterMark` in
+  the low-watermark companion).
+- #4603, fixed by #4612 - a full dead-letter queue evicted its oldest entry,
+  and a discarded dead letter left no lost mark
+  (`EventualConvergenceDeadLetterEvictsOldest` and
+  `CausalOrderDiscardLeavesNoMark`, in the low-watermark companion).
+- #4537 (fixed by #4647), #4549 (#4675), #4615 (#4678) and #4673 (#4681) - the
+  re-bootstrap companion's: a reaped delete the drain did not reconcile, of a
+  source-origin key and then of any origin's; a tombstone reaped on the wall
+  clock alone; and a stale-lineage batch applied after realignment
+  (`EventualConvergenceReapedDeleteNotReconciled`,
+  `EventualConvergenceForeignRowNotReconciled` and, for a third origin's
+  write still in flight, `EventualConvergenceNoBootstrapFloor`,
+  `EventualConvergenceReapInsideGrace`,
+  `ReconcileDeletesOnlyDeletedStaleLineageApplied`).
 
 [`Refinement.md`](Refinement.md#defects-found-and-fixed) lists them with the
 fixes.
 
 ## Open production gaps
 
-- #4615 - a tombstone is reaped on the wall clock alone, so a write it beats
-  that arrives later resurrects the key (`EventualConvergenceReapInsideGrace`,
-  in the re-bootstrap companion).
-- #4586 - the causal dependency check compares against a high-water mark that
-  is not downward-closed; no property checks causal order until its fix.
-- #4537 - an in-place re-bootstrap cannot reconcile a delete whose source
-  tombstone was reaped (`EventualConvergenceReapedDeleteNotReconciled`, in
-  the re-bootstrap companion).
-- #4549 - the residual of #4537: a reaped delete of a key the receiver holds
-  under another origin.
-[`ReplicationReBootstrap.Refinement.md`](ReplicationReBootstrap.Refinement.md#territory-owned-by-other-open-issues)
-marks the rows they touch.
+None: every row of the four refinement notes is Yes. Saga atomicity across a
+bootstrap (#4683, #4684, #4685) is the atomic-commit cross-cluster module's,
+not this directory's; no row here depends on it.
 
 ## How to run TLC
 
@@ -201,11 +252,16 @@ two-arm experiment, in CI; see [the spec README](../README.md#ci-decision).
 ## Last checked
 
 On tla2tools v1.7.4 with a Temurin-compatible 17 JDK, every property in
-`Replication.cfg` held with deadlock checking on, over 308,258 distinct states
-(1,604,442 generated) at a complete-search depth of 17. Every property in
-`ReplicationCausalDelivery.cfg` held over 19,753 distinct states (64,330
+`Replication.cfg` held with deadlock checking on, over 306,494 distinct states
+(1,592,864 generated) at a complete-search depth of 17. Every property in
+`ReplicationCausalDelivery.cfg` held over 19,161 distinct states (62,250
 generated) at a depth of 16. Every property in `ReplicationReBootstrap.cfg`
-held over 56,135 distinct states (163,127 generated) at a depth of 17.
+held over 633,326 distinct states (1,898,971 generated) at a depth of 26,
+and in its Floor variant over 449,383 (1,327,241 generated) at a depth of
+21.
+Every property in `ReplicationLowWatermark.cfg` held over 330,842 distinct
+states (1,669,854 generated) at a depth of 26, and in its Sagas, Loss,
+DeadLetters and Bootstrap variants over 181,862, 27,522, 19,449 and 43,757.
 
 ## Counts
 
@@ -218,6 +274,7 @@ This table is the one place this directory states them; see
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `Replication` | 4 | 3 | 14 | 22 | 19 | 308,258 |
-| `ReplicationCausalDelivery` | 1 | 1 | 5 | 4 | 5 | 19,753 |
-| `ReplicationReBootstrap` | 2 | 1 | 10 | 12 | 11 | 56,135 |
+| `Replication` | 5 | 3 | 14 | 22 | 20 | 306,494 |
+| `ReplicationCausalDelivery` | 2 | 1 | 5 | 6 | 6 | 19,161 |
+| `ReplicationReBootstrap` | 2 | 1 | 18 | 33 | 19 | 633,326 |
+| `ReplicationLowWatermark` | 2 | 1 | 18 | 21 | 19 | 330,842 |

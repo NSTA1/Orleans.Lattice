@@ -309,4 +309,15 @@ internal sealed record TreeRegistryEntry
     /// legacy rows is unknown.
     /// </summary>
     [Id(20)] public Guid? Lineage { get; init; }
+
+    /// <summary>
+    /// The highest bootstrap drop-floor epoch installed for this physical tree
+    /// (issue #4549), or <c>0</c> when none has been. Every shard root of the
+    /// tree refuses a replicated write admitted under an older epoch, and a shard
+    /// root that activates later - a split or reshard target included - reads it
+    /// here before admitting its first replicated write. Raised only through
+    /// <see cref="ILatticeRegistry.RaiseReplicationFloorEpochAsync(string, long)"/>;
+    /// never lowered.
+    /// </summary>
+    [Id(21)] public long ReplicationFloorEpoch { get; init; }
 }

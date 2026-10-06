@@ -22,7 +22,7 @@ namespace Orleans.Lattice.Backup.Tests;
 /// </para>
 /// </summary>
 [Category("Integration")]
-public sealed class LatticeBackupIncrementalSagaConsistencyTests
+public sealed partial class LatticeBackupIncrementalSagaConsistencyTests
 {
     private TestCluster _cluster = null!;
 

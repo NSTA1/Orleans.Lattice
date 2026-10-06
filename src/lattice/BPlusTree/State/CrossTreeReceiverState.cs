@@ -56,4 +56,12 @@ internal sealed class CrossTreeReceiverState
 
     /// <summary>Wall-clock UTC tick stamped when the first terminal arrives; drives diagnostics.</summary>
     [Id(6)] public long StartedAtTicks { get; set; }
+
+    /// <summary>
+    /// The operation's decision stamps (issue #4684), or <see langword="null"/>
+    /// while none has been recorded: an operation decided by a silo that
+    /// predates stamping, whose decision precedes every export its origin
+    /// serves.
+    /// </summary>
+    [Id(7)] public Dictionary<string, long>? DecisionStamps { get; set; }
 }

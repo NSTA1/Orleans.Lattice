@@ -385,7 +385,11 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceFrontierHeader),
                 out var parsed))
         {
-            shipped = parsed;
+            shipped = ReplicationAckedPositions.TryParse(
+                    GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.AckedPositionsHeader),
+                    out var acked)
+                ? parsed with { AckedPositions = acked }
+                : parsed;
         }
 
         try
@@ -405,6 +409,24 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
                 originClusterId, treeName);
             return null;
         }
+    }
+
+    /// <summary>
+    /// The source lineage the sender stamped on the push (issue #4673):
+    /// <see langword="null"/> when the header is absent (a sender that predates
+    /// it), the parsed value when it is a <see cref="Guid"/> in the <c>D</c>
+    /// format, and <see cref="Guid.Empty"/> - which matches no drained lineage -
+    /// when it is malformed.
+    /// </summary>
+    private static Guid? ReadSourceLineage(ServerCallContext context)
+    {
+        var header = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.SourceLineageHeader);
+        if (header is null)
+        {
+            return null;
+        }
+
+        return Guid.TryParseExact(header, "D", out var lineage) ? lineage : Guid.Empty;
     }
 
     /// <inheritdoc />
@@ -482,6 +504,18 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
             };
         }
 
+        // A batch the sender read under a source lineage this tree no longer
+        // holds - pushed before a source restore, purge or alias move, and
+        // arriving after this tree drained the new lineage - must not land
+        // (issue #4673). The origin was authenticated above, so the header is
+        // the authenticated sender's own claim; a malformed one vouches for no
+        // lineage and is refused like a mismatch. The check itself runs at the
+        // applier's admission seam (issue #4707), which every apply path - this
+        // push, the causal-buffer drain and a dead-letter replay - passes
+        // through: the stamp rides into it on the lineage scope, and is parked
+        // or dead-lettered with any entry that does not apply now.
+        var stampedLineage = ReadSourceLineage(context);
+
         // Time the apply call so the flow-control policy can shape
         // its hint against the real receiver-side cost of the just-
         // applied batch. Stopwatch.GetTimestamp is allocation-free;
@@ -491,6 +525,9 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         var applyStart = Stopwatch.GetTimestamp();
         try
         {
+            using var lineageScope = stampedLineage is null
+                ? null
+                : ReplicationSourceLineageScope.Enter(request.OriginClusterId, stampedLineage, receiverLineage);
             result = await _applier.ApplyBatchAsync(entries, context.CancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
@@ -518,6 +555,26 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         }
 
         var applyDurationMs = Stopwatch.GetElapsedTime(applyStart).TotalMilliseconds;
+
+        // The applier's admission seam refused the batch: the sender read it
+        // under a source lineage this tree no longer holds (issues #4673,
+        // #4707). Tell it so, and it re-resolves its binding - re-seeding this
+        // peer when its binding is current - rather than re-ship the batch.
+        if (result.SourceLineageRefused)
+        {
+            return new ReplicationAckBox
+            {
+                Value = new ReplicationAck
+                {
+                    Accepted = false,
+                    HighestAppliedHlc = HybridLogicalClock.Zero,
+                    BootstrapEpoch = bootstrapEpoch,
+                    ReceiverLineage = receiverLineage,
+                    SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion,
+                    SourceLineageRefused = true,
+                },
+            };
+        }
 
         // Stamp the receiver-side blocked-floor pin (the lowest
         // staged HLC across every partially-buffered atomic batch on

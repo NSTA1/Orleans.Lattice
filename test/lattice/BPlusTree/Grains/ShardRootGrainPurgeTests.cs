@@ -47,7 +47,7 @@ public sealed partial class ShardRootGrainPurgeTests
 
         await harness.Grain.PurgeAsync();
 
-        await leaf.Grain.Received(1).ClearGrainStateAsync();
+        await leaf.Grain.Received(1).ClearGrainStateForPurgeAsync();
         Assert.That(harness.State.State.RootNodeId, Is.Null);
     }
 
@@ -75,9 +75,9 @@ public sealed partial class ShardRootGrainPurgeTests
         await harness.Grain.PurgeAsync();
 
         // Every leaf on the chain was cleared, in chain order.
-        await l0.Grain.Received(1).ClearGrainStateAsync();
-        await l1.Grain.Received(1).ClearGrainStateAsync();
-        await l2.Grain.Received(1).ClearGrainStateAsync();
+        await l0.Grain.Received(1).ClearGrainStateForPurgeAsync();
+        await l1.Grain.Received(1).ClearGrainStateForPurgeAsync();
+        await l2.Grain.Received(1).ClearGrainStateForPurgeAsync();
 
         // The depth-first pre-walk collected the root and both of its
         // internal children, and each was cleared exactly once.
@@ -104,7 +104,7 @@ public sealed partial class ShardRootGrainPurgeTests
 
         await harness.Grain.PurgeAsync();
 
-        await l0.Grain.Received(1).ClearGrainStateAsync();
+        await l0.Grain.Received(1).ClearGrainStateForPurgeAsync();
         await i0.Grain.Received(1).ClearGrainStateAsync();
         await i1.Grain.Received(1).ClearGrainStateAsync();
         await i2.Grain.Received(1).ClearGrainStateAsync();
@@ -126,7 +126,7 @@ public sealed partial class ShardRootGrainPurgeTests
 
         await harness.Grain.PurgeAsync();
 
-        await l0.Grain.Received(1).ClearGrainStateAsync();
+        await l0.Grain.Received(1).ClearGrainStateForPurgeAsync();
         await i0.Grain.Received(1).ClearGrainStateAsync();
         Assert.That(harness.State.State.RootNodeId, Is.Null);
     }
@@ -180,6 +180,7 @@ public sealed partial class ShardRootGrainPurgeTests
             var grain = Substitute.For<IBPlusLeafGrain>();
             grain.GetNextSiblingAsync().Returns(Task.FromResult(nextSibling));
             grain.ClearGrainStateAsync().Returns(Task.CompletedTask);
+            grain.ClearGrainStateForPurgeAsync().Returns(Task.CompletedTask);
             Factory.GetGrain<IBPlusLeafGrain>(id).Returns(grain);
             return new LeafNode(id, grain);
         }

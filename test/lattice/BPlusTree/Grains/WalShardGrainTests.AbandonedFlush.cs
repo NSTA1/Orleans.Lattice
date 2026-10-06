@@ -163,11 +163,13 @@ public partial class WalShardGrainTests
     [Test]
     public async Task A_trailing_hole_left_by_a_force_faulted_flush_is_not_exposed_and_its_reissue_is_seen()
     {
-        // The drain budget force-faults an in-flight flush at deactivation without
-        // resyncing the allocator, so the activation's next offset stays above the
-        // window. When that call then settles without landing, the window is a
-        // trailing hole: nothing is stored above it, and a recovered allocator
-        // issues it again. The readable head must not pass it.
+        // The deactivation drain cancels an in-flight flush, whose provider call is
+        // still in motion. When that call then settles without landing, the window
+        // is a trailing hole: nothing is stored above it, and a recovered allocator
+        // issues it again. The readable head must not pass it. (Here the failure
+        // handler's resync rewinds the allocator before the call settles; the head
+        // clamp's own detector, where that resync fails, is
+        // A_trailing_hole_is_not_exposed_when_the_post_failure_resync_fails.)
         var provider = new LateLandingWalStorageProvider(new InMemoryWalStorageProvider(), gatedOffset: 0);
         var options = new LatticeOptions
         {
@@ -197,6 +199,98 @@ public partial class WalShardGrainTests
         });
     }
 
+    [Test]
+    public async Task A_trailing_hole_is_not_exposed_when_the_post_failure_resync_fails()
+    {
+        // The head clamp's own detector (issue #4699 review). The flush deadline
+        // abandons the call for offset 0, and the post-failure resync that would
+        // rewind the allocator fails, so the activation keeps serving reads with
+        // its next offset above the window and nothing in flight. Once the call
+        // settles without landing, the window is a trailing hole: nothing is stored
+        // above it, and a recovered allocator issues it again. Only the clamp at
+        // highest stored + 1 keeps it unexposed.
+        var provider = new LateLandingWalStorageProvider(new InMemoryWalStorageProvider(), gatedOffset: 0);
+        var options = new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 8,
+            WalFlushTimeout = TimeSpan.FromMilliseconds(300),
+        };
+        var first = await CreateGrainAsync(provider, options);
+        provider.FailNextHighestRead();
+        var abandoned = first.AppendAsync(MakeEntry("k0"), CancellationToken.None);
+        await provider.OffsetGated.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.That(async () => await abandoned, Throws.TypeOf<TimeoutException>());
+        Assert.That(provider.HighestReadFailed.Task.IsCompleted, Is.True, "the post-failure resync ran and failed");
+
+        provider.Fail();
+        await provider.Settled.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        var windows = WalAbandonedFlushRegistry.For(provider, TreeId, 0);
+        var stopAt = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (windows.LowestUnsettledStart() is not null && DateTime.UtcNow < stopAt)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(windows.LowestUnsettledStart(), Is.Null, "the abandoned call has settled, so it no longer bounds the head");
+        var head = await first.GetReadableHeadAsync(CancellationToken.None);
+        var page = await first.ReadAsync(0L, 256, CancellationToken.None);
+
+        var second = await CreateGrainAsync(provider, options);
+        var reissued = await second.AppendAsync(MakeEntry("k1"), CancellationToken.None);
+        var seen = (await second.ReadAsync(head, 256, CancellationToken.None)).Entries.Select(e => e.Sequence).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(head, Is.EqualTo(0L), "the readable head does not pass the trailing hole");
+            Assert.That(page.NextSequence, Is.EqualTo(0L), "a cursor read does not advance past the trailing hole either");
+            Assert.That(reissued, Is.EqualTo(0L), "the recovered allocator issues the hole's offset again");
+            Assert.That(seen, Does.Contain(reissued), "a reader resuming from the head sees the reissued write");
+        });
+    }
+    [Test]
+    public async Task Quiesce_of_a_reactivated_shard_is_not_quiesced_while_its_predecessors_abandoned_flush_can_land()
+    {
+        // Issue #4699: the predecessor activation abandoned its call for offset 0 at
+        // the flush deadline, and only the process-wide registry remembers it. Were
+        // the new activation's quiesce to report a stable tail, the move's copy
+        // would take {1} and the late landing at 0 would stay behind on the source.
+        var provider = new LateLandingWalStorageProvider(new InMemoryWalStorageProvider(), gatedOffset: 0);
+        var options = new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 8,
+            WalFlushTimeout = TimeSpan.FromMilliseconds(300),
+        };
+        var first = await CreateGrainAsync(provider, options);
+        var abandoned = first.AppendAsync(MakeEntry("k0"), CancellationToken.None);
+        await provider.OffsetGated.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        await first.AppendAsync(MakeEntry("k1"), CancellationToken.None);
+        Assert.That(async () => await abandoned, Throws.TypeOf<TimeoutException>());
+
+        var second = await CreateGrainAsync(provider, options);
+        var refused = await second.QuiesceForMoveAsync(0, TimeSpan.FromMinutes(1), CancellationToken.None);
+
+        provider.Open();
+        await provider.Landed.Task.WaitAsync(TimeSpan.FromSeconds(15));
+        // The provider task completes just after it signals the landing; poll the
+        // quiesce until the registry sees it settled.
+        var settled = await second.QuiesceForMoveAsync(0, TimeSpan.FromMinutes(1), CancellationToken.None);
+        var stopAt = DateTime.UtcNow + TimeSpan.FromSeconds(15);
+        while (!settled.Quiesced && DateTime.UtcNow < stopAt)
+        {
+            await Task.Delay(20);
+            settled = await second.QuiesceForMoveAsync(0, TimeSpan.FromMinutes(1), CancellationToken.None);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused.Quiesced, Is.False, "the predecessor's abandoned call for offset 0 can still land under the copy");
+            Assert.That(refused.DrainIncomplete, Is.True);
+            Assert.That(settled.Quiesced, Is.True, "once the call has settled the tail is stable");
+            Assert.That(settled.HighestOffsetInclusive, Is.EqualTo(1L));
+        });
+    }
     /// <summary>
     /// <see cref="IWalStorageProvider"/> decorator whose call for one offset ignores
     /// cancellation and waits for the test, then either lands or fails: an abandoned
@@ -207,6 +301,8 @@ public partial class WalShardGrainTests
         private readonly TaskCompletionSource<bool> _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         private int _gatedOnce;
+
+        private int _failHighest;
 
         internal TaskCompletionSource OffsetGated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -247,9 +343,25 @@ public partial class WalShardGrainTests
         public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)
             => inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
 
-        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
-            => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+        /// <summary>
+        /// Makes the next <see cref="GetHighestOffsetAsync"/> call throw, then signals
+        /// <see cref="HighestReadFailed"/>: a failing post-failure resync, which reads
+        /// the provider's highest offset to rewind the allocator.
+        /// </summary>
+        public void FailNextHighestRead() => Volatile.Write(ref _failHighest, 1);
 
+        internal TaskCompletionSource HighestReadFailed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Exchange(ref _failHighest, 0) == 1)
+            {
+                HighestReadFailed.TrySetResult();
+                return Task.FromException<long>(new IOException("the resync's tail read failed"));
+            }
+
+            return inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+        }
         public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
             => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
 

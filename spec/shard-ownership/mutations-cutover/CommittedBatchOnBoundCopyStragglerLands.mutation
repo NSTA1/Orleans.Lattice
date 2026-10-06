@@ -1,0 +1,15 @@
+# Pairs with CommittedBatchOnBoundCopy. A straggling routed prepare is not refused
+# by a leaf that remembers the saga's discard, so it recreates a bucket on a copy
+# the saga left after the decision.
+MODULE: CommittedBatchOnBoundCopyStragglerLands
+TARGET: CommittedBatchOnBoundCopy
+CLASS: Invariant
+SUMMARY: a late prepare lands on a leaf that discarded the saga
+PERTURBS: Land
+
+--- FIND
+    /\ pend' = IF RoutedAdmits(c) /\ ~term[c][k] THEN [pend EXCEPT ![c][k] = TRUE] ELSE pend
+--- REPLACE
+    \* MUTATION: the leaf's memory of the discard does not refuse it.
+    /\ pend' = IF RoutedAdmits(c) THEN [pend EXCEPT ![c][k] = TRUE] ELSE pend
+--- END

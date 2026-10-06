@@ -132,7 +132,13 @@ internal sealed partial class ShardRootGrain
         // tree-deletion retry comes back to them.
         await ClearPendingLeavesForPurgeAsync();
 
-        await ClearTopologyAsync();
+        // A retry that finds the shard already purged finishes deleting the marked
+        // row records the earlier attempt recorded (issue #4700).
+        var purgeClearedLeafIds = state.State.PurgeClearedLeafRecords is { Count: > 0 } owed
+            ? new List<GrainId>(owed)
+            : new List<GrainId>();
+
+        await ClearTopologyAsync(forPurge: true, purgeClearedLeafIds);
 
         // Leave a purge tombstone rather than no row (issue #4503): a router that
         // still caches this physical copy must keep being refused, as it was in
@@ -141,12 +147,22 @@ internal sealed partial class ShardRootGrain
         // tree is never routed through an alias, so it keeps the empty row.
         if (TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
+            await DeletePurgeClearedLeafRecordsAsync(purgeClearedLeafIds);
             await state.ClearStateAsync();
             return;
         }
 
+        // The tombstone carries the leaves whose records the purge marked, in the
+        // same write that drops the topology naming them (issue #4700). Once it is
+        // durable no recovery can re-create them - the copy is purged - so their
+        // marked records are deleted, and the list with them. A failure part-way
+        // leaves the list for the purge's retry to finish.
         var purged = state.State;
-        state.State = new ShardRootState { IsPurged = true };
+        state.State = new ShardRootState
+        {
+            IsPurged = true,
+            PurgeClearedLeafRecords = purgeClearedLeafIds.Count > 0 ? purgeClearedLeafIds.Distinct().ToList() : null,
+        };
         try
         {
             await WriteShardStateAsync();
@@ -156,7 +172,35 @@ internal sealed partial class ShardRootGrain
             state.State = purged;
             throw;
         }
+
+        if (state.State.PurgeClearedLeafRecords is { Count: > 0 } toDelete)
+        {
+            await DeletePurgeClearedLeafRecordsAsync(toDelete);
+            state.State.PurgeClearedLeafRecords = null;
+            try
+            {
+                await WriteShardStateAsync();
+            }
+            catch
+            {
+                state.State.PurgeClearedLeafRecords = toDelete;
+                throw;
+            }
+        }
     }
+
+    /// <summary>
+    /// Deletes the row records a purge marked on the leaves it cleared, once the
+    /// shard is purged and nothing can re-create those leaves (issue #4700).
+    /// Idempotent; a failure propagates so the purge's retry finishes the work.
+    /// </summary>
+    private Task DeletePurgeClearedLeafRecordsAsync(IReadOnlyList<GrainId> leafIds) =>
+        BoundedFanOut.ForEachAsync(
+            leafIds,
+            BoundedFanOut.DefaultWidth,
+            id => id.TryGetGuidKey(out var leafKey, out _)
+                ? grainFactory.GetGrain<ILeafRowRecordGrain>(leafKey).ClearAsync()
+                : Task.CompletedTask);
 
     /// <inheritdoc />
     public Task<bool> IsRetiredAsync() => Task.FromResult(state.State.IsRetired);
@@ -345,7 +389,7 @@ internal sealed partial class ShardRootGrain
         try
         {
             await ClearPendingLeavesForPurgeAsync();
-            await ClearTopologyAsync();
+            await ClearTopologyAsync(forPurge: false);
 
             // Keep the moved-away fence, the delete flag and the registration;
             // drop everything that described the cleared topology.
@@ -381,30 +425,32 @@ internal sealed partial class ShardRootGrain
     /// Clears every leaf and internal node this shard routes to. Shared by
     /// <see cref="PurgeAsync"/> and <see cref="RetireAsync"/>; leaves the shard
     /// root's own record untouched, which each caller then clears or rewrites.
+    /// <para>
+    /// A purge clears each leaf with <see cref="IBPlusLeafGrain.ClearGrainStateForPurgeAsync"/>,
+    /// which marks the leaf's own row record as cleared by the purge before it
+    /// clears anything (issue #4700): a purge that dies part-way leaves rowless
+    /// leaves that recovery re-creates empty one by one, by their own mark, and
+    /// never a leaf the purge did not reach. A retirement is never recovered, so it
+    /// clears leaves outright. Every leaf the purge cleared is added to
+    /// <paramref name="purgeClearedLeafIds"/>, so the purge can delete their marked
+    /// records once the shard is purged.
+    /// </para>
     /// </summary>
-    private async Task ClearTopologyAsync()
+    private async Task ClearTopologyAsync(bool forPurge, List<GrainId>? purgeClearedLeafIds = null)
     {
         if (state.State.RootNodeId is null)
         {
             return;
         }
 
-        // Record, before the first leaf is cleared, that this shard's leaves are
-        // being cleared on purpose (issue #4654). A purge that dies part-way leaves
-        // routed leaves with no state row, which recovery can then re-create empty
-        // without mistaking a leaf whose row was lost for one the purge cleared.
-        if (!state.State.LeafClearsBegun)
+        Task ClearLeafAsync(GrainId id)
         {
-            state.State.LeafClearsBegun = true;
-            try
-            {
-                await WriteShardStateAsync();
-            }
-            catch
-            {
-                state.State.LeafClearsBegun = false;
-                throw;
-            }
+            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(id);
+            if (!forPurge)
+                return leaf.ClearGrainStateAsync();
+
+            purgeClearedLeafIds?.Add(id);
+            return leaf.ClearGrainStateForPurgeAsync();
         }
 
         GrainId? leafId;
@@ -442,7 +488,7 @@ internal sealed partial class ShardRootGrain
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
             var nextId = await leaf.GetNextSiblingAsync();
-            await leaf.ClearGrainStateAsync();
+            await ClearLeafAsync(leafId.Value);
             clearedLeafIds?.Add(leafId.Value);
             walk.RecordLeafVisited();
             leafId = nextId;
@@ -464,7 +510,7 @@ internal sealed partial class ShardRootGrain
             {
                 if (clearedLeafIds!.Add(routedLeafId))
                 {
-                    await grainFactory.GetGrain<IBPlusLeafGrain>(routedLeafId).ClearGrainStateAsync();
+                    await ClearLeafAsync(routedLeafId);
                 }
             }
         }
@@ -561,16 +607,15 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Upper bound on the number of nodes a single
-    /// <see cref="ReseedNodeBindingsAsync"/> pass will re-assert. The repair
-    /// runs inside one grain call, and an unbounded node walk in one grain call
-    /// is precisely what stranded the topology in the first place - a
-    /// <c>PurgeTreeAsync</c> that blew the grain-call timeout part-way through
-    /// its own walk. A recovery that timed out would be no better than the
-    /// unbound leaf it is trying to repair, so the walk is capped and the
-    /// overrun is reported rather than allowed to run long.
+    /// The number of leaves a single <see cref="ReseedNodeBindingsAsync"/> call
+    /// re-binds. The repair runs inside one grain call, and an unbounded amount of
+    /// leaf work in one grain call is precisely what stranded the topology in the
+    /// first place - a <c>PurgeTreeAsync</c> that blew the grain-call timeout
+    /// part-way through its own walk. So each call does at most this many leaves
+    /// and returns where the next call resumes; the recovery loops until the shard
+    /// is done, so no leaf is ever skipped (issue #4700).
     /// </summary>
-    private const int MaxReseedNodes = 4096;
+    internal const int ReseedLeafPageSize = 4096;
 
     /// <summary>
     /// Maximum re-assert calls in flight at once inside
@@ -583,11 +628,13 @@ internal sealed partial class ShardRootGrain
     private const int ReseedFanOutWidth = 16;
 
     /// <inheritdoc />
-    public async Task ReseedNodeBindingsAsync()
+    public async Task<int> ReseedNodeBindingsAsync(int fromLeafIndex)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(fromLeafIndex);
+
         // No topology to re-assert: EnsureRootAsync seeds a fresh root leaf,
         // binding included, on the first operation after recovery.
-        if (state.State.RootNodeId is null) return;
+        if (state.State.RootNodeId is null) return -1;
 
         // Walk unconditionally rather than probing one node and inferring the
         // rest. An earlier revision of this repair probed the leftmost leaf on
@@ -597,104 +644,58 @@ internal sealed partial class ShardRootGrain
         // an unbound sibling anywhere in the key range while the leftmost leaf
         // stays perfectly bound. Recovery is a rare operator action, so paying
         // the full walk to be correct is the right trade.
+        //
+        // A failed walk fails the recovery rather than degrading to no repair
+        // (issue #4700): the leaves a purge cleared are re-created only here, so a
+        // repair skipped now would leave them failed closed with no path back. The
+        // recovery is retried.
         var leafIds = new List<GrainId>();
         var internalIds = new List<GrainId>();
-        var recreateClearedLeaves = state.State.LeafClearsBegun;
-        bool truncated;
-        try
-        {
-            truncated = await CollectBindingTargetsAsync(RootIsLeafTyped, leafIds, internalIds);
-        }
-        catch (Exception ex)
-        {
-            // Best-effort: a topology whose internal root was itself cleared has
-            // nothing to descend, and a node's silo may be momentarily
-            // unreachable. Recovery succeeds today without this repair and an
-            // unbound node still surfaces loudly and typed on the write path
-            // (where it is now also self-repairing), so degrading to "no repair"
-            // is strictly no worse than the status quo, whereas throwing would
-            // make recovery newly fragile.
-            logger.LogWarning(
-                ex,
-                "Could not walk shard {ShardIndex} of tree {TreeId} to re-assert node bindings after recovery; "
-                + "a node left unbound by an interrupted purge would keep rejecting typed CRDT writes to its key "
-                + "range until the write path re-binds it.",
-                MyShardIndex,
-                TreeId);
-            return;
-        }
+        await CollectBindingTargetsAsync(RootIsLeafTyped, leafIds, internalIds);
+
+        var end = Math.Min(leafIds.Count, fromLeafIndex + ReseedLeafPageSize);
 
         // Leaves first: an unbound leaf is what actually fails the write path,
         // whereas an unbound internal node only degrades its per-tree options
-        // lookup. Both setters are idempotent and short-circuit inside the
-        // callee, so a node that is already bound costs one RPC and no storage
-        // write - which is what makes an unconditional walk affordable.
-        await BoundedFanOut.RunAsync(leafIds.Count, ReseedFanOutWidth, async slot =>
+        // lookup. Re-binding a bound leaf costs one RPC and no storage write.
+        await BoundedFanOut.RunAsync(Math.Max(0, end - fromLeafIndex), ReseedFanOutWidth, async slot =>
         {
-            var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafIds[slot]);
-
-            // A routed leaf with no state row is re-created empty only when a purge
-            // of this shard began clearing its leaves: their data was discarded on
-            // purpose. Otherwise it cannot be told apart from a leaf whose row was
-            // lost (issue #4654), so it carries no create intent, refuses the
-            // binding, and stays failed closed; recovery of the rest goes on.
-            using var createIntent = recreateClearedLeaves ? LatticeNewLeafIntentContext.BeginScope(leafIds[slot]) : null;
+            var leafId = leafIds[fromLeafIndex + slot];
             try
             {
-                await leaf.SetTreeIdAsync(TreeId);
-                await leaf.SetShardIndexAsync(MyShardIndex);
+                // Re-creates a rowless leaf only when its own row record shows the
+                // purge cleared it; a fault reading that record fails the recovery.
+                await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).RecoverBindingAsync(TreeId, MyShardIndex);
             }
             catch (LeafStateRowLostException ex)
             {
+                // A rowless leaf no purge cleared: its row may have been lost, and
+                // re-creating it empty would report its keys absent (issues #4654,
+                // #4700). It stays failed closed; recovery of the rest goes on.
                 logger.LogWarning(
                     ex,
-                    "Leaf {LeafId} of shard {ShardIndex} of tree {TreeId} has no state row and no purge of the shard "
-                    + "began, so recovery did not re-create it: it may be a leaf whose row was lost, and re-creating it "
-                    + "empty would report its keys absent. Its key range fails closed until the leaf, or the tree, is "
-                    + "restored from a backup.",
-                    leafIds[slot],
+                    "Leaf {LeafId} of shard {ShardIndex} of tree {TreeId} has no state row and its row record does "
+                    + "not show that a purge cleared it, so recovery did not re-create it: its row may have been lost, "
+                    + "and re-creating it empty would report its keys absent. Its key range fails closed until the "
+                    + "leaf, or the tree, is restored from a backup.",
+                    leafId,
                     MyShardIndex,
                     TreeId);
             }
         });
 
-        await BoundedFanOut.RunAsync(internalIds.Count, ReseedFanOutWidth, slot =>
-            grainFactory.GetGrain<IBPlusInternalGrain>(internalIds[slot]).SetTreeIdAsync(TreeId));
-
-        if (truncated)
+        if (fromLeafIndex == 0)
         {
-            logger.LogWarning(
-                "Re-asserted node bindings on the first {NodeCount} nodes of shard {ShardIndex} of tree {TreeId} "
-                + "after recovery, but the shard has more than the {MaxReseedNodes}-node repair budget; "
-                + "keys routed to the nodes beyond it are re-bound by the write path on their next typed CRDT write; "
-                + "a node beyond it with no state row fails closed (issue #4654).",
-                leafIds.Count + internalIds.Count,
-                MyShardIndex,
-                TreeId,
-                MaxReseedNodes);
+            await BoundedFanOut.RunAsync(internalIds.Count, ReseedFanOutWidth, slot =>
+                grainFactory.GetGrain<IBPlusInternalGrain>(internalIds[slot]).SetTreeIdAsync(TreeId));
         }
 
-        // The purge's leaves are re-created; the shard is live again, so a leaf
-        // that loses its row from here on is a lost leaf, not a purged one.
-        if (recreateClearedLeaves)
-        {
-            state.State.LeafClearsBegun = false;
-            try
-            {
-                await WriteShardStateAsync();
-            }
-            catch
-            {
-                state.State.LeafClearsBegun = true;
-                throw;
-            }
-        }
+        return end < leafIds.Count ? end : -1;
     }
-
     /// <summary>
     /// Collects every node this shard still routes to, splitting them into
-    /// leaves and internal nodes, and returns whether the
-    /// <see cref="MaxReseedNodes"/> budget truncated the walk.
+    /// leaves and internal nodes. Unbounded: the walk only reads internal nodes,
+    /// and the leaf work it feeds is paged (issue #4700).
     /// <para>
     /// Descends through the internal nodes rather than following the leaf
     /// sibling chain: the chain is exactly what an interrupted purge severs
@@ -705,7 +706,7 @@ internal sealed partial class ShardRootGrain
     /// to, which is the set that has to be bound for the tree to be writable.
     /// </para>
     /// </summary>
-    private async Task<bool> CollectBindingTargetsAsync(
+    private async Task CollectBindingTargetsAsync(
         bool rootIsLeafTyped,
         List<GrainId> leafIds,
         List<GrainId> internalIds)
@@ -714,7 +715,7 @@ internal sealed partial class ShardRootGrain
         if (rootIsLeafTyped)
         {
             leafIds.Add(rootNodeId);
-            return false;
+            return;
         }
 
         var stack = new Stack<GrainId>();
@@ -722,9 +723,6 @@ internal sealed partial class ShardRootGrain
 
         while (stack.Count > 0)
         {
-            if (leafIds.Count + internalIds.Count >= MaxReseedNodes)
-                return true;
-
             var nodeId = stack.Pop();
             internalIds.Add(nodeId);
 
@@ -745,7 +743,5 @@ internal sealed partial class ShardRootGrain
                 stack.Push(children[i]);
             }
         }
-
-        return false;
     }
 }

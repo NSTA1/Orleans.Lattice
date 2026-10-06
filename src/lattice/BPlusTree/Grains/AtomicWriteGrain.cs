@@ -599,6 +599,24 @@ internal sealed partial class AtomicWriteGrain(
     }
 
     /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(IReadOnlyDictionary<string, long> stamps)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+        var txid = state.State.TransactionId;
+        if (txid == Guid.Empty || string.IsNullOrEmpty(state.State.TreeId))
+        {
+            return;
+        }
+
+        var registry = RegistryFor(state.State.TreeId, txid);
+        await TxRegistryWriteRetry.RunAsync(
+            (registry, txid, stamps),
+            static s => s.registry.RecordCrossTreeDecisionStampsAsync(s.txid, s.stamps));
+    }
+
+    /// <inheritdoc />
     public async Task FinalizeAsync(bool commit)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -647,6 +665,16 @@ internal sealed partial class AtomicWriteGrain(
             if (txid != Guid.Empty)
             {
                 var registry = RegistryFor(state.State.TreeId, txid);
+
+                // The membership precedes the delegation, and so every terminal
+                // of the saga, and lives as long as its decision (#4683).
+                if (state.State.CrossTreeParticipants is { Count: > 0 } participants)
+                {
+                    await TxRegistryWriteRetry.RunAsync(
+                        (registry, txid, coordinatorKey, participants),
+                        static s => s.registry.RecordCrossTreeMembershipAsync(s.txid, s.coordinatorKey, s.participants));
+                }
+
                 await TxRegistryWriteRetry.RunAsync(
                     (registry, txid, coordinatorKey),
                     static s => s.registry.RegisterExternalDecisionAuthorityAsync(s.txid, s.coordinatorKey));
@@ -2575,6 +2603,11 @@ internal sealed partial class AtomicWriteGrain(
 
             await RebindAcrossAliasSwapAsync();
 
+            // Issue #4689: before any decision - this saga's own or a cross-tree
+            // coordinator's - drop the prepares the saga left on every copy it
+            // re-bound away from.
+            await DiscardAbandonedCopiesAsync();
+
             // The commit decision is next: the last point at which a saga whose
             // caller has given up can still be rolled back instead.
             await RollBackUndecidedIfCallerGoneAsync();
@@ -2600,6 +2633,11 @@ internal sealed partial class AtomicWriteGrain(
             // resolves to the pre-saga value via the registry, so
             // readers never observe a partial rollback.
             var abortCommitted = DecideSagaCommit(everyParticipantPrepared: false);
+            // An aborted saga's prepares on a copy it re-bound away from are
+            // never surfaced, but they would otherwise stay stranded there, and
+            // once the decision ages out a read of their keys is refused rather
+            // than served (issue #4689). Best effort: the abort must proceed.
+            await TryDiscardAbandonedCopiesAsync();
             var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
@@ -3150,6 +3188,9 @@ internal sealed partial class AtomicWriteGrain(
         var prevNextIndex = state.State.NextIndex;
         var prevTouchedShards = state.State.TouchedShards;
         var prevRetries = state.State.RetriesOnCurrentStep;
+        var prevAbandoned = state.State.AbandonedCopyShards;
+        state.State.AbandonedCopyShards = SagaAbandonedCopies.Record(
+            prevAbandoned, prevBound, prevTouchedShards, routing.PhysicalTreeId);
         state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
         state.State.NextIndex = 0;
         state.State.TouchedShards = [.. touched];
@@ -3164,6 +3205,7 @@ internal sealed partial class AtomicWriteGrain(
             state.State.NextIndex = prevNextIndex;
             state.State.TouchedShards = prevTouchedShards;
             state.State.RetriesOnCurrentStep = prevRetries;
+            state.State.AbandonedCopyShards = prevAbandoned;
             throw;
         }
     }

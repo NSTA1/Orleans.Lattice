@@ -25,7 +25,7 @@ public sealed partial class ShardRootGrainPurgeTests
         await harness.Grain.PurgeAsync();
 
         await owed.Grain.Received(1).ClearGrainStateAsync();
-        await root.Grain.Received(1).ClearGrainStateAsync();
+        await root.Grain.Received(1).ClearGrainStateForPurgeAsync();
         Assert.That(harness.State.State.PendingLeafClears, Is.Empty,
             "the shard row, and with it the record, is cleared only after every owed leaf");
     }
@@ -86,9 +86,9 @@ public sealed partial class ShardRootGrainPurgeTests
 
         await harness.Grain.PurgeAsync();
 
-        await l0.Grain.Received(1).ClearGrainStateAsync();
-        await l1.Grain.Received(1).ClearGrainStateAsync();
-        await l2.Grain.Received(1).ClearGrainStateAsync();
+        await l0.Grain.Received(1).ClearGrainStateForPurgeAsync();
+        await l1.Grain.Received(1).ClearGrainStateForPurgeAsync();
+        await l2.Grain.Received(1).ClearGrainStateForPurgeAsync();
         await i1.Grain.Received(1).ClearGrainStateAsync();
     }
 
@@ -107,8 +107,8 @@ public sealed partial class ShardRootGrainPurgeTests
 
         await harness.Grain.PurgeAsync();
 
-        await l0.Grain.Received(1).ClearGrainStateAsync();
-        await l1.Grain.Received(1).ClearGrainStateAsync();
+        await l0.Grain.Received(1).ClearGrainStateForPurgeAsync();
+        await l1.Grain.Received(1).ClearGrainStateForPurgeAsync();
         await l1.Grain.Received(1).GetNextSiblingAsync();
     }
 }

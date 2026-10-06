@@ -141,7 +141,10 @@ public static class LatticeBootstrapTransientFaultClassifier
             // The source tree is itself being bootstrapped (issue #4526): its
             // reads are refused until its own drain completes, so the export
             // succeeds on a later attempt.
-            || exception is LatticeTreeBootstrappingException)
+            || exception is LatticeTreeBootstrappingException
+            // The source deferred the export until a cross-tree precondition
+            // holds (issue #4684).
+            || exception is LatticeSnapshotExportDeferredException)
         {
             return true;
         }

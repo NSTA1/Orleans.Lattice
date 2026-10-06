@@ -986,6 +986,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod);
 
     /// <summary>
+    /// <see cref="CompactTombstonesAsync"/> under a reap ceiling (issue #4615):
+    /// a tombstone, or a TTL-expired live entry, is reaped only when it is past
+    /// <paramref name="gracePeriod"/> and stamped strictly below
+    /// <paramref name="reapCeiling"/>. A replicated tree's ceiling is the point
+    /// below which no write the entry beats can still be delivered here, so a
+    /// reap never lets a late older write resurrect the key. An entry the
+    /// ceiling keeps is treated as still inside the grace window.
+    /// </summary>
+    Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling);
+
+    /// <summary>
     /// Returns all live (non-tombstoned) key-value pairs in this leaf.
     /// Used by the tree resize operation to drain entries before purging.
     /// </summary>
@@ -1064,6 +1075,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task ClearGrainStateAsync();
+
+    /// <summary>
+    /// <see cref="ClearGrainStateAsync"/> for a purge of a deleted tree (issue
+    /// #4700). Before anything is cleared it marks the leaf's row record as cleared
+    /// by a purge, durably, and it keeps the record afterwards, so a recovery of
+    /// the tree can tell this deliberate clear apart from a lost row and re-create
+    /// the leaf empty. Idempotent and resumable, like the plain clear.
+    /// </summary>
+    Task ClearGrainStateForPurgeAsync();
+
+    /// <summary>
+    /// Re-asserts this leaf's binding to <paramref name="treeId"/> and
+    /// <paramref name="shardIndex"/> on recovery of a deleted tree (issue #4700).
+    /// A leaf with a state row is bound as by the birth seams. A leaf with no state
+    /// row is re-created empty only when its row record shows a purge cleared it:
+    /// the purge's leftover snapshot and witness are deleted first, and the mark is
+    /// reset once the new row is durable. Any other rowless leaf - one whose row may
+    /// have been lost - is refused with <c>LeafStateRowLostException</c>. A fault
+    /// reading the record propagates, so the recovery fails and can be retried.
+    /// </summary>
+    /// <param name="treeId">The physical tree the leaf belongs to.</param>
+    /// <param name="shardIndex">The shard the leaf belongs to.</param>
+    Task RecoverBindingAsync(string treeId, int shardIndex);
 
     /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>

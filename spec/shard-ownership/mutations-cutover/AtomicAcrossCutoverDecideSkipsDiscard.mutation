@@ -1,0 +1,18 @@
+# Pairs with AtomicAcrossCutover. Reproduces production before #4689 was fixed: the saga recorded
+# its commit decision without discarding the prepares it left on the copy it
+# re-bound away from, so the previous copy keeps an orphan bucket of a committed
+# saga, which a stale reader before the redirect is armed, or any reader after a
+# revert, is served beside the other key's pre-saga value.
+MODULE: AtomicAcrossCutoverDecideSkipsDiscard
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: the commit decision does not wait for the discards on the copies the saga left
+PERTURBS: Decide
+
+--- FIND
+    /\ sg = "checked"
+    /\ left \subseteq disc
+--- REPLACE
+    /\ sg = "checked"
+    \* MUTATION: no discard before the decision.
+--- END

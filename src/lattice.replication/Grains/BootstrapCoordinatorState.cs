@@ -228,4 +228,55 @@ internal sealed class BootstrapCoordinatorState
     /// pins them on the tree frontier. <see langword="null"/> installs none.
     /// </summary>
     [Id(25)] public SnapshotSourceFrontier? ExportedFrontier { get; set; }
+
+    /// <summary>
+    /// Per source cluster, the source lineage of the last whole-tree export this
+    /// receiver began draining (issue #4673): the export's opening lineage,
+    /// recorded before the first entry is applied and wherever
+    /// <see cref="AlignedLineageBySource"/> is written. A pushed batch the source
+    /// stamped with any other lineage is refused, so a batch the source read
+    /// before a restore, purge or alias move cannot land on a copy drained from
+    /// the new lineage. Never cleared by a skipped reconcile: refusing the
+    /// source's current lineage only costs the sender a forced gap. State
+    /// written before this slot decodes to an empty map, under which every
+    /// batch is applied as before.
+    /// </summary>
+    [Id(26)] public Dictionary<string, Guid> DrainedLineageBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the receiver tree frontier's epoch
+    /// (<see cref="FrontierEpoch"/>) when <see cref="DrainedLineageBySource"/>
+    /// was recorded (issue #4673). The frontier re-mints its epoch on every
+    /// possible replacement of the tree's contents, so a recorded drain whose
+    /// epoch is no longer current no longer describes the tree, and every
+    /// stamped batch from that source is refused until a whole-tree export is
+    /// drained again. State written before this slot decodes to an empty map.
+    /// </summary>
+    [Id(27)] public Dictionary<string, Guid> DrainedFrontierEpochBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The cross-tree receiver barriers the last drain recorded this tree's
+    /// arrival at, from a cross-tree sub-saga's decision row, that had not yet
+    /// decided when the drain ended (issue #4683). The tree stays read-fenced,
+    /// and the bootstrap does not complete, until every one has decided: the
+    /// import serves the sub-saga post-saga, and a sibling tree may still serve
+    /// it pre-saga until its own terminal reaches the barrier. State written
+    /// before this slot decodes to an empty list.
+    /// </summary>
+    [Id(28)] public List<string> PendingCrossTreeBarriers { get; set; } = [];
+
+    /// <summary>
+    /// The sibling trees replicated here whose boundary, captured at the end of
+    /// the drained export, has not been passed yet (issue #4684): the tree stays
+    /// read-fenced until each sibling's shipper has vouched acknowledged
+    /// positions at or past the captured tails, or this cluster has completed an
+    /// import of the sibling from an export numbered above the captured epoch.
+    /// </summary>
+    [Id(29)] public Dictionary<string, CrossTreeSiblingBoundary> PendingSiblingBoundaries { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>When the pending sibling boundaries were recorded (UTC ticks); drives the automatic re-seed.</summary>
+    [Id(30)] public long SiblingBoundariesSinceUtcTicks { get; set; }
+
+    /// <summary>The pending siblings this coordinator has already asked to re-seed.</summary>
+    [Id(31)] public HashSet<string> SiblingReseedsRequested { get; set; } = new(StringComparer.Ordinal);
 }

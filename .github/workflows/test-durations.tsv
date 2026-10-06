@@ -74,28 +74,28 @@
 
 # -- lattice, sharded --------------------------------------------------------
 #
-# The four formal-tlc-* rows are the one exception to the provenance above.
-# They are not a median of leg records. When the TLC mutation gates were split
-# out of `rest`, no leg had ever run those shards, so there was nothing to
-# record. Those first figures came from the per-test durations in one run's
-# rest TRX (run 37215308560, 2026-10-04). That run's rest item took 29.3 min
-# for 106 test-minutes, about 3.5 TLC processes at once on a 4-core runner, and
-# each shard was priced at the larger of its test-minutes / 3.5 and its single
-# longest case. The per-mutation BOUNDS headers and the per-process control memo
-# then changed the cost of every group, so each group's test-minutes were scaled
-# by the ratio its TLC cases measured locally before and after that change (two
-# full TlcModelCheckTests runs on one 4-way host, 32.8 -> 19.9 min wall-clock):
-# Replication EventualConvergence 0.43, ShardOwnership 0.65, ReplicationWal 0.66,
-# AtomicCommit/Backup 0.71, the remainder 0.54. The pin and atomic-backup shards
-# were folded into convergence and formal-tlc respectively, and formal-tlc also
-# carries the BackupIncremental module that landed alongside, priced by the same
-# local-to-CI factor as the other Backup* cases. The `rest` row is
-# the 2026-10-04 run's non-TLC remainder. Replace all five with measured medians
-# at the next refresh.
-lattice	formal-tlc	deterministic	5.6
-lattice	formal-tlc-shard-ownership	deterministic	4.1
-lattice	formal-tlc-convergence	deterministic	4.0
-lattice	formal-tlc-replication-wal	deterministic	3.8
+# The seven formal-tlc* rows are the one exception to the provenance above.
+# They are not a median of leg records: the TLC gates outgrew their shards
+# faster than a median window could follow. They come from one run, ci.yml run
+# 37322771720 (2026-10-05, the #4676 head), in which formal-tlc took 41.9 min of
+# test time for 165 test-minutes and the three category shards 13.8 - 15.7 min.
+# The convergence, replication-wal and shard-ownership rows are those items'
+# measured test time. The rebootstrap, atomic and backup shards were split out
+# of formal-tlc after that run, so they and the remaining formal-tlc row are
+# priced from that run's formal-tlc TRX: each group's summed per-case
+# test-minutes / 3.9, the parallelism the formal-tlc item itself measured
+# (165 / 41.9), or its single longest case if that is larger. Replace all seven
+# with measured medians at the next refresh.
+# The rebootstrap row also carries the replication companions moved into it
+# afterwards, ReplicationLowWatermark and ReplicationCausalDelivery, about 5.5
+# test-minutes measured locally.
+lattice	formal-tlc	deterministic	8.9
+lattice	formal-tlc-shard-ownership	deterministic	15.7
+lattice	formal-tlc-convergence	deterministic	15.1
+lattice	formal-tlc-replication-wal	deterministic	13.8
+lattice	formal-tlc-rebootstrap	deterministic	16.8
+lattice	formal-tlc-atomic	deterministic	10.4
+lattice	formal-tlc-backup	deterministic	7.7
 lattice	bplustree	deterministic	5.0
 lattice	rest	deterministic	2.5
 lattice	bplustree	chaos	3.8
@@ -131,6 +131,12 @@ lattice	formal-tlc-shard-ownership	chaos	0.0
 lattice	formal-tlc-shard-ownership	coyote	0.0
 lattice	formal-tlc	chaos	0.0
 lattice	formal-tlc	coyote	0.0
+lattice	formal-tlc-rebootstrap	chaos	0.0
+lattice	formal-tlc-rebootstrap	coyote	0.0
+lattice	formal-tlc-atomic	chaos	0.0
+lattice	formal-tlc-atomic	coyote	0.0
+lattice	formal-tlc-backup	chaos	0.0
+lattice	formal-tlc-backup	coyote	0.0
 
 # -- lattice.api.mcp.repocontext, sharded (untiered: see crossTiers) ----------
 lattice.api.mcp.repocontext	capture	all	3.9

@@ -41,7 +41,7 @@ namespace Orleans.Lattice.Replication.Grains;
 /// <see cref="BootstrapCoordinatorState.LastAppliedHlc"/>.
 /// </para>
 /// </summary>
-internal sealed class LatticeBootstrapCoordinatorGrain(
+internal sealed partial class LatticeBootstrapCoordinatorGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IBootstrapSnapshotSource snapshotProvider,
@@ -155,6 +155,22 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     }
 
     /// <inheritdoc />
+    public Task<long?> GetDrainedExportEpochAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        long? drained = state.State.CompletedExportEpochs.TryGetValue(sourceClusterId, out var completed) ? completed : null;
+        if (state.State.InProgress
+            && state.State.Phase == LatticeBootstrapState.IncrementalHandoff
+            && string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            && state.State.SnapshotExportEpoch > (drained ?? 0))
+        {
+            drained = state.State.SnapshotExportEpoch;
+        }
+
+        return Task.FromResult(drained);
+    }
+
+    /// <inheritdoc />
     public Task<long?> GetCompletedExportEpochAsync(string sourceClusterId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
@@ -219,6 +235,35 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     {
         ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
         return Task.FromResult(state.State.ReseedAfterEpochs.ContainsKey(sourceClusterId));
+    }
+
+    /// <inheritdoc />
+    public Task<ReplicationDrainedLineage?> GetDrainedLineageAsync(string sourceClusterId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        return Task.FromResult<ReplicationDrainedLineage?>(
+            state.State.DrainedLineageBySource.TryGetValue(sourceClusterId, out var lineage)
+                ? new ReplicationDrainedLineage(
+                    lineage,
+                    state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var epoch) ? epoch : Guid.Empty)
+                : null);
+    }
+
+    /// <summary>
+    /// Records the source lineage a whole-tree export opened under, with the
+    /// tree frontier epoch the drain began in (issue #4673). An export from a
+    /// sender that reports no lineage records nothing, and leaves any earlier
+    /// record in place.
+    /// </summary>
+    private void RecordDrainedLineage(string sourceClusterId, SnapshotSourceGeneration? openGeneration)
+    {
+        if (openGeneration?.Lineage is not { } lineage)
+        {
+            return;
+        }
+
+        state.State.DrainedLineageBySource[sourceClusterId] = lineage;
+        state.State.DrainedFrontierEpochBySource[sourceClusterId] = state.State.FrontierEpoch;
     }
 
     /// <inheritdoc />
@@ -860,6 +905,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             return;
         }
 
+        // Issue #4549: a tree that has never been written is registered by the
+        // drain's first write, and registering it stamps its lineage, which
+        // resets the tree's applied identities and with them the bootstrap drop
+        // floor. Register it now, before the tree frontier's epoch is captured and
+        // the floor installed, so neither is reset mid-drain.
+        await EnsureTreeRegisteredAsync(treeName).ConfigureAwait(true);
+
         // Resolve the per-tree merge mode once up-front. The resolver
         // is O(1) (a cached dictionary read in the default
         // ConfiguredLatticeMergeModeResolver implementation) and the
@@ -900,6 +952,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // Capture the tree frontier's epoch before the export is requested
         // (#4586 part 2b): the handoff pins the export only if no replacement
         // of the tree's contents happened in between.
+        // The sagas already pending from the source before the export opens
+        // (issue #4692): after a plain bootstrap only these can be stale. Read
+        // on every attempt, so a resumed drain reads it afresh for its new export.
+        var pendingBeforeExport = await StalePendingClearer
+            .CapturePendingAsync(_grainFactory, treeName, sourceClusterId, cancellationToken)
+            .ConfigureAwait(true);
+
         var frontierEpoch = (await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
             .GetAsync(cancellationToken)
             .ConfigureAwait(true)).Epoch;
@@ -928,6 +987,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             state.State.HeldNoSourceRowsAtImportStart = preCapture.HeldNoSourceRows;
         }
 
+        // From here the tree holds the export's lineage, so a pushed batch the
+        // source read under any other lineage is refused (issue #4673). Recorded
+        // at drain open, durable with the write below, so a stale push that
+        // escapes it must straddle the whole drain, where the end-of-drain scan
+        // finds the row it left. Kept when the reconcile below skips.
+        RecordDrainedLineage(sourceClusterId, snapshot.OpenGeneration);
+
         // Recorded before the first entry is applied: from here on the tree may
         // hold a partial import, so a failure keeps the read fence up (#4526).
         state.State.ImportApplied = true;
@@ -939,6 +1005,12 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             pivotedToApplying = true;
         }
         await state.WriteStateAsync().ConfigureAwait(true);
+
+        // Issue #4549. Installed before the drain, and only once the import is
+        // recorded: from here on a failure keeps the tree fenced and re-drives
+        // the bootstrap until a drain completes, so the floor never outlives an
+        // abandoned import.
+        var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, cancellationToken).ConfigureAwait(true);
 
         // Lazy-initialise the duration anchor on resume after a silo
         // failover: TryInitiateBootstrapAsync set it on kickoff, but a
@@ -997,9 +1069,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         // while the drain runs.
         var carriedSagas = new HashSet<Guid>();
         var decidedSagas = new Dictionary<Guid, bool>();
+        var crossTreeBarriers = new HashSet<string>(StringComparer.Ordinal);
+        var namedCrossTreeOperations = new HashSet<string>(StringComparer.Ordinal);
 
         await foreach (var entry in snapshot.Entries.ConfigureAwait(true))
         {
+            if (!string.IsNullOrEmpty(entry.CrossTreeOperationId))
+            {
+                namedCrossTreeOperations.Add(entry.CrossTreeOperationId);
+            }
+
             if (entry.TransactionId != Guid.Empty)
             {
                 if (entry.SettledDecision is { } settled)
@@ -1017,6 +1096,17 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             if (entry.IsDecision)
             {
                 await ApplySettledDecisionAsync(_grainFactory, treeName, entry).ConfigureAwait(true);
+
+                // A cross-tree sub-saga's decision replaces its terminal here, so
+                // it arrives at the receiver's barrier as the terminal would
+                // (#4683). Recorded only after the decision, so a sibling the
+                // barrier finalizes never sees this tree undecided.
+                if (await NotifyImportedCrossTreeArrivalAsync(treeName, sourceClusterId, entry, cancellationToken)
+                        .ConfigureAwait(true) is { } barrier)
+                {
+                    crossTreeBarriers.Add(barrier);
+                }
+
                 continue;
             }
 
@@ -1091,6 +1181,16 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 cancellationToken)
             .ConfigureAwait(true);
 
+        await ReconcileForeignDeletesAsync(
+                treeName,
+                sourceClusterId,
+                snapshot,
+                carriedKeys,
+                mergeMode,
+                floorInstalled,
+                cancellationToken)
+            .ConfigureAwait(true);
+
         // The export's applied frontier describes the imported contents only if
         // the source generation held still under its lineage (#4586 part 2b).
         // Persisted by the drain-end write; the handoff pins it.
@@ -1112,29 +1212,68 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
 
         // A re-seed the export postdates: the sender has withheld every saga
         // record since before the export, so every pending bucket from it is
-        // either carried by the export or stale. Still behind the read fence.
-        if (state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter) && snapshot.ExportEpoch > reseedAfter)
+        // either carried by the export or stale. Any other full bootstrap - a
+        // tree re-added to replication among them (#4692) - settles only the
+        // sagas that were pending before the export opened: the sender held
+        // nothing back, so a saga staged since is not stale. Still behind the
+        // read fence.
+        var reseed = state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter)
+            && snapshot.ExportEpoch > reseedAfter;
+        if (reseed || pendingBeforeExport.Count > 0)
         {
             var cleared = await StalePendingClearer
-                .ClearAsync(_grainFactory, treeName, sourceClusterId, carriedSagas, decidedSagas, cancellationToken)
+                .ClearAsync(
+                    _grainFactory,
+                    treeName,
+                    sourceClusterId,
+                    carriedSagas,
+                    decidedSagas,
+                    cancellationToken,
+                    onlyTransactions: reseed ? null : pendingBeforeExport)
                 .ConfigureAwait(true);
             if (cleared > 0)
             {
                 Logger.LogWarning(
-                    "Re-seed of tree '{TreeName}' from '{SourceClusterId}' settled {Count} leftover pending saga(s): each decided "
+                    "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' settled {Count} leftover pending saga(s): each decided "
                     + "one by its decision, and each the source purged discarded, its committed values carried by the export.",
                     treeName, sourceClusterId, cleared);
             }
+        }
 
+        if (reseed)
+        {
             // Consumed; persisted with the phase transition below.
             state.State.ReseedAfterEpochs.Remove(sourceClusterId);
         }
 
+        // The import settled cross-tree sub-sagas whose sibling trees may still
+        // be pre-saga here (#4683), and may have settled one it names nowhere
+        // because the source purged it (#4684): record the import, let every
+        // barrier waiting for the tree judge it, and keep the tree read-fenced
+        // while any barrier indexed under it is undecided. Persisted with the
+        // phase below.
+        await RecordCrossTreeImportAsync(
+                treeName, sourceClusterId, snapshot, namedCrossTreeOperations, cancellationToken)
+            .ConfigureAwait(true);
+        state.State.PendingCrossTreeBarriers = await UndecidedBarriersAsync(
+                crossTreeBarriers.Union(await IndexedBarriersAsync(treeName).ConfigureAwait(true), StringComparer.Ordinal))
+            .ConfigureAwait(true);
+
         // Every snapshot entry is applied: the import is whole, so lift the read
-        // fence before leaving the drain (issue #4526). Lifted before the phase
-        // is persisted: a crash in between resumes the drain, which re-arms the
-        // fence and re-applies the (idempotent) import.
-        await LiftReadFenceAsync().ConfigureAwait(true);
+        // fence before leaving the drain (issue #4526) - unless a cross-tree
+        // barrier above holds it. Lifted before the phase is persisted: a crash
+        // in between resumes the drain, which re-arms the fence and re-applies
+        // the (idempotent) import.
+        // Nor while a sibling tree may still owe this cluster a terminal of an
+        // operation the import settled from bare rows (#4684).
+        RecordSiblingBoundaries(treeName, snapshot);
+        await PruneSiblingBoundariesAsync(sourceClusterId).ConfigureAwait(true);
+
+        if (state.State.PendingCrossTreeBarriers.Count == 0 && state.State.PendingSiblingBoundaries.Count == 0)
+        {
+            await LiftReadFenceAsync().ConfigureAwait(true);
+        }
+
         state.State.Phase = LatticeBootstrapState.IncrementalHandoff;
         await state.WriteStateAsync().ConfigureAwait(true);
 
@@ -1215,6 +1354,8 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
             alignedLineage == Guid.Empty ? null : alignedLineage,
             state.State.HeldNoSourceRowsAtImportStart,
             preCapture.SourceEntries.Keys.Any(key => !carriedKeys.Contains(key)),
+            await AnySourceRowAbsentFromExportAsync(treeName, sourceClusterId, carriedKeys, mergeMode, cancellationToken)
+                .ConfigureAwait(true),
             mergeMode);
 
         RecordBootstrapReconcile(treeName, sourceClusterId, decision.Outcome);
@@ -1233,6 +1374,7 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
         if (decision.RecordAlignedLineage && openGeneration?.Lineage is { } lineage)
         {
             state.State.AlignedLineageBySource[sourceClusterId] = lineage;
+            RecordDrainedLineage(sourceClusterId, openGeneration);
         }
 
         // The aligned-lineage and owed slots are persisted by the drain-end write
@@ -1269,6 +1411,293 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
                 // re-sends this delete, so fail the attempt and re-drain.
                 throw new LatticeBootstrapEntryDeferredException(treeName, key);
             }
+        }
+    }
+
+    /// <summary>
+    /// Installs the bootstrap drop floor from the frontier the export carried
+    /// when it opened (issue #4549), or clears any earlier floor when the export
+    /// carries none read under its opening lineage. Returns whether a floor is
+    /// in force for this drain.
+    /// <para>
+    /// The floor starts provisional, so a delivery below it is deferred until the
+    /// import closes stable. The install bumps the tree's floor epoch; the epoch
+    /// is raised in the tree registry and every shard root is armed with it, which
+    /// returns once each has finished the writes it admitted under an older epoch
+    /// and refuses any later one. So no write admitted before the install lands
+    /// after the reconcile scan. The source's own origin is never floored: its
+    /// writes are re-shipped in offset order with their deletes.
+    /// </para>
+    /// </summary>
+    private async Task<bool> InstallBootstrapFloorAsync(
+        string treeName,
+        string sourceClusterId,
+        SnapshotStream snapshot,
+        CancellationToken cancellationToken)
+    {
+        var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
+        if (!BootstrapForeignDeleteReconcile.FrontierMatchesOpen(snapshot.OpenFrontier, snapshot.OpenGeneration))
+        {
+            await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+            return false;
+        }
+
+        var frontier = snapshot.OpenFrontier!;
+        var lowWatermarks = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        foreach (var (origin, lowWatermark) in frontier.LowWatermarks)
+        {
+            if (!string.Equals(origin, sourceClusterId, StringComparison.Ordinal))
+            {
+                lowWatermarks[origin] = lowWatermark;
+            }
+        }
+
+        var epoch = await hwm.SetBootstrapFloorAsync(lowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
+
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        await registry.RaiseReplicationFloorEpochAsync(physicalTreeId, epoch).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        var arms = new List<Task>();
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            arms.Add(_grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}")
+                .ArmReplicationFloorEpochAsync(epoch));
+        }
+
+        await Task.WhenAll(arms).ConfigureAwait(true);
+        return true;
+    }
+
+    /// <summary>
+    /// Deletes the receiver's rows of origins other than the source whose keys
+    /// the export lacks and whose writes the source had applied before the
+    /// export opened (issue #4549), then makes the floor final. Pending saga
+    /// prepares are covered too: the stale saga's bucket on that leaf is
+    /// discarded, so its later commit installs nothing. Scanned after the
+    /// shards were armed, so every write admitted before the floor was installed
+    /// is seen, and every later one below the floor was deferred. A floor
+    /// installed for an export that turned out unstable is cleared instead, so
+    /// the deferred deliveries apply when re-shipped, and the reconcile owes a
+    /// retry that installs a fresh one.
+    /// </summary>
+    private async Task ReconcileForeignDeletesAsync(
+        string treeName,
+        string sourceClusterId,
+        SnapshotStream snapshot,
+        HashSet<string> carriedKeys,
+        LatticeMergeMode mergeMode,
+        bool floorInstalled,
+        CancellationToken cancellationToken)
+    {
+        if (!floorInstalled)
+        {
+            return;
+        }
+
+        var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
+        if (!BootstrapForeignDeleteReconcile.IsEligible(
+                snapshot.OpenFrontier, snapshot.OpenGeneration, snapshot.CloseGeneration, mergeMode))
+        {
+            await hwm.ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+            state.State.ReconcileOwedBySource[sourceClusterId] = true;
+            Logger.LogWarning(
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}': the source tree changed during the export, so the "
+                + "bootstrap drop floor is cleared and the reconcile is owed a retry",
+                treeName, sourceClusterId);
+            return;
+        }
+
+        var frontier = snapshot.OpenFrontier!;
+        var localClusterId = _optionsMonitor.Get(treeName).ClusterId;
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        var allSlots = new int[shardMap.VirtualShardCount];
+        for (var i = 0; i < allSlots.Length; i++)
+        {
+            allSlots[i] = i;
+        }
+
+        var doomed = new HashSet<(string Key, HybridLogicalClock Timestamp)>();
+        var staleSagas = new HashSet<(GrainId Leaf, Guid TransactionId)>();
+        var orphanAboveWatermark = false;
+        bool Doomed(string key, string? rowOrigin, HybridLogicalClock timestamp, long expiresAtTicks, LatticeMergeMode mode)
+        {
+            if (expiresAtTicks != 0 || mode != LatticeMergeMode.LwwRegister || carriedKeys.Contains(key))
+            {
+                return false;
+            }
+
+            // A local write is stored without an origin; the source keys it by this cluster's id.
+            var origin = string.IsNullOrEmpty(rowOrigin) ? localClusterId : rowOrigin;
+            if (string.Equals(origin, sourceClusterId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            switch (BootstrapForeignDeleteReconcile.Classify(frontier, origin, timestamp))
+            {
+                case ForeignOrphanVerdict.Delete:
+                    return true;
+                case ForeignOrphanVerdict.Owed:
+                    orphanAboveWatermark = true;
+                    return false;
+                default:
+                    return false;
+            }
+        }
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
+                {
+                    if (Doomed(entry.Key, entry.OriginClusterId, entry.Timestamp, entry.ExpiresAtTicks, entry.MergeMode ?? mergeMode))
+                    {
+                        doomed.Add((entry.Key, entry.Timestamp));
+                    }
+                }
+
+                foreach (var pending in await leaf.GetPendingMutationsForSlotsAsync(allSlots, shardMap.VirtualShardCount).ConfigureAwait(true))
+                {
+                    if (pending.TransactionId != Guid.Empty
+                        && !pending.IsTombstone
+                        && Doomed(pending.Key, pending.OriginClusterId, pending.Timestamp, pending.ExpiresAtTicks, pending.Mode))
+                    {
+                        staleSagas.Add((leafId.Value, pending.TransactionId));
+                    }
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+
+        foreach (var (key, timestamp) in doomed)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            // Stamped with the source's id, which vouches for the delete: the
+            // applier never applies an entry stamped with this cluster's own id.
+            var record = new WalRecord
+            {
+                TreeId = treeName,
+                Op = MutationKind.Delete,
+                Key = key,
+                Value = null,
+                Timestamp = timestamp,
+                IsTombstone = true,
+                OriginClusterId = sourceClusterId,
+                Mode = LatticeMergeMode.LwwRegister,
+            };
+            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            if (applied.Deferred)
+            {
+                throw new LatticeBootstrapEntryDeferredException(treeName, key);
+            }
+        }
+
+        // A pending prepare the export lacks belongs to a saga the source had
+        // already decided: a saga still open there is exported as prepared rows.
+        // The export carries its outcome, so the bucket is stale. It is dropped,
+        // durably, rather than shadowed by a tombstone: an unmarked replicated
+        // prepare is superseded only by a row stamped strictly above it, so a
+        // tombstone at its stamp would not hide it, and one above could beat a
+        // legitimate later write.
+        foreach (var (leafId, transactionId) in staleSagas)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _grainFactory.GetGrain<IBPlusLeafGrain>(leafId)
+                .DiscardPendingTransactionAsync(transactionId)
+                .ConfigureAwait(true);
+        }
+
+        if (doomed.Count > 0 || staleSagas.Count > 0)
+        {
+            Logger.LogWarning(
+                "Bootstrap of tree '{TreeName}' from '{SourceClusterId}' deleted {Count} row(s) and discarded {Sagas} stale saga "
+                + "bucket(s) of other origins that the source had applied and then deleted before the export",
+                treeName, sourceClusterId, doomed.Count, staleSagas.Count);
+        }
+
+        // An orphan at or above its origin's watermark may be a write the source
+        // applied during the export and then deleted, or one still on its way
+        // there, so this export proves nothing about it. The watermark rises as
+        // delivery proceeds, so the reconcile is owed a retry that settles it.
+        if (orphanAboveWatermark)
+        {
+            state.State.ReconcileOwedBySource[sourceClusterId] = true;
+        }
+
+        await hwm.FinalizeBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Whether, now the drain is over, the receiver holds a live, non-expiring
+    /// source-origin row whose key the export did not carry (issue #4549). Such a
+    /// row reached the receiver during the drain - after a source restore it may
+    /// be from an older lineage - so the receiver may not align with the export's
+    /// lineage over it.
+    /// </summary>
+    private async Task<bool> AnySourceRowAbsentFromExportAsync(
+        string treeName,
+        string sourceClusterId,
+        HashSet<string> carriedKeys,
+        LatticeMergeMode mergeMode,
+        CancellationToken cancellationToken)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(true);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                foreach (var entry in await leaf.GetLiveRawEntriesAsync().ConfigureAwait(true))
+                {
+                    if (entry.ExpiresAtTicks == 0
+                        && (entry.MergeMode ?? mergeMode) == LatticeMergeMode.LwwRegister
+                        && string.Equals(entry.OriginClusterId, sourceClusterId, StringComparison.Ordinal)
+                        && !carriedKeys.Contains(entry.Key))
+                    {
+                        return true;
+                    }
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(true);
+            }
+        }
+
+        return false;
+    }
+
+    private async Task EnsureTreeRegisteredAsync(string treeName)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        if (!await registry.ExistsAsync(physicalTreeId).ConfigureAwait(true))
+        {
+            await registry.RegisterAsync(physicalTreeId).ConfigureAwait(true);
         }
     }
 
@@ -1376,6 +1805,13 @@ internal sealed class LatticeBootstrapCoordinatorGrain(
     /// </summary>
     private async Task PinAndCompleteAsync()
     {
+        // The import stays read-fenced until every cross-tree barrier it
+        // arrived at has decided (#4683); the phase timer re-checks.
+        if (!await ReleaseCrossTreeHoldAsync().ConfigureAwait(true))
+        {
+            return;
+        }
+
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
         var asOfHlc = state.State.SnapshotAsOfHlc;

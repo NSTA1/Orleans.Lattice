@@ -50,6 +50,12 @@ not to hold in production:
   full backup uses: a committed batch is included whole, an aborted one never,
   and an undecided one is left for the next increment. A batch that straddles a
   full backup's frontier makes the increment fall back to a full backup.
+- **An increment on an older base could omit a committed batch (#4686,
+  fixed).** A base captured before the #4589 fix does not record the batches it
+  held back as undecided, so an increment layered on it could not look them up
+  and could leave out a batch that committed after the base. An incremental
+  capture on such a base now falls back to a full backup, which starts a new
+  chain.
 
 - **A capture could hold a committed batch with one key absent (#4619, fixed).**
   A decision whose tombstone had expired but was still stored was read at the
@@ -98,6 +104,9 @@ Coverage of one half must not be read as coverage of the other. Not covered:
 - in-place and cold restores, which have no cutover;
 - the restore-side behaviour of a resharded or resized tree, which belongs to
   the shard-ownership specification;
+- an atomic batch in flight across a local cutover and its revert, which the
+  shard-ownership specification's `ShardOwnershipCutover` module checks, and
+  which found #4689 (fixed);
 - the receiver side of cross-cluster atomic batches, which depends on #4480.
 
 Each refinement note under [`spec/backup/`](../../spec/backup/README.md) lists in

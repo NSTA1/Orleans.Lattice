@@ -75,6 +75,9 @@ public partial class BPlusLeafGrainTests
                 "Discards the state a replay would rebuild, so it RETIRES the barrier rather than "
                 + "waiting for it. Waiting would replay a projection in order to throw it away, and "
                 + "would deadlock against a replay that cannot finish.",
+            ["ClearGrainStateForPurgeAsync"] =
+                "ClearGrainStateAsync for a purge (issue #4700): the same discard, preceded by marking "
+                + "the row record, so it RETIRES the barrier for the same reason.",
             ["RebuildProjectionFromWalAsync"] =
                 "Supersedes the replay outright and so RETIRES the barrier. It is the administrative "
                 + "remedy for a broken projection and must not require the broken replay to finish "
@@ -129,7 +132,7 @@ public partial class BPlusLeafGrainTests
         // replay consults, so it must run against the fully replayed buckets.
         "DiscardPendingTransactionAsync",
         // Maintenance that reads the projection.
-        "CompactTombstonesAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
+        "CompactTombstonesAsync", "CompactTombstonesBelowAsync", "FreezeProjectionAsync", "FoldTailOntoFrozenAsync", "FoldTailOntoFrozenGatedAsync",
         "GetReclaimProbeAsync", "TryBeginRetirementAsync", "TryUnlinkSuccessorAsync",
         "TryBeginOrphanRetirementAsync",
         "AbsorbSuccessorRangeAsync",
@@ -145,6 +148,10 @@ public partial class BPlusLeafGrainTests
         // activation before this change.
         "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync",
         "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync",
+
+        // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf
+        // through SetTreeIdAsync and SetShardIndexAsync, gated as they are.
+        "RecoverBindingAsync",
     };
 
     /// <summary>
@@ -481,7 +488,7 @@ public partial class BPlusLeafGrainTests
             // barrier, which frees this fixture's wedge and would let every method
             // invoked after them pass for the wrong reason. They are covered by
             // their own assertions below.
-            .Where(m => m.Name is not "ClearGrainStateAsync" and not "RebuildProjectionFromWalAsync")
+            .Where(m => m.Name is not "ClearGrainStateAsync" and not "ClearGrainStateForPurgeAsync" and not "RebuildProjectionFromWalAsync")
             .ToList();
 
         Assert.That(methods, Is.Not.Empty, "no metadata entry points were resolved, so this is vacuous");

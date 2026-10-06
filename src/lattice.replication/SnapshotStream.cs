@@ -75,6 +75,13 @@ public sealed class SnapshotStream
     internal SnapshotSourceFrontier? SourceFrontier { get; set; }
 
     /// <summary>
+    /// The sibling boundaries the source captured at the export's end (issue
+    /// #4684), set once the stream is drained; <see langword="null"/> from a
+    /// source that did not serve the export under the cross-tree hold.
+    /// </summary>
+    internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; set; }
+
+    /// <summary>
     /// The same frontier as read when the export opened, before any entry is
     /// enumerated (issue #4586 part 2b), so a receiver can put its bootstrap drop
     /// floor in force before the drain applies anything. Its own-origin entry is
@@ -126,6 +133,13 @@ public sealed class SnapshotStream
     /// that took it off the log knows it has been re-seeded.
     /// </summary>
     internal long ExportEpoch { get; init; }
+
+    /// <summary>
+    /// Whether the source served the export under the cross-tree decision purge
+    /// hold and decision stamping (issue #4684); see
+    /// <see cref="RemoteSnapshotMetadata.CrossTreeHoldHonoured"/>.
+    /// </summary>
+    internal bool CrossTreeHoldHonoured { get; init; }
 
     /// <summary>
     /// Constructs a new <see cref="SnapshotStream"/>. The constructor

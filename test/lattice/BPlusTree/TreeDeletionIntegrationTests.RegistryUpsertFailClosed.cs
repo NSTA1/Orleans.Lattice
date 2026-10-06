@@ -142,6 +142,7 @@ public partial class TreeDeletionIntegrationTests
                 () => registry.SetMaintainProjectionDigestAsync(treeName, false),
                 () => registry.SetMaxCacheValueBytesAsync(treeName, 4096),
                 () => registry.SetWalMaxRetainedBytesAsync(treeName, 4096),
+                () => registry.RaiseReplicationFloorEpochAsync(treeName, 1),
             },
             RegistryVerbFamily.DigestLatch => new Func<Task>[]
             {

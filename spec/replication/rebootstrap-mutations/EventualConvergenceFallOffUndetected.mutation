@@ -8,8 +8,10 @@ SUMMARY: a trim past the receiver is not detected, so no re-bootstrap repairs th
 PERTURBS: Trim
 
 --- FIND
+    /\ \E t \in (cursor[<<s, r>>] + 1)..Len(wal[s]) : cursor' = [cursor EXCEPT ![<<s, r>>] = t]
     /\ fellOff' = TRUE
 --- REPLACE
+    /\ \E t \in (cursor[<<s, r>>] + 1)..Len(wal[s]) : cursor' = [cursor EXCEPT ![<<s, r>>] = t]
 \* MUTATION: fall-off is not detected.
     /\ fellOff' = fellOff
 --- END

@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence. A full dead-letter queue evicts its oldest entry to admit a new one,
+# as production's did before #4612 (the fix for #4603), so the evicted write is never applied.
+MODULE: EventualConvergenceDeadLetterEvictsOldest
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a full dead-letter queue evicts its oldest entry, which is then never replayed
+PERTURBS: ReceiveA
+BOUNDS: NParts = 1, MaxDeadLetters = 2
+
+--- FIND
+             /\ Cardinality(dlq) < DlqCap
+             /\ aack' = [aack EXCEPT ![p] = i]
+             /\ dlq' = dlq \cup {e.h}
+--- REPLACE
+             \* MUTATION: evict the oldest entry at capacity.
+             /\ aack' = [aack EXCEPT ![p] = i]
+             /\ dlq' = (IF Cardinality(dlq) < DlqCap THEN dlq \cup {e.h} ELSE {e.h})
+--- END

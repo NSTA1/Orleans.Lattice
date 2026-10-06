@@ -1,0 +1,31 @@
+# Pairs with ReadPositionHonest. The intent is inferred from the pin store: a
+# rowless leaf is re-created when its pin is still the seeded Zero block pin or
+# has no entry. The GC retires a rowless leaf's pin (PinRetire, #3101), after
+# which the leaf reads as never created, so it is re-created empty over a WAL
+# trimmed under its lost snapshot. This is why pin-store evidence cannot stand in
+# for an explicit create path. The base takes no intent from the pin store.
+MODULE: ReadPositionHonestIntentFromRetiredPin
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a rowless leaf whose pin the GC retired is taken as never created
+PERTURBS: Activate
+
+--- FIND
+    /\ row[l] \/ CreateIntent(l)
+--- REPLACE
+\* MUTATION: no pin entry, or only the seeded block pin, is taken as intent.
+    /\ row[l] \/ Blocking(l) \/ pinHlc[l] = "gone"
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

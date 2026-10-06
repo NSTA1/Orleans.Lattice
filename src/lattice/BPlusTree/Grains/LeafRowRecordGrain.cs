@@ -13,23 +13,46 @@ internal sealed class LeafRowRecordGrain(
 {
     /// <inheritdoc />
     public Task<LeafRowRecordState?> GetAsync() =>
-        Task.FromResult(state.RecordExists ? new LeafRowRecordState { TreeId = state.State.TreeId } : null);
+        Task.FromResult(state.RecordExists
+            ? new LeafRowRecordState { TreeId = state.State.TreeId, PurgeCleared = state.State.PurgeCleared }
+            : null);
 
     /// <inheritdoc />
     public async Task RecordAsync(string? treeId)
     {
-        if (state.RecordExists && (treeId is null || string.Equals(state.State.TreeId, treeId, StringComparison.Ordinal)))
+        if (state.RecordExists
+            && !state.State.PurgeCleared
+            && (treeId is null || string.Equals(state.State.TreeId, treeId, StringComparison.Ordinal)))
             return;
 
-        var previous = state.State.TreeId;
-        state.State.TreeId = treeId ?? previous;
+        var previous = (state.State.TreeId, state.State.PurgeCleared);
+        state.State.TreeId = treeId ?? previous.TreeId;
+        state.State.PurgeCleared = false;
         try
         {
             await state.WriteStateAsync();
         }
         catch
         {
-            state.State.TreeId = previous;
+            (state.State.TreeId, state.State.PurgeCleared) = previous;
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task MarkPurgeClearedAsync()
+    {
+        if (state.RecordExists && state.State.PurgeCleared)
+            return;
+
+        state.State.PurgeCleared = true;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.PurgeCleared = false;
             throw;
         }
     }

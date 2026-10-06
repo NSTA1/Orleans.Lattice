@@ -22,7 +22,7 @@ public partial class LatticeRegistryGrainTests
         "SetShardMapAsync", "ReassignSlotsAsync", "AllocateNextShardIndexAsync", "SetPublishEventsAsync",
         "SetHistoryRetentionAsync", "SetMaintainProjectionDigestAsync", "SetMaxCacheValueBytesAsync",
         "SetWalMaxRetainedBytesAsync", "LatchProjectionDigestPermanentlyDisabledAsync",
-        "UpdateWalPlacementAsync(single)", "UpdateWalPlacementAsync(batch)", "RaiseWalMoveFencesAsync",
+        "RaiseReplicationFloorEpochAsync", "UpdateWalPlacementAsync(single)", "UpdateWalPlacementAsync(batch)", "RaiseWalMoveFencesAsync",
     ];
 
     /// <summary>
@@ -46,6 +46,7 @@ public partial class LatticeRegistryGrainTests
         "SetMaxCacheValueBytesAsync" => g.SetMaxCacheValueBytesAsync(id, 1024),
         "SetWalMaxRetainedBytesAsync" => g.SetWalMaxRetainedBytesAsync(id, 1024),
         "LatchProjectionDigestPermanentlyDisabledAsync" => g.LatchProjectionDigestPermanentlyDisabledAsync(id),
+        "RaiseReplicationFloorEpochAsync" => g.RaiseReplicationFloorEpochAsync(id, 1),
         "UpdateWalPlacementAsync(single)" => g.UpdateWalPlacementAsync(id, 0, 0, "dedicated"),
         "UpdateWalPlacementAsync(batch)" => g.UpdateWalPlacementAsync(id, 0, [(0, "dedicated")]),
         "RaiseWalMoveFencesAsync" => g.RaiseWalMoveFencesAsync(id, 0, [0], "move-a", TimeSpan.FromMinutes(1), renew: false),

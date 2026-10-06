@@ -105,6 +105,75 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
         await h.TreeFrontier.Received(1).ObserveAsync(Origin, Frontier, Arg.Any<CancellationToken>());
     }
 
+    private static readonly ReplicationAckedPositions Acked = new()
+    {
+        PhysicalTreeId = "tree-physical",
+        Positions = [3, 0, 7],
+    };
+
+    [Test]
+    public async Task Acked_positions_beside_a_valid_frontier_are_recorded_with_it()
+    {
+        // Issue #4684: the positions ride on the frontier the receiver records.
+        var h = new Harness();
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, Frontier.ToText(), Acked.ToText()));
+
+        await h.TreeFrontier.Received(1).ObserveAsync(
+            Origin,
+            Arg.Is<ReplicationSourceFrontier?>(f => f.HasValue && f.Value.AckedPositions != null
+                && f.Value.AckedPositions.PhysicalTreeId == Acked.PhysicalTreeId
+                && f.Value.AckedPositions.Positions.SequenceEqual(Acked.Positions)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Malformed_acked_positions_vouch_none_but_keep_the_watermark()
+    {
+        var h = new Harness();
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, Frontier.ToText(), "1|not-base64!|3"));
+
+        await h.TreeFrontier.Received(1).ObserveAsync(Origin, Frontier, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Acked_positions_without_a_valid_frontier_are_never_read()
+    {
+        var h = new Harness();
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, Frontier.ToText() + ".9", Acked.ToText()));
+        await h.Service(peers: ["someone-else"]).Push(EmptyBox(), new CallContext(Origin, Frontier.ToText(), Acked.ToText()));
+
+        await h.TreeFrontier.Received(2).ObserveAsync(Origin, null, Arg.Any<CancellationToken>());
+    }
+
+    [TestCase(null)]
+    [TestCase("someone-else")]
+    public async Task Acked_positions_on_a_call_whose_origin_is_not_authenticated_as_the_body_origin_are_never_read(string? stampedOrigin)
+    {
+        // Issue #4684: a peer cannot vouch positions for another origin's
+        // shipper. The push is refused before any header is read.
+        var h = new Harness();
+
+        var refused = Assert.ThrowsAsync<RpcException>(
+            async () => await h.Service().Push(EmptyBox(), new CallContext(stampedOrigin, Frontier.ToText(), Acked.ToText())));
+
+        Assert.That(refused!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+        await h.TreeFrontier.DidNotReceiveWithAnyArgs().ObserveAsync(default!, default, default);
+    }
+
+    [Test]
+    public async Task Oversized_acked_positions_vouch_none_but_keep_the_watermark()
+    {
+        var h = new Harness();
+        var oversized = "1|dHJlZQ==|" + string.Join(',', Enumerable.Repeat("1", ReplicationAckedPositions.MaxPartitions + 1));
+
+        await h.Service().Push(EmptyBox(), new CallContext(Origin, Frontier.ToText(), oversized));
+
+        await h.TreeFrontier.Received(1).ObserveAsync(Origin, Frontier, Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task A_frontier_from_a_peer_that_is_not_configured_is_ignored()
     {
@@ -191,13 +260,13 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
         });
     }
 
-    private sealed class CallContext(string? stampedOrigin, string? frontier) : ServerCallContext
+    private sealed class CallContext(string? stampedOrigin, string? frontier, string? ackedPositions = null) : ServerCallContext
     {
         protected override string MethodCore => "Push";
         protected override string HostCore => string.Empty;
         protected override string PeerCore => string.Empty;
         protected override DateTime DeadlineCore => DateTime.MaxValue;
-        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = Headers(stampedOrigin, frontier);
+        protected override global::Grpc.Core.Metadata RequestHeadersCore { get; } = Headers(stampedOrigin, frontier, ackedPositions);
         protected override CancellationToken CancellationTokenCore => CancellationToken.None;
         protected override global::Grpc.Core.Metadata ResponseTrailersCore { get; } = new();
         protected override Status StatusCore { get; set; }
@@ -208,7 +277,7 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
             => throw new NotSupportedException();
         protected override Task WriteResponseHeadersAsyncCore(global::Grpc.Core.Metadata responseHeaders) => Task.CompletedTask;
 
-        private static global::Grpc.Core.Metadata Headers(string? stampedOrigin, string? frontier)
+        private static global::Grpc.Core.Metadata Headers(string? stampedOrigin, string? frontier, string? ackedPositions)
         {
             var headers = new global::Grpc.Core.Metadata();
             if (stampedOrigin is not null)
@@ -219,6 +288,11 @@ public class LatticeReplicationGrpcServiceSourceFrontierTests
             if (frontier is not null)
             {
                 headers.Add(LatticeReplicationGrpcMetadataNames.SourceFrontierHeader, frontier);
+            }
+
+            if (ackedPositions is not null)
+            {
+                headers.Add(LatticeReplicationGrpcMetadataNames.AckedPositionsHeader, ackedPositions);
             }
 
             return headers;

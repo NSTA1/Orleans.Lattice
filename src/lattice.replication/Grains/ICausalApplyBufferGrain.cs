@@ -44,7 +44,14 @@ internal interface ICausalApplyBufferGrain : IGrainWithStringKey
     /// before its restore paused receiving. A re-park of an already parked entry
     /// keeps the epoch it was first parked under.
     /// </param>
-    Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0);
+    /// <param name="sourceLineage">
+    /// The source lineage the entry's sender stamped on the batch it arrived in
+    /// (issue #4707), or <see langword="null"/> for an unstamped entry. The drain
+    /// checks the entry against the lineage this tree has drained by then and
+    /// discards it when its sender's lineage has been replaced. A re-park of an
+    /// already parked entry keeps the stamp it was first parked with.
+    /// </param>
+    Task<int> ParkAsync(WalRecord entry, long admissionEpoch = 0, ReplicationSourceLineageStamp? sourceLineage = null);
 
     /// <summary>
     /// Applies, in FIFO order and to a fixed point, every parked entry whose

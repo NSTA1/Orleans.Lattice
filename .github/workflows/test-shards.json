@@ -90,25 +90,43 @@
         "shard": "formal-tlc-convergence",
         "tlc": true,
         "includeCategories": ["TlcShardConvergence"],
-        "note": "The TLC mutation gates are CPU-bound JVM runs and were 94 of the rest shard's 106 test-minutes, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, and their BOUNDS headers shrink the mutant arms, about 14 test-minutes."
+        "note": "The TLC mutation gates are CPU-bound JVM runs, so they are split across their own shards by the TlcShard* category test/lattice/Formal/TlcCiShard.cs gives each case (a category, because the NUnit adapter's filter parser rejects a FullName prefix that ends inside a case's argument list). Sizes are test-minutes summed over the cases of CI run 37322771720, which the harness runs about four at a time, so wall-clock is about a quarter. This shard holds every Replication EventualConvergence (temporal) mutant: they share one control arm, which the harness runs once per process, about 54 test-minutes (15 minutes wall-clock in that run)."
+      },
+      {
+        "shard": "formal-tlc-rebootstrap",
+        "tlc": true,
+        "includeCategories": ["TlcShardReBootstrap"],
+        "note": "The mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations, about 66 test-minutes, 60 of them ReplicationReBootstrap's. Each module's mutants share their controls, so every companion module stays whole in this shard."
       },
       {
         "shard": "formal-tlc-replication-wal",
         "tlc": true,
         "includeCategories": ["TlcShardReplicationWal"],
-        "note": "The other Replication mutants plus the WalDurability and WalMove mutants, about 13 test-minutes."
+        "note": "The other Replication mutants plus the mutants of every Wal* module, about 55 test-minutes (14 minutes wall-clock in that run)."
       },
       {
         "shard": "formal-tlc-shard-ownership",
         "tlc": true,
         "includeCategories": ["TlcShardShardOwnership"],
-        "note": "ShardOwnership and ShardOwnershipRetention mutants, about 14 test-minutes."
+        "note": "The mutants of every ShardOwnership* module, about 62 test-minutes (16 minutes wall-clock in that run)."
+      },
+      {
+        "shard": "formal-tlc-atomic",
+        "tlc": true,
+        "includeCategories": ["TlcShardAtomic"],
+        "note": "The mutants and variant configurations of every AtomicCommit* module, about 41 test-minutes."
+      },
+      {
+        "shard": "formal-tlc-backup",
+        "tlc": true,
+        "includeCategories": ["TlcShardBackup"],
+        "note": "The mutants of every Backup* module, about 30 test-minutes."
       },
       {
         "shard": "formal-tlc",
         "tlc": true,
         "include": ["Formal.TlcModelCheckTests"],
-        "note": "Every other TLC case: the base and variant runs of every module, the AtomicCommit, AtomicCommitCrossCluster and Backup* (including BackupIncremental) mutants, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 19 test-minutes."
+        "note": "Every other TLC case: the base run of every module, the variant runs of every module but AtomicCommit*, the mutants of modules TlcCiShard does not group (a new spec module lands here), and the synthetic-module gates, about 35 test-minutes. Before the AtomicCommit*, Backup* and ReplicationReBootstrap groups were split out it was 165 test-minutes, 42 minutes of wall-clock."
       },
       {
         "shard": "rest",

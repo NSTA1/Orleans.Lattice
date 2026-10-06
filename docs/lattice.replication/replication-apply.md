@@ -102,7 +102,7 @@ The tree's high-water-mark grain decides each dependency in one call:
 
    A dependency is **Lost** when its write is marked lost. It is **Met** when `t < S` and the write is not held, because acknowledged and not held means applied. Otherwise it is **Unmet**. A held listing that a crash left behind is confirmed with its source before it blocks anything.
 
-**How the origin's low watermark reaches the receiver.** An origin's shipper derives `S` from its WAL partitions' clock floors (the producer clock floor refuses a fresh local stamp below the floor, so once the peer has acknowledged every offset before the floor took effect, every write stamped below it has been acknowledged). It sends `S` beside each push as the `x-lattice-replication-source-frontier` call header, like the re-seed epoch, so the batch framing is unchanged and a receiver that predates it ignores it. The header carries the low watermark over the batch's tree, the low watermark over every tree the origin replicates to this receiver, an aggregate generation, and the receiver lineage the covering acknowledgements were taken under. The receiver reads it only after the caller's origin is authenticated, only for a tree enrolled here and an origin in the configured replication topology, and parses it strictly and bounded; a missing or malformed header vouches for nothing.
+**How the origin's low watermark reaches the receiver.** An origin's shipper derives `S` from its WAL partitions' clock floors (the producer clock floor refuses a fresh local stamp below the floor, so once the peer has acknowledged every offset before the floor took effect, every write stamped below it has been acknowledged). It sends `S` beside each push as the `x-lattice-replication-source-frontier` call header, like the re-seed epoch, so the batch framing is unchanged and a receiver that predates it ignores it. The header carries the low watermark over the batch's tree, the low watermark over every tree the origin replicates to this receiver, an aggregate generation, and the receiver lineage the covering acknowledgements were taken under. The receiver reads it only after the caller's origin is authenticated, only for a tree enrolled here and an origin in the configured replication topology, and parses it strictly and bounded; a missing or malformed header vouches for nothing. Beside a frontier the shipper vouches, it also sends its acknowledged read positions - per WAL partition of its bound log, the lowest offset the peer has not acknowledged, capped at held terminals - as the `x-lattice-replication-acked-positions` header ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). It is read only with a valid frontier, under the same checks, parsed strictly and bounded, and recorded on the tree's frontier for the origin; a malformed value vouches no positions but keeps the watermark. A receiver that predates it ignores it. An import of another tree reads these positions to decide whether this tree has passed the sibling boundary its export captured (see [Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
 
 **The receiver's tree frontier.** Each tree has a durable `IReplicationTreeFrontierGrain` that owns a frontier epoch and records each origin's watermark for the tree. Every acknowledgement reports the epoch as `ReplicationAck.ReceiverLineage`, and a watermark is accepted only if it is tagged with the current epoch. Whenever the tree's contents may be replaced, the frontier re-mints its epoch. The tree registry tells it before it persists any change to the tree's lineage (`TreeRegistryEntry.Lineage`, [#4537](https://github.com/NSTA1/Orleans.Lattice/issues/4537)) - a registration, an unregistration or purge, a shadow-cutover restore or its revert, an alias move - and a failure to force the gap fails the change; an alias swap re-stamps it too, and an activation that finds a registry lineage it never observed re-stamps as well. In-place restore, resize, reshard and remediation keep the lineage, because they lose no applied write. On a re-stamp the frontier zeroes every origin's watermark, caps each origin's aggregate at zero on its frontier, and forgets the tree's applied identities, before the replacement proceeds. A sender that sees the epoch change treats it as a forced gap and re-seeds this receiver, because the new contents may lack writes it already shipped. The guarantee covers the writes the sender's current contents still hold. If a cluster replaces its own tree's contents outside a coordinated restore, its peers keep the writes it discarded, and a peer write that depends on one of them is released on that cluster's watermark once it re-covers the tree, without the discarded write; the replacing cluster logs a warning and counts it on `orleans.lattice.replication.source_restore.uncoordinated`. The tree accepts no watermark until a full bootstrap installs its export; the cap holds until the origin ships a watermark tagged with the new epoch, and from then on the origin's frontier ignores any aggregate of an older generation, which may still count the tree's lost coverage.
 
@@ -114,6 +114,12 @@ The buffer is bounded by `CausalBufferMaxEntries` (default `1024`) and `CausalBu
 
 - **The entry's own origin diagonal.** The per-origin high-water-mark tracks that origin's own FIFO progression, so requiring the local clock to dominate the diagonal would deadlock the very entry being applied.
 - **The receiver's own cluster id.** The receiver-side local vector clock tracks only *foreign*-applied frontiers - it never advances its own diagonal - but the receiver durably holds every write it authored itself, so any dependency on one of the receiver's own writes is trivially satisfied. Without this exemption a peer entry whose frontier references a write the receiver originated (for example, site C's post-partition write that causally follows site A's pre-partition write, once an A-C partition heals) would park forever against a perpetually-zero self-component and stall convergence.
+
+### 7. Bootstrap drop floor
+
+After a full bootstrap the high-water-mark grain may hold a durable drop floor: per origin, the source's applied low watermark when the export opened and the writes below it the source held without applying ([snapshot bootstrap](snapshot-bootstrap.md), issue #4549). A point write or prepare of that origin stamped below the watermark and not held is not merged. While the bootstrap's import is still open the floor is provisional and the delivery is deferred (`Deferred = true`, `outcome=bootstrap-floor-deferred`); once the import closes stable it is acknowledged without being merged (`Applied = false`, `outcome=bootstrap-floor-dropped`), because the export already reflected it. The check runs after the terminal branch, so saga terminals are never held back, and it is skipped inside a bootstrap drain, so the drain's own rows apply. The batch path applies the same per-entry check and defers its run when any entry is below a provisional floor.
+
+Every other replicated write is stamped with the tree's floor epoch from the same admission read. A shard root armed by a later floor install refuses a write stamped with an older epoch with `ReplicationFloorAdmissionStaleException`, and the applier maps it to a deferral (`outcome=bootstrap-floor-deferred`), so the re-shipped delivery is admitted against the floor. The floor is cleared whenever the tree's applied identities are reset, and a later bootstrap replaces it.
 
 ## Validation
 
@@ -272,6 +278,31 @@ excluded, so a cross-tree batch spanning a mix of replicated and
 non-replicated trees stays valid - the barrier completes on the present
 subset rather than waiting forever on a tree that never ships here.
 
+The wait set is fixed when the barrier opens. The first terminal freezes it
+and the coordinator persists it; it is never recomputed from the
+receiver's live configuration (#4692). The applier still computes each
+terminal's wait set from the trees replicated here at that moment, so a
+configuration change between two terminals of one operation can hand a
+later terminal a different set. The coordinator logs that and keeps the
+frozen one. A tree that was not replicated here when the set froze, and
+whose terminal arrives later, joins the set itself (it is arriving, so it
+adds nothing to wait for) after the same cluster-identity check the freeze
+makes; once the barrier has decided, it is finalized with the decided
+verdict.
+
+A participant that stops being replicated here before its own terminal
+arrives would otherwise be waited for for ever: its terminal is dropped at
+the enrollment gate. That drop - and only that one, the gate's
+not-replicated arm - tells the barrier the tree is absent. An undecided
+barrier that still waits for it removes it from the wait set and, if every
+remaining tree has arrived, decides by the usual rule; the applier then
+finalizes the remaining trees. The dropped tree's pending bucket of the
+sub-saga is discarded, because the tree is no longer a replica of the
+origin. A terminal dropped or deferred for any other reason (a merge-mode
+mismatch, an apply failure) never decides the barrier. A barrier that has
+not opened is left untouched and persists nothing, since the tree and
+operation ids are peer-supplied.
+
 Once a tree's per-source-shard gate is final, a cross-tree terminal does
 **not** flip that tree's registry directly. Instead the receiver durably
 registers the tree's local txid as delegated to a **receiver coordinator
@@ -288,6 +319,45 @@ calls back into a tree grain); the calling tree grain performs the
 per-tree finalizes - itself inline, siblings via their apply grains - so
 there is no circular wait. A null/empty `crossTreeOperationId` routes the
 terminal through the legacy single-tree gate unchanged.
+
+A bootstrap or re-seed of one participating tree arrives at the barrier
+too. Its export carries a decision row that names the sub-saga's
+cross-tree operation, and the drain records the tree's arrival with that
+verdict as the tree's terminal would. The imported tree stays read-fenced
+until the barrier decides, so it is never served post-saga beside a
+sibling that is still pre-saga
+([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683); see
+[Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
+
+The receiver acknowledges a cross-tree terminal only once the barrier has
+recorded it: the apply hop returns after the coordinator persisted the
+arrival, and a notify that fails fails the apply, so the batch is not
+accepted. The origin relies on this when it purges a cross-tree decision
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+Saga terminals are never parked in the causal apply buffer or dead-lettered
+(a terminal that exhausts its retries is deferred instead), and a
+multi-shard sub-saga notifies on its final source shard's terminal. The one
+terminal acknowledged without reaching the barrier is the enrollment gate's
+drop of a tree no longer replicated here, which removes the tree from the
+barrier instead (above). A barrier also registers itself, before it persists
+its wait set, under every tree it waits for (`ICrossTreeBarrierIndexGrain`,
+keyed by the receiver tree), and withdraws once decided, so an import of one
+of those trees can find it.
+
+A shipped cross-tree terminal carries the operation's **decision stamps**:
+per participating tree, the export epoch the origin read after the decision
+was durable (`WalRecord.CrossTreeDecisionStamps`, on the wire only). The
+applier records them on the barrier before it applies the terminal. A
+barrier compares each tree that has not arrived with the tree's latest
+snapshot import, which the same index records, and records the tree's
+arrival with the operation's verdict when that import named the operation
+nowhere and its export opened after the decision
+([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684); see
+[Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)).
+Such an arrival finalizes nothing, because the import already settled the
+tree; a real terminal of the tree that arrives later replaces it, so its
+pending bucket is still finalized.
 
 Public readers therefore observe the receiver-side same-cluster
 atomic-visibility property end-to-end: at every point in time,

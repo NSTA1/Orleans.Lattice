@@ -5,9 +5,12 @@
   "counts": {
     "invariants": 2,
     "properties": 1,
-    "actions": 10,
-    "mutations": 12,
-    "behaviourRows": 11,
-    "distinctStates": 56135
+    "actions": 18,
+    "mutations": 33,
+    "behaviourRows": 19,
+    "distinctStates": 633326
+  },
+  "variants": {
+    "Floor": { "distinctStates": 449383 }
   }
 }

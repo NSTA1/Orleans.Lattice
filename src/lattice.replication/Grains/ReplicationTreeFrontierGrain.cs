@@ -72,6 +72,12 @@ internal sealed class ReplicationTreeFrontierGrain(
         }
 
         var origin = grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId);
+        if (frontier.AckedPositions is { } acked && acked != entry.AckedPositions)
+        {
+            entry.AckedPositions = acked;
+            _watermarksDirty = true;
+        }
+
         if (frontier.TreeLowWatermark > entry.LowWatermark)
         {
             entry.LowWatermark = frontier.TreeLowWatermark;
@@ -217,6 +223,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         await EnsureSettledAsync(cancellationToken).ConfigureAwait(true);
 
         var watermarks = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        var acked = new Dictionary<string, ReplicationAckedPositions>(StringComparer.Ordinal);
         if (state.State.Epoch != Guid.Empty)
         {
             foreach (var (origin, entry) in state.State.Origins)
@@ -224,6 +231,11 @@ internal sealed class ReplicationTreeFrontierGrain(
                 if (!entry.AwaitingPin && entry.LowWatermark > HybridLogicalClock.Zero)
                 {
                     watermarks[origin] = entry.LowWatermark;
+                }
+
+                if (!entry.AwaitingPin && entry.AckedPositions is { } positions)
+                {
+                    acked[origin] = positions;
                 }
             }
         }
@@ -233,6 +245,8 @@ internal sealed class ReplicationTreeFrontierGrain(
             Epoch = state.State.Epoch,
             RegistryLineage = state.State.ObservedRegistryLineage,
             LowWatermarks = watermarks,
+            AckedPositions = acked,
+            KnownOrigins = state.State.Epoch == Guid.Empty ? Array.Empty<string>() : [.. state.State.Origins.Keys],
         };
     }
 
@@ -337,6 +351,7 @@ internal sealed class ReplicationTreeFrontierGrain(
             entry.LowWatermark = HybridLogicalClock.Zero;
             entry.AwaitingPin = true;
             entry.Capped = true;
+            entry.AckedPositions = null;
         }
 
         _forwarded.Clear();

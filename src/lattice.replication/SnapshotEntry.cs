@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Replication;
@@ -203,6 +204,33 @@ public readonly record struct SnapshotEntry
     public bool IsDecision => SettledDecision is not null;
 
     /// <summary>
+    /// The cross-tree atomic write the saga <see cref="TransactionId"/> belongs
+    /// to, on a decision row or a prepared row of a sub-saga the source authored
+    /// as part of one (issue #4683), or <see langword="null"/>. A receiver
+    /// that imports a cross-tree sub-saga's decision records the tree's arrival
+    /// at its cross-tree barrier for this operation, as a shipped terminal
+    /// would, so the sibling trees are not left waiting for a terminal the
+    /// import replaced. A receiver that predates this slot ignores it.
+    /// </summary>
+    [Id(13)] internal string? CrossTreeOperationId { get; init; }
+
+    /// <summary>
+    /// The trees the cross-tree write <see cref="CrossTreeOperationId"/>
+    /// touched, ordinal-sorted, or empty when the row names no operation.
+    /// </summary>
+    [Id(14)] internal ImmutableArray<string> CrossTreeParticipants { get; init; }
+
+    /// <summary>
+    /// The decision stamps of the cross-tree write
+    /// <see cref="CrossTreeOperationId"/> (issue #4684): per participating tree,
+    /// that tree's export epoch read at the source after the decision was
+    /// durable, or <see langword="null"/> when the row names no operation or the
+    /// operation was decided before stamping. The receiver's barrier compares a
+    /// participant's stamp with the export it imported the participant from.
+    /// </summary>
+    [Id(15)] internal ImmutableDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
+
+    /// <summary>
     /// Compares two entries by value, with <see cref="Value"/> and
     /// <see cref="Delta"/> compared by content. The compiler-generated
     /// record-struct equality compares each <see cref="byte"/> array with
@@ -225,7 +253,36 @@ public readonly record struct SnapshotEntry
         && ExpiresAtTicks == other.ExpiresAtTicks
         && ByteArrayEquality.ContentEquals(Delta, other.Delta)
         && Mode == other.Mode
-        && SettledDecision == other.SettledDecision;
+        && SettledDecision == other.SettledDecision
+        && string.Equals(CrossTreeOperationId, other.CrossTreeOperationId, StringComparison.Ordinal)
+        && (CrossTreeParticipants.IsDefaultOrEmpty
+            ? other.CrossTreeParticipants.IsDefaultOrEmpty
+            : !other.CrossTreeParticipants.IsDefaultOrEmpty
+                && CrossTreeParticipants.AsSpan().SequenceEqual(other.CrossTreeParticipants.AsSpan()))
+        && StampsEqual(CrossTreeDecisionStamps, other.CrossTreeDecisionStamps);
+
+    private static bool StampsEqual(ImmutableDictionary<string, long>? left, ImmutableDictionary<string, long>? right)
+    {
+        if (left is null || right is null)
+        {
+            return left is null && right is null;
+        }
+
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var (tree, stamp) in left)
+        {
+            if (!right.TryGetValue(tree, out var other) || other != stamp)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     /// <inheritdoc />
     public override int GetHashCode()
@@ -252,6 +309,7 @@ public readonly record struct SnapshotEntry
 
         hash.Add(Mode);
         hash.Add(SettledDecision);
+        hash.Add(CrossTreeOperationId, StringComparer.Ordinal);
         return hash.ToHashCode();
     }
 }

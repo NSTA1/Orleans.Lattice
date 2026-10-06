@@ -876,14 +876,21 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// apply with <see cref="LatticeCrdtShapeNotRegisteredException"/> forever.
     /// </para>
     /// <para>
-    /// Cheap on a healthy shard: the leftmost leaf is unconditionally the first
-    /// node <see cref="PurgeAsync"/> clears, so a leftmost leaf that still
-    /// carries its binding proves no node in this shard was cleared and the
-    /// walk is skipped after a single probe. Idempotent, and safe to call on a
-    /// shard that was never purged.
+    /// Each routed leaf is re-bound through <see cref="IBPlusLeafGrain.RecoverBindingAsync"/>,
+    /// which re-creates a rowless leaf empty only when its own row record shows the
+    /// purge cleared it, and refuses any other rowless leaf, whose row may have been
+    /// lost (issue #4700). The walk reads every internal node; the leaf work is
+    /// paged so one call stays bounded: the call handles the leaves from
+    /// <paramref name="fromLeafIndex"/> on, and returns where the next call resumes,
+    /// or <c>-1</c> once the shard is done. Idempotent, and safe to call on a shard
+    /// that was never purged. A failure - a walk fault, or a fault reading a leaf's
+    /// record - propagates, so the recovery is retried rather than leaving a cleared
+    /// leaf with no path back.
     /// </para>
     /// </summary>
-    Task ReseedNodeBindingsAsync();
+    /// <param name="fromLeafIndex">The index of the first routed leaf to re-bind; <c>0</c> to start.</param>
+    /// <returns>The index to resume from, or <c>-1</c> when every leaf has been handled.</returns>
+    Task<int> ReseedNodeBindingsAsync(int fromLeafIndex);
 
     /// <summary>
     /// Merges entries into this shard using LWW (Last-Writer-Wins) semantics,
@@ -2010,6 +2017,18 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="fenced"><see langword="true"/> to arm the fence, <see langword="false"/> to lift it.</param>
     Task SetBootstrapReadFenceAsync(bool fenced);
+
+    /// <summary>
+    /// Raises the bootstrap drop-floor epoch this shard enforces (issue #4549)
+    /// and returns once every replicated write it admitted under an older epoch
+    /// has finished its leaf merge. From then on it refuses a replicated write
+    /// stamped with an older epoch with
+    /// <see cref="ReplicationFloorAdmissionStaleException"/>. The epoch is not
+    /// lowered; it lives in this activation, and a later activation reads it
+    /// from the tree registry, which the caller raises first.
+    /// </summary>
+    /// <param name="epoch">The floor epoch to enforce.</param>
+    Task ArmReplicationFloorEpochAsync(long epoch);
 
     /// <summary>
     /// Reports whether this shard's receiver bootstrap read fence is armed

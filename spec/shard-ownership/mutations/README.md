@@ -1,7 +1,7 @@
 # Shard-ownership mutations
 
-Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/)
-and [`../mutations-crdt/`](../mutations-crdt/),
+Each `.mutation` file here, and in [`../mutations-retention/`](../mutations-retention/),
+[`../mutations-crdt/`](../mutations-crdt/) and [`../mutations-cutover/`](../mutations-cutover/),
 is one controlled experiment: a deliberate defect in one module that must make
 one named property fire, run as two arms (the property holds on the unmutated
 module, and fails on the mutant). The file format, and why a mutation is
@@ -11,7 +11,8 @@ these catalogues use it unchanged, including `PERTURBS:`.
 
 This directory holds the `ShardOwnership` catalogue and
 `../mutations-retention/` the `ShardOwnershipRetention` one, and
-`../mutations-crdt/` the `ShardOwnershipCrdt` one. Mutation names are
+`../mutations-crdt/` the `ShardOwnershipCrdt` one, and `../mutations-cutover/`
+the `ShardOwnershipCutover` one. Mutation names are
 unique across every module, because they name test cases; where both modules
 pair an action with the same kind of defect, the retention module's file has its
 own name.
@@ -25,7 +26,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618 and #4619, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619 and #4689, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
@@ -169,3 +170,23 @@ generates exactly that cfg.
 | [`NoLostContributionSplitImportDropsOverOwnRow`](../mutations-crdt/NoLostContributionSplitImportDropsOverOwnRow.mutation) | `NoLostContribution` | Invariant | `WriteB`, `Copy`, `Commit` | a split's import drops the source's row over the destination's own fold, losing a contribution only the source held |
 | [`NoLostContributionStageOmitsOwnContribution`](../mutations-crdt/NoLostContributionStageOmitsOwnContribution.mutation) | `NoLostContribution` | Invariant | `Stage` | the staged state omits the saga's own contribution, which a backstop then never applies |
 | [`TypeOkMigrationPhaseOutsideDomain`](../mutations-crdt/TypeOkMigrationPhaseOutsideDomain.mutation) | `TypeOK` | Invariant | `Begin` | an opened migration window records a phase outside its domain |
+
+## Inventory: ShardOwnershipCutover
+
+| Mutation | Target | Class | Perturbs | What it breaks |
+|----------|--------|-------|----------|----------------|
+| [`AtomicAcrossCutoverAbortAfterCommit`](../mutations-cutover/AtomicAcrossCutoverAbortAfterCommit.mutation) | `AtomicAcrossCutover` | Invariant | `Abort` | a compensation overturns a recorded commit part way through the terminal broadcast |
+| [`AtomicAcrossCutoverCheckBeforeDispatched`](../mutations-cutover/AtomicAcrossCutoverCheckBeforeDispatched.mutation) | `AtomicAcrossCutover` | Invariant | `Check` | the pre-decision check passes before the whole batch is prepared, so one key surfaces while the other waits for the backstop |
+| [`AtomicAcrossCutoverDecideSkipsDiscard`](../mutations-cutover/AtomicAcrossCutoverDecideSkipsDiscard.mutation) | `AtomicAcrossCutover` | Invariant | `Decide` | **reproduces production before #4689 was fixed**: the decision does not wait for the discards, so the previous copy keeps an orphan bucket a revert serves torn |
+| [`AtomicAcrossCutoverDiscardForgetsTerminal`](../mutations-cutover/AtomicAcrossCutoverDiscardForgetsTerminal.mutation) | `AtomicAcrossCutover` | Invariant | `Discard` | the leaf does not remember the discard, so a straggling prepare recreates the orphan after the decision |
+| [`AtomicAcrossCutoverRebindForgetsLeftCopy`](../mutations-cutover/AtomicAcrossCutoverRebindForgetsLeftCopy.mutation) | `AtomicAcrossCutover` | Invariant | `RebindOnRefusal` | **production's mid-dispatch re-bind before #4689 was fixed**: the copy left behind is not recorded, so nothing discards it |
+| [`AtomicAcrossCutoverRouterIgnoresBinding`](../mutations-cutover/AtomicAcrossCutoverRouterIgnoresBinding.mutation) | `AtomicAcrossCutover` | Invariant | `Prepare` | the routing tier ignores the binding (#4358), placing a prepare on a copy the saga never discards |
+| [`AtomicAcrossCutoverTerminalRoutedThroughAlias`](../mutations-cutover/AtomicAcrossCutoverTerminalRoutedThroughAlias.mutation) | `AtomicAcrossCutover` | Invariant | `Terminal` | a routed terminal is refused by the retained redirect and follows the alias, installing the batch on the shadow one key at a time |
+| [`CommittedBatchOnBoundCopyRebindBeforeDecisionForgets`](../mutations-cutover/CommittedBatchOnBoundCopyRebindBeforeDecisionForgets.mutation) | `CommittedBatchOnBoundCopy` | Invariant | `RebindBeforeDecision` | **production's pre-decision re-bind before #4689 was fixed**: the whole batch stays prepared on the previous copy after the commit |
+| [`CommittedBatchOnBoundCopyStragglerLands`](../mutations-cutover/CommittedBatchOnBoundCopyStragglerLands.mutation) | `CommittedBatchOnBoundCopy` | Invariant | `Land` | a straggling prepare lands on a leaf that discarded the saga |
+| [`SagaSettlesArmsAliasCopy`](../mutations-cutover/SagaSettlesArmsAliasCopy.mutation) | `SagaSettles` | Temporal | `Arm` | the cutover arms the copy the alias moved onto, which then refuses its own bound saga |
+| [`SagaSettlesDiscardRouted`](../mutations-cutover/SagaSettlesDiscardRouted.mutation) | `SagaSettles` | Temporal | `Discard` | the discard is routed, so the retained redirect refuses it and the saga can never decide (`DEADLOCK: off`) |
+| [`SagaSettlesRevertKeepsRedirect`](../mutations-cutover/SagaSettlesRevertKeepsRedirect.mutation) | `SagaSettles` | Temporal | `RevertArm` | the revert leaves the previous copy redirecting, so the copy the alias is back on refuses its bound saga |
+| [`SagaSettlesRevertSwapLeavesAlias`](../mutations-cutover/SagaSettlesRevertSwapLeavesAlias.mutation) | `SagaSettles` | Temporal | `RevertSwap` | the revert's swap leaves the alias on the shadow, which its fix-up then arms |
+| [`SagaSettlesSwapLeavesAlias`](../mutations-cutover/SagaSettlesSwapLeavesAlias.mutation) | `SagaSettles` | Temporal | `Swap` | the cutover's swap leaves the alias on the previous copy, which the restore then arms |
+| [`TypeOkCutoverDiscardOutsideCopies`](../mutations-cutover/TypeOkCutoverDiscardOutsideCopies.mutation) | `TypeOK` | Invariant | none (edits `Discard`) | the discard bookkeeping records a value outside the copies |

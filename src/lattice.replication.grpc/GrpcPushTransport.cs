@@ -386,6 +386,17 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
             {
                 (headers ??= new global::Grpc.Core.Metadata())
                     .Add(LatticeReplicationGrpcMetadataNames.SourceFrontierHeader, frontier.ToText());
+                if (frontier.AckedPositions is { } acked)
+                {
+                    headers.Add(LatticeReplicationGrpcMetadataNames.AckedPositionsHeader, acked.ToText());
+                }
+            }
+
+            // The source lineage the batch was read under (issue #4673).
+            if (batch.SourceLineage is { } sourceLineage)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.SourceLineageHeader, sourceLineage.ToString("D"));
             }
 
             using var call = channel.Invoker.AsyncUnaryCall(

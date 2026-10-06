@@ -49,6 +49,13 @@ internal readonly record struct ReplicationSourceFrontier
     /// </summary>
     [Id(3)] public long OriginGeneration { get; init; }
 
+    /// <summary>
+    /// The shipper's acknowledged read positions (issue #4684), present only
+    /// while it vouches the watermark. Not part of <see cref="ToText"/>: the gRPC
+    /// transport ships it as its own header.
+    /// </summary>
+    [Id(4)] public ReplicationAckedPositions? AckedPositions { get; init; }
+
     /// <summary>Renders the canonical text form <see cref="TryParse"/> reads.</summary>
     public string ToText() => string.Join(
         '.',

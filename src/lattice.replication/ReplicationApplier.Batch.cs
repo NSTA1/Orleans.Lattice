@@ -125,6 +125,7 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         var i = 0;
         while (i < entries.Count)
         {
@@ -140,6 +141,10 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (runResult.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
@@ -147,7 +152,7 @@ internal sealed partial class ReplicationApplier
             i = j;
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -233,6 +238,7 @@ internal sealed partial class ReplicationApplier
         var anyApplied = false;
         var highest = HybridLogicalClock.Zero;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         foreach (var runResult in results)
         {
             if (runResult.Applied)
@@ -243,13 +249,17 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (runResult.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (runResult.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = runResult.HighWaterMark;
             }
         }
 
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -272,6 +282,7 @@ internal sealed partial class ReplicationApplier
             var anyApplied = false;
             var highest = HybridLogicalClock.Zero;
             var anyDeferred = false;
+            var anyLineageRefused = false;
             foreach (var (start, end) in segments)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -285,12 +296,16 @@ internal sealed partial class ReplicationApplier
                 {
                     anyDeferred = true;
                 }
+                if (runResult.SourceLineageRefused)
+                {
+                    anyLineageRefused = true;
+                }
                 if (runResult.HighWaterMark.CompareTo(highest) > 0)
                 {
                     highest = runResult.HighWaterMark;
                 }
             }
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
         }
         finally
         {
@@ -370,6 +385,19 @@ internal sealed partial class ReplicationApplier
             // Issue #4593: the run routed to a restored copy whose receive fence a
             // coordinated restore still holds closed. Defer the run exactly as the
             // receive fence does; the sender re-ships it once the copy opens.
+            RecordInboundContact(entries[startInclusive], success: true);
+            return new ApplyResult
+            {
+                Applied = false,
+                HighWaterMark = HybridLogicalClock.Zero,
+                Deferred = true,
+            };
+        }
+        catch (ReplicationFloorAdmissionStaleException)
+        {
+            // Issue #4549: a bootstrap drop floor was installed after the run was
+            // admitted, and its shard is armed against it. Defer the run; the
+            // sender re-ships it and the re-delivery is admitted against the floor.
             RecordInboundContact(entries[startInclusive], success: true);
             return new ApplyResult
             {
@@ -602,8 +630,10 @@ internal sealed partial class ReplicationApplier
     ///   <item><description>Range-delete entries apply
     ///   through the range path because one issue HLC covers a whole
     ///   key range rather than one point write.</description></item>
-    ///   <item><description>Point entries have no HLC drop threshold:
-    ///   neither the incrementally advanced per-origin diagonal (per-origin
+    ///   <item><description>Point entries have no HLC drop threshold but
+    ///   the bootstrap drop floor (#4549), which is the source's
+    ///   downward-closed per-origin applied low watermark: neither the
+    ///   incrementally advanced per-origin diagonal (per-origin
     ///   HLC is non-monotonic in WAL-append order - #1060) nor a
     ///   snapshot-pinned floor (no single HLC is downward-closed over what a
     ///   snapshot holds - #4463). Exact duplicates are absorbed by the
@@ -683,6 +713,15 @@ internal sealed partial class ReplicationApplier
             }
         }
 
+        // SOURCE LINEAGE (issues #4673, #4707). Mirror the per-entry check in
+        // ApplyAsync: one stamp covers the whole delivery, and the verdict is
+        // cached on the scope, so every run of the batch costs one check.
+        var lineageVerdict = await AdmitSourceLineageAsync(treeId, cancellationToken).ConfigureAwait(false);
+        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+        {
+            return SourceLineageRefusal(lineageVerdict);
+        }
+
         var resolved = options.Get(treeId);
         if (ReplicationReceiveDedup.IsOwnOrigin(origin, resolved.ClusterId))
         {
@@ -698,7 +737,8 @@ internal sealed partial class ReplicationApplier
         }
 
         var hwmGrain = GetHwmGrain(treeId);
-        var hwm = await hwmGrain.GetAsync(origin!, cancellationToken).ConfigureAwait(false);
+        var floorAdmission = await hwmGrain.GetAdmissionAsync(origin!, cancellationToken).ConfigureAwait(false);
+        var hwm = floorAdmission.HighWaterMark;
 
         // Bootstrap-drain mode: receiver-side bootstrap replay opens a
         // <see cref="LatticeBootstrapApplyContext"/> scope around the
@@ -718,6 +758,13 @@ internal sealed partial class ReplicationApplier
         // drainer that batches; the matching test fixture covers it
         // verbatim.
         var bootstrapMode = LatticeBootstrapApplyContext.IsActive;
+
+        // Bootstrap drop floor (#4549): see ApplyAsync. The run's writes carry
+        // the floor epoch they were admitted under.
+        if (!bootstrapMode)
+        {
+            ReplicationFloorAdmission.Stamp(floorAdmission.FloorEpoch);
+        }
 
         // Per-tree shadow-forward dedupe cache (see ApplyAsync for the
         // race scenario it closes). The cache instance is fetched once
@@ -754,6 +801,7 @@ internal sealed partial class ReplicationApplier
         // dead-letter queue is full (#4603). The run then reports Deferred, so
         // the sender keeps its cursor and re-ships rather than lose the entry.
         var deferDeadLetterFull = false;
+        var deferBelowProvisionalFloor = false;
 
         // Pending batched LWW Set/Delete items. Items pass classification
         // (not range delete, not dedup'd, not causally parked) and are
@@ -1011,12 +1059,35 @@ internal sealed partial class ReplicationApplier
                 // batched per-entry pass.
                 var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
 
+                // Bootstrap drop floor (#4549): see ApplyAsync. The run's
+                // admission read covers every entry of its single origin.
+                if (!bootstrapMode && floorAdmission.Drops(entry.Timestamp))
+                {
+                    if (floorAdmission.FloorProvisional)
+                    {
+                        // Not acknowledged: the run is re-shipped, and the
+                        // re-delivery is admitted against the settled floor.
+                        deferBelowProvisionalFloor = true;
+                        if (entry.IsPrepared && entry.TransactionId != Guid.Empty)
+                        {
+                            (deferredSagaPrepares ??= new HashSet<Guid>()).Add(entry.TransactionId);
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
+                        continue;
+                    }
+
+                    outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
+                    continue;
+                }
+
                 // Shadow-forward dedupe cache: suppress the duplicate-emit
                 // pair that structural rewrites (split / merge) generate
                 // when they shadow-forward a user
                 // write into a different shard. See ApplyAsync for the
                 // detailed race scenario. There is no HLC drop threshold
-                // ahead of it (#1060, #4463).
+                // ahead of it but the bootstrap drop floor (#1060, #4463,
+                // #4549).
                 if (!dedupeCache.TryAdd(entry, out var duplicateInFlight))
                 {
                     // IN-FLIGHT DUPLICATE (#4465): see ApplyAsync. A
@@ -1335,7 +1406,7 @@ internal sealed partial class ReplicationApplier
                 await DrainBufferAsync(treeId, cancellationToken).ConfigureAwait(false);
             }
 
-            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
+            return new ApplyResult { Applied = anyApplied, HighWaterMark = newHwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull || deferBelowProvisionalFloor };
         }
 
         // Bootstrap mode: the per-origin HWM is pinned atomically at
@@ -1345,7 +1416,7 @@ internal sealed partial class ReplicationApplier
         // suppress still-pending saga keys with strictly-earlier source
         // HLCs. Surface the pre-drain HWM so callers observe the
         // canonical pre-pin frontier.
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = hwm, Deferred = deferInFlightDuplicate || deferDeadLetterFull || deferBelowProvisionalFloor };
     }
 
     /// <summary>
@@ -1394,6 +1465,7 @@ internal sealed partial class ReplicationApplier
     {
         var anyApplied = false;
         var anyDeferred = false;
+        var anyLineageRefused = false;
         var highest = HybridLogicalClock.Zero;
         for (var k = startInclusive; k < endExclusive; k++)
         {
@@ -1407,12 +1479,16 @@ internal sealed partial class ReplicationApplier
             {
                 anyDeferred = true;
             }
+            if (r.SourceLineageRefused)
+            {
+                anyLineageRefused = true;
+            }
             if (r.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = r.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred };
+        return new ApplyResult { Applied = anyApplied, HighWaterMark = highest, Deferred = anyDeferred, SourceLineageRefused = anyLineageRefused };
     }
 
     /// <summary>
@@ -1509,6 +1585,10 @@ internal sealed partial class ReplicationApplier
         }
 
         await RecordNotEnrolledLostAsync(origin, dropped, cancellationToken).ConfigureAwait(false);
+        for (var k = startInclusive; k < endExclusive; k++)
+        {
+            await NotifyCrossTreeParticipantAbsentAsync(entries[k], cancellationToken).ConfigureAwait(false);
+        }
 
         for (var k = startInclusive; k < endExclusive; k++)
         {
