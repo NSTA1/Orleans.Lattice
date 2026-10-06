@@ -29,9 +29,38 @@ to you" or "No app is assigned to you yet".
 | `/apps/catalogue?source={key\|all}&filter={all\|installed\|available\|updates}&q=` | The catalogue. The query string is the state, so every view can be linked. |
 | `/apps/catalogue/{source}/{slug}[@{version}]` | Review before install, or manage an install: consent, lifecycle, upgrade and re-consent. Without a version, the source's newest is reviewed. |
 | `/apps/{slug}/{tab}` | The app's own pages, built from its manifest: `overview`, `trees`, `roles`, `tools`, `subscriptions`, `replication`, and `consent` (`AppInstall` only). The bare `/apps/{slug}` shows the overview in place. |
-| `/apps/{slug}/open[/{path}]` | The app's UI, when it ships one and the caller holds a role. Up to four in-app path segments follow `open`; a deeper in-app path travels as `?path=`, and its query as `?query=`. |
+| `/apps/{slug}/window[/{path}]` | The app's UI, when it ships one and the caller holds a role, alone in a browser window of its own with no Explorer chrome around it. Up to four in-app path segments follow `window`; a deeper in-app path travels as `?path=`, and its query as `?query=`. See [Opening an app](#opening-an-app). |
+| `/apps/{slug}/open[/{path}]` | An earlier address for the app's UI. It redirects, in place, to the same in-app path under `window`. |
 
 With tenancy on, each address is rooted at `/t/{tenant}`.
+
+### Opening an app
+
+An app's UI never runs inside the console. It is launched from the app's **Overview**,
+whose **Open {app}** button opens `/apps/{slug}/window` in a new browser window or tab.
+The **Open** buttons in Your apps and in the catalogue do the same. Each link carries
+`target="_blank"` and `rel="noopener noreferrer"`, so the new window shares nothing
+with the console that opened it. A caller who cannot open the app is never offered
+the button. The overview says why instead, as described in
+[who holds an app role](#who-holds-an-app-role). The address-line completion
+`a/{slug}/window` goes to the window in the current tab.
+
+That address is an ordinary Explorer URL, so it can also be bookmarked, shared, or
+typed in to go straight to the app without passing through the rest of the console.
+The Apps area marks it **standalone**: the layout draws no header, address line or
+directory spine, and the frame fills the window. Nothing else changes. The page goes
+through every gate an Explorer page does (session, tenant, the area's availability, and
+the app's own check that you may open it), and the frame is the same sandboxed frame with the same
+bridge. The new window starts its own launch, on its own Blazor circuit, through the
+per-launch workspace gate.
+
+Sign-in lives in the header. So a caller who reaches a window address while signed out
+sees the full console, signs in there, and the chrome then drops away. The window's
+**Leave app** goes to the app's overview, in the full console.
+
+An app's MCP tools never pass through the Explorer. An MCP client reaches them
+directly on the cluster's MCP endpoint, as `{slug}_{tool}`; see
+[app MCP tools](../lattice.api.mcp.apps/README.md).
 
 ### Sources
 
@@ -200,9 +229,12 @@ a plain HTML fragment, stylesheets and self-contained scripts. The bootstrap def
 The operations match the manifest's bridge vocabulary:
 
 - `context.read` returns the app, theme, contrast, density, reduced motion, tenant
-  display name, and the caller's app `roles`. The web head currently sends the
-  default appearance (Paper, standard contrast, comfortable density, full motion)
-  whatever the console's own appearance is, and no tenant display name (`null`).
+  display name, and the caller's app `roles`. The appearance is the one the console
+  page that launched the frame is drawn in: your chosen material, contrast and
+  density, with "follow the system" resolved as the page resolved it, and the
+  platform's reduced-motion preference. The Explorer reads it from its own page,
+  never from the frame, and holds every value to its closed set before a frame sees
+  it. The web head sends no tenant display name (`null`).
 - `context.user` returns the display name only. The web head currently has no
   display name to give a frame, so even a consented `context.user` is answered
   `unavailable`.
@@ -235,9 +267,10 @@ Guidance:
   `lattice-app.css`, so your UI starts with the Explorer's Paper and Board materials,
   type and controls without linking anything. The kit sets the theme, contrast,
   density and reduced-motion attributes on `<html>` and updates them on
-  `context.changed`, although the web head does not yet send `context.changed`, so
-  a frame keeps the appearance it started with. Keep layouts fluid: the frame
-  fills the content area at every width, down to a phone.
+  `context.changed`. The frame starts in the console's appearance, but the web head
+  does not yet send `context.changed`, so an app that is already open keeps the
+  appearance it started with until it is opened again. Keep layouts fluid: the frame
+  fills its window at every width, down to a phone.
 - **Digests.** Pin every asset's digest and the bundle digest in the manifest. The
   [task-board sample](../../samples/Explorer/Apps/TaskBoard/README.md) computes them
   in a test that fails with the correct values whenever a file changes.

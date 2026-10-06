@@ -185,4 +185,16 @@ internal sealed class ExplorerNavigator
         ArgumentNullException.ThrowIfNull(address);
         return address.Area is not { } key || _directory.Find(key) is not { } area || area.IsTenantScopedAt(address);
     }
+
+    /// <summary>
+    /// Whether <paramref name="address"/> renders standalone, without the shell's
+    /// header, address line and directory spine: its area's answer, and
+    /// <see langword="false"/> for an address in no known area.
+    /// </summary>
+    /// <param name="address">The address.</param>
+    public bool IsStandalone(ExplorerAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return address.Area is { } key && _directory.Find(key) is { } area && area.IsStandaloneAt(address);
+    }
 }

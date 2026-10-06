@@ -79,7 +79,7 @@ public sealed class AppRoleHoldingJourneyTests : UiTestBase
 
         // Now a member of the bound group, the administrator holds its roles: Open appears.
         await Shell.GotoAsync(page, world.Head, "/t/globex/apps/task-board");
-        await Expect(content.GetByRole(AriaRole.Link, new() { Name = "Open Task board", Exact = true })).ToBeVisibleAsync();
+        await Expect(content.GetByRole(AriaRole.Link, new() { Name = "Open Task board (opens in a new window)", Exact = true })).ToBeVisibleAsync();
         await Expect(content.Locator("[data-lt-holding]")).ToHaveCountAsync(0);
     }
 }

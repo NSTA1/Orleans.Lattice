@@ -59,7 +59,7 @@ public sealed class AppFrameIsolationTests(string engine) : UiTestBase(engine)
         {
         }
 
-        var page = await OpenAsync(hostile.Head, $"/apps/{name}/open", WorldIdentities.Admin);
+        var page = await OpenAsync(hostile.Head, $"/apps/{name}/window", WorldIdentities.Admin);
         await Expect(AppFrames.Host(page)).ToBeVisibleAsync();
         var explorerUrl = page.Url;
 

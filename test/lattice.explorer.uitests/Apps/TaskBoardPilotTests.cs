@@ -86,7 +86,7 @@ public sealed class TaskBoardPilotTests(string engine) : UiTestBase(engine)
         await Expect(board.Locator("#tb-cards-doing button.tb-card").Filter(new() { HasText = name })).ToHaveCountAsync(1);
 
         // Selecting a card writes its path into the Explorer's address.
-        await Expect(page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("/apps/task-board/open/tasks/[^/?#]+$"));
+        await Expect(page).ToHaveURLAsync(new System.Text.RegularExpressions.Regex("/apps/task-board/window/tasks/[^/?#]+$"));
         await Expect(board.Locator("#tb-detail-title")).ToHaveTextAsync(name);
         return page.Url;
     }
@@ -135,7 +135,7 @@ public sealed class TaskBoardPilotTests(string engine) : UiTestBase(engine)
         // And its address, deep or not, is a page that does not exist.
         await Shell.GotoAsync(page, world.Head, $"/apps/{TaskBoardApp.Slug}");
         await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
-        await Shell.GotoAsync(page, world.Head, $"/apps/{TaskBoardApp.Slug}/open");
+        await Shell.GotoAsync(page, world.Head, $"/apps/{TaskBoardApp.Slug}/window");
         await Expect(Shell.Heading(page)).ToHaveTextAsync(ExplorerAreas.NotFoundHeading);
         await Expect(AppFrames.Element(page)).ToHaveCountAsync(0);
     }

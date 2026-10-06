@@ -56,7 +56,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     public string AppSlug { get; set; } = string.Empty;
 
     /// <summary>
-    /// The app's in-frame path from the address line (the <c>{*path}</c> of <c>/apps/{slug}/open</c>),
+    /// The app's in-frame path from the address line (the <c>{*path}</c> of <c>/apps/{slug}/window</c>),
     /// or <see langword="null"/> for the app's own start. A change is sent to the frame as
     /// <c>nav.changed</c>.
     /// </summary>
@@ -250,6 +250,12 @@ public sealed partial class AppFrame : IAsyncDisposable
         }
 
         var generation = _generation;
+        await ObserveAppearanceAsync().ConfigureAwait(true);
+        if (generation != _generation)
+        {
+            return;
+        }
+
         AppFrameBundleResult loaded;
         try
         {
@@ -443,6 +449,30 @@ public sealed partial class AppFrame : IAsyncDisposable
         catch (Exception exception) when (exception is JSException or JSDisconnectedException or TaskCanceledException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads the appearance the Explorer's own page is drawn in - the user's chosen material,
+    /// contrast and density, with "follow the system" resolved as the page resolved it - and
+    /// records it on the host context, so the bundle and <c>context.read</c> both report it.
+    /// A read that fails leaves the appearance as it was: cosmetic, never a launch failure.
+    /// </summary>
+    private async Task ObserveAppearanceAsync()
+    {
+        if (_module is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var values = await _module.InvokeAsync<string?[]?>("readAppearance", _disposal.Token).ConfigureAwait(true);
+            HostContext.ObserveAppearance(AppFrameAppearance.FromDocument(values));
+        }
+        catch (Exception exception) when (exception is JSException or JSDisconnectedException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException)
+        {
+            // Anything the page answers that is not a well-formed read keeps the appearance as it was.
         }
     }
 

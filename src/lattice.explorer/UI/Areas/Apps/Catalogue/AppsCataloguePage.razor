@@ -161,7 +161,7 @@ else if (_error is null || _rows.Count > 0)
         var name = AppsPresentation.DisplayName(app.Presentation, app.Slug);
         if (CanOpen(app))
         {
-            <a class="lt-btn lt-btn--quiet" href="@Href(AppsRoutes.Open(Address.Tenant, app.Slug))" aria-label="@($"Open {name}")">Open</a>
+            <a class="lt-btn lt-btn--quiet" href="@Href(AppsRoutes.Window(Address.Tenant, app.Slug))" target="@AppsRoutes.NewWindowTarget" rel="@AppsRoutes.NewWindowRel" aria-label="@($"Open {name} in a new window")">Open</a>
         }
 
         if (!CanReview)

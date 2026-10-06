@@ -51,6 +51,7 @@ public sealed class CallerKeyedMemoHygieneTests
         [typeof(ShellTransportChannel)] = "The channel is rebuilt for the connection; every call carries the credential and tenant of the moment.",
         [typeof(LtToastService)] = "Notices this circuit raised; no cluster answer is remembered.",
         [typeof(Orleans.Lattice.Explorer.UI.Layout.Appearance.ShellAppearance)] = "Theme, contrast and density: a display preference, not a cluster answer.",
+        [typeof(Orleans.Lattice.Explorer.UI.Framing.DefaultAppFrameHostContext)] = "The appearance the Explorer's own page is drawn in, sanitised to closed sets and read again at every launch before a frame sees it: a display preference, not a cluster answer.",
         [typeof(Orleans.Lattice.Explorer.UI.Layout.ShellChromeInterop)] = "The imported JavaScript module.",
         [typeof(BackupsInterop)] = "The imported JavaScript module.",
         [typeof(Orleans.Lattice.Explorer.UI.Areas.Replication.JsReplicationPageVisibility)] = "The page-visibility JavaScript callback.",
