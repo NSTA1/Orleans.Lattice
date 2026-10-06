@@ -11,7 +11,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Coyote;
 /// them; the <c>coyote</c> tier runs them.
 /// <para>
 /// Every guard removes one rule and requires the violation to be reported by
-/// <c>[AckedWriteDurable]</c>, the only assertion the model makes.
+/// <c>[AckedWriteDurable]</c>, the only assertion the model makes, and explores
+/// under <see cref="CoyoteModelHarness.GuardSeed"/> so it explores the same runs on
+/// every execution and cannot flake (issue #4727). The fixed-design tests stay
+/// unseeded, so each run samples fresh paths.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -62,7 +65,8 @@ public sealed class WalPartitionReleaseCoyoteTests
         var result = CoyoteModelHarness.Explore(
             new WalPartitionReleaseModel(
                 releaseOnlyAfterReplay: true, ttl: true, ttlCappedAtUncoveredFrontier: false, afterWalReset: afterWalReset),
-            iterations: 5000);
+            iterations: 5000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "a TTL ceiling yielding only to Zero pins");
     }
@@ -86,7 +90,8 @@ public sealed class WalPartitionReleaseCoyoteTests
     {
         var result = CoyoteModelHarness.Explore(
             new WalPartitionReleaseModel(releaseOnlyAfterReplay: false),
-            iterations: 5000);
+            iterations: 5000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "an empty release published before the replay");
     }
@@ -108,7 +113,8 @@ public sealed class WalPartitionReleaseCoyoteTests
     {
         var result = CoyoteModelHarness.Explore(
             new WalPartitionReleaseModel(releaseOnlyAfterReplay: true, overrideStampedWrites: true, overrideHold: false),
-            iterations: 10000);
+            iterations: 10000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "skipping the override hold");
     }
@@ -126,7 +132,8 @@ public sealed class WalPartitionReleaseCoyoteTests
             new WalPartitionReleaseModel(
                 releaseOnlyAfterReplay: true, stopBudget: 2, ttl: true, overrideStampedWrites: true,
                 overrideHoldClear: WalPartitionReleaseModel.OverrideHoldClear.OnPersistedCheckpoint),
-            iterations: 20000);
+            iterations: 20000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "clearing the override hold on a persisted checkpoint");
     }
@@ -142,7 +149,8 @@ public sealed class WalPartitionReleaseCoyoteTests
             new WalPartitionReleaseModel(
                 releaseOnlyAfterReplay: true, stopBudget: 2, ttl: true, overrideStampedWrites: true,
                 overrideHoldClear: WalPartitionReleaseModel.OverrideHoldClear.StoreOnAnyPublish),
-            iterations: 20000);
+            iterations: 20000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "dropping the hold on any publish");
     }
@@ -159,7 +167,8 @@ public sealed class WalPartitionReleaseCoyoteTests
             new WalPartitionReleaseModel(
                 releaseOnlyAfterReplay: true, overrideStampedWrites: true,
                 gcReadOrder: WalPartitionReleaseModel.GcReadOrder.HoldsHeadCensus),
-            iterations: 20000);
+            iterations: 20000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "reading the holds before the head bound");
     }
@@ -179,7 +188,8 @@ public sealed class WalPartitionReleaseCoyoteTests
             new WalPartitionReleaseModel(
                 releaseOnlyAfterReplay: true, ttl: true, overrideStampedWrites: true, saturatedMerges: true,
                 overrideHoldTrigger: WalPartitionReleaseModel.OverrideHoldTrigger.StampBelowClockOnly),
-            iterations: 20000);
+            iterations: 20000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         AssertCaughtBy(result, "a trigger on a stamp below the clock alone");
     }

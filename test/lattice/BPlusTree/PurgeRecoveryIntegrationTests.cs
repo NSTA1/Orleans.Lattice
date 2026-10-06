@@ -297,12 +297,13 @@ public sealed class PurgeRecoveryIntegrationTests
     /// checkpoint, and the recovered leaf would latch
     /// <see cref="LeafProjectionStaleException"/> on its next activation.
     /// <para>
-    /// This is the end-to-end guard: the WAL GC really trims past the leaf's
-    /// checkpoint here, and the recovered leaf must still serve its keys. In process,
-    /// the interrupted activation's own deactivation flush and the leaf's covering
-    /// snapshot also close the window, so the pins-first order needs a silo crash
-    /// between the two steps to latch; the ordering itself is pinned by the
-    /// <c>ClearGrainStateForPurge_*</c> leaf-grain tests.
+    /// This is end-to-end supporting evidence, not the detector of the order: the WAL
+    /// GC really trims past the leaf's checkpoint here, and the recovered leaf must
+    /// still serve its keys. In process, the interrupted activation's own deactivation
+    /// flush and the leaf's covering snapshot also close the window, so this test
+    /// stays green when the pins are retired first; that order needs a silo crash
+    /// between the two steps to latch. The ordering itself is pinned by the
+    /// <c>ClearGrainStateForPurge_*</c> leaf-grain tests, which are red under it.
     /// </para>
     /// </summary>
     [Test]

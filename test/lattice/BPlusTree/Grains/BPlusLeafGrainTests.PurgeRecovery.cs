@@ -236,4 +236,40 @@ public partial class BPlusLeafGrainTests
             Assert.That(record.Recorded?.PurgeCleared, Is.False);
         });
     }
+
+    [Test]
+    public async Task Create_intent_re_creates_a_purge_cleared_leaf_finishing_its_interrupted_clear()
+    {
+        // A create path, not recovery, reaching a leaf whose purge clear was
+        // interrupted after the row was gone: the marked record and a snapshot
+        // survive. The create intent admits it as purge-cleared, finishing the clear
+        // the purge began, rather than refusing it as a lost row or re-creating it
+        // over the remnant.
+        var events = new List<string>();
+        var record = new FakeRowRecord(events)
+        {
+            Recorded = new LeafRowRecordState { TreeId = MaterialiserTreeId, PurgeCleared = true },
+        };
+        var (grain, state, snapshot) = CreateRowlessLeafWithSnapshotStore(record, TrimmedPrefixSnapshot(5));
+        state.OnWriteState = written => events.Add($"state-write:tree={written.TreeId}");
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+
+        using (LatticeNewLeafIntentContext.BeginScope(LeafIdOf(grain)))
+        {
+            await grain.SetTreeIdAsync(MaterialiserTreeId);
+        }
+
+        var firstWrite = events.FindIndex(e => e.StartsWith("state-write:", StringComparison.Ordinal));
+        var reset = events.FindIndex(e => e.StartsWith("record:", StringComparison.Ordinal));
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.TreeId, Is.EqualTo(MaterialiserTreeId));
+            Assert.That(record.Recorded?.PurgeCleared, Is.False, "the mark is reset once the leaf is re-created");
+            Assert.That(firstWrite, Is.GreaterThanOrEqualTo(0));
+            Assert.That(reset, Is.GreaterThan(firstWrite),
+                $"The mark must outlive the first row write. Events: [{string.Join(", ", events)}].");
+        });
+        await snapshot.Received().ClearAsync(Arg.Any<CancellationToken>());
+        Assert.That(await grain.GetAsync("k0"), Is.Null, "the re-created leaf serves, empty");
+    }
 }

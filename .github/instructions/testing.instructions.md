@@ -736,7 +736,13 @@ The reusable harness lives in the product-agnostic shared testing library
   `CoyoteExplorationResult` (iterations, bugs found, bug reports, replayable
   trace); `AssertNoViolationInAnyExploredRun` fails the test with the reproducible
   trace when any schedule violates the property; `AssertViolationFoundInSomeExploredRun`
-  asserts a schedule *does* violate it.
+  asserts a schedule *does* violate it. `Explore` takes an optional `seed` that fixes
+  the exploration, so every call explores the same runs. A guard that requires a
+  *specific* assertion to report its violation must pass
+  `CoyoteModelHarness.GuardSeed`: Coyote stops at the first violation, so when the
+  removed fix breaks two properties, an unseeded guard is reported by whichever
+  assertion its random sample reaches first, and flakes (issue #4727). A
+  fixed-design (no-violation) run stays unseeded, so each run samples fresh paths.
 - `FaultBudget` / `FaultDeliveryQueue<T>` - the dependency-free fault-injection
   helpers for **liveness** models. `FaultBudget` is a bounded ledger of drops,
   duplicates, and restarts (the fairness ceiling that makes bounded-progress

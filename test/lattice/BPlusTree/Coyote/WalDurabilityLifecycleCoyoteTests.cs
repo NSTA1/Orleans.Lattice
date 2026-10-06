@@ -14,6 +14,17 @@ namespace Orleans.Lattice.Tests.BPlusTree.Coyote;
 /// in the bug report. Accepting any violation would let a guard pass because
 /// some other assertion fired, which proves nothing about the fix it names.
 /// </para>
+/// <para>
+/// Every guard explores under <see cref="CoyoteModelHarness.GuardSeed"/>, so it
+/// explores the same runs, and reports the same violation, on every execution.
+/// Unseeded, a removed fix that breaks two properties was reported by whichever
+/// assertion its random sample reached first: removing
+/// <see cref="WalDurabilityLifecycleGuard.ReplayStopsAtPersistedCheckpoint"/>
+/// was reported by <c>[ReclamationEventuallyAdvances]</c> instead of
+/// <c>[EveryAckedWriteMaterialised]</c> in 7 of 55 runs, a required test that
+/// flaked (issue #4727). The fixed-design tests stay unseeded, so each run
+/// samples fresh paths.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Coyote")]
@@ -59,7 +70,8 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     public void Removing_the_never_written_release_bound_is_caught_by_the_release_backing_assertion()
     {
         var result = CoyoteModelHarness.Explore(new WalDurabilityLifecycleModel(
-            WalDurabilityLifecycleGuard.NeverWrittenReleaseIgnoresCoverage, faultBudget: 0));
+            WalDurabilityLifecycleGuard.NeverWrittenReleaseIgnoresCoverage, faultBudget: 0),
+            seed: CoyoteModelHarness.GuardSeed);
 
         Assert.That(
             result.BugsFound,
@@ -88,7 +100,8 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     /// it was ~ 2.0e-3 while the core exempted a checkpoint of 0), so the default
     /// 1000 runs would still miss it ~ 2e-4 of the time; 10000 runs miss it with
     /// probability ~ e^-85. Exploration stops at the first violation, so the
-    /// expected cost is ~ 1/p ~ 120 runs.    /// </remarks>
+    /// expected cost is ~ 1/p ~ 120 runs.
+    /// </remarks>
     [Test]
     public void Removing_the_never_written_release_bound_is_caught_by_the_fall_off_assertion()
     {
@@ -98,7 +111,8 @@ public sealed class WalDurabilityLifecycleCoyoteTests
                 faultBudget: 1,
                 neverWrittenLeaf: true,
                 checkReleaseBacking: false),
-            iterations: 10000);
+            iterations: 10000,
+            seed: CoyoteModelHarness.GuardSeed);
 
         Assert.That(
             result.BugsFound,
@@ -131,6 +145,16 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     /// is ~ e^-26, and ~ 2e-8 even at the lower 95% bound of p. Exploration
     /// stops at the first violation, so the expected cost is ~ 1/p ~ 400 runs.
     /// </para>
+    /// <para>
+    /// Those rates size the budgets, but the seed fixes the outcome: under
+    /// <see cref="CoyoteModelHarness.GuardSeed"/> each case finds its violation,
+    /// reported by its own tag, identically on every run. Removing
+    /// <see cref="WalDurabilityLifecycleGuard.ReplayStopsAtPersistedCheckpoint"/>
+    /// also stalls reclamation, so unseeded it was reported by
+    /// <c>[ReclamationEventuallyAdvances]</c> in 7 of 55 runs, and under 2 of
+    /// the first 20 seeds (7 and 9); the seed is what makes the case specific on
+    /// every run (issue #4727).
+    /// </para>
     /// </remarks>
     [TestCase(WalDurabilityLifecycleGuard.PinFromPendingCheckpoint, 0, CoyoteModelHarness.DefaultIterations, "[PublishedPinWithinPersistedBelief]")]
     [TestCase(WalDurabilityLifecycleGuard.NoRollbackOnFailedPersist, 1, CoyoteModelHarness.DefaultIterations, "[PersistedBeliefHonest]")]
@@ -142,7 +166,7 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     public void Removing_one_fix_is_caught_by_the_assertion_it_protects(
         WalDurabilityLifecycleGuard guard, int faultBudget, int iterations, string tag)
     {
-        var result = CoyoteModelHarness.Explore(new WalDurabilityLifecycleModel(guard, faultBudget), iterations);
+        var result = CoyoteModelHarness.Explore(new WalDurabilityLifecycleModel(guard, faultBudget), iterations, seed: CoyoteModelHarness.GuardSeed);
 
         Assert.That(
             result.BugsFound,
@@ -167,7 +191,8 @@ public sealed class WalDurabilityLifecycleCoyoteTests
     {
         var result = CoyoteModelHarness.Explore(
             new WalDurabilityLifecycleModel(
-                WalDurabilityLifecycleGuard.ReadPositionTracksOwnEntries, faultBudget: 0, neverWrittenLeaf: true));
+                WalDurabilityLifecycleGuard.ReadPositionTracksOwnEntries, faultBudget: 0, neverWrittenLeaf: true),
+            seed: CoyoteModelHarness.GuardSeed);
 
         Assert.That(
             result.BugsFound,
