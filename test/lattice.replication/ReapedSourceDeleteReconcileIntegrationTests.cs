@@ -573,6 +573,7 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.AddLatticeReplication(opts => opts.ClusterId = SiteBClusterId);
+            siloBuilder.AddOutgoingGrainCallFilter<ApplyHoldFilter>();
 
             if (SiteATransports.TryGetValue(SiteAClusterId, out var transport))
             {
