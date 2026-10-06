@@ -386,7 +386,11 @@ frontier has reached its sequence:
 
 An operation decided before sequencing counts as sequence 0 on every
 participant: its tombstone drops once the origin stores no such decision. A
-tombstone with no recorded participants (an older build's) is kept. Dropping
+tombstone with no recorded participants (an older build's) is kept. Both kept
+sets are finite - only operations decided before the upgrade - and each is
+logged when its retention runs. Every sweep logs, per tree, how many
+tombstones it dropped and how many are still held, so the held count can be
+seen draining to that fixed residue. Dropping
 relies on the purge hold: the origin purges a cross-tree decision only after
 every peer acknowledged the operation's terminals, so no terminal can be
 re-shipped after the frontier passes it.

@@ -96,6 +96,21 @@ internal sealed class LatticeCrossTreeReceiverGrain(
             DecisionSequences = state.State.DecisionSequences,
         };
 
+        // The two bounded residues (#4733), so an operator can see them drain to
+        // a fixed size rather than grow: both are pre-upgrade operations only.
+        if (tombstone.Participants.Count == 0)
+        {
+            Logger.LogInformation(
+                "Cross-tree receiver {Key}: tombstone retained permanently; the barrier predates participant recording, so no purge frontier can release it (bounded residue).",
+                GrainContext.GrainId.Key);
+        }
+        else if (tombstone.DecisionSequences is null)
+        {
+            Logger.LogInformation(
+                "Cross-tree receiver {Key}: tombstone of an operation decided before sequencing; it drops once the origin stores no such decision on any of its {Count} participant(s) (bounded residue).",
+                GrainContext.GrainId.Key, tombstone.Participants.Count);
+        }
+
         // Listed before the frontier is read: either the next frontier advance
         // sweeps the listing, or the read below sees it (#4733).
         await ListTombstoneAsync(tombstone.Participants);

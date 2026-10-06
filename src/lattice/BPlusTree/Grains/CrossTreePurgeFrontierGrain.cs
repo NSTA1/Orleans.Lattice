@@ -52,7 +52,9 @@ internal sealed class CrossTreePurgeFrontierGrain(
         foreach (var tree in advanced)
         {
             var index = grainFactory.GetGrain<ICrossTreeBarrierIndexGrain>(tree);
-            foreach (var key in await index.GetTombstonesAsync())
+            var listed = await index.GetTombstonesAsync();
+            var held = 0;
+            foreach (var key in listed)
             {
                 try
                 {
@@ -60,12 +62,23 @@ internal sealed class CrossTreePurgeFrontierGrain(
                     {
                         await index.RemoveTombstoneAsync(key);
                     }
+                    else
+                    {
+                        held++;
+                    }
                 }
                 catch (Exception ex)
                 {
+                    held++;
                     logger.LogDebug(ex, "Settling cross-tree tombstone {Key} listed under tree '{Tree}' failed; retried on the next advance.", key, tree);
                 }
             }
+
+            // Per sweep, what is still held under the tree: it drains as the
+            // origin purges, down to the bounded pre-upgrade residue (#4733).
+            logger.LogInformation(
+                "Cross-tree purge frontier of origin {Origin} advanced on tree '{Tree}' to {Frontier}: {Dropped} tombstone(s) dropped, {Held} still held.",
+                this.GetPrimaryKeyString(), tree, snapshot[tree], listed.Length - held, held);
         }
     }
 
