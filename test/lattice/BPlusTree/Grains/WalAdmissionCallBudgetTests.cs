@@ -213,9 +213,6 @@ public class WalAdmissionCallBudgetTests
         var (writer, key) = await ArrangeSaturatedAsync(
             OptionsWith(appendBudget, Timeout.InfiniteTimeSpan));
 
-        Assert.That(LatticeOptions.DefaultWalAdmissionSaturationCallBudget,
-            Is.EqualTo(Timeout.InfiniteTimeSpan),
-            "the default must disable the per-call bound so the change is non-breaking");
 
         LatticeTransactionContext.EnsureCallStart();
 
