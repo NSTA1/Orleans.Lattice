@@ -45,6 +45,7 @@ public partial class TenancyRegions : IDisposable
     private TenancyFailure? _failure;
     private string? _loadedFor;
     private bool _busy;
+    private string? _savePhase;
     private bool _confirmResidency;
     private bool _confirmAllowed;
     private IReadOnlyList<string> _allowed = [];
@@ -313,6 +314,8 @@ public partial class TenancyRegions : IDisposable
         {
             Toasts.Show(refusal, LtToastTone.Warning);
         }
+
+        StateHasChanged();
     }
 
     private async Task ApplyResidency()
@@ -342,6 +345,9 @@ public partial class TenancyRegions : IDisposable
         }
 
         _busy = true;
+        _savePhase = $"Applying residency for {TenantId}";
+        StopFollowing();
+        StateHasChanged();
         try
         {
             var result = await Catalog.Regions!.SetResidencyAsync(TenantId, _plan.Planned).ConfigureAwait(true);
@@ -360,6 +366,8 @@ public partial class TenancyRegions : IDisposable
         finally
         {
             _busy = false;
+            _savePhase = null;
+            FollowIfTransitional();
         }
     }
 
@@ -419,6 +427,7 @@ public partial class TenancyRegions : IDisposable
         }
 
         _busy = true;
+        _savePhase = $"Saving allowed regions for {TenantId}";
         StateHasChanged();
         try
         {
@@ -429,11 +438,13 @@ public partial class TenancyRegions : IDisposable
         {
             _allowedError = failure.Message;
             _busy = false;
+            _savePhase = null;
             return;
         }
         catch
         {
             _busy = false;
+            _savePhase = null;
             throw;
         }
 
@@ -446,6 +457,7 @@ public partial class TenancyRegions : IDisposable
         finally
         {
             _busy = false;
+            _savePhase = null;
         }
     }
 }

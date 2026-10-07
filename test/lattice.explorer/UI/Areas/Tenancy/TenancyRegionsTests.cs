@@ -418,7 +418,11 @@ public sealed partial class TenancyRegionsTests : TenancyTestContext
 
         cut.FindAll(".lt-table-list__open")[2].Click();
 
-        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog .lt-dialog__actions input[type=checkbox]"), Is.Not.Null));
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll(".lt-dialog input[type=checkbox]"), Has.Count.EqualTo(1));
+            Assert.That(cut.Find(".lt-dialog .lt-dl input[type=checkbox]"), Is.Not.Null);
+        });
     }
 
     private IRenderedComponent<TenancyRegions> RenderRegions(bool canAuthorize = false, string[]? resident = null, LtBreakpoint? band = null)
