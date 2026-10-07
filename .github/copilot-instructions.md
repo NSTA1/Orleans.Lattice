@@ -413,7 +413,10 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   Dependabot PRs authored by `dependabot[bot]` may use the generated
   `dependabot/<ecosystem>/<dependency>` namespace instead, including mixed-case
   package names. This is a bot-only exception, not an additional human branch
-  prefix; the commit-trailer and single-author-identity gates still apply.
+  prefix. The banned-trailer and zero-commit guards still apply, but these
+  bot PRs may carry multiple author identities (bot updates plus contributor
+  changes). Always squash-merge them with an explicit subject and body to
+  prevent GitHub from manufacturing attribution trailers.
 
   PRs confined to `videos/**`, `.github/workflows/**`, and this instruction
   file use lightweight CI: guard self-tests and video order run, but the

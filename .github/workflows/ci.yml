@@ -410,10 +410,16 @@ jobs:
             echo "::error::The trailer guard resolved zero commits in ${BASE_SHA}..${HEAD_SHA}, so both of its arms scanned nothing. Every pull request adds at least one commit, so this is a broken range and not a clean pull request. Check that the checkout still uses fetch-depth: 0 and that the event shas are reachable."
             failed=1
           elif [ "${identity_count}" -gt 1 ]; then
+            # Bot updates plus contributor fixes/main merges naturally have
+            # two identities. Their merge message must be supplied explicitly.
+            if [ "${dependabot_branch}" = true ]; then
+              echo "::notice::Dependabot PR carries ${identity_count} author identities (bot update plus contributor changes). Squash-merge with an explicit subject and body to avoid manufactured attribution trailers."
+            else
             echo "::error::This pull request's commits carry ${identity_count} distinct author identities, so GitHub will compose a 'Co-authored-by:' trailer into the squash commit for every identity beyond the one it makes the author. That trailer is generated at merge time and is banned on this repository (see .github/copilot-instructions.md); nothing can remove it afterwards short of a history rewrite, and no check can read it before the merge. Normalise the authorship first: 'git rebase ${BASE_SHA} --exec \"git commit --amend --no-edit --reset-author\"', then force-push."
-            printf 'Author identities on this pull request:\n'
-            printf '%s\n' "${identities}" | sed 's/^/  /'
-            failed=1
+              printf 'Author identities on this pull request:\n'
+              printf '%s\n' "${identities}" | sed 's/^/  /'
+              failed=1
+            fi
           fi
 
           if [ "${failed}" -ne 0 ]; then

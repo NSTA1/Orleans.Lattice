@@ -325,9 +325,21 @@ def main() -> int:
         done = run_guard(script, workroot / "bot-identities", base_sha=base, head_sha=head,
                          branch="dependabot/nuget/Some.Package-1.2.3",
                          author="dependabot[bot]")
-        check("A13 Dependabot commits still require one author identity",
+        check("A13 Dependabot accepts contributor identities with an explicit-merge notice",
+              done.returncode == 0 and "explicit subject and body" in done.stdout,
+              done.stdout)
+
+        done = run_guard(script, workroot / "bot-identities", base_sha=base, head_sha=head,
+                         branch="feat/a-described-change", author="dependabot[bot]")
+        check("Dependabot outside its namespace still requires one identity",
               done.returncode == 1 and "distinct author identities" in done.stdout,
               done.stdout)
+
+        done = run_guard(script, workroot / "bot-identities", base_sha=head, head_sha=head,
+                         branch="dependabot/nuget/Some.Package-1.2.3",
+                         author="dependabot[bot]")
+        check("Dependabot still fails on a zero-commit range",
+              done.returncode == 1 and "zero commits" in done.stdout, done.stdout)
 
         # -- Fail-closed behaviour ------------------------------------------
         print("\nFail-closed behaviour (an unread population is not a clean one)")
