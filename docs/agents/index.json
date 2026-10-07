@@ -45,7 +45,7 @@
     "deprecated": {
       "shape": "{diagnostic, replacement, removal, migration}; diagnostic and migration optional",
       "replacement": "an operation id in the same file, or 'api/<surface>.json#<operation-id>'",
-      "coverage": "every operation whose in_process member is [Obsolete] LATTICE0002 carries deprecated with diagnostic LATTICE0002, and every MCP tool whose facade_operation is deprecated is deprecated too"
+      "coverage": "no published operation or MCP tool may outlive a removed LATTICE0002 facade member or tool alias; the consistency tests remove retired operations from the specs and reserve the diagnostic id for history only"
     },
     "mcp_tool": {
       "tool_annotations": "{read_only, destructive, source} mirror the ReadOnly and Destructive hints of the MCP tool registration",

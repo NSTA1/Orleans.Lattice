@@ -1,8 +1,5 @@
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -71,7 +68,7 @@ public sealed partial class LatticeBackupControlTenancyTests
         await _fixture.InitializeAsync();
         await SeedAsync(Effective(Acme, LocalName), "k", "async-secret");
 
-        var captured = await AsyncResolvedControlFor(Acme).CreateBackupAsync(
+        var captured = await CaptureAsync(AsyncResolvedControlFor(Acme),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         // The composed id proves the awaited continuation rebuilt the scope; a
@@ -87,9 +84,9 @@ public sealed partial class LatticeBackupControlTenancyTests
 
         // The two resolution paths must be indistinguishable in their result:
         // the fast path and the awaited continuation compose the same id.
-        var viaAsync = await AsyncResolvedControlFor(Acme).CreateBackupAsync(
+        var viaAsync = await CaptureAsync(AsyncResolvedControlFor(Acme),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
-        var viaSync = await ControlFor(Acme).CreateBackupAsync(
+        var viaSync = await CaptureAsync(ControlFor(Acme),
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(LocalName)));
 
         Assert.That(
@@ -126,15 +123,20 @@ public sealed partial class LatticeBackupControlTenancyTests
         await SeedAsync(qualified, "k", "v");
         await SeedAsync(Effective(Acme, LocalName), "k", "v");
 
-        var result = await ControlFor(Acme).CreateBackupSetAsync(
+        var control = ControlFor(Acme);
+        var operations = (ILatticeBackupOperations)control;
+        var handle = await operations.StartBackupSetAsync(
             new LatticeBackupSetCaptureRequest(
                 "set",
                 [
                     BackupScopeSelector.WholeTree(qualified),
                     BackupScopeSelector.WholeTree(LocalName),
                 ]));
-
-        var treeIds = result.Members.Select(m => m.Manifest.Scope.TreeId).ToArray();
+        var status = await UntilTerminalAsync(operations, handle.OperationId);
+        var treeIds = BackupOperationResults.ReadMemberBackupIds(status.Result)
+            .Select(async id => (await control.DescribeBackupAsync(id))!.Manifest.Scope.TreeId)
+            .Select(t => t.GetAwaiter().GetResult())
+            .ToArray();
         Assert.Multiple(() =>
         {
             Assert.That(treeIds, Has.Length.EqualTo(2),

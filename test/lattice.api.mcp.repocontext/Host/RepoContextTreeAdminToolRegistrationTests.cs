@@ -36,7 +36,7 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// <remarks>
     /// <para>
     /// The point of naming them is that the opt-in is <b>not</b> a switch for the
-    /// orphaned-leaf repair. It contributes 33 mutating verbs, of which the repair is
+    /// orphaned-leaf repair. It contributes 29 mutating verbs, of which the repair is
     /// one; the others include tree deletion, purge, restore, reshard, resize, WAL
     /// placement moves, and the accept-then-poll starts and cancel of #4124. Accepting that surface is a decision about this
     /// container - single-user, one trusted local caller, every verb still
@@ -61,7 +61,6 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_orphaned_leaves_repair",
         "lattice_treeadmin_orphaned_leaves_repair_start",
         "lattice_treeadmin_retention_set",
-        "lattice_treeadmin_tag_index_reconcile",
         "lattice_treeadmin_tag_index_reconcile_start",
         "lattice_treeadmin_tree_create",
         "lattice_treeadmin_tree_delete",
@@ -78,11 +77,8 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         "lattice_treeadmin_tree_snapshot",
         "lattice_treeadmin_view_create",
         "lattice_treeadmin_view_drop",
-        "lattice_treeadmin_view_rebuild",
         "lattice_treeadmin_view_rebuild_start",
-        "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_reconcile_start",
-        "lattice_treeadmin_wal_move_execute",
         "lattice_treeadmin_wal_move_reclaim",
         "lattice_treeadmin_wal_move_start",
     ];
@@ -112,7 +108,7 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
 
     /// <summary>
     /// The schema remediation and migration operation reads (#4209) every host
-    /// advertises. Their starts, cancel and the deprecated aliases need the
+    /// advertises. Their starts, cancel and the removed blocking aliases need the
     /// schema-control opt-in, which stays off here.
     /// </summary>
     private static readonly string[] SchemaOperationReadTools =
@@ -184,7 +180,8 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// Before the lifecycle opt-in the groups contributed 53 admitted tools (23
     /// repository-context, 30 tree-administration), i.e. 55 including the meta pair,
     /// which matches the count observed from a branch-built image. The opt-in adds the
-    /// 26 verbs named above and nothing else.
+    /// 22 verbs named above and nothing else, because the four deprecated blocking
+    /// aliases removed for LATTICE0002 no longer contribute to the opt-in set.
     /// </para>
     /// <para>
     /// The accept-then-poll compliance scan and storage re-measure (#4126) add the 8
@@ -194,18 +191,19 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
     /// <para>
     /// The accept-then-poll tree maintenance (#4124) adds 9 more: the two reads in
     /// <see cref="MaintenanceOperationReadTools"/>, and six starts plus the cancel,
-    /// which the lifecycle opt-in contributes (its set grows from 26 to 33). The
-    /// total is 96.
+    /// which the lifecycle opt-in contributes (its set grows from 22 to 29). The
+    /// total is 92.
     /// </para>
     /// <para>
     /// The accept-then-poll schema remediation and migration (#4209) add the 2 reads in
     /// <see cref="SchemaOperationReadTools"/>; everything else it adds is schema-control
-    /// gated. The total is 98.
+    /// gated. The removed blocking compliance scan alias no longer contributes its
+    /// extra read, so the total is 94.
     /// </para>
     /// <para>
     /// The WAL reclamation read (#4237), <c>lattice_treeadmin_wal_reclamation</c>, is a
     /// default-on read, not a lifecycle verb, so the opt-in's set is unchanged and the
-    /// total is 99.
+    /// total remains 94.
     /// </para>
     /// </remarks>
     [Test]
@@ -225,10 +223,10 @@ public sealed class RepoContextTreeAdminToolRegistrationTests
         {
             Assert.That(admitted, Is.Unique, "A duplicate tool name would make the count meaningless.");
             Assert.That(
-                admitted, Has.Count.EqualTo(99),
-                "53 before the lifecycle opt-in plus the 33 verbs it contributes, plus the 8 #4126 operation tools, "
+                admitted, Has.Count.EqualTo(94),
+                "53 before the lifecycle opt-in plus the 29 verbs it contributes, plus the 8 #4126 operation tools, "
                 + "the 2 #4124 operation reads, the 2 #4209 schema operation reads and the #4237 WAL reclamation "
-                + "read. Add the two meta tools for the 101 a client sees, against 55 before.");
+                + "read. Add the two meta tools for the 96 a client sees, against 55 before.");
         });
     }
 

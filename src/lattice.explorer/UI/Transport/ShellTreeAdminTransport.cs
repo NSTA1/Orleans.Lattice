@@ -2,10 +2,6 @@ using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 
-// Still calls the deprecated blocking tree-administration verbs (LATTICE0002); the Explorer moves to
-// ILatticeTreeAdminOperations in the second #4124 change, which removes this suppression.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
 /// <summary>
@@ -435,20 +431,6 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
     }
 
     /// <inheritdoc />
-    public Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentException.ThrowIfNullOrEmpty(targetProviderKey);
-        return CallAsync(
-            (TreeId: treeId, Partition: partition, TargetProviderKey: targetProviderKey, Options: options),
-#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
-            static (client, state, ct) => client.ExecuteWalMoveAsync(state.TreeId, state.Partition, state.TargetProviderKey, state.Options, ct),
-#pragma warning restore LATTICE0002
-            null,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -496,32 +478,6 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
     }
 
     /// <inheritdoc />
-    public Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
-        return CallAsync(
-            viewName,
-#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
-            static (client, state, ct) => client.RebuildViewAsync(state, ct),
-#pragma warning restore LATTICE0002
-            null,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(viewName);
-        return CallAsync(
-            viewName,
-#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
-            static (client, state, ct) => client.ReconcileViewAsync(state, ct),
-#pragma warning restore LATTICE0002
-            null,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
     public Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(viewName);
@@ -549,19 +505,6 @@ internal sealed partial class ShellTreeAdminTransport(ShellTransportChannel chan
         return CallAsync(
             indexName,
             static (client, state, ct) => client.GetTagIndexStatusAsync(state, ct),
-            null,
-            cancellationToken);
-    }
-
-    /// <inheritdoc />
-    public Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(indexName);
-        return CallAsync(
-            indexName,
-#pragma warning disable LATTICE0002 // The interface still declares the deprecated verb; this forwards it (see ShellTreeAdminTransport.Operations).
-            static (client, state, ct) => client.ReconcileTagIndexAsync(state, ct),
-#pragma warning restore LATTICE0002
             null,
             cancellationToken);
     }

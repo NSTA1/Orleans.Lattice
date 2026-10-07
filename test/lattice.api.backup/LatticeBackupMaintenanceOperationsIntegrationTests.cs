@@ -10,9 +10,8 @@ namespace Orleans.Lattice.Api.Backup.Tests;
 /// <see cref="ILatticeBackupOperations"/> (#4125) against a live single-silo
 /// cluster: a health check, a catalog rebuild and a catalog scrub each return a
 /// handle at once and poll to their outcome with real progress; each is authorized
-/// exactly as its deprecated blocking twin; a catalog operation needs the restore
-/// grant over the catalog to start or cancel; and the deprecated blocking verbs run
-/// through the same tracked path and return as before.
+/// exactly as its deprecated blocking twin; and a catalog operation needs the
+/// restore grant over the catalog to start or cancel.
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -222,59 +221,6 @@ public sealed class LatticeBackupMaintenanceOperationsIntegrationTests
             Assert.That(await denied.CancelOperationAsync(handle.OperationId), Is.Null);
         });
     }
-
-#pragma warning disable LATTICE0002 // The deprecated wrappers are exercised on purpose.
-    [Test]
-    public async Task The_deprecated_blocking_maintenance_verbs_run_as_tracked_operations_and_return_as_before()
-    {
-        var before = (await Operations.ListOperationsAsync(new LatticeOperationListRequest { PageSize = 500 })).Operations
-            .Select(o => o.OperationId).ToHashSet();
-
-        var health = await _fixture.Control.CheckBackupHealthAsync(_backupId);
-        var rebuild = await _fixture.Control.RebuildCatalogFromSinkAsync();
-        var scrub = await _fixture.Control.ScrubCatalogAgainstSinkAsync();
-
-        var tracked = (await Operations.ListOperationsAsync(new LatticeOperationListRequest { PageSize = 500 })).Operations
-            .Where(o => !before.Contains(o.OperationId))
-            .ToList();
-        Assert.Multiple(() =>
-        {
-            Assert.That(health.Status, Is.EqualTo(BackupHealthStatus.Healthy));
-            Assert.That(rebuild.ScannedCount, Is.GreaterThanOrEqualTo(1));
-            Assert.That(scrub.Pruned, Is.False);
-            Assert.That(
-                tracked.Select(o => o.Kind),
-                Is.EquivalentTo(new[] { BackupOperationKinds.HealthCheck, BackupOperationKinds.CatalogRebuild, BackupOperationKinds.CatalogScrub }));
-            Assert.That(tracked.All(o => o.State == LatticeOperationState.Succeeded), Is.True);
-        });
-    }
-
-    [Test]
-    public void The_deprecated_health_check_still_throws_the_engines_own_exception()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(async () => await _fixture.Control.CheckBackupHealthAsync("no-such-backup"), Throws.TypeOf<KeyNotFoundException>());
-            Assert.That(
-                async () => await ((ILatticeBackupControl)OperationsWith(new AllowAllButRestoreGate())).RebuildCatalogFromSinkAsync(),
-                Throws.TypeOf<LatticeAuthorizationDeniedException>());
-        });
-    }
-
-    [Test]
-    public void The_deprecated_maintenance_verbs_honour_an_already_cancelled_token()
-    {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(async () => await _fixture.Control.CheckBackupHealthAsync(_backupId, cts.Token), Throws.InstanceOf<OperationCanceledException>());
-            Assert.That(async () => await _fixture.Control.RebuildCatalogFromSinkAsync(cts.Token), Throws.InstanceOf<OperationCanceledException>());
-            Assert.That(async () => await _fixture.Control.ScrubCatalogAgainstSinkAsync(cancellationToken: cts.Token), Throws.InstanceOf<OperationCanceledException>());
-        });
-    }
-#pragma warning restore LATTICE0002
 
     private async Task<string> CreateOrphanAsync()
     {

@@ -29,7 +29,7 @@ public sealed class BackupsPickerFieldsTests : BackupsTestContext
         cut.Find("form").Submit();
 
         cut.WaitUntil(() => Assert.That(SuggestionFields.ErrorOf(cut, "Tree"), Is.EqualTo("No tree is named ordrs. Choose one from the list.")));
-        Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupAsync)), Is.Zero);
+        Assert.That(Backups.CountOf("CreateBackupAsync"), Is.Zero);
     }
 
     [Test]

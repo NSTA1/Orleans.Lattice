@@ -356,11 +356,6 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
 
             Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
-                Method(LatticeTreeAdminGrpcMethods.ExecuteWalMoveMethodName),
-                new TreeAdminWalMoveExecuteRequest { TreeId = "orders", Partition = 0, TargetProviderKey = "wal-secondary" }),
-                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
-
-            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
                 Method(LatticeTreeAdminGrpcMethods.ReclaimMovedWalSourceMethodName),
                 new TreeAdminWalReclaimRequest { TreeId = "orders", Partition = 0, SourceProviderKey = "wal-primary" }),
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, "orders")));
@@ -411,16 +406,6 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
 
             Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
-                Method(LatticeTreeAdminGrpcMethods.RebuildViewMethodName),
-                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
-                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
-
-            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
-                Method(LatticeTreeAdminGrpcMethods.ReconcileViewMethodName),
-                new TreeAdminViewRequest { ViewName = "orders-by-region" }),
-                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
-
-            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
                 Method(LatticeTreeAdminGrpcMethods.DropViewMethodName),
                 new TreeAdminViewRequest { ViewName = "orders-by-region" }),
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
@@ -462,10 +447,6 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
                 new TreeAdminTagIndexRequest { IndexName = "by-tag" }),
                 Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
 
-            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.DescribeCall(
-                Method(LatticeTreeAdminGrpcMethods.ReconcileTagIndexMethodName),
-                new TreeAdminTagIndexRequest { IndexName = "by-tag" }),
-                Is.EqualTo((LatticeTreeAdminApiOperation.Unknown, (string?)null)));
         });
     }
 
@@ -489,8 +470,6 @@ public sealed class TreeAdminGrpcInterceptorMappingTests
         {
             Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
                 Method(LatticeTreeAdminGrpcMethods.GetWalPlacementMethodName)), Is.False);
-            Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
-                Method(LatticeTreeAdminGrpcMethods.ExecuteWalMoveMethodName)), Is.False);
             Assert.That(LatticeTreeAdminApiGrpcAuthInterceptor.IsUnauthenticatedMethod(
                 Method(LatticeTreeAdminGrpcMethods.ReclaimMovedWalSourceMethodName)), Is.False);
         });

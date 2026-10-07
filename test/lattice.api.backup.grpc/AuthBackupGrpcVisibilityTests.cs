@@ -111,7 +111,7 @@ public sealed class AuthBackupGrpcVisibilityTests
     public void create_backup_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
-            _host.Methods.CreateBackup,
+            _host.Methods.StartBackup,
             new BackupCaptureRequestMessage
             {
                 Name = "denied",
@@ -126,7 +126,7 @@ public sealed class AuthBackupGrpcVisibilityTests
     public async Task create_backup_with_a_credential_is_accepted()
     {
         var response = await CallAsync(
-            _host.Methods.CreateBackup,
+            _host.Methods.StartBackup,
             new BackupCaptureRequestMessage
             {
                 Name = "allowed",
@@ -134,14 +134,14 @@ public sealed class AuthBackupGrpcVisibilityTests
             },
             Operator);
 
-        Assert.That(response.BackupId, Is.Not.Empty);
+        Assert.That(response.OperationId, Is.Not.Empty);
     }
 
     [Test]
     public void create_backup_set_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
-            _host.Methods.CreateBackupSet,
+            _host.Methods.StartBackupSet,
             new BackupSetCaptureRequestMessage
             {
                 Name = "denied-set",
@@ -156,7 +156,7 @@ public sealed class AuthBackupGrpcVisibilityTests
     public async Task create_backup_set_with_a_credential_is_accepted()
     {
         var response = await CallAsync(
-            _host.Methods.CreateBackupSet,
+            _host.Methods.StartBackupSet,
             new BackupSetCaptureRequestMessage
             {
                 Name = "allowed-set",
@@ -164,14 +164,14 @@ public sealed class AuthBackupGrpcVisibilityTests
             },
             Operator);
 
-        Assert.That(response.SetManifest.MemberBackupIds, Is.Not.Empty);
+        Assert.That(response.OperationId, Is.Not.Empty);
     }
 
     [Test]
     public void restore_backup_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
-            _host.Methods.RestoreBackup,
+            _host.Methods.StartRestore,
             new RestoreRequestMessage { BackupId = "does-not-matter", TargetTreeId = "target" },
             subject: null));
 

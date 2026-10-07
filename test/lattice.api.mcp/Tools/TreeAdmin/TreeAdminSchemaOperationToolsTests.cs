@@ -11,9 +11,9 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// <summary>
 /// Drives each accept-then-poll schema remediation and migration tool of
 /// <see cref="TreeAdminSchemaOperationTools"/> (#4209) through its own invocation
-/// delegate: the start tools and the deprecated aliases forward their arguments and
-/// idempotency id to <see cref="ILatticeSchemaOperations"/> and answer a handle that
-/// names the status tool, never calling a blocking verb on
+/// delegate: the start tools forward their arguments and idempotency id to
+/// <see cref="ILatticeSchemaOperations"/> and answer a handle that names the
+/// status tool, never calling a blocking verb on
 /// <see cref="ILatticeSchemaControl"/>; the status, list and cancel tools project the
 /// shared operation contract; and a server without the surface fails the call.
 /// </summary>
@@ -85,7 +85,6 @@ public sealed class TreeAdminSchemaOperationToolsTests
     private static readonly LatticeSchemaPolicy Policy = new(new[] { LatticeSchemaRule.Json() });
 
     [TestCase(TreeAdminSchemaOperationTools.RemediationStartToolName)]
-    [TestCase(TreeAdminSchemaOperationTools.RemediateAliasToolName)]
     public async Task The_remediation_tools_start_an_operation_and_name_the_status_tool(string toolName)
     {
         _operations.StartRemediationAsync("orders", Arg.Any<LatticeValueTransform>(), Arg.Any<LatticeSchemaPolicy>(), "rem-1", Arg.Any<CancellationToken>())
@@ -112,7 +111,6 @@ public sealed class TreeAdminSchemaOperationToolsTests
     }
 
     [TestCase(TreeAdminSchemaOperationTools.MigrationStartToolName)]
-    [TestCase(TreeAdminSchemaOperationTools.MigrateAliasToolName)]
     public async Task The_migration_tools_start_an_operation_without_an_id_when_none_is_given(string toolName)
     {
         _operations.StartMigrationAsync("orders", null, Arg.Any<CancellationToken>()).Returns(Handle(SchemaOperationKinds.Migration));
@@ -125,7 +123,6 @@ public sealed class TreeAdminSchemaOperationToolsTests
     }
 
     [TestCase(TreeAdminSchemaOperationTools.AdvanceAndMigrateStartToolName)]
-    [TestCase(TreeAdminSchemaOperationTools.AdvanceAndMigrateAliasToolName)]
     public async Task The_advance_and_migrate_tools_forward_the_new_target(string toolName)
     {
         _operations.StartAdvanceAndMigrateAsync("orders", 4u, "adv-1", Arg.Any<CancellationToken>())
@@ -216,7 +213,7 @@ public sealed class TreeAdminSchemaOperationToolsTests
         Assert.Multiple(() =>
         {
             Assert.That(TreeAdminSchemaOperationTools.CreateReadTools(), Has.Count.EqualTo(2));
-            Assert.That(TreeAdminSchemaOperationTools.CreateControlTools(), Has.Count.EqualTo(7));
+            Assert.That(TreeAdminSchemaOperationTools.CreateControlTools(), Has.Count.EqualTo(4));
             Assert.That(tools.Select(t => t.ProtocolTool.Name), Is.Unique);
             foreach (var tool in tools)
             {
@@ -226,9 +223,8 @@ public sealed class TreeAdminSchemaOperationToolsTests
                 Assert.That(schema, Does.Not.Contain("cancellationToken"), tool.ProtocolTool.Name);
             }
 
-            var remediate = Tool(TreeAdminSchemaOperationTools.RemediateAliasToolName).ProtocolTool;
+            var remediate = Tool(TreeAdminSchemaOperationTools.RemediationStartToolName).ProtocolTool;
             Assert.That(remediate.InputSchema.GetRawText(), Does.Contain("\"transform\"").And.Contain("\"targetPolicy\"").And.Contain("\"operationId\""));
-            Assert.That(remediate.Description, Does.Contain(TreeAdminSchemaOperationTools.RemediationStartToolName).And.Contain("Deprecated"));
             Assert.That(Tool(TreeAdminSchemaOperationTools.StatusToolName).ProtocolTool.Annotations?.ReadOnlyHint, Is.True);
             Assert.That(Tool(TreeAdminSchemaOperationTools.MigrationStartToolName).ProtocolTool.Annotations?.DestructiveHint, Is.True);
             Assert.That(Tool(TreeAdminSchemaOperationTools.CancelToolName).ProtocolTool.Annotations?.DestructiveHint, Is.False);
@@ -245,7 +241,6 @@ public sealed class TreeAdminSchemaOperationToolsTests
             Assert.That(names, Does.Contain(TreeAdminSchemaOperationTools.StatusToolName));
             Assert.That(names, Does.Contain(TreeAdminSchemaOperationTools.ListToolName));
             Assert.That(names, Does.Not.Contain(TreeAdminSchemaOperationTools.RemediationStartToolName));
-            Assert.That(names, Does.Not.Contain(TreeAdminSchemaOperationTools.RemediateAliasToolName));
             Assert.That(names, Does.Not.Contain(TreeAdminSchemaOperationTools.CancelToolName));
         });
     }

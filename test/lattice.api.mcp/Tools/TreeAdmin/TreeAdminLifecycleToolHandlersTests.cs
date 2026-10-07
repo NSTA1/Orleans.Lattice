@@ -3,10 +3,6 @@ using NSubstitute;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.TreeAdmin;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
-// they stay supported until the next major version.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
@@ -644,27 +640,6 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
-    public async Task ExecuteWalMoveAsync_maps_the_option_scalars_and_returns_the_receipt()
-    {
-        var admin = TreeAdmin();
-        var expected = new TreeWalMoveReceipt { TreeId = "orders", Partition = 1, Outcome = TreeWalMoveOutcome.Moved };
-        admin.ExecuteWalMoveAsync("orders", 1, "wal-secondary", Arg.Any<TreeWalMoveOptions?>(), Arg.Any<CancellationToken>())
-            .Returns(expected);
-
-        var result = await TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(
-            admin, "orders", 1, "wal-secondary", 45, 128, true, CancellationToken.None);
-
-        Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).ExecuteWalMoveAsync(
-            "orders", 1, "wal-secondary",
-            Arg.Is<TreeWalMoveOptions?>(o => o.HasValue
-                && o.Value.QuiesceLeaseSeconds == 45
-                && o.Value.CopyPageSize == 128
-                && o.Value.DisableVerifyAfterCopy),
-            Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public async Task ReclaimMovedWalSourceAsync_forwards_the_arguments_and_returns_the_receipt()
     {
         var admin = TreeAdmin();
@@ -786,32 +761,6 @@ public sealed class TreeAdminLifecycleToolHandlersTests
     }
 
     [Test]
-    public async Task RebuildViewAsync_forwards_the_view_name_and_returns_the_status()
-    {
-        var admin = TreeAdmin();
-        var expected = new TreeViewStatus { ViewName = "orders-by-region", SourceTreeId = "orders" };
-        admin.RebuildViewAsync("orders-by-region", Arg.Any<CancellationToken>()).Returns(expected);
-
-        var result = await TreeAdminLifecycleToolHandlers.RebuildViewAsync(admin, "orders-by-region", CancellationToken.None);
-
-        Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).RebuildViewAsync("orders-by-region", Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcileViewAsync_forwards_the_view_name_and_returns_the_result()
-    {
-        var admin = TreeAdmin();
-        var expected = new TreeViewReconcileResult { ViewName = "orders-by-region", SourceTreeId = "orders", DriftRepaired = true };
-        admin.ReconcileViewAsync("orders-by-region", Arg.Any<CancellationToken>()).Returns(expected);
-
-        var result = await TreeAdminLifecycleToolHandlers.ReconcileViewAsync(admin, "orders-by-region", CancellationToken.None);
-
-        Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).ReconcileViewAsync("orders-by-region", Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public async Task DropViewAsync_forwards_the_view_name_and_returns_it()
     {
         var admin = TreeAdmin();
@@ -846,19 +795,6 @@ public sealed class TreeAdminLifecycleToolHandlersTests
 
         Assert.That(result, Is.SameAs(expected));
         await admin.Received(1).GetTagIndexStatusAsync("by-tag", Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcileTagIndexAsync_forwards_the_index_name_and_returns_the_report()
-    {
-        var admin = TreeAdmin();
-        var expected = new TreeTagReconcileReport { IndexName = "by-tag", TreeId = "tag-by-tag", OrphanRowsRemoved = 3 };
-        admin.ReconcileTagIndexAsync("by-tag", Arg.Any<CancellationToken>()).Returns(expected);
-
-        var result = await TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync(admin, "by-tag", CancellationToken.None);
-
-        Assert.That(result, Is.SameAs(expected));
-        await admin.Received(1).ReconcileTagIndexAsync("by-tag", Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -948,16 +884,12 @@ public sealed class TreeAdminLifecycleToolHandlersTests
             Assert.That(() => TreeAdminLifecycleToolHandlers.AuditOrphanedLeavesAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.RepairOrphanedLeavesAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.PlanWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminLifecycleToolHandlers.ExecuteWalMoveAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ReclaimMovedWalSourceAsync(null!, "t", 0, "k"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ListViewsAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetViewStatusAsync(null!, "v"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminLifecycleToolHandlers.RebuildViewAsync(null!, "v"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileViewAsync(null!, "v"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.DropViewAsync(null!, "v"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.ListTagIndexesAsync(null!), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetTagIndexStatusAsync(null!, "i"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminLifecycleToolHandlers.ReconcileTagIndexAsync(null!, "i"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.TriggerShardCompactionAsync(null!, "t", 0), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.GetHistoryRetentionAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminLifecycleToolHandlers.SetHistoryRetentionAsync(null!, "t"), Throws.ArgumentNullException);

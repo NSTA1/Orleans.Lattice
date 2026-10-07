@@ -43,12 +43,12 @@ When a version operation is called and the add-on is not present, the facade thr
 
 ## Remediation
 
-`RemediateAsync` applies a `LatticeValueTransform` across a tree and adopts a target `LatticeSchemaPolicy` when the run completes. It is a SchemaAdmin operation because it can rewrite existing values and change the policy that future writes must satisfy. `GetRemediationStatusAsync` is the read-only status path, returning the last or current `LatticeSchemaRemediationReport` visible for the tree.
+`StartRemediationAsync` accepts a tracked remediation and `GetRemediationStatusAsync` reports the last or current `LatticeSchemaRemediationReport` visible for the tree. The start call is a SchemaAdmin operation because the remediation can rewrite existing values and change the policy that future writes must satisfy; the status read is Read-only.
 
 The transform, target policy, and report semantics are owned by [`Orleans.Lattice.Schema`](../lattice.schema/README.md); the facade's job is to authorize, invoke, and expose the result consistently to transport bindings.
 
 ## Compliance audit
 
-`ScanComplianceAsync` is a read-only audit. It scans the tree's entries against the cached compiled policy and returns a `LatticeSchemaComplianceReport` with compliant and non-compliant counts plus a reason breakdown. When no policy is set, it returns the ungoverned report: `HasPolicy` is `false` and every count is zero.
+`StartComplianceScanAsync` accepts a tracked read-only audit. The background scan validates the tree's entries against the cached compiled policy and its terminal result is a `LatticeSchemaComplianceReport` with compliant and non-compliant counts plus a reason breakdown. When no policy is set, it returns the ungoverned report: `HasPolicy` is `false` and every count is zero.
 
 The scan never mutates values, policy, dead-letter entries, or version config. It is a Read operation, so an operator can audit a tree without holding SchemaAdmin authority.

@@ -28,7 +28,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupOperation
             return existing;
         }
 
-        var result = await CreateBackupAsync(request, cancellationToken);
+        var result = await SeedBackupAsync(request, cancellationToken);
         return Record(operationId, BackupOperationKinds.Capture, request.Scope.TreeId, result.BackupId,
             new Dictionary<string, string> { [BackupOperationResultKeys.BackupId] = result.BackupId });
     }
@@ -42,7 +42,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupOperation
             return existing;
         }
 
-        var result = await CreateIncrementalBackupAsync(request, cancellationToken);
+        var result = await CaptureIncrementalNowAsync(request, cancellationToken);
         return Record(operationId, BackupOperationKinds.IncrementalCapture, request.Scope.TreeId, result.BackupId,
             new Dictionary<string, string> { [BackupOperationResultKeys.BackupId] = result.BackupId });
     }
@@ -71,7 +71,7 @@ internal sealed partial class FakeLatticeBackupControl : ILatticeBackupOperation
             return existing;
         }
 
-        var restore = await RestoreBackupAsync(request, cancellationToken);
+        var restore = await RestoreNowAsync(request, cancellationToken);
         var result = new Dictionary<string, string>
         {
             [BackupOperationResultKeys.BackupId] = restore.BackupId,

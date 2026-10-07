@@ -8,9 +8,7 @@ using Orleans.Lattice;
 using Orleans.Lattice.Backup;
 using Orleans.Serialization;
 
-// These tests exercise the deprecated blocking CheckBackupHealth RPC (LATTICE0002) on
 // purpose: they prove the wrapper still behaves exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
@@ -77,25 +75,6 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     }
 
     [Test]
-    public async Task CheckBackupHealth_wraps_the_fresh_report_as_found()
-    {
-        var report = Report("b1");
-        var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync("b1", Arg.Any<CancellationToken>()).Returns(report);
-        var service = CreateService(control);
-
-        var response = await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b1" },
-            Context());
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(response.Found, Is.True);
-            Assert.That(response.Report, Is.SameAs(report));
-        });
-    }
-
-    [Test]
     public async Task GetBackupHealth_wraps_a_stored_report_as_found()
     {
         var report = Report("b2");
@@ -158,15 +137,15 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     {
         var report = Report("b5");
         var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync("b5", Arg.Any<CancellationToken>()).Returns(report);
+        control.GetBackupHealthAsync("b5", Arg.Any<CancellationToken>()).Returns(report);
         var bridge = new HeaderLatticeBackupApiCredentialBridge(
             Options.Create(new LatticeBackupApiGrpcOptions()));
         var service = CreateService(control, bridge);
         var headers = new global::Grpc.Core.Metadata { { "authorization", "Bearer token-xyz" } };
         var context = new FakeServerCallContext("unit", headers);
 
-        var response = await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b5" },
+        var response = await service.GetBackupHealth(
+            new BackupHealthGetRequestMessage { BackupId = "b5" },
             context);
 
         Assert.That(response.Report, Is.SameAs(report));
@@ -190,11 +169,11 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     public void InvokeAsync_maps_facade_exceptions_onto_status_codes(Exception thrown, StatusCode expected)
     {
         var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(thrown);
+        control.GetBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(thrown);
         var service = CreateService(control);
 
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b" },
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.GetBackupHealth(
+            new BackupHealthGetRequestMessage { BackupId = "b" },
             Context()));
 
         Assert.That(ex!.StatusCode, Is.EqualTo(expected));
@@ -204,12 +183,12 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     public void InvokeAsync_attaches_a_correlation_ref_to_the_opaque_internal_detail()
     {
         var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        control.GetBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidTimeZoneException("secret internal detail"));
         var service = CreateService(control);
 
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b" },
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.GetBackupHealth(
+            new BackupHealthGetRequestMessage { BackupId = "b" },
             Context()));
 
         Assert.Multiple(() =>
@@ -226,12 +205,12 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     public void InvokeAsync_surfaces_a_transient_reminder_failure_as_retryable_unavailable()
     {
         var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        control.GetBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new TimeoutException("The operation has timed out."));
         var service = CreateService(control);
 
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b" },
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.GetBackupHealth(
+            new BackupHealthGetRequestMessage { BackupId = "b" },
             Context()));
 
         Assert.Multiple(() =>
@@ -246,11 +225,11 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     {
         var original = new RpcException(new Status(StatusCode.AlreadyExists, "dup"));
         var control = Substitute.For<ILatticeBackupControl>();
-        control.CheckBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(original);
+        control.GetBackupHealthAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).ThrowsAsync(original);
         var service = CreateService(control);
 
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckBackupHealth(
-            new BackupHealthCheckRequestMessage { BackupId = "b" },
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.GetBackupHealth(
+            new BackupHealthGetRequestMessage { BackupId = "b" },
             Context()));
 
         Assert.That(ex, Is.SameAs(original));

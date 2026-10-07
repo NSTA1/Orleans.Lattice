@@ -2,9 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Schema;
 using Orleans.Serialization;
 
-// The deprecated blocking verbs (LATTICE0002) - the compliance scan (#4126) and the
 // remediation and migration verbs (#4123) - are exercised on purpose until their removal.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Schema.Grpc.Tests;
 
@@ -235,40 +233,6 @@ public sealed class LatticeSchemaApiGrpcClientUnitTests
     }
 
     [Test]
-    public async Task AdvanceAndMigrateAsync_returns_the_report()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-
-        var report = await client.AdvanceAndMigrateAsync(Tree, 4);
-
-        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
-    public void AdvanceAndMigrateAsync_with_empty_tree_throws()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-        Assert.That(async () => await client.AdvanceAndMigrateAsync("", 4), Throws.ArgumentException);
-    }
-
-    [Test]
-    public async Task MigrateToTargetVersionAsync_returns_the_report()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-
-        var report = await client.MigrateToTargetVersionAsync(Tree);
-
-        Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
-    public void MigrateToTargetVersionAsync_with_empty_tree_throws()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-        Assert.That(async () => await client.MigrateToTargetVersionAsync(""), Throws.ArgumentException);
-    }
-
-    [Test]
     public async Task ClearVersionConfigAsync_returns_the_removed_flag()
     {
         var client = ClientReturning(new SchemaRemovedResponse { Removed = false });
@@ -281,39 +245,6 @@ public sealed class LatticeSchemaApiGrpcClientUnitTests
     {
         var client = ClientReturning(new SchemaRemovedResponse { Removed = false });
         Assert.That(async () => await client.ClearVersionConfigAsync(""), Throws.ArgumentException);
-    }
-
-    [Test]
-    public async Task RemediateAsync_sends_transform_and_target_policy()
-    {
-        var invoker = FakeCallInvoker.ForUnary(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-        var client = LatticeSchemaApiGrpcClient.Create(invoker, _serializerProvider);
-
-        var report = await client.RemediateAsync(Tree, LatticeValueTransform.Passthrough(), JsonPolicy());
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-            Assert.That(((RemediateRequest)invoker.LastRequest!).TreeId, Is.EqualTo(Tree));
-        });
-    }
-
-    [Test]
-    public void RemediateAsync_with_empty_tree_throws()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-        Assert.That(
-            async () => await client.RemediateAsync("", LatticeValueTransform.Passthrough(), JsonPolicy()),
-            Throws.ArgumentException);
-    }
-
-    [Test]
-    public void RemediateAsync_with_null_target_policy_throws()
-    {
-        var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
-        Assert.That(
-            async () => await client.RemediateAsync(Tree, LatticeValueTransform.Passthrough(), null!),
-            Throws.ArgumentNullException);
     }
 
     [Test]
@@ -331,27 +262,6 @@ public sealed class LatticeSchemaApiGrpcClientUnitTests
     {
         var client = ClientReturning(new SchemaRemediationReportResponse { Report = LatticeSchemaRemediationReport.Idle });
         Assert.That(async () => await client.GetRemediationStatusAsync(""), Throws.ArgumentException);
-    }
-
-    [Test]
-    public async Task ScanComplianceAsync_returns_the_report()
-    {
-        var report = LatticeSchemaComplianceReport.Ungoverned(Tree) with { HasPolicy = true };
-        var client = ClientReturning(new SchemaComplianceReportResponse { Report = report });
-
-        var result = await client.ScanComplianceAsync(Tree);
-
-        Assert.That(result.TreeId, Is.EqualTo(Tree));
-    }
-
-    [Test]
-    public void ScanComplianceAsync_with_empty_tree_throws()
-    {
-        var client = ClientReturning(new SchemaComplianceReportResponse
-        {
-            Report = LatticeSchemaComplianceReport.Ungoverned(Tree),
-        });
-        Assert.That(async () => await client.ScanComplianceAsync(""), Throws.ArgumentException);
     }
 
     [Test]

@@ -59,7 +59,7 @@ public sealed class BackupOperationPageTests : BackupsTestContext
         var cut = RenderAt<BackupOperationPage>("backups/operations/" + operation.Id);
 
         cut.WaitUntil(() => Assert.That(CurrentPath, Is.EqualTo("/backups/operations/op-1")));
-        Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)), Is.Zero, "the blocking verb is not called");
+        Assert.That(Backups.CountOf("RebuildCatalogFromSinkAsync"), Is.Zero, "the blocking verb is not called");
 
         Backups.Succeed("op-1", null, FakeBackupControl.RebuildResult(10, 3, 7));
         var followed = RenderAt<BackupOperationPage>("backups/operations/op-1");

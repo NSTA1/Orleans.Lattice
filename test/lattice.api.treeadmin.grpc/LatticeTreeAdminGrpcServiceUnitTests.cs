@@ -6,9 +6,7 @@ using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Orleans.Serialization;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
 // they stay supported until the next major version.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
@@ -409,39 +407,6 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
             Context("PlanWalMove"));
 
         Assert.That(result, Is.SameAs(plan));
-    }
-
-    [Test]
-    public async Task RebuildView_forwards_the_view_name()
-    {
-        var status = new TreeViewStatus { ViewName = "by-region", SourceTreeId = "orders" };
-        var control = Substitute.For<ILatticeTreeAdmin>();
-        control.RebuildViewAsync("by-region", Arg.Any<CancellationToken>()).Returns(Task.FromResult(status));
-        var service = CreateService(control);
-
-        var result = await service.RebuildView(
-            new TreeAdminViewRequest { ViewName = "by-region" }, Context("RebuildView"));
-
-        Assert.That(result, Is.SameAs(status));
-    }
-
-    [Test]
-    public async Task ReconcileView_forwards_the_view_name()
-    {
-        var reconcile = new TreeViewReconcileResult
-        {
-            ViewName = "by-region",
-            SourceTreeId = "orders",
-            DriftRepaired = true,
-        };
-        var control = Substitute.For<ILatticeTreeAdmin>();
-        control.ReconcileViewAsync("by-region", Arg.Any<CancellationToken>()).Returns(Task.FromResult(reconcile));
-        var service = CreateService(control);
-
-        var result = await service.ReconcileView(
-            new TreeAdminViewRequest { ViewName = "by-region" }, Context("ReconcileView"));
-
-        Assert.That(result, Is.SameAs(reconcile));
     }
 
     [Test]
