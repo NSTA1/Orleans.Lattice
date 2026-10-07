@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.UI.Transport;
+
 namespace Orleans.Lattice.Explorer.UI.Areas.Replication;
 
 /// <summary>
@@ -21,6 +23,8 @@ internal sealed record ReplicationFault(ReplicationFaultKind Kind, string Messag
 
         return exception switch
         {
+            _ when BootstrapReadFenceErrors.IsBootstrapReadFence(exception) =>
+                new(ReplicationFaultKind.Bootstrapping, "This tree is bootstrapping from a peer; reads resume when it completes."),
             UnauthorizedAccessException => new(ReplicationFaultKind.Denied, $"You are not allowed to see {subject} on this cluster."),
             NotSupportedException => NotServed(subject),
             _ => new(ReplicationFaultKind.Failed, $"The cluster could not report {subject}. Try again in a moment."),
