@@ -3,6 +3,7 @@ using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Replication;
 using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Samples.Explorer.Tests;
@@ -199,6 +200,11 @@ public sealed class TenancyRegionsSmokeTests
         using var system = LatticeSystemOrigin.Enter();
         foreach (var region in _sample.Regions)
         {
+            var bootstrap = await region.Services.GetRequiredService<ILatticeBootstrapCoordinator>()
+                .GetStatusAsync("sys-tenant-registry");
+            NUnit.Framework.TestContext.Out.WriteLine(
+                $"{region.Id} bootstrap: phase={bootstrap.Phase}, source={bootstrap.SourceClusterId}, "
+                + $"read-fenced={bootstrap.ReadFenced}, entries-applied={bootstrap.EntriesApplied}, redrives={bootstrap.RedriveAttempts}");
             var status = await region.Services.GetRequiredService<ILatticeReplicationStatus>()
                 .GetPeerStatusAsync(new ReplicationPeerStatusQuery { TreeId = "sys-tenant-registry" });
             foreach (var link in status.Peers)
