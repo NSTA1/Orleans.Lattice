@@ -12,7 +12,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
-- **Replication - Defer bootstrap after an untrusted startup WAL gap, and do not await sibling re-seeds.** A fresh silo waits for its cluster manifest before classifying an unknown WAL gap as a trim; sibling coordinators issue re-seed requests without waiting on one another, preventing a cross-tree bootstrap cycle. A tree first registered after its shipper bound it also re-seeds the peer to establish the new source lineage. ([#4768](https://github.com/NSTA1/Orleans.Lattice/issues/4768)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+- **Replication - Defer bootstrap after an untrusted startup WAL gap, avoid sibling re-seed cycles, and accept a fresh source lineage.** A fresh silo waits for its cluster manifest before classifying an unknown WAL gap as a trim; sibling coordinators issue re-seed requests without waiting on one another. A shipper does not force a re-seed merely because a tree receives its first lineage after the shipper binds to an empty tree; it still re-seeds after an actual lineage replacement or recreation through an unregistered tree. ([#4768](https://github.com/NSTA1/Orleans.Lattice/issues/4768)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
 
 ### Added
 
