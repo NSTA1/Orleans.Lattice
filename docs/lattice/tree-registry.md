@@ -111,6 +111,14 @@ Tree deletion, recovery and purge resolve the alias too, but only to a target th
 
 ### Cache invalidation
 
+A bare registry alias set also carries the target's shard map and split allocation mark in the same row write. Before publishing that row, it persists a retained redirect on every shard addressed by the previous map. Every already-active logical router then receives the stale-routing signal, discards its cached alias and map together, and retries against the target. This applies to point reads, writes and deletes as well as fan-out operations; the old copy need not be deleted. Multiple logical aliases of the same physical copy keep independent redirects, and direct access through a distinct physical id or internal shard maintenance remains available.
+
+Re-setting the same alias keeps the current map and lineage and repairs any redirect left on the target. Moving back to an earlier copy releases that copy's redirect for this logical tree. Removing a bare alias restores the original logical copy's captured map and split allocation mark and fences routers still addressing the copy being left.
+
+Before touching shards, the registry persists a uniquely owned move intent in its alias-routing grain state and registers a durable recovery reminder. A failure proven to precede publication restores only that operation's source fences, including any redirect it displaced. After publication has committed, including a lost acknowledgement, recovery only completes forward: fresh routers may already have accepted writes on the destination, so restoring the old alias would lose those writes. The published ownership token prevents stale recovery from overwriting a newer alias change. A later alias mutation finishes pending work before starting its own move.
+
+Recovery does not require a caller retry. An exclusive one-second timer retries pending moves on an active registry; after deactivation or process interruption, the minute reminder reactivates it and resumes from durable intent. The activation hook schedules recovery rather than awaiting shard fan-out, avoiding activation-time registry read deadlocks. Recovery failures are logged and retried while intent remains durable; affected logical traffic can be temporarily refused, but cannot silently write the superseded copy. The reminder remains registered even when no move is pending, with an empty, constant-time tick. Hosts must configure durable grain storage and a durable Orleans reminder provider for recovery across process loss; an in-memory provider cannot preserve intent or reminders across that boundary.
+
 Different physical trees produce different leaf grain IDs, which automatically create fresh `LeafCacheGrain` instances. No explicit cache flush is needed after an alias swap. See [Read Caching](caching.md#cache-invalidation-via-tree-aliasing) for details.
 
 ### API

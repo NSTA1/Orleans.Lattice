@@ -32,8 +32,8 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private void ThrowIfRetainedRedirect()
     {
-        var rr = state.State.RetainedRedirect;
-        if (rr is null) return;
+        if (state.State.RetainedRedirect is null && state.State.AdditionalRetainedRedirects is null)
+            return;
 
         // Discriminate logical-alias-routed traffic (which must self-heal onto
         // the destination tree) from direct-physical access and maintenance
@@ -47,6 +47,12 @@ internal sealed partial class ShardRootGrain
         //     id, used by revert / diagnostics) -> keep reading the snapshot.
         if (RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) is not string routedLogical)
             return;
+
+        var rr = state.State.AdditionalRetainedRedirects?.GetValueOrDefault(routedLogical)
+            ?? (state.State.RetainedRedirect?.LogicalTreeId == routedLogical ? state.State.RetainedRedirect : null)
+            ?? state.State.AdditionalRetainedRedirects?.GetValueOrDefault("")
+            ?? state.State.RetainedRedirect;
+        if (rr is null) return;
 
         var logicalRouted = string.IsNullOrEmpty(rr.LogicalTreeId)
             ? !string.Equals(routedLogical, TreeId, StringComparison.Ordinal)
@@ -72,67 +78,101 @@ internal sealed partial class ShardRootGrain
                 nameof(destinationPhysicalTreeId));
 
         var existing = state.State.RetainedRedirect;
-        if (existing is not null
-            && string.Equals(existing.OperationId, operationId, StringComparison.Ordinal)
-            && string.Equals(existing.DestinationPhysicalTreeId, destinationPhysicalTreeId, StringComparison.Ordinal)
-            && string.Equals(existing.LogicalTreeId, logicalTreeId, StringComparison.Ordinal))
+        var previousForLogical = state.State.AdditionalRetainedRedirects?.GetValueOrDefault(logicalTreeId)
+            ?? (existing?.LogicalTreeId == logicalTreeId ? existing : null);
+        if (previousForLogical is not null
+            && string.Equals(previousForLogical.OperationId, operationId, StringComparison.Ordinal)
+            && string.Equals(previousForLogical.DestinationPhysicalTreeId, destinationPhysicalTreeId, StringComparison.Ordinal))
         {
             // Idempotent re-mark under the same operation.
             return;
         }
 
+        var additional = state.State.AdditionalRetainedRedirects;
+        var previous = state.State.PreviousRetainedRedirects;
+        if (previousForLogical is not null)
+        {
+            var updatedPrevious = previous is null
+                ? new Dictionary<string, RetainedRedirectState>(StringComparer.Ordinal)
+                : new Dictionary<string, RetainedRedirectState>(previous, StringComparer.Ordinal);
+            updatedPrevious[operationId] = previousForLogical;
+            state.State.PreviousRetainedRedirects = updatedPrevious;
+        }
+        var updatedAdditional = additional is null
+            ? new Dictionary<string, RetainedRedirectState>(StringComparer.Ordinal)
+            : new Dictionary<string, RetainedRedirectState>(additional, StringComparer.Ordinal);
+        if (existing is not null
+            && !string.Equals(existing.LogicalTreeId, logicalTreeId, StringComparison.Ordinal))
+        {
+            updatedAdditional[existing.LogicalTreeId] = existing;
+        }
+        updatedAdditional.Remove(logicalTreeId);
+        state.State.AdditionalRetainedRedirects = updatedAdditional.Count == 0 ? null : updatedAdditional;
         state.State.RetainedRedirect = new RetainedRedirectState
         {
             DestinationPhysicalTreeId = destinationPhysicalTreeId,
             OperationId = operationId,
             LogicalTreeId = logicalTreeId,
         };
-        await WriteShardStateAsync();
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State.RetainedRedirect = existing;
+            state.State.AdditionalRetainedRedirects = additional;
+            state.State.PreviousRetainedRedirects = previous;
+            RecycleAfterRetainedRedirectWriteFailure();
+            throw;
+        }
     }
 
     /// <inheritdoc />
-    public async Task ClearRetainedRedirectAsync(string operationId)
+    public Task ClearRetainedRedirectAsync(string operationId) =>
+        ClearRetainedRedirectCoreAsync(operationId, onlyIfOwned: false);
+
+    /// <inheritdoc />
+    public Task ClearRetainedRedirectIfOwnedAsync(string operationId) =>
+        ClearRetainedRedirectCoreAsync(operationId, onlyIfOwned: true);
+
+    private async Task ClearRetainedRedirectCoreAsync(string operationId, bool onlyIfOwned)
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);
         var rr = state.State.RetainedRedirect;
-        if (rr is null)
+        var additional = state.State.AdditionalRetainedRedirects;
+        var previous = state.State.PreviousRetainedRedirects;
+        if (rr is null && additional is null)
         {
             // Idempotent - nothing to clear.
             return;
         }
 
-        if (!string.Equals(rr.OperationId, operationId, StringComparison.Ordinal))
+        var clearPrimary = rr is not null && string.Equals(rr.OperationId, operationId, StringComparison.Ordinal);
+        var updatedAdditional = additional?.Where(pair => !string.Equals(pair.Value.OperationId, operationId, StringComparison.Ordinal))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        if (!clearPrimary && updatedAdditional?.Count == additional?.Count)
         {
+            if (onlyIfOwned) return;
             throw new InvalidOperationException(
-                $"Shard '{context.GrainId.Key}' has a retained redirect from operation '{rr.OperationId}'; "
+                $"Shard '{context.GrainId.Key}' has a retained redirect from operation '{rr?.OperationId}'; "
                 + $"refused ClearRetainedRedirectAsync under different operationId '{operationId}'.");
         }
 
-        state.State.RetainedRedirect = null;
-        await WriteShardStateAsync();
-    }
-
-    /// <inheritdoc />
-    public async Task ReleaseRetainedRedirectAsync(string logicalTreeId)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(logicalTreeId);
-        var rr = state.State.RetainedRedirect;
-        if (rr is null)
+        var restore = onlyIfOwned ? previous?.GetValueOrDefault(operationId) : null;
+        if (clearPrimary) state.State.RetainedRedirect = restore;
+        else if (restore is not null)
         {
-            return;
+            updatedAdditional ??= new Dictionary<string, RetainedRedirectState>(StringComparer.Ordinal);
+            updatedAdditional[restore.LogicalTreeId] = restore;
         }
-
-        // A redirect with no recorded logical id applies to every logical tree
-        // other than this shard's own id (see ThrowIfRetainedRedirect).
-        var redirectsLogical = string.IsNullOrEmpty(rr.LogicalTreeId)
-            ? !string.Equals(logicalTreeId, TreeId, StringComparison.Ordinal)
-            : string.Equals(rr.LogicalTreeId, logicalTreeId, StringComparison.Ordinal);
-        if (!redirectsLogical)
+        if (previous?.ContainsKey(operationId) == true)
         {
-            return;
+            var updatedPrevious = new Dictionary<string, RetainedRedirectState>(previous, StringComparer.Ordinal);
+            updatedPrevious.Remove(operationId);
+            state.State.PreviousRetainedRedirects = updatedPrevious.Count == 0 ? null : updatedPrevious;
         }
-
-        state.State.RetainedRedirect = null;
+        state.State.AdditionalRetainedRedirects = updatedAdditional is { Count: > 0 } ? updatedAdditional : null;
         try
         {
             await WriteShardStateAsync();
@@ -140,7 +180,65 @@ internal sealed partial class ShardRootGrain
         catch
         {
             state.State.RetainedRedirect = rr;
+            state.State.AdditionalRetainedRedirects = additional;
+            state.State.PreviousRetainedRedirects = previous;
+            RecycleAfterRetainedRedirectWriteFailure();
             throw;
         }
+    }
+
+    /// <inheritdoc />
+    public async Task ReleaseRetainedRedirectAsync(string logicalTreeId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(logicalTreeId);
+        var rr = state.State.RetainedRedirect;
+        var additional = state.State.AdditionalRetainedRedirects;
+        var previous = state.State.PreviousRetainedRedirects;
+        if (rr is null && additional is null)
+        {
+            return;
+        }
+
+        // A redirect with no recorded logical id applies to every logical tree
+        // other than this shard's own id (see ThrowIfRetainedRedirect).
+        var redirectsLogical = rr is not null && (string.IsNullOrEmpty(rr.LogicalTreeId)
+            ? !string.Equals(logicalTreeId, TreeId, StringComparison.Ordinal)
+            : string.Equals(rr.LogicalTreeId, logicalTreeId, StringComparison.Ordinal));
+        var releaseLegacy = logicalTreeId != TreeId && additional?.ContainsKey("") == true;
+        if (!redirectsLogical && additional?.ContainsKey(logicalTreeId) != true && !releaseLegacy)
+        {
+            return;
+        }
+
+        if (redirectsLogical) state.State.RetainedRedirect = null;
+        if (additional is not null)
+        {
+            var updatedAdditional = new Dictionary<string, RetainedRedirectState>(additional, StringComparer.Ordinal);
+            updatedAdditional.Remove(logicalTreeId);
+            if (releaseLegacy) updatedAdditional.Remove("");
+            state.State.AdditionalRetainedRedirects = updatedAdditional.Count == 0 ? null : updatedAdditional;
+        }
+        state.State.PreviousRetainedRedirects = previous?.Where(pair => pair.Value.LogicalTreeId != logicalTreeId)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
+        try
+        {
+            await WriteShardStateAsync();
+        }
+        catch
+        {
+            state.State.RetainedRedirect = rr;
+            state.State.AdditionalRetainedRedirects = additional;
+            state.State.PreviousRetainedRedirects = previous;
+            RecycleAfterRetainedRedirectWriteFailure();
+            throw;
+        }
+    }
+
+    private void RecycleAfterRetainedRedirectWriteFailure()
+    {
+        // A lost acknowledgement may have persisted the fence and advanced its
+        // etag. Retry on a fresh activation, not the restored in-memory snapshot.
+        context.Deactivate(new DeactivationReason(DeactivationReasonCode.ApplicationRequested,
+            "Retained redirect persistence failed; reload durable state before retry."));
     }
 }

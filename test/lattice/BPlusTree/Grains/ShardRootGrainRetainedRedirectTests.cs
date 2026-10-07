@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// that self-heals a stale shadow-cutover routing activation while leaving
 /// direct-physical access and internal maintenance untouched.
 /// </summary>
-public class ShardRootGrainRetainedRedirectTests
+public partial class ShardRootGrainRetainedRedirectTests
 {
     private const string PhysicalTreeId = "src-tree";
     private const string LogicalTreeId = "my-logical";
@@ -350,4 +350,5 @@ public class ShardRootGrainRetainedRedirectTests
 
         Assert.That(state.State.RetainedRedirect, Is.Null);
     }
+
 }

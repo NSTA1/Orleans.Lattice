@@ -394,6 +394,16 @@ internal sealed class ShardRootState
     /// </summary>
     [Id(26)] public List<GrainId>? PurgeClearedLeafRecords { get; set; }
 
+    /// <summary>
+    /// Redirects for other logical aliases that left this physical copy.
+    /// Kept alongside <see cref="RetainedRedirect"/> so moving one alias does
+    /// not erase the stale-routing fence of another alias of the same copy.
+    /// </summary>
+    [Id(27)] public Dictionary<string, RetainedRedirectState>? AdditionalRetainedRedirects { get; set; }
+
+    /// <summary>Prior logical redirects displaced by a fence, for operation-owned pre-publication rollback.</summary>
+    [Id(28)] public Dictionary<string, RetainedRedirectState>? PreviousRetainedRedirects { get; set; }
+
     // [Id(25)] RESERVED: the retired shard-wide LeafClearsBegun flag (issue #4700).
     // State persisted by an older silo still carries it; never reuse this slot.
 }
