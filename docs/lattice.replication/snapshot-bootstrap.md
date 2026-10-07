@@ -28,17 +28,16 @@ before calling `AddLatticeReplication`.
   cursor yet.
 - **`asOfHlc > Zero`** filters out entries whose stamped commit-time
   HLC is strictly greater than `asOfHlc`. After the drain the
-  receiver's snapshot pin replaces both its per-origin
-  high-water-mark vector and its pinned causal floor with the
-  snapshot's causal-stable frontier (the source cluster's own
-  coordinate sealed at or above every entry the drain applied), and
-  the steady-state floor gate in `IReplicationApplier` then drops any
-  incremental entry at or below that frontier, which keeps the
-  handoff exactly-once across the snapshot/incremental boundary. See
-  "Bootstrap drain bypasses the pinned-floor gate and the
-  high-water-mark advance" below for the
-  receiver-side state machine that keeps the in-drain apply
-  idempotent without relying on that gate.
+  receiver's bootstrap handoff merges the snapshot's causal-stable
+  frontier into its per-origin high-water-mark vector by pointwise
+  maximum (the source cluster's own coordinate sealed at or above every
+  entry the drain applied), clears any legacy pinned floor, and drains
+  the durable causal-apply buffer. `IReplicationApplier`
+  does not drop live incremental point writes at or below that
+  frontier; duplicates across the boundary are absorbed by exact
+  identity dedup and idempotent per-key merge. See "Bootstrap drain
+  bypasses the high-water-mark advance" below for the receiver-side
+  state machine that keeps the in-drain apply idempotent.
 - **`CausalStableFrontier`** is the producer's causal-stable frontier
   at snapshot time - the pointwise minimum `VersionVector` across
   every consumer that has reported a vector through
@@ -49,16 +48,155 @@ before calling `AddLatticeReplication`.
   the per-tree high-water-mark store's current vector - a strict superset
   of the meet that is safe as a snapshot cut-point. The receiver
   records this `(asOfHlc, frontier)` cut-point when the export opens
-  and pins the frontier on the per-tree high-water-mark store only
+  and merges the frontier into the per-tree high-water-mark store only
   after every snapshot entry has been applied, so the causal
-  dependency check on the first incremental entry after the pin runs
+  dependency check on the first incremental entry after the handoff runs
   from a non-empty frontier.
-- **Tombstoned and expired keys are not emitted.** Only live entries
-  reach the receiver through the committed projection; the tombstone
-  state is reconstructed from the incremental WAL after the snapshot
-  completes. The one exception is an in-flight saga's prepared delete,
-  which ships as a prepared row with `IsTombstone` set (see
+- **Deletes ship as committed tombstone rows, then reaped source deletes
+  reconcile.** The committed projection carries live keys only, so the
+  default provider ends the export with a tombstone pass: every key a
+  source leaf still holds as a tombstone ships as a row with
+  `IsTombstone` set and `IsPrepared` clear, stamped with the tombstone's
+  own HLC, and the bootstrap drain applies it as a delete. Without it a
+  receiver that bootstraps in place over an existing copy - a peer that
+  fell off the log and is re-bootstrapped by either the receiver-side local
+  detector or the sender-side trim-gap request, or an operator re-seed over existing data - kept the old value of every key
+  the source deleted while it was behind, permanently, because the
+  delete's WAL record is behind the source's trim point and the
+  incremental stream never delivers it (#4504).
+
+  A source tombstone can be physically reaped after
+  `TombstoneGracePeriod`, so an in-place drain also pre-captures the
+  receiver's live source-origin, non-expiring rows before opening the
+  export. The sender carries a source-generation tuple at export open and
+  close: physical tree id, shard-map version, lineage token, soft-delete
+  epoch, and deletion state. After the drain, for every pre-captured
+  source-origin key that the whole-tree export did not carry as a live,
+  tombstone, or prepared row, the coordinator synthesises a delete at the
+  captured HLC. The HLC is not advanced: the last-writer-wins merge makes
+  a tombstone win an equal-HLC tie, while any receiver write with a newer
+  HLC still wins.
+
+  The reconcile is deliberately fail-safe. It runs only for unscoped,
+  last-writer-wins exports whose open and close generation match, whose
+  source was not deleted or purging at either end, and whose lineage
+  matches the receiver's durable aligned-lineage record for that source.
+  A bootstrap records that alignment when the receiver held no row of the
+  source's origin when the import began (tombstones and expiring rows
+  included; the receiver's own and third-origin rows do not count), and it
+  reconciles in that same import. A receiver that cannot prove alignment
+  that way - it was never aligned, or the source's lineage has since
+  changed (a restore, a revert, or an alias moved to another tree) -
+  adopts the export's lineage when every source-origin key it held was
+  carried by the export, because there is then nothing it could wrongly
+  delete; otherwise it skips, counted as `skipped_never_aligned` or
+  `skipped_lineage_mismatch`, and keeps every key. Every alignment - this
+  one and the one a receiver that held no source row records - also
+  needs a scan at the end of the drain to find no live, non-expiring
+  source-origin row the export lacks (#4549). A source-origin row that
+  arrived during the drain, perhaps one the source shipped under an older
+  lineage before a restore, is absent from the pre-capture; aligning over
+  it would let a later pass delete a value the source never deleted.
+
+  An unknown generation (a sender that predates generations), a generation
+  that moved during the export, or a deleted or purging source records a
+  durable owed retry. Maintenance re-enters the normal full bootstrap path
+  with a fresh pre-capture and every gate run again, so an upgraded sender
+  reconciles on its first retry. Owed retries back off exponentially from
+  one minute to a six-hour cap, so a sender that never reports a
+  generation does not re-bootstrap the tree on every tick. Source-origin
+  keys carrying an expiry are not captured because they expire on their
+  own.
+
+  Rows of any other origin - the receiver's own writes and a third
+  cluster's - converge through the source's applied frontier (#4549). The
+  export carries, when it opens and after its opening generation, the
+  source tree's per-origin applied low watermark `S(o)` and the writes
+  below it the source holds without applying `H(o)` (lost marks
+  included); the source's own origin is never part of it, because its
+  writes are re-shipped in offset order with their deletes. A write of
+  origin `o` stamped below `S(o)` and not in `H(o)` was applied at the
+  source before the export opened, so the export already reflects it:
+  carried, or superseded by a later write or a delete.
+
+  Before the drain, once the import is recorded (and once the tree is
+  registered, so its lineage stamp cannot reset anything mid-drain), the
+  receiver installs `(S, H)` as a durable **bootstrap drop floor** on its
+  high-water-mark grain, provided the frontier was read under the
+  export's opening lineage; otherwise it clears any earlier floor. The
+  floor starts **provisional**: a delivery below it - a third cluster's
+  write still in flight, a dead-letter replay, or a causal-buffer drain -
+  is deferred (`outcome=bootstrap-floor-deferred`), not acknowledged,
+  because an import that turns out unstable clears the floor and a
+  dropped delivery would never be re-sent. The drain's own rows, saga
+  terminals, and range deletes are exempt.
+
+  Every install bumps the tree's **floor epoch**. The applier stamps each
+  replicated write with the epoch it was admitted under, the epoch is
+  raised in the tree registry
+  (`TreeRegistryEntry.ReplicationFloorEpoch`), and every shard root of the
+  tree is armed with it. Arming is a serial shard-root turn that returns
+  only once the writes the shard admitted under an older epoch have
+  finished their leaf merges; from then on the shard refuses an
+  older-stamped write, which the applier defers. A shard root that
+  activates later - a split or reshard target included - reads the epoch
+  from the registry before it admits its first stamped write. So no write
+  admitted before the floor existed can land after the reconcile scan.
+
+  After the drain the coordinator scans the receiver's live, non-expiring
+  last-writer-wins rows of every origin other than the source (a local
+  row counts as this cluster's id), and deletes, at the row's own HLC and
+  stamped with the source's id, each one whose key the export did not
+  carry and whose write is below `S(o)` and not in `H(o)`. A pending saga
+  prepare matching the same test belongs to a saga the source had already
+  decided - one still open there is exported as prepared rows - so its
+  bucket on that leaf is discarded, durably, and its later commit
+  installs nothing. A row of another origin the export lacks whose write
+  is at or above `S(o)` - or of an origin the frontier carries no
+  watermark for - proves nothing: the source may have applied it during
+  the export and then deleted it, or not have received it yet. It is kept
+  and the reconcile is owed a retry, which settles it once the watermark
+  has risen past it. The reconcile needs a stable generation like the
+  source-origin reconcile, but not the aligned-lineage record: the
+  frontier itself proves the source applied the write. A stable close
+  then makes the floor final, and from then on a delivery below it is
+  acknowledged without being merged (`outcome=bootstrap-floor-dropped`).
+  An export whose generation moved clears the floor instead, so the
+  deferred deliveries apply when re-shipped, and owes a retry that
+  installs a fresh one. The floor belongs to the receiver's lineage of
+  the tree: the tree frontier's re-stamp clears it with the tree's
+  applied identities. A sender that carries no frontier installs no floor
+  and reconciles no other origin.
+
+  An in-flight saga's prepared delete ships as a prepared row with
+  `IsTombstone` set (see
   [Snapshot and in-flight atomic visibility](#snapshot-and-in-flight-atomic-visibility)).
+- **An unbounded export carries the source's applied frontier**
+  ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). For
+  every foreign origin, it carries the applied low watermark below which
+  each of that origin's writes to the tree is reflected in the export, and
+  the writes the source held without applying them (parked, dead-lettered
+  or lost). The values come from the source's own receiver tree frontier,
+  and only when that frontier observed the open generation's lineage. The
+  source's own origin is never covered: a restore, revert or alias move of
+  the source's tree can lose its own writes without deleting them, and the
+  source's shipped watermark, tagged with the receiver's lineage after its
+  re-seed rewind, covers its writes at each receiver anyway. The value
+  rides the export metadata at open, so a receiver can put a drop floor in
+  force before the drain applies anything, and the end-of-stream trailer
+  at close. The receiver keeps it only when the open and close generations
+  match, are known, describe a live tree, and carry the lineage the
+  frontier was read under. The bootstrap pin then installs it on the
+  receiver's tree frontier: each origin's watermark starts from the
+  export's, and the source's held writes stay held until the receiver
+  applies them itself or the origin's own watermark passes them. Otherwise
+  every origin starts from zero, which is sound and rises as each origin's
+  own sender ships its watermark. The export reads every key of the tree
+  through non-interleaving calls, so a write the watermarks cover cannot be
+  overtaken by the read. A bounded or scoped export carries no frontier.
+- **Expired keys are not emitted.** The committed projection reads an
+  expired key as absent; the receiver's copy carries the same absolute
+  expiry, so it expires there too.
 - **A live key's TTL is carried.** Every exported row - a
   committed-projection row as well as a prepared saga row - carries the
   source entry's absolute `ExpiresAtTicks` (`0` for a durable key), so on
@@ -402,40 +540,45 @@ _ = (frontier, asOf);
 
 In a host the `ISnapshotProvider` is resolved from DI on the sender
 side; the default snapshot provider is shown above for illustration. The
-receiver pins the snapshot's `CausalStableFrontier` on its per-tree
-high-water-mark store after draining the entry stream, so the causal
-dependency check on the first incremental entry after the pin runs
-from a non-empty frontier.
+receiver merges the snapshot's `CausalStableFrontier` into its
+per-tree high-water-mark store after draining the entry stream, then
+drains the durable causal-apply buffer, so the causal dependency check
+on the first incremental entry after the handoff runs from a non-empty
+frontier.
 
 ## Receiver-side bootstrap state machine
 
 The bootstrap state machine that drains an `ISnapshotProvider` export
 on the receiver, applies every entry through the local apply seam
-preserving the source HLC, and pins the snapshot's causal-stable
-frontier on the per-tree high-water-mark grain ships as the public
-`ILatticeBootstrapCoordinator` seam. Triggered by the fall-off
+preserving the source HLC, and merges the snapshot's causal-stable
+frontier into the per-tree high-water-mark grain ships as the public
+`ILatticeBootstrapCoordinator` seam. Triggered by the receiver-side local fall-off
 detector (when the per-tree maintenance pass finds a peer's per-origin
 high-water mark behind the oldest entry that peer authored in the head
-window of the local WAL partitions - see [Auto-Bootstrap](auto-bootstrap.md)) and by operator-driven
-re-seed flows.
+window of the local WAL partitions), by the source shipper's sequence-gap
+re-seed request after a sender WAL trim, and by operator-driven re-seed flows.
+See [Auto-Bootstrap](auto-bootstrap.md).
 
 | Type | Shape | Purpose |
 |------|-------|---------|
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
-| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` | Observable status snapshot returned by `GetStatusAsync`; carries the phase plus the in-flight source cluster id (or `null` when no bootstrap is in flight). |
-| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
-| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
+| `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` plus `ReadFenced`, `EntriesApplied` and `RedriveAttempts` | Observable status snapshot returned by `GetStatusAsync`; carries the phase, the in-flight source cluster id (or `null` when no bootstrap is in flight), whether the tree's reads are fenced, how many snapshot entries the current drain attempt has applied, and how many times a failed bootstrap has been re-driven (see [Read fence during the drain](#read-fence-during-the-drain)). Answered while a drain runs. |
+| `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
+| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, `LatticeTreeBootstrappingException` (the source tree is itself mid-bootstrap), Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
 ```text
 Idle
-  └─► RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
-        └─► ApplyingSnapshot (snapshot stream open; draining Entries)
-              └─► IncrementalHandoff (entries drained; pinning AsOfHlc + CausalStableFrontier)
-                    └─► LiveIncremental (terminal - incremental replication is live)
+  -> RequestingSnapshot     (BootstrapAsync invoked; ExportAsync issued)
+     -> ApplyingSnapshot    (snapshot stream open; draining Entries)
+        -> IncrementalHandoff (entries drained; merging CausalStableFrontier)
+           -> LiveIncremental (terminal - incremental replication is live)
 
-Any state ──► Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
+Any state -> Failed         (any thrown exception; restart is a fresh BootstrapAsync call)
+
+Failed -> RequestingSnapshot (automatic re-drive of a drain that failed part-way
+                              through an import; the tree stays read-fenced)
 ```
 
 ### Semantics
@@ -480,13 +623,16 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   receiver-side LWW
   reconciliation on each leaf grain (plus the per-leaf recently-terminal
   short-circuit and the per-tx registry no-op described under "Bootstrap
-  drain bypasses the pinned-floor gate and the high-water-mark advance"
-  below) absorbs it. A fresh `BootstrapAsync` kickoff resets the cursor
+  drain bypasses the high-water-mark advance" below) absorbs it. A
+  fresh `BootstrapAsync` kickoff resets the cursor
   to `Zero`.
 - **`Failed` is restartable.** On any thrown exception inside the
-  phase pump the state transitions to `Failed` (persisted) and
-  the pump tears down. A subsequent `BootstrapAsync` call
-  restarts the cycle from `RequestingSnapshot`.
+  phase pump the state transitions to `Failed` (persisted). A drain
+  that failed before applying any snapshot entry tears the pump down,
+  and a subsequent `BootstrapAsync` call restarts the cycle from
+  `RequestingSnapshot`. A drain that failed part-way through an import
+  keeps the tree read-fenced and is re-driven automatically instead
+  (see [Read fence during the drain](#read-fence-during-the-drain)).
 - **Bounded retry on transient transport faults.** When the
   snapshot drain throws an exception classified as transient by
   `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`
@@ -498,10 +644,9 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   retries the drain in-place using a bounded exponential backoff
   (default: `DefaultBootstrapMaxAttempts = 4` attempts, initial delay
   `500 ms`, capped at `30 s`). Each retry re-opens the export with no
-  upper bound (the resume rule above); the drain applies without the
-  pinned-floor gate, and receiver-side LWW reconciliation is what makes
-  re-applying the entries the failed attempt already applied a
-  correctness no-op. Every retry increments
+  upper bound (the resume rule above); receiver-side LWW reconciliation
+  is what makes re-applying the entries the failed attempt already
+  applied a correctness no-op. Every retry increments
   the `orleans.lattice.replication.bootstrap.transient_retries`
   counter (`LatticeReplicationMetrics.BootstrapTransientRetries`) so
   operators can dashboard the rate. Non-transient faults still pivot
@@ -510,6 +655,18 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   pivots to `Failed` as the terminal outcome. Set
   `BootstrapTransientRetry.MaxAttempts = 1` to disable retries
   entirely (fail-fast).
+- **A deferred entry is never skipped.** The applier can defer an entry
+  (`ApplyResult.Deferred`): a cross-cluster restore saga's receive fence
+  has paused inbound apply for the tree, or the entry duplicates one still
+  in flight on the receiver. Nothing else re-sends a snapshot row, so the
+  drain stops at the first deferred entry, without counting it or folding
+  its clock into the handoff seal, and fails the attempt. The deferral
+  consumes a slot of the same `BootstrapTransientRetry` budget whatever the
+  classifier says, and each retry re-opens the full export; once the budget
+  is spent the bootstrap fails with the import started, so the tree stays
+  read-fenced and is re-driven until a drain applies every entry. The
+  handoff is never pinned past a deferred entry
+  ([#4604](https://github.com/NSTA1/Orleans.Lattice/issues/4604)).
 - **Source HLC + origin preservation.** Every snapshot entry is
   applied through `IReplicationApplier.ApplyAsync`, the same canonical
   inbound apply seam used by live-incremental replication, carrying
@@ -528,23 +685,19 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   therefore raises the same observable side-effects as a receiver
   that catches up via the WAL tail, so UI live-update hooks and
   audit observers see the bootstrap window rather than missing it.
-- **Bootstrap drain bypasses the pinned-floor gate and the
-  high-water-mark advance.** The applier
-  reads an ambient bootstrap-apply flag on every
-  inbound call; when the flag is set (the bootstrap coordinator
-  opens one scope around the entire drain) the pinned-causal-floor
-  check and the post-apply high-water-mark advance are skipped, and
-  the steady-state
-  `orleans.lattice.replication.apply.fifo_violations` tracker is not
-  fed. This is required because the snapshot exporter
+- **Bootstrap drain bypasses the high-water-mark advance.** The
+  applier reads an ambient bootstrap-apply flag on every inbound call;
+  when the flag is set (the bootstrap coordinator opens one scope
+  around the entire drain) the post-apply high-water-mark advance and
+  the steady-state `orleans.lattice.replication.apply.fifo_violations`
+  tracker are skipped. This is required because the snapshot exporter
   enumerates shards/leaves in arbitrary order rather than HLC order:
-  per-shard HLCs are not globally monotonic across a single
-  bootstrap stream, so advancing the high-water-mark mid-drain can
-  suppress a still-pending saga key with a strictly-earlier source
-  HLC and break per-saga all-or-nothing visibility on the
-  bootstrapped peer; and feeding those out-of-order HLCs to the FIFO
-  diagnostic would register every out-of-order shard arrival as a
-  violation. The drain is still
+  per-shard HLCs are not globally monotonic across a single bootstrap
+  stream, so advancing the high-water-mark mid-drain can suppress a
+  still-pending saga key with a strictly-earlier source HLC and break
+  per-saga all-or-nothing visibility on the bootstrapped peer; and
+  feeding those out-of-order HLCs to the FIFO diagnostic would register
+  every out-of-order shard arrival as a violation. The drain is still
   idempotent end-to-end because:
   - **Receiver-side LWW** on each leaf grain reconciles concurrent
     arrivals of the same key by HLC, with a replica-invariant
@@ -564,39 +717,41 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
     late redelivery records the verdict afresh. The safe redelivery
     window is `LatticeOptions.TxDecisionRetention`, not "forever".
 
-  The post-drain snapshot pin atomically replaces the per-origin
-  high-water-mark vector and the pinned causal floor with the
-  snapshot's causal-stable frontier, so the
-  bootstrap-to-incremental handoff retains exactly-once semantics on
-  the live tail. Range deletes,
-  saga terminal records (which carry the saga's own terminal HLC), and
-  tombstone-reap envelopes are routed before the pinned-floor gate, so
-  the bootstrap scope does not change how they apply.
-- **Live-incremental dedup is unchanged.** The snapshot-pinned causal
-  floor in the applier suppresses any re-delivery of
-  bootstrap-arrived entries through the live-incremental path - the
-  pin at the end of the drain sets each origin's floor to its
-  coordinate in the snapshot's causal-stable frontier, so a live entry
-  at or below that coordinate is deduped canonically.
-- **Snapshot/incremental handoff is exactly-once.** The coordinator
-  pins the snapshot's causal-stable frontier on the per-tree
+  The post-drain bootstrap handoff atomically raises the per-origin
+  high-water-mark vector by pointwise maximum with the snapshot's
+  causal-stable frontier, clears any legacy pinned floor, and drains
+  the durable causal-apply buffer. The bootstrap-to-incremental
+  handoff remains idempotent on the live tail because exact identity
+  dedup and per-key merge absorb duplicates, while point writes at or
+  below one pinned coordinate still apply when they are not duplicates.
+  Range deletes, saga terminal records (which carry the saga's own
+  terminal HLC), and tombstone-reap envelopes are routed before the
+  point-write path, so the bootstrap scope does not change how they
+  apply.
+- **Live-incremental dedup is unchanged except for the removed floor.**
+  The applier suppresses exact re-delivery of bootstrap-arrived entries
+  through the shadow-forward identity cache, and an entry whose cache
+  tuple has aged out re-applies idempotently under the leaf-level merge.
+- **Snapshot/incremental handoff is idempotent.** The coordinator
+  merges the snapshot's causal-stable frontier into the per-tree
   high-water-mark store *after* every snapshot entry has been
   applied, first sealing the source cluster's own coordinate at or
   above the highest HLC the drain applied and the oldest
-  source-authored entry the local WAL still retains, so the fall-off
-  detector cannot read the retained baselines as a trim gap. The
-  pin replaces both the high-water-mark vector and the pinned floor
-  (the `AsOfHlc` passed alongside it is currently ignored). The
-  applier's floor gate then makes any incremental entry whose
-  timestamp is at or below the pinned frontier a no-op, so the
-  snapshot/incremental boundary is exactly-once regardless of
+  source-authored entry the local WAL still retains, so the receiver-side
+  fall-off detector cannot read the retained baselines as a local trim gap. The
+  merge takes the pointwise maximum with the vector already held,
+  clears any legacy pinned floor (the `AsOfHlc` passed alongside it is
+  currently ignored), and drains the durable causal-apply buffer. The
+  applier has no HLC floor gate; exact identity dedup and idempotent
+  per-key merge make the snapshot/incremental boundary safe regardless of
   overlap.
-- **Tombstones in custom providers are skipped.** Committed
-  (non-prepared) snapshot entries whose `Value` is `null` (not emitted
-  by the default provider, but permissible from a host-supplied
-  `ISnapshotProvider`) are skipped rather than applied as deletes, as
-  are prepared rows with an empty `TransactionId`. A prepared row with
-  `IsTombstone` set is applied as a prepared delete.
+- **Committed tombstone rows apply as deletes.** A committed
+  (non-prepared) row with `IsTombstone` set is applied as a delete at
+  the row's HLC, and a prepared row with `IsTombstone` set as a prepared
+  delete. A committed row whose `Value` is `null` and which does not set
+  `IsTombstone` (not emitted by the default provider, but permissible
+  from a host-supplied `ISnapshotProvider`) is skipped, as is a prepared
+  row with an empty `TransactionId`.
 - **Per-tree merge mode is honoured on bootstrap.** Every
   `WalRecord` emitted by the bootstrap drain is stamped with the
   merge mode `ILatticeMergeModeResolver` resolves for the tree - the
@@ -616,6 +771,136 @@ Any state ──► Failed         (any thrown exception; restart is a fresh Boo
   the resolver is on the hot path's allocation budget but is
   invariant for the lifetime of a single drain.
 
+### Read fence during the drain
+
+The drain applies the export one row at a time. A committed atomic batch
+arrives as independent committed rows: once its terminal has drained at
+the source, nothing in the export identifies the rows as one saga. A reader
+part-way through the drain could therefore see some of a batch's keys
+post-batch and the rest pre-batch, or absent (issue #4526). To prevent that,
+the coordinator **fences the tree's reads for the whole drain**:
+
+1. Before it applies the first entry, it arms a durable read fence on every
+   shard of the copy the tree routes to.
+2. While the fence is up, every read of the tree is refused with
+   `LatticeTreeBootstrappingException`. Readers are therefore either refused
+   or see the whole import, never part of it.
+3. After the last entry is applied, it lifts the fence on every shard, and
+   the import becomes visible at once.
+
+**What is refused.**
+
+- Point and multi-key reads, existence checks, counts, and key and entry
+  scans.
+- The read-modify-write verbs whose outcome depends on the current value:
+  `GetOrSetAsync`, version-conditional writes, and predicate writes.
+- The snapshot baseline capture that backups and snapshot cursors are built
+  from.
+
+**What still applies.** Plain writes, deletes, range deletes, replication
+applies (the drain itself, and live incremental replication from any
+peer), saga prepares and terminals, and maintenance. Live replication
+interleaved with the drain becomes visible at the lift, with the import.
+
+`LatticeTreeBootstrappingException` derives directly from `Exception`
+and carries the refused `TreeId`. It is **transient**: back off and retry.
+The gRPC data and state APIs map it to `StatusCode.Unavailable`.
+
+**How long it lasts.** The fence lasts for the duration of the drain,
+which is roughly proportional to the size of the tree. On a fresh receiver
+the tree holds nothing worth reading yet. On an **in-place re-bootstrap**,
+where a receiver that fell off the log re-bootstraps over its existing
+copy, a tree that was readable becomes **unreadable for the whole drain**.
+That trade-off is deliberate: a correct, retryable refusal is better than
+a torn read. A bootstrap into a shadow copy that keeps the receiver
+readable is tracked as #4567.
+
+**Watching a drain.** `ILatticeBootstrapCoordinator.GetStatusAsync`
+answers while a drain runs. Its `ReadFenced` field reports the fence,
+`EntriesApplied` reports the current attempt's progress, and
+`RedriveAttempts` counts automatic re-drives.
+
+**Migrations, resizes and undos are held.** The fence covers the shards
+that existed when it was armed, so nothing may move the tree off them
+while it is up:
+
+- A fenced shard refuses to open a split or consolidation, so a reshard
+  made of them is refused too.
+- A resize of a fenced tree is refused, and so is an undo of a completed
+  resize.
+- If the coordinator finds a migration, resize or undo already in
+  progress, it waits for it before draining, re-checking every tick. While
+  it waits, it lifts a fence that hides no partial import.
+
+Each side publishes its own state before reading the other's: the fence
+first, or the migration record or resize intent first. Whichever of two
+racing starts reads second therefore sees the first. A probe that cannot
+answer counts as a hold.
+
+**A failed drain keeps the fence.** A drain that fails after applying part
+of an import leaves the tree holding that partial import, so the fence stays
+up. The bootstrap stays in progress, reports `Failed`, and is **re-driven
+automatically**: it re-exports and re-drains the whole snapshot, with a
+backoff that starts at 5 seconds and doubles to a 5-minute cap. The fence
+lifts when a drain completes. A bootstrap from a different source cluster
+may take over a failed, fenced one. A drain that fails before applying any
+entry lifts the fence and fails as before. If that lift itself fails, the
+fence is kept and the bootstrap re-driven instead, so a fence is never left
+up with no coordinator to lift it.
+
+**Operator override.**
+`ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync(treeName, reason)`
+lifts the fence a failed bootstrap left up and stops its automatic re-drive.
+It is an **alarmed** override, never a recovery path, and works as follows:
+
+- **Consequence.** Reads may then observe the partial import - a committed
+  batch with some keys present and others missing or stale - until a later
+  bootstrap completes.
+- **When it is refused.** While a drain is running.
+- **Failure.** It fails closed: a shard that cannot be lifted leaves the
+  fence up and the call throws.
+- **Audit.** It requires a reason. Every call is audit-logged at `Warning`
+  before it is dispatched, and every lift increments
+  `orleans.lattice.replication.bootstrap.read_fence_force_lifted`.
+- **Exposure.** Like the re-seed verbs on the same seam, it is available
+  to host code only and is not exposed by any network API.
+
+```csharp verify
+ILatticeReplicationAdmin admin = client.ServiceProvider
+    .GetRequiredService<ILatticeReplicationAdmin>();
+
+BootstrapCoordinatorStatus status = await client.ServiceProvider
+    .GetRequiredService<ILatticeBootstrapCoordinator>()
+    .GetStatusAsync("orders", cancellationToken);
+
+if (status.Phase == LatticeBootstrapState.Failed && status.ReadFenced)
+{
+    // Exposes the partial import to readers until a later bootstrap completes.
+    bool lifted = await admin.ForceLiftBootstrapReadFenceAsync(
+        "orders", reason: "source cluster decommissioned; re-seeding from site-b", cancellationToken);
+    _ = lifted;
+}
+```
+
+### Source lineage gate
+
+When a whole-tree drain opens, the coordinator records the source lineage the export opened under for that source, together with the receiver tree frontier's epoch at the time ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). The record is durable before the first entry applies. It is written again wherever the aligned lineage is written, and it is kept when the reconcile skips.
+
+From then on, the receiver refuses an entry stamped by that source in two cases:
+- the batch is stamped with any other source lineage (see [Source lineage stamp](replication-drivers.md#source-lineage-stamp));
+- the receiver's frontier epoch has moved since the drain. The receiver's own contents were then replaced, for example by a coordinated restore cutover, and the drain no longer describes the tree.
+
+A refused batch is not accepted. Its ack sets `ReplicationAck.SourceLineageRefused`, and the batch is counted on `orleans.lattice.replication.apply.source_lineage_refused`. The sender's cursor holds, so nothing is lost:
+- A sender whose binding is stale rebinds and never re-sends the old log.
+- A sender whose binding is current re-seeds the peer, and the new drain records the current lineage.
+
+The check runs at the applier's admission seam (`ReplicationSourceLineageGate.AdmitAsync`), which every apply entry passes through, so it covers more than the push that delivered a batch ([#4707](https://github.com/NSTA1/Orleans.Lattice/issues/4707)). An entry that parks in the causal-apply buffer, or is dead-lettered, keeps the stamp it arrived under. It is checked again when the buffer drains it or an operator replays it, against the lineage the tree has drained by then:
+- The drain discards a refused entry. It belongs to a lineage the tree no longer replicates, as a refused push would have.
+- A refused replay returns `ApplyResult.SourceLineageRefused` and leaves the entry parked for the operator to discard.
+- A failure to read the record keeps a drained entry parked, and defers a replay.
+
+The gate refuses more than the reconcile strictly needs, because a lineage cannot be ordered and a refusal only costs a re-seed. A batch with no stamp (a sender that predates the header), or from a source this tree never drained, applies as before. A failure to read the record refuses the batch for now without asking for a re-seed.
+
 ### Sample usage
 
 ```csharp verify
@@ -631,11 +916,11 @@ _ = state; // LatticeBootstrapState.LiveIncremental once the bootstrap completes
 
 ## Operator-driven re-seed
 
-Beyond the receiver-driven auto-bootstrap path (`ILatticeFallOffLogDetector`), the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the auto-bootstrap path, so every re-seed - operator-driven or detector-driven - flows through one state machine.
+Beyond the receiver-side local auto-bootstrap path (`ILatticeFallOffLogDetector`) and the sender-side trim-gap request path, the package exposes an explicit operator-facing entry point for scheduled bootstraps - a new peer joining, a bandwidth-constrained initial sync, or a post-disaster re-bootstrap. The seam is `ILatticeReplicationAdmin.RequestSnapshotAsync`; honoured requests delegate to the same `ILatticeBootstrapCoordinator.BootstrapAsync` driving the automatic paths, so every re-seed - operator-driven, detector-driven, or sender-requested - flows through one state machine.
 
 | Type | Shape | Purpose |
 |------|-------|---------|
-| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public façade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
+| `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> RequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade that gates the request behind a per-`(tree, sourceClusterId)` rate limit before delegating to the bootstrap coordinator. |
 | `ILatticeReplicationAdmin` | `Task<OperatorReseedDecision> ForceRequestSnapshotAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Opt-in bypass that skips the rate-limit check entirely. Intended for disaster-recovery and scheduled re-seed scenarios where a real cross-cluster drain may exceed the configured window. Every call is audit-logged at `Information`. |
 | `OperatorReseedDecision` | `readonly record struct` with `Triggered`, `LastRequestedAt`, `RetryAfter` | Diagnostic return value indicating whether the call invoked the coordinator and, when denied, how long the operator should wait before retrying. Both overloads share this return shape. |
 
@@ -714,13 +999,15 @@ subset.
 
 The export operates in two passes against a single frozen view of the
 producer's tree-wide transaction-registry decisions, unioned across every
-registry shard of the tree:
+registry shard of the tree, followed by the tombstone pass described under
+[Semantics](#semantics):
 
 1. **Prepared rows pass (runs first).** Walks every shard's leaf
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
    every `(transactionId, key)` pair in any leaf's per-tx pending
    bucket whose registry status in the captured snapshot is
-   `InFlight`, `Indeterminate`, or absent. The emitted row carries the
+   `InFlight`, `Indeterminate`, or absent (an `Indeterminate` saga whose
+   decision is still stored is first resolved to it; see below). The emitted row carries the
    source-stamped
    prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
    `ExpiresAtTicks`, and the typed CRDT `Delta` / `Mode` so the
@@ -784,16 +1071,305 @@ because the terminal that would have flipped it was already behind the
 incremental stream the receiver drains after the snapshot. The source
 held "committed", the receiver held "preparing", permanently, with no
 repair path on either side. Carrying the row explicitly means absence
-in this payload once again means only what it says, and an
-`Indeterminate` saga's prepared rows ship (pass 1 above) so the
-receiver holds exactly what the source holds.
+in this payload once again means only what it says.
+
+**The verdict behind an aged-out row is exported, not the mask.** The
+prepared rows pass resolves an `Indeterminate` saga whose decision the
+registry still stores to that recorded verdict
+(`ITxRegistryGrain.GetRecordedStatusAsync`), once per saga, before it
+emits any of the saga's rows. Both passes then treat the saga as
+decided. A recorded commit ships as committed rows, and a recorded abort
+ships nothing. The prepared rows pass emits a recorded commit's committed
+rows itself, because the committed projection pass need not enumerate a
+key held only in a pending bucket. A delete the saga committed ships as a
+committed tombstone row, which the bootstrap drain applies as a delete,
+rather than as an absence: a bootstrap can land on a receiver copy that
+still holds the key (a peer that fell off the log re-bootstraps over its
+existing copy, which the drain does not clear), and an absence would leave
+that older value beside the saga's other keys. Shipping such a saga as prepared rows split it on the
+receiver (#4481): when its terminal had drained some keys before the
+decision aged out and left another bucket stranded, the drained keys
+arrived as committed rows and the stranded one as a prepared row. The
+receiver's registry has no row for the saga, so it reads that prepared
+row as still in flight and serves its pre-saga value beside the drained
+keys' post-saga values, and nothing on either side repairs it. The
+recorded verdict is what the source's own leaf sweep finishes the
+stranded prepare by, so the receiver now holds the state the source
+converges to. The source's read path keeps masking the row: the export
+transfers state the source owns rather than disclosing an outcome to a
+reader. Two cases still ship as prepared rows:
+
+- An `Indeterminate` saga with no stored verdict, such as a cross-tree
+  delegation whose coordinator could not be reached.
+- A saga whose row has already been purged reads as absent. Its export
+  carries the split the source itself serves (#4508).
 
 A saga the producer's registry recorded as `Committed` before the
 snapshot is naturally folded into the committed projection by the
 leaf scan's pending-transaction read step - which honors
 the frozen registry scope - so the receiver observes the post-saga
-value directly without a separate prepared/terminal round trip. The
+value directly without a separate prepared/terminal round trip. A
+bucket of such a saga that the terminal has not yet drained is also
+emitted as a committed row by the prepared rows pass, because the scan
+need not enumerate a key held only in a pending bucket. The
 same applies in reverse for `Aborted`: the prepared mutation is
 correctly dropped from the committed pass and not shipped as a
-prepared row.
+prepared row. A `Committed` saga's pending **delete** is the exception
+to the fold: the committed pass reads the deleted key as absent and
+emits nothing, so the prepared rows pass ships it itself as a committed
+tombstone row (`IsTombstone` set, `IsPrepared` clear, at the prepare's
+HLC). Otherwise a receiver re-bootstrapping over a copy that still held
+the key would keep its older value beside the saga's other keys (#4504).
+
+**Decision rows: pre-cut saga records re-shipped after the bootstrap.**
+The source shipper resumes from its own per-partition cursors after a
+bootstrap. A peer that fell off the log resumes from the oldest entry
+the source still retains, which can sit below the snapshot's cut. A
+saga's prepares and its terminals live in different partitions, each
+trimmed to its own floor. So the stream can re-ship a prepare from
+before the cut whose terminal was already trimmed (#4482). Staged on
+the receiver, that prepare would wait in a pending bucket for a
+terminal that never comes.
+
+The export therefore ends with one **decision row** per saga the
+source still stores a decision for. A decision row has no key or
+value; it carries the transaction id and `SettledDecision` (`true` for
+a commit). An aged-out row is resolved to its recorded verdict first,
+whether or not it has a resident bucket. The drain records each
+outcome in the receiver's transaction registry and does not forget
+it. Re-shipping a long retained tail can outlast the receiver's
+decision retention, and a prepare arriving after the row was purged
+would strand again. The receiver cannot yet observe the stream passing
+the export's cut, which is what would make retiring the row safe, so
+it retains one registry row per saga the source stored at the export
+([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524) tracks
+retiring them).
+
+The receiver then settles a replicated prepare against any decision
+its registry already holds, instead of staging it (the read uses the
+recorded verdict behind an aged-out row):
+
+- A commit is applied as a committed write at the prepare's source
+  clock. Last-writer-wins keeps it below any newer write on the key,
+  and it is a no-op over the snapshot row.
+- An abort is dropped.
+
+A receiver that predates the decision slot sees a row with no value
+that is neither prepared nor a tombstone, which its drain skips.
+
+**Cross-tree sub-sagas.** A tree's part of a cross-tree atomic write (see
+[Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier))
+is settled on a receiver by a barrier that waits for every participating
+tree's terminal. An import of one participant settles that tree's
+sub-saga from the export instead, and its terminal may never be shipped
+again: it is often trimmed, which is why the peer fell off the log. So
+([#4683](https://github.com/NSTA1/Orleans.Lattice/issues/4683)):
+
+- **The export names the operation.** The authoring tree's transaction
+  registry records each sub-saga's cross-tree operation id and
+  participating trees when it parks prepared, and keeps them for exactly
+  as long as it stores the decision. Every decision row and prepared row
+  of such a sub-saga carries them.
+- **The drain records the arrival.** For a decision row that names an
+  operation, the drain records the tree's arrival at the receiver's barrier
+  for it, with the row's verdict, as the tree's terminal would. The wait
+  set is the participants replicated here, plus the tree. If that completes
+  the barrier, every participant is finalized.
+- **The tree stays fenced until the barrier decides.** The imported tree
+  serves the sub-saga post-saga, while a sibling whose terminal has not
+  arrived serves it pre-saga. So the drain does not lift the read fence
+  while any barrier it arrived at is undecided. The bootstrap stays in its
+  incremental-handoff phase, re-checks on each tick, and lifts the fence
+  and completes once every one has decided.
+  - The cost is availability: the imported tree is unreadable until the
+    sibling's own terminal reaches this receiver.
+  - A re-driven drain records the same arrival again, and a terminal of the
+    tree shipped later overwrites it. Both are no-ops.
+- **An import that names the operation nowhere can still arrive.** The
+  origin keeps a cross-tree sub-saga's decision until every peer of every
+  participant has acknowledged past it (see
+  [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)),
+  but a decision purged before that hold existed reaches an export only as
+  the sub-saga's committed rows
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). So at the
+  end of every drain from an export the source served under the hold, the
+  drain records the import in the tree's barrier index: the export's epoch
+  and every cross-tree operation one of its rows named. It then has every
+  barrier waiting for the tree re-evaluate. A barrier does the same whenever
+  it opens or records an arrival, so the order of the import and the sibling's
+  terminal does not matter. A tree that has not arrived arrives with its
+  siblings' verdict - one operation has one verdict - when its latest import
+  named the operation nowhere and its export opened after the operation's
+  decision: the export's epoch is greater than the tree's **decision stamp**,
+  the tree's export epoch the origin read after the decision was durable
+  (see [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+  An export that opened before the decision can predate the sub-saga's
+  prepare, so its rows can be pre-saga, and the tree stays pending. An
+  operation decided by a silo that predates stamping carries no stamps; the
+  source serves no export while such a silo is up, so every export it served
+  opened after that decision.
+- **The tree stays fenced while any barrier waits for it.** The drain does
+  not lift the read fence, and the bootstrap does not complete, while any
+  barrier indexed under the tree is undecided, including one that opened
+  after the drain while the fence was still up.
+- **Nor while a sibling tree may still owe a terminal.** An import can
+  settle a sub-saga from bare rows before the sibling tree's terminal of the
+  same operation has reached this cluster, and then no barrier exists yet to
+  hold the fence. So the export captures, after its last row, every other
+  tree the source replicates: its physical write-ahead log, each partition's
+  next sequence, and its export epoch. The tree stays read-fenced until
+  every such sibling that this cluster replicates and whose log held
+  anything has passed its boundary
+  ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)), by either
+  of two routes:
+  - **Acknowledged.** The sibling's shipper vouched acknowledged read
+    positions on the same log at or past every captured tail (see
+    [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)).
+    This cluster acknowledges a cross-tree terminal only once its barrier
+    has it.
+  - **Re-imported.** A drain of the sibling here ended from an export
+    numbered above the captured epoch, so opened after the capture. It
+    counts once the drain ends, while the sibling's own fence may still be
+    held, so two imports that wait on each other both pass.
+
+  A sibling that has not passed within five minutes is re-seeded
+  automatically when `AutoBootstrapOnFallOffLog` is on. With it off, the
+  tree stays fenced until an operator re-seeds the sibling, the same
+  availability caveat a fall-off off the log carries. An export from a source
+  that did not serve it under the cross-tree hold carries no boundaries.
+
+A saga whose decision the source has already purged cannot be
+exported. The source never re-ships such a saga: its shipper's
+[replay filter](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas)
+withholds it whole (#4533). A pending bucket the receiver staged for it
+before a re-seed is cleared by that re-seed's drain (below). Any other
+full bootstrap clears one too (#4692) - a tree re-added to replication,
+which must come back holding no leftover bucket from the origin, among
+them - but only for a saga that was already pending from the origin when
+the export opened and that the export neither carries in flight nor
+decides. The sender holds nothing back during such a bootstrap, so a saga
+staged after the export opened is not stale: its terminal is still to
+come, and it keeps its bucket. A saga the
+source still knows but cannot settle (an `Indeterminate` row with no
+recorded verdict) ships as a value-less row that names it with no
+`SettledDecision`, so the receiver does not take it for a purged one;
+a receiver that predates it skips the row like any other value-less row.
+
+**Late decisions.** A saga snap0 had in flight can decide while the
+passes run and drain some of its keys before they are read: those keys
+reach the committed pass as plain values, while the rest still ship as
+prepared rows. Were its terminal then trimmed, nothing would settle the
+prepared rows on the receiver, which would serve the saga split
+([#4627](https://github.com/NSTA1/Orleans.Lattice/issues/4627)). So
+once the passes are done the export re-reads the decision of every saga
+it shipped as prepared rows, and ships a decision row for each one that
+decided meanwhile.
+
+<a id="export-completion"></a>
+**Completion: sagas that decide while the export reads.** The passes
+read each leaf at its own instant, so a saga can decide between two of
+those reads: one of its keys is read before it prepared there (pre-saga),
+another after its terminal drained there (post-saga). A saga that started
+after snap0 and staged its prepares after the prepared pass read their
+leaves ships no prepared row at all, so no decision row names it either,
+and the receiver would serve it split until the incremental stream
+delivered its last source-shard terminal
+([#4685](https://github.com/NSTA1/Orleans.Lattice/issues/4685)). The
+export therefore:
+
+1. Records a decision-purge hold on the tree
+   ([`IWalPurgeHoldGrain`](replication-drivers.md#replay-filter-a-non-contiguous-stream-over-purged-sagas))
+   before snap0, and releases it once the completion has read the log, so a
+   saga that decides during the export is still recorded at close. A crashed
+   export's hold is released by the tree's next export after 24 hours.
+2. Captures every write-ahead-log partition's readable head (C0) before
+   snap0.
+3. Once the passes and the decision rows are done, takes a second
+   registry snapshot (snap1) and then every partition's head (C1). Every
+   saga decided in snap1 that snap0 did not have decided ships a decision
+   row, and each one that committed also ships every prepare of it the log
+   holds in [C0, C1), as a committed row at the prepare's own stamp. The
+   segment is read page by page, keeping only those sagas' prepares.
+
+Each saga then reaches the receiver whole:
+
+- A saga still undecided at snap1 drained nothing before the passes
+  ended, so its keys shipped pre-saga or as buckets, and the receiver's
+  tally hides it until the stream settles it.
+- A prepare below C0 of a saga that decided during the export was staged
+  before the passes read its key. The passes therefore captured that key as
+  its bucket, which the decision row settles, or as its drained value.
+- A prepare at or above C0 precedes the saga's decision, snap1 and C1, so
+  it ships committed.
+
+Last-writer-wins at the prepare's stamp keeps the committed row above any
+pre-saga value the passes shipped. Over a drained value it is a no-op,
+because the stamp is the same. A typed CRDT prepare ships its delta, and
+CRDT deltas are joins, so a key whose drained state already includes the
+delta counts it once.
+
+The export fails with a retryable `TimeoutException`, and the bootstrap
+retries it whole, when a trim reached into [C0, C1) before the completion
+read it or the tree moved to another physical copy while it was exported.
+
+<a id="re-seed-stale-pending-clear"></a>
+**Re-seed: clearing stale pending buckets.** A sender that took its
+peer off the log ([forced gap](replication-drivers.md#forced-gap-a-peer-taken-off-the-log))
+asks for a re-seed past an export epoch. The receiver records the
+request on its bootstrap coordinator before it starts (or joins) the
+bootstrap, and records it even with `AutoBootstrapOnFallOffLog` off,
+so an operator's bootstrap serves it. While the request is recorded
+the sender withholds every saga record, so a drain whose export
+postdates the request knows every pending bucket it holds from that
+sender was staged before the re-seed or re-staged by the export.
+After the drain has applied the export, still behind the read fence,
+it walks the tree's pending buckets from that sender and settles each
+one durably, through a terminal mark on the shards that hold it:
+
+- A saga the export carried as a prepared row (in flight at the cut)
+  or as a value-less row (known but unsettled) is left staged for the
+  terminal that follows the re-seed. A saga undecided at the cut is
+  therefore never cleared, and commits after the re-seed.
+- A saga the export carried as a decision row (including one that also
+  shipped as prepared rows and decided while the export ran), or that
+  this receiver's registry has decided, is drained by that decision: the
+  source may already have trimmed its terminal, which no rewind can
+  re-ship.
+- Any other saga was decided and purged by the source. Its bucket is
+  discarded with an abort mark that records no outcome in the
+  receiver's registry, because the source may have committed it: its
+  committed values, if any, arrived as committed rows.
+
+The drain then consumes the request.
+
+Two rules keep the window closed:
+
+- **Stragglers are refused.** Until the drain has consumed the
+  request, the receiver refuses, with a not-accepted ack, any pushed
+  batch that carries a saga record from that sender. The sender is
+  withholding saga records then, so such a batch was pushed before its
+  marker and could otherwise stage a purged saga's prepare after the
+  clear. The sender re-ships the batch's plain records.
+- **No echo without the clear.** A bootstrap that completes while a
+  request it did not consume is outstanding (one recorded after its
+  drain finished) does not record its export epoch for the echo, so
+  the sender keeps withholding until a drain has cleared.
+
+**Visibility while the drain runs.** The drain installs committed rows
+one at a time, so the import is made atomic for readers by the
+[read fence](#read-fence-during-the-drain): every read of the tree is
+refused until the drain has applied its last entry, and the whole
+import becomes visible at once when the fence lifts. The decision rows
+and the settle above keep each saga's outcome atomic across the import
+itself. In particular, a prepared row the drain imports after the
+saga's terminal has already reached the receiver through the live
+stream is settled as a committed write, rather than refused as a late
+prepare and left pre-saga beside its siblings (issue #4526).
+Modelled in `AtomicCommitCrossCluster`: the real drain, with
+incremental replication interleaved and the fence, is clean on every
+property, and lifting the fence early or on failure fires
+`RAllOrNothing`. For a cross-tree sub-saga the fence is held past the
+drain until the receiver's barrier decides (see
+[Cross-tree sub-sagas](#snapshot-and-in-flight-atomic-visibility) above),
+which the cross-tree slice of the model checks clean.
 

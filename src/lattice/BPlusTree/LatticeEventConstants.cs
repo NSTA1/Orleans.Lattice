@@ -153,6 +153,14 @@ public static class LatticeEventConstants
     internal const string HlcOverrideRequestContextKey = "ol.hlc";
 
     /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key marking an HLC override
+    /// as a freshly minted stamp rather than a carried one (issue #4586), so the
+    /// WAL clock floor still governs the write. Internal - set through
+    /// <c>LatticeFreshStampContext</c>.
+    /// </summary>
+    internal const string FreshStampRequestContextKey = "ol.fsh";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
     /// atomic-transaction <c>(Size, Index)</c> pair from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator down
@@ -272,6 +280,53 @@ public static class LatticeEventConstants
     /// clients.
     /// </summary>
     internal const string ForwardedPrepareRequestContextKey = "ol.prep.fwd";
+
+    /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key carrying a create intent
+    /// for one leaf: the string form of the leaf's grain id. A leaf whose state row
+    /// is missing writes a first row only under an intent naming it, so a leaf whose
+    /// row was lost cannot be silently re-created empty by a call that merely
+    /// reaches it (issue #4654). Internal - set through
+    /// <see cref="LatticeNewLeafIntentContext"/> by the paths that create leaves
+    /// (shard bootstrap, leaf split, bulk load, recovery reseed), and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string NewLeafIntentRequestContextKey = "ol.leaf.new";
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key naming the shard
+    /// (<c>{physicalTreeId}/{shardIndex}</c>) the routing tier dispatched a saga
+    /// prepare-phase write to (issue #4522). A leaf treats the prepare stamp it
+    /// mints as the prepare's original stamp only when this value equals its own
+    /// shard. A shard-to-shard forward inherits the value of the shard it left,
+    /// so it never matches its destination, and a caller that predates the key
+    /// sets nothing. Either way the prepare stays unmarked and keeps the
+    /// pre-#4522 terminal drain. Internal - set through
+    /// <see cref="LatticeOriginalPrepareStampContext"/>, and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string PreparedRouteRequestContextKey = "ol.prep.route";
+
+    /// <summary>
+    /// Orleans <c>RequestContext</c> key carrying each key's original saga
+    /// prepare stamp (a key to <see cref="HybridLogicalClock"/> map) to a leaf
+    /// that is about to bucket a forwarded prepare or apply a committed-values
+    /// backstop (issue #4522). The leaf buckets a forwarded prepare AT the
+    /// carried stamp, and installs a backstop value only over a row stamped
+    /// below it, at that stamp. Internal - set through
+    /// <see cref="LatticeOriginalPrepareStampContext"/>, and stripped from
+    /// external clients.
+    /// </summary>
+    internal const string OriginalPrepareStampsRequestContextKey = "ol.prep.stamp";
+
+    /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key that marks a whole-row
+    /// merge whose CRDT rows the destination leaf joins into its own rather than
+    /// resolving last-writer-wins: the online-resize and online-snapshot mirror
+    /// of a source's applied rows, and that copy's drain (issue #4618). Internal
+    /// - set through <see cref="LatticeCrdtJoinMergeContext"/>, and stripped
+    /// from external clients.
+    /// </summary>
+    internal const string CrdtJoinMergeRequestContextKey = "ol.crdt.join";
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key used to communicate the WAL

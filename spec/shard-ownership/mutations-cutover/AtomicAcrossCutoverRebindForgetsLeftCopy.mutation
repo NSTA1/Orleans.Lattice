@@ -1,0 +1,23 @@
+# Pairs with AtomicAcrossCutover. A refused dispatch re-binds without recording
+# the copy it leaves, so nothing discards the prepares already taken there: the
+# shape of production's TryRebindToResolvedCopyAsync before #4689 was fixed.
+MODULE: AtomicAcrossCutoverRebindForgetsLeftCopy
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: the mid-dispatch re-bind does not record the copy it leaves
+PERTURBS: RebindOnRefusal
+
+--- FIND
+    /\ prepped # Keys
+    /\ alias # bound
+    /\ bound' = alias
+    /\ prepped' = {}
+    /\ left' = (left \cup {bound}) \ {alias}
+--- REPLACE
+    /\ prepped # Keys
+    /\ alias # bound
+    /\ bound' = alias
+    /\ prepped' = {}
+    \* MUTATION: the copy left behind is not recorded.
+    /\ left' = left \ {alias}
+--- END

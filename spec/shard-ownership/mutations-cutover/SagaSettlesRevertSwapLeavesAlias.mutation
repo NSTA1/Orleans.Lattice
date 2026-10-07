@@ -1,0 +1,17 @@
+# Pairs with SagaSettles. The revert's swap leaves the alias on the shadow, which
+# its fix-up then arms to redirect back: the copy the tree resolves to refuses
+# its own bound saga.
+MODULE: SagaSettlesRevertSwapLeavesAlias
+TARGET: SagaSettles
+CLASS: Temporal
+SUMMARY: the revert's swap does not move the alias back
+PERTURBS: RevertSwap
+
+--- FIND
+    /\ rp = "committed"
+    /\ alias' = P
+--- REPLACE
+    /\ rp = "committed"
+    \* MUTATION: the alias stays on the shadow.
+    /\ alias' = alias
+--- END

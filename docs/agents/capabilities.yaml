@@ -880,7 +880,7 @@ capabilities:
         source: "docs/lattice.replication/README.md"
       - statement: "Repeated records are suppressed by exact origin, HLC, key, and operation identity."
         source: "docs/lattice.replication/README.md"
-      - statement: "Entries whose causal dependencies are missing wait in the receiver causal-apply buffer."
+      - statement: "Entries whose causal dependencies are missing wait in the receiver's durable per-tree causal-apply buffer."
         source: "docs/lattice.replication/README.md"
       - statement: "Dead-letter quarantine isolates poison entries per tree while replication continues past them."
         source: "docs/lattice.replication/README.md"
@@ -2105,7 +2105,7 @@ capabilities:
       - sequence:
           - "start ReshardAsync on a tree"
           - "start ResizeAsync on the same tree before reshard completes"
-        hazard: "The reshard is refused with InvalidOperationException while resize is in flight, for a target that needs a migration; an observably empty tree is re-pinned even while a resize runs."
+        hazard: "The reshard is refused with InvalidOperationException while resize is in flight, and after it completes until it is undone or the previous copy is purged (SoftDeleteDuration), for a target that needs a migration; an observably empty tree is re-pinned even while a resize runs."
         source: "docs/lattice/online-reshard.md"
       - sequence:
           - "start ReshardAsync with target A"
@@ -2641,7 +2641,12 @@ capabilities:
       - sequence:
           - "start a resize"
           - "start a reshard before the resize completes"
-        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
+        hazard: "Resize and reshard interlock; ReshardAsync throws while resize is in flight, or while a completed resize can still be undone and the previous copy mirrors into the resized one, for a target that needs a migration, and ResizeAsync throws while reshard is in flight."
+        source: "docs/lattice/tree-sizing.md"
+      - sequence:
+          - "an adaptive split or online consolidation is in flight on the tree"
+          - "start a resize"
+        hazard: "Resize and shard-migration interlock; ResizeAsync throws InvalidOperationException while a split or consolidation is in flight on the tree, and a split or fold is refused (or backs out) while a resize is in flight or its undo is pending or running; a fold (and a reshard) also through the soft-delete window until the old physical tree stops mirroring into the destination (#4452), while an adaptive split may run in that window because the mirror follows it (#4478)."
         source: "docs/lattice/tree-sizing.md"
       - sequence:
           - "call ResizeAsync while a resize is in progress"

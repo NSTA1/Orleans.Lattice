@@ -1,0 +1,16 @@
+# Pairs with AtomicAcrossCutover. A compensation runs after the commit decision
+# and overturns it part way through the terminal broadcast.
+MODULE: AtomicAcrossCutoverAbortAfterCommit
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: an abort overturns a recorded commit
+PERTURBS: Abort
+
+--- FIND
+Abort ==
+    /\ sg = "dispatch"
+--- REPLACE
+Abort ==
+    \* MUTATION: an abort after the decision.
+    /\ sg \in {"dispatch", "decided"}
+--- END

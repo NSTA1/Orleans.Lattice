@@ -1,0 +1,16 @@
+# Pairs with NoLostContribution. The saga completes once the source has its
+# terminal, without waiting for the destination's: a resize that swaps before
+# the mirrored terminal reaches the resized copy leaves the new owner without
+# the saga's contribution although the caller was acknowledged.
+MODULE: NoLostContributionCompleteSkipsDestination
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the saga completes before its terminal reaches the migration's destination
+PERTURBS: Complete
+
+--- FIND
+    /\ TermTargets \subseteq told
+--- REPLACE
+\* MUTATION: only the source's terminal is awaited.
+    /\ "src" \in told
+--- END

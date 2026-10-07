@@ -89,4 +89,44 @@ public class TxRegistryWriteRetryTests
         await registry.Received(1).MarkAbortedAsync(aborted);
         await registry.DidNotReceive().MarkAbortedAsync(committed);
     }
+
+    private static TxDecisionGateRefusedException Refused(TxDecisionGateRefusal refusal) =>
+        new("tree-x", refusal, TimeSpan.FromMilliseconds(5));
+
+    [Test]
+    public async Task RunAsync_waits_out_a_decision_gate_refusal_and_reissues_the_call()
+    {
+        var calls = 0;
+
+        await TxRegistryWriteRetry.RunAsync(
+            0,
+            _ => ++calls < 4 ? Task.FromException(Refused(TxDecisionGateRefusal.DecisionGated)) : Task.CompletedTask);
+
+        Assert.That(calls, Is.EqualTo(4), "a gated decision is deferred, not failed, and does not spend the write-failure budget");
+    }
+
+    [Test]
+    public void RunAsync_does_not_retry_a_fenced_registration()
+    {
+        var calls = 0;
+
+        var ex = Assert.ThrowsAsync<TxDecisionGateRefusedException>(
+            () => TxRegistryWriteRetry.RunAsync(0, _ => { calls++; return Task.FromException(Refused(TxDecisionGateRefusal.RegistrationFenced)); }));
+
+        Assert.That(ex!.Refusal, Is.EqualTo(TxDecisionGateRefusal.RegistrationFenced));
+        Assert.That(calls, Is.EqualTo(1), "the sub-saga must vote Failed so the backup set's drain terminates");
+    }
+
+    [Test]
+    public void MarkDecisionAsync_propagates_a_gate_refusal_when_told_not_to_wait()
+    {
+        var registry = Substitute.For<ITxRegistryGrain>();
+        registry.MarkCommittedAsync(Arg.Any<Guid>()).Returns(Task.FromException(Refused(TxDecisionGateRefusal.DecisionGated)));
+
+        var ex = Assert.ThrowsAsync<TxDecisionGateRefusedException>(
+            () => TxRegistryWriteRetry.MarkDecisionAsync(registry, Guid.NewGuid(), committed: true, waitOutDecisionGate: false));
+
+        Assert.That(ex!.Refusal, Is.EqualTo(TxDecisionGateRefusal.DecisionGated));
+        registry.ReceivedWithAnyArgs(1).MarkCommittedAsync(default);
+    }
 }

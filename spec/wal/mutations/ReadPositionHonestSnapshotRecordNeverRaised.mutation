@@ -1,0 +1,31 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4634 as production had it:
+# the leaf keeps no durable record that it has held snapshot coverage, so once
+# the snapshot vanishes its cold start sees "no snapshot", replays the surviving
+# WAL suffix and serves a read position past an owned write the GC trimmed under
+# the snapshot. The mutation enables snapshot loss and the two faults it needs.
+# The base raises the record in the leaf row before any pin that relies on it.
+MODULE: ReadPositionHonestSnapshotRecordNeverRaised
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: no record of held snapshot coverage, so a cold start over a vanished snapshot replays a trimmed WAL
+PERTURBS: PublishPin
+
+--- FIND
+                  THEN [hadSnap EXCEPT ![l] = @ \/ cov[l] # NoSnap]
+--- REPLACE
+\* MUTATION: the record is never raised.
+                  THEN hadSnap
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the snapshot vanishes and its leaf stops: two faults.
+MaxFaults == 2
+--- END

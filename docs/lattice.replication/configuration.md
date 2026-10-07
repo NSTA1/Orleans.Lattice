@@ -71,8 +71,10 @@ The core WAL - its partition grains, commit-log writer, and garbage collector - 
 | Option | Type | Default |
 |---|---|---|
 | [`MaxApplyRetries`](#maxapplyretries) | `int` | 5 |
+| [`SagaDeferralTimeout`](#sagadeferraltimeout) | `TimeSpan` | 15 minutes |
 | [`DeadLetterQueueCapacity`](#deadletterqueuecapacity) | `int` | 1000 |
 | [`CausalBufferMaxEntries`](#causalbuffermaxentries) | `int` | 1024 |
+| [`CausalAppliedIdentityCapacity`](#causalappliedidentitycapacity) | `int` | 16,384 |
 | [`CausalBufferMaxBytes`](#causalbuffermaxbytes) | `long` | 16 MiB |
 | [`ShadowForwardDedupeCacheSize`](#shadowforwarddedupecachesize) | `int` | 4096 |
 | [`ApplyMaxParallelRuns`](#applymaxparallelruns) | `int` | 1 |
@@ -203,9 +205,17 @@ Maximum pending WAL batches per partition. Raising it increases pipeline depth a
 
 Retry budget before a poison inbound entry is moved to the dead-letter queue. Raise only when failures are usually transient.
 
+### `SagaDeferralTimeout`
+
+Wall-clock bound for a receiver-side deferred saga record. When a prepare has exhausted `MaxApplyRetries` and remains deferred for this long, the receiver poisons that saga, parks the deferred prepare with `reason=poisoned_saga`, withholds the saga's terminals until the re-seed retires the poison, and starts or records an owed full re-seed from the origin. A deferred `TxCommit` or `TxAbort` terminal gets the same bound (#4692): its saga is poisoned and re-seeded the same way, and the terminal itself is withheld, never parked.
+
 ### `DeadLetterQueueCapacity`
 
-Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. See [Dead-Letter Queue](dead-letter-queue.md).
+Maximum retained dead-letter entries per tree. Size for the largest operator triage window you need. A full queue never evicts: it refuses further parks and holds the affected replication link back (the link reports Stalled) until parked entries are replayed or discarded, because every parked entry was acknowledged and evicting it would lose the write. See [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure).
+
+### `CausalAppliedIdentityCapacity`
+
+How many applied write identities `(origin, HLC)` a receiver remembers per tree and origin ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). An entry whose causal dependency names a remembered write is released at once. A dependency whose identity was forgotten - evicted past this capacity, lost to a reactivation, or applied in another tree - is decided by the origin's low watermark instead (see [Causal-dependency gate](replication-apply.md#6-causal-dependency-gate)). The record is in memory only, so the capacity trades memory for latency, never correctness. It must be between 1 and 1,048,576.
 
 ### `CausalBufferMaxEntries`
 
@@ -237,15 +247,17 @@ Collapses redundant per-key versions before shipping. Keep enabled for normal de
 
 ### `ContentHashDedupElisionEnabled`
 
-Enables actual payload elision for repeated content. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
+Enables actual payload elision for repeated content. The receiver elides only a write it already merged exactly - the same content hash, origin, and source HLC - while its leaf still holds the key at that version or newer; the same bytes at another version always ship. It is off by default because it changes what is carried on the wire, even though decoding remains part of the public protocol. It requires `ContentHashDedupEnabled`: the options validator rejects elision with the master switch off.
 
 ### `WalRetention`
 
 Optional wall-clock hard ceiling on retained WAL. `null` means consumers and cursors drive retention. If set too low, lagging peers may fall off the log and require bootstrap.
 
-For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - it advances past a trimmed prefix without emitting a fall-off event, and the receiver-side fall-off detector only compares against its own local WAL, so it never sees entries it never received. Setting `WalRetention` on a replicated tree can therefore let the sender trim entries a lagging shipper has not shipped yet, silently and permanently diverging the receiver for the trimmed range with no metric and no repair.
+For a local consumer, a fall-off is self-healing: the next read surfaces the trimmed prefix to the auto-bootstrap trigger. A **cross-cluster shipper is different** - the receiver-side fall-off detector only compares against the receiver's own local WAL, so it never sees entries it never received from the sender. The source shipper therefore detects sender WAL trims itself: if a shipping read returns a first sequence greater than the requested cursor, it records a re-seed epoch, withholds saga records, and asks the receiver to re-seed through `ReplicationBatch.ReseedAfterEpoch`. A custom transport that drops that field fails closed: saga records remain withheld and the link stays stalled until an operator re-seeds or the transport carries the request.
 
 To prevent that footgun, the silo **refuses to start** when a replicated tree (declared in [`ReplicatedTrees`](#replicatedtrees)) has an effective `WalRetention` set while the anti-entropy detection backstop [`DigestProbeEnabled`](#digestprobeenabled) is off. Resolve it by one of: enable `DigestProbeEnabled` (and, for automatic repair, the remaining [anti-entropy stages](automatic-drift-remediation.md)) so the divergence is detected and healed out-of-band; remove `WalRetention` from the tree so a lagging shipper pins the WAL until it catches up; or set [`AllowWalRetentionWithoutAntiEntropy`](#allowwalretentionwithoutantientropy) to acknowledge the risk explicitly. The effective retention is read from the per-tree core `LatticeOptions.WalRetention`, which already reflects any value mirrored from this replication-side `WalRetention`, so the rule catches retention configured on either surface.
+
+A peer that is unreachable for good holds more than the log. It also holds every tombstone of the trees it replicates: the [tombstone reap gate](replication-drivers.md#tombstone-reap-gate) reaps nothing a peer may still lack, so those tombstones accumulate until the peer is removed from `ReplicationPeers` and its shipper detaches from the log ([#4615](https://github.com/NSTA1/Orleans.Lattice/issues/4615)). `WalRetention` does not bound that growth.
 
 ### `AllowWalRetentionWithoutAntiEntropy`
 
@@ -253,7 +265,7 @@ Escape hatch (default `false`) that permits `WalRetention` on a replicated tree 
 
 ### `AutoBootstrapOnFallOffLog`
 
-When enabled, a fall-off detection makes this cluster re-seed the tree automatically from a snapshot of the source cluster it fell behind; when disabled the detection is still counted on `peer.fell_off_log`. See [Auto-Bootstrap](auto-bootstrap.md), and [`WalRetention`](#walretention) for the cross-cluster trim gap the built-in check cannot see.
+When enabled, a receiver-side local fall-off detection makes this cluster re-seed the tree automatically from a snapshot of the source cluster it fell behind; when disabled the detection is still counted on `peer.fell_off_log`. Source-side WAL trim gaps use the shipper's sequence-gap request path described in [Auto-Bootstrap](auto-bootstrap.md).
 
 ### `OperatorReseedMinInterval`
 

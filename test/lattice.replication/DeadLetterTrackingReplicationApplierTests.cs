@@ -41,7 +41,7 @@ public partial class DeadLetterTrackingReplicationApplierTests
     {
         var inner = Substitute.For<IReplicationApplier>();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(dlq);
         grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
@@ -339,5 +339,101 @@ public partial class DeadLetterTrackingReplicationApplierTests
 
         Assert.That(result.Applied, Is.False);
         grainFactory.DidNotReceive().GetGrain<IReplicationDeadLetterGrain>("   ");
+    }
+
+    [Test]
+    public async Task ApplyAsync_withholds_a_terminal_of_a_poisoned_saga_without_calling_inner_or_parking_it()
+    {
+        var inner = Substitute.For<IReplicationApplier>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var poison = Substitute.For<IReceiverSagaPoisonGrain>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(dlq);
+        grainFactory.GetGrain<IReceiverSagaPoisonGrain>(TreeId).Returns(poison);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaxApplyRetries = 1,
+        });
+
+        var txid = Guid.NewGuid();
+        poison.FilterPoisonedAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new[] { txid });
+        poison.ClassifyAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new ReceiverSagaPoisonClassification { Poisoned = new[] { txid } });
+        var decorator = new DeadLetterTrackingReplicationApplier(
+            inner,
+            grainFactory,
+            monitor,
+            NullLogger<DeadLetterTrackingReplicationApplier>.Instance);
+        var terminal = MakeEntry(op: MutationKind.TxCommit) with
+        {
+            TransactionId = txid,
+            Key = "0",
+        };
+
+        var result = await decorator.ApplyAsync(terminal, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Applied, Is.False);
+            Assert.That(result.Deferred, Is.True, "the terminal is withheld unacknowledged until the re-seed retires the poison");
+        });
+        await dlq.DidNotReceive().EnqueueAsync(
+            Arg.Any<WalRecord>(),
+            Arg.Any<string>(),
+            Arg.Any<int>(),
+            Arg.Any<string>(),
+            Arg.Any<CancellationToken>());
+        await inner.DidNotReceive().ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>());
+    }
+    [Test]
+    public async Task ApplyAsync_applies_a_later_prepare_of_a_poisoned_saga_and_parks_it_at_once_if_it_fails()
+    {
+        var inner = Substitute.For<IReplicationApplier>();
+        var dlq = Substitute.For<IReplicationDeadLetterGrain>();
+        var poison = Substitute.For<IReceiverSagaPoisonGrain>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(TreeId).Returns(dlq);
+        grainFactory.GetGrain<IReceiverSagaPoisonGrain>(TreeId).Returns(poison);
+        var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
+        monitor.Get(Arg.Any<string>()).Returns(new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            MaxApplyRetries = 1,
+        });
+
+        var txid = Guid.NewGuid();
+        poison.FilterPoisonedAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new[] { txid });
+        poison.ClassifyAsync("site-b", Arg.Any<IReadOnlyCollection<Guid>>())
+            .Returns(new ReceiverSagaPoisonClassification { Poisoned = new[] { txid } });
+        var decorator = new DeadLetterTrackingReplicationApplier(
+            inner,
+            grainFactory,
+            monitor,
+            NullLogger<DeadLetterTrackingReplicationApplier>.Instance);
+        var staged = MakeEntry() with { TransactionId = txid, IsPrepared = true, Key = "staged" };
+        var failing = MakeEntry() with { TransactionId = txid, IsPrepared = true, Key = "failing" };
+        inner.ApplyAsync(staged, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new ApplyResult { Applied = true, HighWaterMark = staged.Timestamp }));
+        inner.ApplyAsync(failing, Arg.Any<CancellationToken>())
+            .Returns<Task<ApplyResult>>(_ => throw new IOException("unappliable"));
+
+        var stagedResult = await decorator.ApplyAsync(staged, CancellationToken.None);
+        var failingResult = await decorator.ApplyAsync(failing, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stagedResult.Applied, Is.True, "a later prepare of a poisoned saga only stages, so it applies");
+            Assert.That(failingResult.Deferred, Is.False, "a failing prepare of a poisoned saga is parked at once, not deferred again");
+        });
+        await dlq.Received(1).EnqueueAsync(
+            failing,
+            Arg.Any<string>(),
+            Arg.Any<int>(),
+            LatticeReplicationMetrics.ReasonPoisonedSaga,
+            Arg.Any<CancellationToken>());
     }
 }

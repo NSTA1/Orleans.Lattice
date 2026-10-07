@@ -1,0 +1,27 @@
+# Pairs with RNoStrandedPrepare. A receiver leaf stages a prepare that arrives
+# after it has already applied the saga's terminal - a duplicate redelivered
+# because its ack was lost - instead of refusing it as
+# BPlusLeafGrain.IsLatePrepareForTerminalTransactionAsync does. Each saga issues one
+# terminal per source shard and the leaf has already consumed it, so the bucket
+# is never drained. The settle in front of the leaf (#4510) would materialise
+# such a duplicate instead, because a leaf holds a terminal only once its
+# registry has decided, so this mutation removes the settle too: the refusal is
+# the defence the leaf keeps for a receiver registry that has forgotten.
+MODULE: RNoStrandedPrepareLatePrepareStaged
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: a receiver stages a duplicate prepare that trails the saga's terminal, with neither the settle nor the late-prepare refusal
+PERTURBS: DeliverPrepare
+
+--- FIND
+    /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
+                THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
+--- REPLACE
+\* MUTATION: no settle and no late-prepare refusal.
+    /\ rpend' = [rpend EXCEPT ![m.key] = "pending"]
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
+--- END

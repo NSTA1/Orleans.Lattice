@@ -13,8 +13,8 @@ namespace Orleans.Lattice.Replication;
 /// Only value-carrying point-<see cref="Orleans.Lattice.MutationKind.Set"/>
 /// entries are ever manifested. The content hash is an in-process change
 /// token (FNV-1a, not cryptographic) and is never used as an apply
-/// identity; receiver-side apply still relies on the snapshot-pinned
-/// floor, shadow-forward identity cache, and idempotent leaf merge.
+/// identity; receiver-side apply still relies on the shadow-forward
+/// identity cache and idempotent leaf merge.
 /// </para>
 /// </summary>
 [GenerateSerializer]

@@ -1,0 +1,18 @@
+# Pairs with OwnerMonotonic. The retroactive sweep does not replay an undecided
+# prepare that predates the split window, so once the map moves k2 to the
+# destination the destination has neither the bucket nor the row, and a commit
+# a reader already saw on the source reverts.
+MODULE: OwnerMonotonicSweepSkipsReplay
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: the retroactive sweep drops an undecided prepare, so a visible commit reverts when the map moves
+PERTURBS: SplitSweep
+
+--- FIND
+               ELSE /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                                   IF <<x, s>> \in dests /\ k = k2 THEN b ELSE pend[x][s][k]]]]
+                    /\ UNCHANGED <<row, term, mig>>
+--- REPLACE
+\* MUTATION: an undecided bucket is not replayed to the destination.
+               ELSE UNCHANGED <<row, pend, term, mig>>
+--- END

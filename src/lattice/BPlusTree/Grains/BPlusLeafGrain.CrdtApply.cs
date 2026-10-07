@@ -81,6 +81,53 @@ internal sealed partial class BPlusLeafGrain
             ?? FallbackCrdtShapeRegistry;
 
     /// <summary>
+    /// Joins a CRDT row a cross-shard migration imports into the row this leaf
+    /// already holds for <paramref name="key"/> (issue #4613), or returns
+    /// <see langword="false"/> when the key is not a live CRDT key on both sides,
+    /// so the caller keeps its last-writer-wins handling. A split's destination
+    /// takes the saga terminal's fold, a backstop or a direct apply at its own
+    /// stamp, while the source keeps taking writes the destination does not
+    /// mirror; the import that follows must keep both, which only a join does.
+    /// <para>
+    /// The key's mode is the one recorded when this leaf last folded or applied a
+    /// CRDT write to it, else the tree's declared mode. The joined row strictly
+    /// dominates both rows' stamps, so the last-writer-wins store installs it; it
+    /// keeps the stored row's migration flag, origin and vector clock, and the
+    /// later of the two expiries, as the CRDT apply path's expiry join does.
+    /// </para>
+    /// </summary>
+    private bool TryJoinMigratedCrdtRow(
+        string key,
+        LwwValue<byte[]> existing,
+        LwwValue<byte[]> incoming,
+        out LwwValue<byte[]> joined,
+        out LatticeMergeMode mode)
+    {
+        joined = default;
+        mode = LatticeMergeMode.LwwRegister;
+        if (existing.IsTombstone || incoming.IsTombstone || incoming.Value is not { Length: > 0 } incomingBytes)
+            return false;
+
+        mode = Cache.GetMergeMode(key) is { } recorded && recorded != LatticeMergeMode.LwwRegister
+            ? recorded
+            : ResolveMergeMode();
+        if (mode == LatticeMergeMode.LwwRegister)
+            return false;
+
+        var floor = state.State.Clock;
+        if (existing.Timestamp > floor) floor = existing.Timestamp;
+        if (incoming.Timestamp > floor) floor = incoming.Timestamp;
+        joined = LwwValue<byte[]>.Create(JoinCrdtStateIntoRow(key, mode, incomingBytes), HybridLogicalClock.Tick(floor)) with
+        {
+            IsMigrated = existing.IsMigrated,
+            ExpiresAtTicks = Math.Max(existing.ExpiresAtTicks, incoming.ExpiresAtTicks),
+            OriginClusterId = existing.OriginClusterId,
+            VectorClock = existing.VectorClock,
+        };
+        return true;
+    }
+
+    /// <summary>
     /// Resolves the tree id this leaf activation is bound to for a CRDT shape
     /// lookup, faulting with the typed
     /// <see cref="LatticeCrdtShapeNotRegisteredException"/> when the activation
@@ -166,7 +213,17 @@ internal sealed partial class BPlusLeafGrain
     public async Task<CrdtApplyResult> ApplyCrdtDeltaAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         await AwaitReplayBarrierAsync();
-        return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+        try
+        {
+            return await ApplyCrdtDeltaCoreAsync(key, mode, deltaBytes, expiresAtTicks, batch: null);
+        }
+        catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+        {
+            // Issue #4586: unreachable - the filter merges the leaf clock past
+            // the floor and lets the refusal propagate. The typed fold has
+            // already touched the cached shadow, so the commit is not re-run here.
+            throw;
+        }
     }
 
     /// <summary>
@@ -609,7 +666,16 @@ internal sealed partial class BPlusLeafGrain
                 // interleave at any await inside the fill loop above and
                 // would share such a field. The list is per-call state, so it
                 // is safe; it is only the copy that was unnecessary.
-                await writer.AppendManyAsync(walEntries);
+                try
+                {
+                    await writer.AppendManyAsync(walEntries);
+                }
+                catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+                {
+                    // Issue #4586: unreachable - the filter merges the leaf clock
+                    // past the floor so the caller's retry is admitted.
+                    throw;
+                }
             }
         }
 

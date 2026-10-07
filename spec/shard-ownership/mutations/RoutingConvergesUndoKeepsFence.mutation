@@ -1,0 +1,22 @@
+# Pairs with RoutingConverges. The undo's last step clears the shadow-forward
+# state of the pinned shard only, not of the shard an adaptive split allocated
+# above the pinned count (the issue-3880 shape), so k2's shard of T stays in
+# Rejecting under the alias that names T again and the tree's own pair is
+# refused for k2 forever. Fairness is unchanged; no other operation is
+# blocked, so the mutant cannot deadlock instead.
+MODULE: RoutingConvergesUndoKeepsFence
+TARGET: RoutingConverges
+CLASS: Temporal
+SUMMARY: the undo leaves the split-allocated shard fenced, so the restored tree refuses it forever
+PERTURBS: UndoClear
+
+--- FIND
+    /\ rz = "undoing"
+    /\ alias = T
+    /\ fence' = {}
+--- REPLACE
+    /\ rz = "undoing"
+    /\ alias = T
+\* MUTATION: only the pinned shard's fence is lifted.
+    /\ fence' = fence \ {s1}
+--- END

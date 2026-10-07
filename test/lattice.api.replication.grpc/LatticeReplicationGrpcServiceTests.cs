@@ -35,7 +35,8 @@ public sealed class LatticeReplicationGrpcServiceTests
 
     private LatticeReplicationGrpcService CreateService(
         ILatticeReplicationControl control,
-        ILatticeReplicationApiAuthSchemeSource? authSchemeSource = null)
+        ILatticeReplicationApiAuthSchemeSource? authSchemeSource = null,
+        ILatticeReplicationPeerAdmin? peerAdmin = null)
     {
         var bridge = Substitute.For<ILatticeReplicationApiCredentialBridge>();
         bridge.Resolve(Arg.Any<ServerCallContext>()).Returns((LatticeCredential?)null);
@@ -49,6 +50,7 @@ public sealed class LatticeReplicationGrpcServiceTests
         return new LatticeReplicationGrpcService(
             _methods,
             control,
+            peerAdmin ?? Substitute.For<ILatticeReplicationPeerAdmin>(),
             bridge,
             source,
             Options.Create(new LatticeReplicationApiGrpcOptions()),

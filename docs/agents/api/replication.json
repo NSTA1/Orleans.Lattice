@@ -11,6 +11,7 @@
   "sources": [
     "docs/lattice.replication/dead-letter-queue.md",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationControl.cs#ILatticeReplicationControl",
+    "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs#ILatticeReplicationPeerAdmin",
     "src/lattice.api.abstractions/Replication/ILatticeReplicationStatus.cs#ILatticeReplicationStatus",
     "src/lattice.api.replication.grpc/LatticeReplicationApiGrpcServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApiGrpc",
     "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#LatticeReplicationGrpcMethods",
@@ -50,7 +51,7 @@
     "src/lattice.replication/PeerStatus/ReplicationPeerStatusReadPath.cs#AddReplicationPeerStatusReadPath"
   ],
   "in_process": {
-    "interface": "ILatticeReplicationControl; ILatticeReplicationStatus",
+    "interface": "ILatticeReplicationControl; ILatticeReplicationPeerAdmin; ILatticeReplicationStatus",
     "registration": "ISiloBuilder.AddLatticeReplicationApi after AddLatticeReplication(..., enableRuntimeConfig: true); ISiloBuilder.AddLatticeReplicationStatusApi after AddLatticeReplication(...).",
     "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.Status.cs#AddLatticeReplicationStatusApi"
   },
@@ -93,7 +94,8 @@
         "registration": "AddLatticeReplicationApi",
         "package": "Orleans.Lattice.Api.Replication",
         "provides": [
-          "ILatticeReplicationControl"
+          "ILatticeReplicationControl",
+          "ILatticeReplicationPeerAdmin"
         ],
         "source": "src/lattice.api.replication/LatticeApiReplicationServiceCollectionExtensions.cs#LatticeApiReplicationServiceCollectionExtensions.AddLatticeReplicationApi"
       },
@@ -197,6 +199,11 @@
         },
         {
           "name": "Deferred",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "SourceLineageRefused",
           "type": "bool",
           "required": true
         }
@@ -377,6 +384,16 @@
           "name": "EnqueuedAtTicks",
           "type": "long",
           "required": true
+        },
+        {
+          "name": "SourceLineageClusterId",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "SourceLineage",
+          "type": "Guid?",
+          "required": false
         }
       ],
       "source": "src/lattice.replication/DeadLetterEntry.cs#DeadLetterEntry"
@@ -1221,6 +1238,53 @@
       ]
     },
     {
+      "id": "decommission-peer",
+      "in_process": "ILatticeReplicationPeerAdmin.DecommissionPeerAsync",
+      "grpc_method": "/orleans.lattice.api.replication/DecommissionPeer",
+      "transport_scope": "both",
+      "request": "ReplicationDecommissionPeerRequestMessage",
+      "response": "ReplicationDecommissionPeerResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "PeerClusterId is null or empty."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is not authorized."
+        },
+        {
+          "error_id": "failed-precondition",
+          "condition": "The peer is still present in the configured replication peer set (ReplicationPeers / IReplicationTopology.CurrentPeers); it must be removed from ReplicationPeers before it can be decommissioned."
+        },
+        {
+          "error_id": "unavailable",
+          "condition": "The replication engine is not hosted in this process (ILatticeReplicationPeerDecommissioner is not registered), so the facade cannot carry out the decommission."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Idempotent per tree; iterating every registered tree and calling it again for an already-decommissioned peer re-marks the peer and is a no-op for trees that never enrolled it.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Decommissioning an already-decommissioned peer reaches the same end state and is reported via AlreadyDecommissioned=true, though the marker's timestamp is refreshed on every call.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "concurrency": {
+        "rule": "Fans out per tree rather than acting atomically across all trees; for each tree that actually enrolled the peer it un-enrols the peer from ICrossTreePeerEnrolmentGrain and synchronously force-detaches that tree's shipper so the cross-tree decision hold releases without waiting on the asynchronous, retried ReplicationDriverActivationService detach path.",
+        "source": "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Replication/ILatticeReplicationPeerAdmin.cs#DecommissionPeerAsync",
+        "src/lattice.replication/ILatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
+        "src/lattice.replication/LatticeReplicationPeerDecommissioner.cs#DecommissionPeerAsync",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcMethods.cs#DecommissionPeerMethodName",
+        "src/lattice.api.replication.grpc/LatticeReplicationGrpcService.cs#DecommissionPeer"
+      ]
+    },
+    {
       "id": "disable-replication",
       "in_process": "ILatticeReplicationControl.DisableReplicationAsync",
       "grpc_method": "/orleans.lattice.api.replication/DisableReplication",
@@ -1890,7 +1954,7 @@
       ],
       "retry": {
         "safe": "conditional",
-        "policy": "Receivers must call GetMetadata first and pin the cut point; retries/resumes in the bootstrap coordinator re-open the full stream and rely on per-key LWW reconciliation for overlap.",
+        "policy": "Receivers must call GetMetadata first and record the cut point; retries/resumes in the bootstrap coordinator re-open the full stream, merge the frontier after the drain, and rely on per-key LWW reconciliation for overlap.",
         "source": "src/lattice.replication/IRemoteSnapshotTransport.cs#RequestSnapshotAsync"
       },
       "idempotency": {

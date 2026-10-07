@@ -1,0 +1,17 @@
+# Pairs with ReconcileDeletesOnlyDeleted. Comparing the source's restore epoch and
+# physical tree identity at export open and close catches a restore DURING the
+# export but not one before it: r's copy predates the restore, the key is absent
+# without a delete, and the reconcile fabricates one. The generation must be the
+# one r's copy is aligned with.
+MODULE: ReconcileDeletesOnlyDeletedGenerationAtExportOnly
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the source's tree generation is compared only between export open and close, missing a restore before the export
+PERTURBS: EndExport
+
+--- FIND
+           okSrc == orphan /\ stable /\ ex.gen0 = aligned
+--- REPLACE
+\* MUTATION: no comparison with the aligned generation.
+           okSrc == orphan /\ stable
+--- END

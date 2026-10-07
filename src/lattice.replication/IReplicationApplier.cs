@@ -10,10 +10,11 @@ namespace Orleans.Lattice.Replication;
 /// Implementations are responsible for:
 /// </para>
 /// <list type="bullet">
-/// <item>filtering entries that fall at or below the snapshot-pinned floor and
-/// suppressing recent exact re-deliveries by <c>(originClusterId, timestamp,
+/// <item>suppressing recent exact re-deliveries by <c>(originClusterId, timestamp,
 /// key, op)</c>; older repeats re-apply idempotently under the tree's merge
-/// semantics,</item>
+/// semantics (there is no per-origin HLC drop threshold but the bootstrap
+/// drop floor, which drops only a write a stable bootstrap's export already
+/// reflects),</item>
 /// <item>routing the entry through the apply seam exposed by
 /// <c>Orleans.Lattice</c> so the persisted
 /// <c>LwwValue&lt;byte[]&gt;</c> carries the source HLC and origin
@@ -93,6 +94,7 @@ public interface IReplicationApplier
 
         var applied = false;
         var deferred = false;
+        var lineageRefused = false;
         var highest = Orleans.Lattice.HybridLogicalClock.Zero;
         for (var i = 0; i < entries.Count; i++)
         {
@@ -106,11 +108,15 @@ public interface IReplicationApplier
             {
                 deferred = true;
             }
+            if (result.SourceLineageRefused)
+            {
+                lineageRefused = true;
+            }
             if (result.HighWaterMark.CompareTo(highest) > 0)
             {
                 highest = result.HighWaterMark;
             }
         }
-        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = deferred };
+        return new ApplyResult { Applied = applied, HighWaterMark = highest, Deferred = deferred, SourceLineageRefused = lineageRefused };
     }
 }

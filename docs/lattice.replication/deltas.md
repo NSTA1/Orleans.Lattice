@@ -92,4 +92,4 @@ Consumers that need content equality for those records must compare collection c
 
 `LwwRegisterDelta` carries `OriginClusterId` directly because a last-writer-wins value is attributed to its authoring cluster for cycle-break and dedupe; on an exact HLC tie the origin id is the last-ranked tie-break, after the replica-invariant tombstone, expiry, and value-byte fields. The other deltas encode origin implicitly through their per-replica indexed dots, components, or entries. Receivers do not need a separate origin field for those records - the per-replica row identifies the producer.
 
-The receiver-side per-origin high-water-mark state is keyed `(treeId, originClusterId)` and filters at the `WalRecord` envelope layer through its snapshot-pinned causal floor; it does not inspect delta internals.
+The receiver-side per-origin high-water-mark state is keyed `(treeId, originClusterId)` and records the local vector clock used for HWM advances and causal-plus dependency checks; it is not a point-write drop threshold and it does not inspect delta internals.

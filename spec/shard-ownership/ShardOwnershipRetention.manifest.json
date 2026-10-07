@@ -1,0 +1,14 @@
+{
+  "mutations": "mutations-retention",
+  "refinement": "RefinementRetention.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 7,
+    "properties": 4,
+    "actions": 27,
+    "mutations": 36,
+    "behaviourRows": 36,
+    "distinctStates": 142980
+  }
+}
+

@@ -64,6 +64,7 @@ public class LatticeMicroBenchmarks
     private readonly Dictionary<Guid, IBPlusLeafGrain> _leaves = [];
     private readonly Dictionary<string, IShardRootGrain> _shards = [];
     private readonly Dictionary<string, ILeafCacheGrain> _leafCaches = [];
+    private readonly Dictionary<Guid, ILeafTerminalWitnessGrain> _terminalWitnesses = [];
     private FakeGrainFactory _grainFactory = null!;
     private FakeLatticeRegistry _registry = null!;
     private IOptionsMonitor<LatticeOptions> _optionsMonitor = null!;
@@ -730,6 +731,20 @@ public class LatticeMicroBenchmarks
         // fan-out on the legacy key without a thrown NotSupportedException.
         _grainFactory.RouteByString<ITxRegistryHighWaterGrain>(static _ => BenchTxRegistryHighWaterGrain.Instance);
 
+        // Issue #4593: every replication apply checks the receive fence of the
+        // physical copy it routes to. The bench never runs a coordinated restore,
+        // so every copy is open with no minimum admission epoch.
+        _grainFactory.RouteByString<ICopyReceiveFenceGrain>(static _ => BenchCopyReceiveFenceGrain.Instance);
+
+        // Issue #4545: a leaf terminal that settles a key without a marked
+        // prepare stamp records an applied-terminal witness in the leaf's
+        // sidecar before its next state write. An in-memory sidecar per leaf
+        // keeps that write on the bench's synchronous path.
+        _grainFactory.RouteByGuid<ILeafTerminalWitnessGrain>(GetOrCreateTerminalWitness);
+
+        // Issue #4654: a leaf records, once, that its state row was written. The
+        // bench's leaves never lose their rows, so a shared no-op record serves.
+        _grainFactory.RouteByGuid<ILeafRowRecordGrain>(static _ => BenchLeafRowRecordGrain.Instance);
         // Cross-tree atomic-write coordinator route: a real
         // LatticeCrossTreeTxGrain per operationId. Shares the same mocked
         // IReminderRegistry as the per-tree sub-sagas (keepalive +
@@ -1036,6 +1051,14 @@ public class LatticeMicroBenchmarks
         return cache;
     }
 
+    /// <summary>Resolves (and lazily creates) the in-memory terminal witness sidecar of a leaf.</summary>
+    private ILeafTerminalWitnessGrain GetOrCreateTerminalWitness(Guid leafId)
+    {
+        if (_terminalWitnesses.TryGetValue(leafId, out var existing)) return existing;
+        var witness = new BenchLeafTerminalWitnessGrain();
+        _terminalWitnesses[leafId] = witness;
+        return witness;
+    }
     /// <summary>
     /// Lazily constructs and caches a real <see cref="BPlusInternalGrain"""
     /// for the given <see cref="GrainId"/>. Used by the deep-tree benchmarks
@@ -3090,13 +3113,18 @@ public class LatticeMicroBenchmarks
         var clusterIdResolver = Substitute.For<ILatticeOriginClusterIdResolver>();
         clusterIdResolver.Resolve(Arg.Any<string>()).Returns(string.Empty);
 
+        // A never-replicated partition: its clock floor stays zero (issue #4586).
+        var leafQueueFloorState = Substitute.For<IPersistentState<WalShardFloorState>>();
+        leafQueueFloorState.State.Returns(new WalShardFloorState());
         _leafQueueWal = new WalShardGrain(
             grainContext,
             monitor,
             new LatticeOptionsResolver(_grainFactory, monitor),
             modeResolver,
             clusterIdResolver,
-            encoder);
+            encoder,
+            leafQueueFloorState,
+            Substitute.For<IWalClockFloorGate>());
         _leafQueueWal
             .InitializeForTestingAsync("leafqueue-tree", 0, _leafQueueStorage, CancellationToken.None)
             .GetAwaiter()
@@ -4636,4 +4664,80 @@ internal sealed class BenchTxRegistryHighWaterGrain : ITxRegistryHighWaterGrain
 
     /// <inheritdoc />
     public Task<int> RaiseShardHighWaterAsync(int shardCount) => Task.FromResult(shardCount);
+}
+
+/// <summary>
+/// Receive fence stub for the microbench (issue #4593): every physical copy is
+/// open and has no minimum admission epoch, because the bench never runs a
+/// coordinated restore. Closing or opening a copy is unsupported.
+/// </summary>
+internal sealed class BenchCopyReceiveFenceGrain : ICopyReceiveFenceGrain
+{
+    /// <summary>The shared instance returned for every physical copy.</summary>
+    public static readonly BenchCopyReceiveFenceGrain Instance = new();
+
+    private static readonly Task<CopyReceiveFenceStatus> Open = Task.FromResult(new CopyReceiveFenceStatus());
+
+    /// <inheritdoc />
+    public Task CloseAsync(string sagaId, long minAdmissionEpoch) =>
+        throw new NotSupportedException("The microbench never closes a restored copy.");
+
+    /// <inheritdoc />
+    public Task OpenAsync(string sagaId) =>
+        throw new NotSupportedException("The microbench never opens a restored copy.");
+
+    /// <inheritdoc />
+    public Task<CopyReceiveFenceStatus> GetStatusAsync() => Open;
+}
+
+/// <summary>
+/// In-memory applied-terminal witness sidecar for the microbench (issue #4545):
+/// the same per-saga key union as the real grain, held in memory rather than
+/// persisted, because the bench's leaves live and die with the process.
+/// </summary>
+internal sealed class BenchLeafTerminalWitnessGrain : ILeafTerminalWitnessGrain
+{
+    private List<AppliedTerminalWitness>? _witnesses;
+
+    /// <inheritdoc />
+    public Task<AppliedTerminalWitness[]> LoadAsync() =>
+        Task.FromResult(_witnesses is { Count: > 0 } witnesses ? witnesses.ToArray() : Array.Empty<AppliedTerminalWitness>());
+
+    /// <inheritdoc />
+    public Task ApplyAsync(AppliedTerminalWitness[]? add, Guid[]? remove)
+    {
+        _witnesses = LeafTerminalWitnessGrain.Merge(_witnesses, add, remove, out _);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task ClearAsync()
+    {
+        _witnesses = null;
+        return Task.CompletedTask;
+    }
+}
+
+/// <summary>
+/// Row-record stub for the microbench (issue #4654): the bench's leaves never lose
+/// their state rows, so recording is a no-op and nothing is ever reported recorded.
+/// </summary>
+internal sealed class BenchLeafRowRecordGrain : ILeafRowRecordGrain
+{
+    /// <summary>The shared instance returned for every leaf.</summary>
+    public static readonly BenchLeafRowRecordGrain Instance = new();
+
+    private static readonly Task<LeafRowRecordState?> NotRecorded = Task.FromResult<LeafRowRecordState?>(null);
+
+    /// <inheritdoc />
+    public Task<LeafRowRecordState?> GetAsync() => NotRecorded;
+
+    /// <inheritdoc />
+    public Task RecordAsync(string? treeId) => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task MarkPurgeClearedAsync() => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task ClearAsync() => Task.CompletedTask;
 }

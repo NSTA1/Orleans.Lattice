@@ -1,0 +1,23 @@
+# Pairs with RNoStrandedPrepare. The re-seed drain records the export's decision
+# row but does not drain the saga's leftover buckets by it. When the lost record
+# was the saga's terminal, no re-shipped record ever drains them. #4631 fans the
+# decision out through AppendTxTerminalAsync.
+MODULE: RNoStrandedPrepareDecisionRowNotFannedOut
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the re-seed drain records a decision row without draining the saga's leftover buckets
+PERTURBS: ReseedDrain
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+         /\ rtodo' = IF Decided(snap) THEN rtodo \cup AKeys ELSE rtodo
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+    \* A drain while
+--- REPLACE
+\* MUTATION: the decision row is not fanned out.
+         /\ rtodo' = rtodo
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+    \* A drain while
+--- END

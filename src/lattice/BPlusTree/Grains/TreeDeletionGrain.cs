@@ -29,7 +29,8 @@ internal sealed partial class TreeDeletionGrain(
     LatticeOptionsResolver optionsResolver,
     ILogger<TreeDeletionGrain> logger,
     [PersistentState("tree-deletion", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeDeletionState> state) : ITreeDeletionGrain, IRemindable, IGrainBase
+    IPersistentState<TreeDeletionState> state,
+    TreeLineageObserverDispatcher? lineageObservers = null) : ITreeDeletionGrain, IRemindable, IGrainBase
 {
     private const string ReminderName = "tree-deletion";
     private const string KeepaliveReminderName = "deletion-keepalive";
@@ -118,11 +119,13 @@ internal sealed partial class TreeDeletionGrain(
         var isDeletedSnapshot = state.State.IsDeleted;
         var deletedAtUtcSnapshot = state.State.DeletedAtUtc;
         var retainsRegistryEntrySnapshot = state.State.RetainsRegistryEntry;
+        var deletionEpochSnapshot = state.State.DeletionEpoch;
 
         // Persist the deletion state.
         state.State.IsDeleted = true;
         state.State.DeletedAtUtc = DateTimeOffset.UtcNow;
         state.State.RetainsRegistryEntry = retainsRegistryEntry;
+        state.State.DeletionEpoch++;
         try
         {
             await PersistAsync();
@@ -132,6 +135,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
+            state.State.DeletionEpoch = deletionEpochSnapshot;
             throw;
         }
 
@@ -188,6 +192,7 @@ internal sealed partial class TreeDeletionGrain(
             state.State.IsDeleted = isDeletedSnapshot;
             state.State.DeletedAtUtc = deletedAtUtcSnapshot;
             state.State.RetainsRegistryEntry = retainsRegistryEntrySnapshot;
+            state.State.DeletionEpoch = deletionEpochSnapshot;
             try
             {
                 await PersistAsync();
@@ -239,6 +244,21 @@ internal sealed partial class TreeDeletionGrain(
         if (state.State.RetainsRegistryEntry)
             throw Refuse("Cannot recover a tree that has not been deleted; its retired physical copy is separate.");
         await RecoverPhysicalAsync();
+    }
+
+    /// <summary>
+    /// Re-binds every node of one shard, a bounded page of leaves per call, until
+    /// the shard reports it is done (issue #4700): no leaf a purge cleared is left
+    /// behind by a truncated pass.
+    /// </summary>
+    private static async Task ReseedShardAsync(IShardRootGrain shard)
+    {
+        var next = 0;
+        do
+        {
+            next = await shard.ReseedNodeBindingsAsync(next);
+        }
+        while (next >= 0);
     }
 
     public async Task RecoverPhysicalAsync()
@@ -293,7 +313,7 @@ internal sealed partial class TreeDeletionGrain(
         for (int i = 0; i < shardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
-            reseeds[i] = shard.ReseedNodeBindingsAsync();
+            reseeds[i] = ReseedShardAsync(shard);
         }
         await Task.WhenAll(reseeds);
 
@@ -391,6 +411,8 @@ internal sealed partial class TreeDeletionGrain(
         }
         if (state.State.PurgeComplete)
             throw new InvalidOperationException("This tree has already been fully purged.");
+
+        await AnnouncePurgeAsync();
 
         // Run purge synchronously shard-by-shard, inside this one call. The public
         // purge goes through BeginPurgeAsync, whose walk no caller's timeout bounds.
@@ -551,6 +573,24 @@ internal sealed partial class TreeDeletionGrain(
     /// </summary>
     internal static readonly TimeSpan RequestedPurgeSlice = TimeSpan.FromSeconds(1);
 
+    /// <summary>
+    /// Tells every <see cref="ITreeLineageObserver"/> that this tree's contents
+    /// are about to be purged (issue #4537), before the first shard is touched.
+    /// Fail closed: an observer's exception stops the purge from starting. Runs
+    /// again on every resume, which is harmless; once the registry row is gone
+    /// there is no lineage left to announce.
+    /// </summary>
+    private async Task AnnouncePurgeAsync()
+    {
+        if (lineageObservers is not { HasObservers: true })
+        {
+            return;
+        }
+
+        var current = (await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId))?.Lineage;
+        await lineageObservers.NotifyChangingAsync(TreeId, current, nextLineage: null);
+    }
+
     internal async Task StartPurgeAsync(int startFromShard, bool requested = false)
     {
         await BeginPurgeStateAsync(startFromShard, requested);
@@ -565,6 +605,7 @@ internal sealed partial class TreeDeletionGrain(
 
     internal async Task BeginPurgeStateAsync(int startFromShard, bool requested = false)
     {
+        await AnnouncePurgeAsync();
         var shardCount = await ResolveAllocatedShardCountAsync();
 
         var snapshot = (state.State.PurgeInProgress, state.State.NextShardIndex, state.State.ShardRetries,

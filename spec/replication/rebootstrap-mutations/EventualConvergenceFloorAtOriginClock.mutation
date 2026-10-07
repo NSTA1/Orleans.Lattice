@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. The floor is the source's applied low
+# watermark for the origin (#4586's downward-closed S), not a bound on what the
+# origin has written: a floor at the origin's head drops a write the export does
+# not reflect, which the receiver then never holds (the scratch model's
+# FloorAtHead, #4549).
+MODULE: EventualConvergenceFloorAtOriginClock
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the drop floor is the third origin's clock, not the source's applied watermark, so a write the source never applied is dropped
+PERTURBS: BeginExport
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+       ELSE /\ fl' = [o \in Thirds |-> SrcLwm(o)]
+--- REPLACE
+\* MUTATION: the floor is the origin's own clock.
+       ELSE /\ fl' = [o \in Thirds |-> clk[o] + 1]
+--- END

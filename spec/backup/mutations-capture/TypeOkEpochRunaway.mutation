@@ -1,0 +1,15 @@
+# Pairs with TypeOK. A registration that advances the epoch by two leaves the
+# declared domain, which only TypeOK can see: the validation compares epochs
+# for equality, so a larger step would still be noticed as a change.
+MODULE: TypeOkEpochRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a cross-tree registration advances the epoch by two, leaving its declared domain
+PERTURBS: Register
+
+--- FIND
+    /\ epoch' = [epoch EXCEPT ![T] = epoch[T] + 1]
+--- REPLACE
+    \* MUTATION: the epoch advances by two.
+    /\ epoch' = [epoch EXCEPT ![T] = epoch[T] + 2]
+--- END

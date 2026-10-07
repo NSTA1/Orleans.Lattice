@@ -1,0 +1,22 @@
+# Pairs with UniqueOwner. LiftFenceUnlessSwappedAsync loses its registry check
+# and lifts the old copy's fence after a flip that did land, so T serves again
+# while the alias names R.
+MODULE: UniqueOwnerLiftAfterLandedFlip
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: the fence is lifted after a flip that landed, so the old copy serves beside the new one
+PERTURBS: ResizeFlipRefused
+
+--- FIND
+ResizeFlipRefused ==
+    /\ rz = "copied"
+    /\ fence # {}
+    /\ refusals > 0
+    /\ alias = T
+--- REPLACE
+ResizeFlipRefused ==
+\* MUTATION: the lift ignores whether the alias moved.
+    /\ rz \in {"copied", "swapped"}
+    /\ fence # {}
+    /\ refusals > 0
+--- END

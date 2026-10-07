@@ -4,7 +4,7 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// One <c>Type.Member</c> reference to production C#, named in backticks by a
-/// row of a <c>spec/Refinement.md</c> mapping table.
+/// row of a <c>spec/atomic-commit/Refinement.md</c> mapping table.
 /// </summary>
 internal sealed record RefinementCodeSymbol
 {
@@ -36,7 +36,7 @@ internal sealed record RefinementCodeSymbol
 
 /// <summary>
 /// Extracts the production-code references out of the mapping tables in
-/// <c>spec/Refinement.md</c>.
+/// <c>spec/atomic-commit/Refinement.md</c>.
 /// <para>
 /// WHAT IS EXTRACTED, AND WHY IT IS NARROW. Only backticked, dotted
 /// <c>Type.Member</c> forms are taken, and in the production columns both

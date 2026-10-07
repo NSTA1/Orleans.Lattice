@@ -1,0 +1,15 @@
+# Pairs with SagaCompletes. The broadcast never records the shards it has
+# visited, so its completion test never holds and the saga never completes.
+# Its terminal step stays weakly fair; after the first visit it changes nothing.
+MODULE: SagaCompletesTerminalNotRecorded
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: the terminal broadcast does not checkpoint progress, so the saga never completes
+PERTURBS: SagaTerminal
+
+--- FIND
+    /\ told' = told \cup {s}
+--- REPLACE
+\* MUTATION: the visited shard is not recorded.
+    /\ told' = told
+--- END

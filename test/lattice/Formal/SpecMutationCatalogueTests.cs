@@ -1,10 +1,12 @@
-using Orleans.Lattice.Testing.Hygiene;
+using System.Text.RegularExpressions;
 
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// The gates over the mutation catalogue that need no external toolchain: they
-/// are string work over <c>spec/</c> and run in milliseconds.
+/// The gates over each module's mutation catalogue that need no external
+/// toolchain: they are string work over <c>spec/</c> and run in milliseconds.
+/// Every gate takes a <see cref="SpecModule"/> and runs once per discovered
+/// module, with the module in its case name.
 /// <para>
 /// WHY THIS IS A SEPARATE FIXTURE FROM <see cref="TlcModelCheckTests"/>. These
 /// checks need neither a JVM nor <c>tla2tools.jar</c>, so tagging them
@@ -25,25 +27,6 @@ namespace Orleans.Lattice.Tests.Formal;
 public sealed class SpecMutationCatalogueTests
 {
     /// <summary>
-    /// The counts <c>spec/README.md</c> and <c>spec/mutations/README.md</c>
-    /// state in prose. Asserted here so the prose is machine-checked; see
-    /// <see cref="The_model_checks_the_documented_number_of_invariants_and_properties"/>.
-    /// </summary>
-    private const int ExpectedInvariantCount = 7;
-
-    private const int ExpectedTemporalPropertyCount = 6;
-
-    private static string SpecDirectory => Path.Combine(HygieneRepository.FindRepoRoot(), "spec");
-
-    private static string MutationDirectory => Path.Combine(SpecDirectory, "mutations");
-
-    private static string BaseSpecification => File.ReadAllText(Path.Combine(SpecDirectory, "AtomicCommit.tla"));
-
-    private static string BaseConfig => File.ReadAllText(Path.Combine(SpecDirectory, "AtomicCommit.cfg"));
-
-    private static IReadOnlyList<SpecMutation> Mutations() => SpecMutationCatalogue.Load(MutationDirectory);
-
-    /// <summary>
     /// Completeness, driven by the model rather than by a hand-maintained list.
     /// Every name in the base cfg's INVARIANTS and PROPERTIES blocks must have
     /// at least one mutation, so adding a property without pairing it fails
@@ -62,23 +45,26 @@ public sealed class SpecMutationCatalogueTests
     /// files cannot claim to be the same experiment.
     /// </para>
     /// </summary>
-    [Test]
-    public void Every_property_the_base_model_checks_has_a_mutation()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_property_the_base_model_checks_has_a_mutation(SpecModule module)
     {
-        var checkedProperties = SpecMutationCatalogue.ReadCheckedProperties(BaseConfig);
-        var mutations = Mutations();
+        ArgumentNullException.ThrowIfNull(module);
+
+        var checkedProperties = SpecMutationCatalogue.ReadCheckedProperties(module.ReadConfig());
+        var mutations = module.LoadMutations();
         var paired = mutations.Select(m => m.Target).Distinct(StringComparer.Ordinal).ToArray();
 
         Assert.That(
             checkedProperties,
             Is.Not.Empty,
-            "parsed no properties out of spec/AtomicCommit.cfg, so this gate would be vacuous.");
+            $"parsed no properties out of {module.Describe(module.ConfigPath)}, so this gate would be vacuous.");
 
         Assert.That(
             paired,
             Is.EquivalentTo(checkedProperties),
-            "every property spec/AtomicCommit.cfg checks needs a mutation in spec/mutations/ that makes "
-            + "it fire, and every mutation needs to target a property the model actually checks. "
+            $"every property {module.Describe(module.ConfigPath)} checks needs a mutation in "
+            + $"{module.Describe(module.MutationDirectory)}/ that makes it fire, and every mutation needs to target a "
+            + "property the model actually checks. "
             + $"Model checks: [{string.Join(", ", checkedProperties.Order(StringComparer.Ordinal))}]. "
             + $"Mutations target: [{string.Join(", ", paired.Order(StringComparer.Ordinal))}].");
 
@@ -93,36 +79,148 @@ public sealed class SpecMutationCatalogueTests
     /// property and its mutation are deleted TOGETHER: both sides shrink and
     /// nothing notices. That is not hypothetical tidiness - it is how a
     /// coverage claim decays quietly, which is the audit's subject. These
-    /// counts are the floor, and they are the same numbers
-    /// <c>spec/README.md</c> and <c>spec/mutations/README.md</c> state in
-    /// prose, so deleting a property makes the prose false AND the build red in
-    /// the same commit.
+    /// counts are the floor. They come from the module's manifest, and
+    /// <see cref="SpecModuleDiscoveryTests"/> checks the module README's counts
+    /// table against the same manifest, so deleting a property makes the README
+    /// false AND the build red in the same commit.
     /// <para>
     /// Deliberately an equality, not a minimum. Adding a property should
     /// require touching the documented count, because the documented count is a
     /// claim about coverage that somebody has to re-make on purpose.
     /// </para>
     /// </summary>
-    [Test]
-    public void The_model_checks_the_documented_number_of_invariants_and_properties()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_model_checks_the_documented_number_of_invariants_and_properties(SpecModule module)
     {
-        var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(BaseConfig);
+        ArgumentNullException.ThrowIfNull(module);
+
+        var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(module.ReadConfig());
+        var counts = module.Manifest.Counts;
+        var remedy = $"If that changed on purpose, update {module.Describe(module.ManifestPath)} AND the counts table in "
+            + $"{module.Describe(module.ReadmePath)}, which is otherwise now false.";
 
         Assert.Multiple(() =>
         {
             Assert.That(
                 blocks[SpecMutationCatalogue.InvariantsBlock],
-                Has.Count.EqualTo(ExpectedInvariantCount),
-                $"spec/AtomicCommit.cfg should check {ExpectedInvariantCount} invariants. If that changed on "
-                + "purpose, update this count AND the counts stated in spec/README.md and "
-                + "spec/mutations/README.md, which are otherwise now false.");
+                Has.Count.EqualTo(counts.Invariants),
+                $"{module.Describe(module.ConfigPath)} should check {counts.Invariants} invariants. {remedy}");
 
             Assert.That(
                 blocks[SpecMutationCatalogue.PropertiesBlock],
-                Has.Count.EqualTo(ExpectedTemporalPropertyCount),
-                $"spec/AtomicCommit.cfg should check {ExpectedTemporalPropertyCount} temporal properties. If that "
-                + "changed on purpose, update this count AND the counts stated in spec/README.md and "
-                + "spec/mutations/README.md, which are otherwise now false.");
+                Has.Count.EqualTo(counts.Properties),
+                $"{module.Describe(module.ConfigPath)} should check {counts.Properties} action and temporal "
+                + $"properties. {remedy}");
+        });
+    }
+
+    /// <summary>
+    /// The same floor for the catalogue itself. Without it, deleting a second
+    /// mutation of a property that has two would pass every gate, since the
+    /// property is still paired, and the action that mutation perturbed might
+    /// still be perturbed by another.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_catalogue_holds_the_documented_number_of_mutations(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        Assert.That(
+            module.LoadMutations(),
+            Has.Count.EqualTo(module.Manifest.Counts.Mutations),
+            $"{module.Describe(module.MutationDirectory)}/ should hold {module.Manifest.Counts.Mutations} mutations. "
+            + $"If that changed on purpose, update {module.Describe(module.ManifestPath)} and the counts table in "
+            + $"{module.Describe(module.ReadmePath)}.");
+    }
+
+    /// <summary>
+    /// Every generated cfg checks <c>TypeOK</c> alongside its target, so that a
+    /// mutation which accidentally leaves a variable's domain reports as
+    /// <c>TypeOK</c> rather than as a confident pairing. That guard is only
+    /// real if the module defines a type invariant and its base model checks
+    /// it; otherwise every generated cfg names a property TLC cannot find.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_base_model_checks_the_type_invariant(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        Assert.That(
+            SpecMutationCatalogue.ReadCheckedPropertiesByBlock(module.ReadConfig())[SpecMutationCatalogue.InvariantsBlock],
+            Does.Contain(SpecMutationCatalogue.TypeInvariant),
+            $"{module.Describe(module.ConfigPath)} must check {SpecMutationCatalogue.TypeInvariant} under INVARIANTS. "
+            + "Every generated mutation cfg carries it so that an out-of-domain mutation cannot pass as a pairing.");
+    }
+
+    /// <summary>
+    /// A variant configuration checks the type invariant too, for the same
+    /// reason the base does: a variant is a second claim about the same
+    /// specification, and a bound changed by override can put a variable out of
+    /// its declared domain without any other invariant noticing.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Every_variant_configuration_checks_the_type_invariant(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        Assert.That(
+            SpecMutationCatalogue.ReadCheckedPropertiesByBlock(module.ReadVariantConfig(variant))[SpecMutationCatalogue.InvariantsBlock],
+            Does.Contain(SpecMutationCatalogue.TypeInvariant),
+            $"{module.Describe(module.VariantConfigPath(variant))} must check {SpecMutationCatalogue.TypeInvariant} under INVARIANTS.");
+    }
+
+    /// <summary>
+    /// Every name a variant configuration assigns or overrides belongs to the
+    /// specification, and the variant changes at least one assignment the base
+    /// configuration makes.
+    /// <para>
+    /// WHY THIS EXISTS. TLC rejects an override whose name it cannot find
+    /// (<c>Typo &lt;- Other</c>), but it ACCEPTS a value assignment to a name
+    /// the specification does not have (<c>MaxFalts = 2</c>) and silently checks
+    /// the unchanged model. A variant with a misspelt bound therefore passes as a
+    /// second, larger check while re-checking the base - the exact vacuity this
+    /// harness exists to refuse. The TLC gate catches the same mistake from the
+    /// other side, by requiring the variant's state count to differ from the
+    /// base's; this one catches it without a toolchain and names the culprit.
+    /// </para>
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Every_name_a_variant_configuration_assigns_belongs_to_the_specification(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        var where = module.Describe(module.VariantConfigPath(variant));
+        var assignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadVariantConfig(variant));
+        var baseAssignments = SpecMutationCatalogue.ReadConstantAssignments(module.ReadConfig());
+        var (declared, defined) = SpecificationNames(module);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                assignments.Except(baseAssignments),
+                Is.Not.Empty,
+                $"{where} makes no assignment the base configuration does not already make, so it checks the base "
+                + "under the base's own bound. A variant exists to change a bound; state the change in its CONSTANTS "
+                + "block.");
+
+            foreach (var assignment in assignments)
+            {
+                Assert.That(
+                    declared(assignment.Name) || defined(assignment.Name),
+                    Is.True,
+                    $"{where} assigns '{assignment.Name}', which {module.Name} neither declares as a CONSTANT nor "
+                    + "defines. TLC would accept the value assignment and silently check the unchanged model.");
+
+                if (assignment.IsOverride)
+                {
+                    Assert.That(
+                        defined(assignment.Value),
+                        Is.True,
+                        $"{where} overrides '{assignment.Name}' with '{assignment.Value}', which {module.Name} does not define.");
+                }
+            }
         });
     }
 
@@ -142,44 +240,54 @@ public sealed class SpecMutationCatalogueTests
     /// <para>
     /// The mutation catalogue is the source of truth for which properties are
     /// temporal, because <see cref="SpecMutation.PropertyClass"/> already has
-    /// to be right for the banner assertion to work.
+    /// to be right for the banner assertion to work. A module with no temporal
+    /// property passes this vacuously, which is correct for that module; that
+    /// the gate checks something somewhere is
+    /// <see cref="The_temporal_layout_gate_checks_at_least_one_property"/>.
     /// </para>
     /// </summary>
-    [Test]
-    public void Temporal_properties_are_declared_under_PROPERTIES_not_INVARIANTS()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Temporal_properties_are_declared_under_PROPERTIES_not_INVARIANTS(SpecModule module)
     {
-        var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(BaseConfig);
+        ArgumentNullException.ThrowIfNull(module);
+
+        var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(module.ReadConfig());
         var invariantsBlock = blocks[SpecMutationCatalogue.InvariantsBlock];
         var propertiesBlock = blocks[SpecMutationCatalogue.PropertiesBlock];
-
-        var temporal = Mutations()
-            .Where(m => m.PropertyClass == SpecPropertyClass.Temporal)
-            .Select(m => m.Target)
-            .ToArray();
-
-        Assert.That(
-            temporal,
-            Is.Not.Empty,
-            "no mutation declares CLASS: Temporal, so this gate would be vacuous.");
+        var cfg = module.Describe(module.ConfigPath);
 
         Assert.Multiple(() =>
         {
-            foreach (var name in temporal)
+            foreach (var name in TemporalTargets(module))
             {
                 Assert.That(
                     invariantsBlock,
                     Does.Not.Contain(name),
-                    $"'{name}' is a temporal property but spec/AtomicCommit.cfg declares it under INVARIANTS. "
+                    $"'{name}' is a temporal property but {cfg} declares it under INVARIANTS. "
                     + "TLC will evaluate it as a state predicate and still report success, so the green run "
                     + "would mean something weaker than the name claims. Move it to the PROPERTIES block.");
 
                 Assert.That(
                     propertiesBlock,
                     Does.Contain(name),
-                    $"'{name}' is a temporal property and must appear in spec/AtomicCommit.cfg's PROPERTIES "
+                    $"'{name}' is a temporal property and must appear in {cfg}'s PROPERTIES "
                     + "block for TLC to check it over behaviours.");
             }
         });
+    }
+
+    /// <summary>
+    /// The vacuity floor for the gate above, taken across every module: at
+    /// least one mutation in the repository targets a temporal property, so the
+    /// layout gate is checking something.
+    /// </summary>
+    [Test]
+    public void The_temporal_layout_gate_checks_at_least_one_property()
+    {
+        Assert.That(
+            SpecModuleCatalogue.Repository().SelectMany(TemporalTargets),
+            Is.Not.Empty,
+            "no mutation in any module declares CLASS: Temporal, so the temporal layout gate checks nothing.");
     }
 
     /// <summary>
@@ -190,20 +298,14 @@ public sealed class SpecMutationCatalogueTests
     /// mutation actually needs it is checked by <see cref="TlcModelCheckTests"/>,
     /// which runs it once with the check left on.
     /// </summary>
-    [Test]
-    public void Deadlock_declarations_map_to_the_TLC_switch_and_nothing_else()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Deadlock_declarations_map_to_the_TLC_switch_and_nothing_else(SpecModule module)
     {
-        var mutations = Mutations();
-
-        Assert.That(
-            mutations.Where(m => m.DeadlockCheckDisabled),
-            Is.Not.Empty,
-            "no mutation declares DEADLOCK: off, so this mapping is checked over nothing. If that is now "
-            + "intended, delete this test together with the header's support.");
+        ArgumentNullException.ThrowIfNull(module);
 
         Assert.Multiple(() =>
         {
-            foreach (var mutation in mutations)
+            foreach (var mutation in module.LoadMutations())
             {
                 Assert.That(
                     mutation.TlcOptions,
@@ -211,6 +313,20 @@ public sealed class SpecMutationCatalogueTests
                     $"mutation '{mutation.Name}' would run TLC with options its header does not declare.");
             }
         });
+    }
+
+    /// <summary>
+    /// The vacuity floor for the mapping above, across every module: the
+    /// header is in use somewhere, so the mapping is checked over something.
+    /// </summary>
+    [Test]
+    public void Some_mutation_declares_the_deadlock_header()
+    {
+        Assert.That(
+            SpecModuleCatalogue.Repository().SelectMany(m => m.LoadMutations()).Where(m => m.DeadlockCheckDisabled),
+            Is.Not.Empty,
+            "no mutation in any module declares DEADLOCK: off, so its mapping is checked over nothing. If that "
+            + "is now intended, delete this test together with the header's support.");
     }
 
     /// <summary>
@@ -238,27 +354,53 @@ public sealed class SpecMutationCatalogueTests
     }
 
     /// <summary>
-    /// The drift gate, and deliberately cheap: it applies every mutation to the
-    /// current base without running TLC, so an edit to
-    /// <c>spec/AtomicCommit.tla</c> that invalidates an anchor fails in
-    /// milliseconds with a message naming the mutation and the exact anchor
-    /// text, instead of surfacing as a confusing TLC parse error minutes later.
+    /// Mutation names are test-case names and mutant module names are the
+    /// files TLC is handed, so both must be unique across every module, and no
+    /// mutant may take a base module's name. A collision would make a
+    /// <c>--filter</c> on one name run two experiments, or make a mutant
+    /// overwrite the base it is compared against.
     /// </summary>
     [Test]
-    public void Every_mutation_applies_cleanly_to_the_current_base_specification()
+    public void Mutation_names_are_unique_across_every_module()
     {
-        var baseSpec = BaseSpecification;
-        var mutations = Mutations();
+        var modules = SpecModuleCatalogue.Repository();
+        var mutations = modules.SelectMany(m => m.LoadMutations()).ToArray();
 
-        Assert.That(mutations, Is.Not.Empty, "expected at least one mutation in spec/mutations/.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(mutations.Select(m => m.Name), Is.Unique, "two modules declare mutations with the same file name.");
+            Assert.That(mutations.Select(m => m.Module), Is.Unique, "two modules declare mutations with the same MODULE.");
+            Assert.That(
+                mutations.Select(m => m.Module).Intersect(modules.Select(m => m.Name), StringComparer.Ordinal),
+                Is.Empty,
+                "a mutation's MODULE equals a base module's name, so its mutant would overwrite that base.");
+        });
+    }
+
+    /// <summary>
+    /// The drift gate, and deliberately cheap: it applies every mutation to the
+    /// current base without running TLC, so an edit to a module that
+    /// invalidates an anchor fails in milliseconds with a message naming the
+    /// mutation and the exact anchor text, instead of surfacing as a confusing
+    /// TLC parse error minutes later.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_mutation_applies_cleanly_to_the_current_base_specification(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var baseSpec = module.ReadSpecification();
+        var mutations = module.LoadMutations();
+
+        Assert.That(mutations, Is.Not.Empty, $"expected at least one mutation in {module.Describe(module.MutationDirectory)}/.");
 
         Assert.Multiple(() =>
         {
             foreach (var mutation in mutations)
             {
                 Assert.DoesNotThrow(
-                    () => mutation.Apply(baseSpec),
-                    $"mutation '{mutation.Name}' no longer applies to spec/AtomicCommit.tla.");
+                    () => mutation.Apply(baseSpec, module.Name),
+                    $"mutation '{mutation.Name}' no longer applies to {module.Describe(module.SpecificationPath)}.");
             }
         });
     }
@@ -276,12 +418,14 @@ public sealed class SpecMutationCatalogueTests
     /// mutation neutered it, and nothing cheap noticed.
     /// </para>
     /// </summary>
-    [Test]
-    public void Every_mutation_actually_changes_something()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_mutation_actually_changes_something(SpecModule module)
     {
-        var mutations = Mutations();
+        ArgumentNullException.ThrowIfNull(module);
 
-        Assert.That(mutations, Is.Not.Empty, "expected at least one mutation in spec/mutations/.");
+        var mutations = module.LoadMutations();
+
+        Assert.That(mutations, Is.Not.Empty, $"expected at least one mutation in {module.Describe(module.MutationDirectory)}/.");
 
         Assert.Multiple(() =>
         {
@@ -319,13 +463,15 @@ public sealed class SpecMutationCatalogueTests
     /// header is therefore invisible in the parse and visible only here.
     /// </para>
     /// </summary>
-    [Test]
-    public void Every_generated_config_names_its_target_once_in_a_single_block()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_generated_config_names_its_target_once_in_a_single_block(SpecModule module)
     {
-        var baseConfig = BaseConfig;
-        var mutations = Mutations();
+        ArgumentNullException.ThrowIfNull(module);
 
-        Assert.That(mutations, Is.Not.Empty, "expected at least one mutation in spec/mutations/.");
+        var baseConfig = module.ReadConfig();
+        var mutations = module.LoadMutations();
+
+        Assert.That(mutations, Is.Not.Empty, $"expected at least one mutation in {module.Describe(module.MutationDirectory)}/.");
 
         Assert.Multiple(() =>
         {
@@ -335,9 +481,9 @@ public sealed class SpecMutationCatalogueTests
                 var lines = cfg.ReplaceLineEndings("\n").Split('\n').Select(l => l.Trim()).ToArray();
 
                 var invariantHeaders = lines.Count(l =>
-                    l.StartsWith(SpecMutationCatalogue.InvariantsBlock, StringComparison.Ordinal));
+                    l.StartsWith("INVARIANT", StringComparison.Ordinal));
                 var propertyHeaders = lines.Count(l =>
-                    l.StartsWith(SpecMutationCatalogue.PropertiesBlock, StringComparison.Ordinal));
+                    l.StartsWith("PROPERT", StringComparison.Ordinal));
 
                 Assert.That(
                     invariantHeaders,
@@ -393,4 +539,180 @@ public sealed class SpecMutationCatalogueTests
             }
         });
     }
+
+    /// <summary>
+    /// A generated cfg must check the same bounded instance as the base model,
+    /// whatever directives the module bounds it with. Everything but the
+    /// checked-property blocks is carried over, and a <c>CONSTRAINT</c> after
+    /// an <c>INVARIANTS</c> block ends that block rather than being read as two
+    /// more invariants.
+    /// </summary>
+    [Test]
+    public void Generated_configs_carry_every_directive_but_the_checked_properties()
+    {
+        const string config = """
+            \* a comment
+            CONSTANTS
+                t1 = t1
+            INVARIANTS
+                TypeOK
+                Safe
+            CONSTRAINT
+                Bounded
+            SPECIFICATION Spec
+            PROPERTIES
+                Live
+            SYMMETRY Perms
+            """;
+
+        var carried = SpecMutationCatalogue.CarriedConfiguration(config).ReplaceLineEndings("\n");
+        var blocks = SpecMutationCatalogue.ReadCheckedPropertiesByBlock(config);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                carried,
+                Is.EqualTo("CONSTANTS\n    t1 = t1\nCONSTRAINT\n    Bounded\nSPECIFICATION Spec\nSYMMETRY Perms"));
+            Assert.That(blocks[SpecMutationCatalogue.InvariantsBlock], Is.EqualTo(new[] { "TypeOK", "Safe" }));
+            Assert.That(blocks[SpecMutationCatalogue.PropertiesBlock], Is.EqualTo(new[] { "Live" }));
+            Assert.That(
+                () => SpecMutationCatalogue.CarriedConfiguration("CONSTANTS\n    t1 = t1\nINVARIANTS\n    TypeOK\n"),
+                Throws.InvalidOperationException.With.Message.Contains("SPECIFICATION"),
+                "a cfg naming no behaviour was carried into generated cfgs that TLC could not run.");
+        });
+    }
+
+    /// <summary>
+    /// Every bound a mutation's <c>BOUNDS:</c> header assigns is a name the
+    /// specification declares or defines. TLC accepts a value assignment to a
+    /// name the specification does not have and silently checks the unchanged
+    /// model, so a misspelt bound would run the mutant at full size - harmless
+    /// to the verdict, but the cost the header exists to cut would come back
+    /// unannounced. Checked without a toolchain, naming the culprit.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Every_bound_a_mutation_assigns_belongs_to_the_specification(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var (declared, defined) = SpecificationNames(module);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in module.LoadMutations())
+            {
+                foreach (var bound in mutation.Bounds)
+                {
+                    Assert.That(
+                        declared(bound.Name) || defined(bound.Name),
+                        Is.True,
+                        $"mutation '{mutation.Name}' bounds '{bound.Name}', which {module.Name} neither declares as a "
+                        + "CONSTANT nor defines. TLC would accept the assignment and run the mutant at full size.");
+                }
+            }
+        });
+    }
+
+    /// <summary>
+    /// The control arm never carries a mutation's bounds and the mutant arm
+    /// always does. This is the half of the BOUNDS design the experiment's
+    /// meaning rests on: the control decides that the target holds on the base,
+    /// and it must decide that over the module's own instance. It is pinned
+    /// without a JVM for every mutation in every module; the synthetic control
+    /// in <see cref="TlcModelCheckTests"/> proves it again with TLC, using a
+    /// bound under which the base itself would fail.
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void Only_the_mutant_arm_carries_a_mutations_bounds(SpecModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+
+        var baseConfig = module.ReadConfig();
+        var baseAssignments = SpecMutationCatalogue.ReadConstantAssignments(baseConfig);
+
+        Assert.Multiple(() =>
+        {
+            foreach (var mutation in module.LoadMutations())
+            {
+                var control = SpecMutationCatalogue.ReadConstantAssignments(mutation.BuildConfig(baseConfig));
+                var mutant = SpecMutationCatalogue.ReadConstantAssignments(mutation.BuildMutantConfig(baseConfig));
+
+                Assert.That(
+                    control,
+                    Is.EqualTo(baseAssignments),
+                    $"the control-arm cfg for mutation '{mutation.Name}' assigns something the base cfg does not, so "
+                    + "the control would not check the module's own instance.");
+                Assert.That(
+                    mutant,
+                    Is.EqualTo(baseAssignments.Concat(mutation.Bounds)),
+                    $"the mutant-arm cfg for mutation '{mutation.Name}' does not carry exactly its declared bounds.");
+            }
+        });
+    }
+
+    /// <summary>
+    /// The vacuity floor for the two gates above, across every module: some
+    /// mutation declares bounds, so they check something.
+    /// </summary>
+    [Test]
+    public void Some_mutation_declares_bounds()
+    {
+        Assert.That(
+            SpecModuleCatalogue.Repository().SelectMany(m => m.LoadMutations()).Where(m => m.Bounds.Count > 0),
+            Is.Not.Empty,
+            "no mutation in any module declares BOUNDS, so the bounds gates check nothing. If that is now "
+            + "intended, delete this test together with the header's support.");
+    }
+
+    /// <summary>
+    /// The header's parse rules: comma-separated <c>Name = value</c> entries
+    /// with an integer or identifier value. A definition override, an empty
+    /// entry, a repeated name or a malformed value is refused rather than
+    /// passed to TLC, which would ignore what it could not resolve.
+    /// </summary>
+    [Test]
+    public void A_bounds_header_holds_value_assignments_and_nothing_else()
+    {
+        static SpecMutation ParseWith(string header) => SpecMutationCatalogue.Parse(
+            "BoundsHeaderControl",
+            "MODULE: BoundsHeaderControl\nTARGET: Termination\nCLASS: Temporal\nSUMMARY: control\n"
+            + header
+            + "\n--- FIND\nx\n--- REPLACE\ny\n--- END\n");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ParseWith(string.Empty).Bounds, Is.Empty);
+            Assert.That(
+                ParseWith("BOUNDS: MaxWrites = 1, MaxFaults=0\n").Bounds,
+                Is.EqualTo(new[] { new CfgAssignment("MaxWrites", false, "1"), new CfgAssignment("MaxFaults", false, "0") }));
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites <- One\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1,\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1, MaxWrites = 0\n"), Throws.InvalidOperationException);
+            Assert.That(() => ParseWith("BOUNDS: MaxWrites = 1 + 1\n"), Throws.InvalidOperationException);
+        });
+    }
+
+    /// <summary>
+    /// The names a module's specification (and its siblings) declares as a
+    /// <c>CONSTANT</c> and defines, for the gates that refuse a cfg assignment
+    /// TLC would silently ignore.
+    /// </summary>
+    private static (Func<string, bool> Declared, Func<string, bool> Defined) SpecificationNames(SpecModule module)
+    {
+        var specifications = module.ReadSiblingSpecifications().Values.Select(SpecActions.StripComments).ToArray();
+
+        bool Defined(string name) => specifications.Any(text =>
+            Regex.IsMatch(text, $@"^{Regex.Escape(name)}(\([^)]*\))?\s*==", RegexOptions.Multiline));
+
+        bool Declared(string name) => specifications.Any(text =>
+            Regex.Matches(text, @"^\s*CONSTANTS?\b(?<names>[^\n]*(\n[ \t]+[^\n]*)*)", RegexOptions.Multiline)
+                .Any(m => Regex.IsMatch(m.Groups["names"].Value, $@"\b{Regex.Escape(name)}\b")));
+
+        return (Declared, Defined);
+    }
+
+    private static IEnumerable<string> TemporalTargets(SpecModule module) =>
+        module.LoadMutations()
+            .Where(m => m.PropertyClass == SpecPropertyClass.Temporal)
+            .Select(m => m.Target);
 }

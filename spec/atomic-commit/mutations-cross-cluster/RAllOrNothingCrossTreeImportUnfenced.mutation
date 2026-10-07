@@ -1,0 +1,19 @@
+# Pairs with RAllOrNothing. The drain records the tree's arrival with the barrier
+# but raises no read fence: while the sibling's terminal is still on its own
+# stream, this tree serves the saga post and the sibling pre. #4683's fix holds the
+# fence until the barrier decides.
+MODULE: RAllOrNothingCrossTreeImportUnfenced
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a cross-tree import notifies the barrier but serves the tree without a read fence
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
+--- REPLACE
+\* MUTATION: the import raises no read fence.
+         /\ afence' = afence
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
+--- END

@@ -1,0 +1,22 @@
+# Pairs with RNoStrandedPrepare. With no replay filter the rewind re-ships a
+# purged saga's retained prepare, which the receiver stages under no decision and
+# nothing ever drains. #4533's filter withholds a purged saga whole.
+MODULE: RNoStrandedPrepareReplayFilterOff
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the shipper replays a purged saga's retained records
+PERTURBS: ReplayWithhold
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ FirstSight = "withhold"
+--- REPLACE
+\* MUTATION: no replay filter.
+    /\ FALSE
+--- END
+--- FIND
+ReplayShips == ~filt \/ FirstSight = "ship"
+--- REPLACE
+\* MUTATION: no replay filter.
+ReplayShips == TRUE
+--- END

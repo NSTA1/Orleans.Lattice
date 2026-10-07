@@ -473,6 +473,16 @@ internal sealed class LatticeDataApiGrpcService : LatticeDataApiGrpcServiceBase
             // though the server had broken.
             throw ToResourceExhausted(ex);
         }
+        catch (LatticeTreeBootstrappingException)
+        {
+            // The tree's replica is being bootstrapped from a snapshot and its
+            // reads are fenced until the import completes (issue #4526). A
+            // transient refusal, not a server fault: Unavailable tells the
+            // client to back off and retry.
+            throw new RpcException(new Status(
+                StatusCode.Unavailable,
+                "The requested tree is being bootstrapped from a snapshot and its reads are refused until the import completes. Retry after a short backoff."));
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Api.Data: gRPC call to {Method} failed.", context.Method);

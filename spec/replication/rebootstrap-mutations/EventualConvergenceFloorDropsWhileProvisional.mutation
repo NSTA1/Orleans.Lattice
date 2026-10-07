@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. The floor is provisional until its import
+# closes stable (#4549's defer-before-stable-close): an import the source's
+# restore makes unstable reflects none of what the restore dropped, and a
+# dropped delivery is acknowledged and never re-sent, so a third origin's write
+# below the floor is lost at the receiver too.
+MODULE: EventualConvergenceFloorDropsWhileProvisional
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a delivery below a provisional floor is dropped instead of deferred, so one an unstable import never reflected is lost
+PERTURBS: Admit
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+       IN /\ ~(BelowFloor(o, w) /\ prov)
+--- REPLACE
+\* MUTATION: a provisional floor drops rather than defers.
+       IN /\ TRUE
+--- END

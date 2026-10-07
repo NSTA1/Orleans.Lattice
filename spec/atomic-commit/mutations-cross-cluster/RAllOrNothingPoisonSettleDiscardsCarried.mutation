@@ -1,0 +1,19 @@
+# Pairs with RAllOrNothing. The poison's re-seed discards every poisoned saga's
+# buckets, including one the export shipped as prepared rows because it is still
+# in flight at the source. Its withheld terminals then commit it with no bucket
+# on the keys whose buckets went. #4633 keeps a carried saga's buckets.
+MODULE: RAllOrNothingPoisonSettleDiscardsCarried
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the poison's re-seed discards the buckets of a poisoned saga the export carried as prepared rows
+PERTURBS: PoisonReseed
+BOUNDS: LossPath = 3, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF ACarried(snap) THEN rpend[k]
+                        ELSE "none"]
+--- REPLACE
+\* MUTATION: every poisoned bucket is discarded, carried or not.
+                        ELSE "none"]
+--- END

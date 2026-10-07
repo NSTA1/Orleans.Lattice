@@ -1,0 +1,26 @@
+# Pairs with BackupSagaConsistent. The terminal fan-out applies on a tree
+# before that tree recorded the decision locally, breaking invariant I1: a
+# cross-tree saga's terminal lands on one shard while another shard of the
+# same tree resolves the saga against a snapshot with no local decision.
+MODULE: BackupSagaConsistentTerminalBeforeMark
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a terminal is broadcast to a tree before that tree's local decision is recorded
+PERTURBS: Broadcast
+
+--- FIND
+Broadcast(t, sh) ==
+    /\ sh \in Writes(t)
+    /\ prep[t][sh]
+    /\ term[t][sh] = "none"
+    /\ loc[t][TreeOf[sh]] # "none"
+    /\ term' = [term EXCEPT ![t][sh] = IF loc[t][TreeOf[sh]] = "committed" THEN "commit" ELSE "abort"]
+--- REPLACE
+Broadcast(t, sh) ==
+    /\ sh \in Writes(t)
+    /\ prep[t][sh]
+    /\ term[t][sh] = "none"
+    \* MUTATION: the coordinator's decision is enough.
+    /\ dec[t] # "inflight"
+    /\ term' = [term EXCEPT ![t][sh] = IF dec[t] = "committed" THEN "commit" ELSE "abort"]
+--- END

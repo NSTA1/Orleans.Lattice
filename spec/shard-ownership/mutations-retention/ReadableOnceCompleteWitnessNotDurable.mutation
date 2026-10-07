@@ -1,0 +1,25 @@
+# Pairs with ReadableOnceComplete. #4545's second fix (#4644) with its witness
+# held in activation memory only: a reactivation loses the record that the
+# saga's terminal settled the key, so an unstamped marker arriving afterwards
+# is installed and gates the key after the saga completed.
+MODULE: ReadableOnceCompleteWitnessNotDurable
+TARGET: ReadableOnceComplete
+CLASS: Invariant
+SUMMARY: a reactivation loses the witness, so a later unstamped marker gates the key after the saga completed
+PERTURBS: Reactivate
+
+--- FIND
+    /\ lk /\ ~term[c][s] /\ ~wit
+    /\ row[c][s][k] < SagaV
+--- REPLACE
+\* MUTATION: the marker carries no prepare stamp.
+    /\ lk /\ ~term[c][s] /\ ~wit
+--- END
+
+--- FIND
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, wit, late, wDone, ackOn>>
+--- REPLACE
+\* MUTATION: the witness is not durable.
+    /\ wit' = FALSE
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, sp, spCopy, rz, rzShards, fence, redir, sg, bound, prepped, told, dec, masked, forgotten, late, wDone, ackOn>>
+--- END

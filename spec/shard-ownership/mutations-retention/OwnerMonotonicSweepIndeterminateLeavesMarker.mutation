@@ -1,0 +1,38 @@
+# Pairs with OwnerMonotonic. Reproduces production before #4473 was fixed (#4561) (the split's
+# retroactive sweep after #4445): the pre-check reads the registry with
+# GetStatusAsync, and an Indeterminate answer is treated like InFlight, so the
+# prepare is replayed as a forwarded prepare. The destination resolves the
+# recorded decision behind the mask and refuses it, and the sweep then installs
+# a shadow marker with no bucket under it. The marker gates the migrated value,
+# but it lives only in activation memory: a destination leaf that reactivates
+# before the saga's terminal lands serves the migrated pre-saga value of a
+# committed saga, and a terminal that reaches the destination before the split
+# commits clears the marker without carrying a value for the moved key.
+MODULE: OwnerMonotonicSweepIndeterminateLeavesMarker
+TARGET: OwnerMonotonic
+CLASS: Invariant
+SUMMARY: the sweep replays an Indeterminate prepare that the destination refuses, leaving only an activation-scoped marker
+PERTURBS: SplitSweep
+
+--- FIND
+           view == IF RegistryView = "indeterminate" THEN dec ELSE RegistryView
+--- REPLACE
+\* MUTATION: the pre-check reads the registry's answer, mask included.
+           view == RegistryView
+--- END
+
+--- FIND
+               ELSE /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                                   IF <<x, s>> \in dests \ RefusedAt(k2) /\ k = k2 THEN b ELSE pend[x][s][k]]]]
+                    /\ UNCHANGED <<row, term, lk, wit>>
+    /\ sp' = "swept"
+--- REPLACE
+\* MUTATION: an Indeterminate replay is refused; only the marker lands where no bucket is.
+               ELSE /\ pend' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                                   IF <<x, s>> \in dests \ RefusedAt(k2) /\ k = k2
+                                   THEN IF view # "indeterminate" THEN b
+                                        ELSE IF pend[x][s][k] = "none" THEN "mark" ELSE pend[x][s][k]
+                                   ELSE pend[x][s][k]]]]
+                    /\ UNCHANGED <<row, term, lk, wit>>
+    /\ sp' = "swept"
+--- END

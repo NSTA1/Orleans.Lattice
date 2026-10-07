@@ -171,7 +171,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
         var initialCheckpoint = state.State.ProjectionCheckpointOffset;
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 

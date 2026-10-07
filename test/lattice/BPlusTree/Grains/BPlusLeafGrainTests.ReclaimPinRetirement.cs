@@ -88,6 +88,58 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task ClearGrainStateForPurge_retires_the_pin_only_after_the_row_is_cleared()
+    {
+        // The purge clear's ordering (issue #4700). The consumer ids are named
+        // while the tree id is bound, as for the plain clear, but the pins are
+        // retired only once the row is gone: a purge interrupted before its row
+        // clear leaves a leaf whose data recovery hands back, and that leaf must
+        // still be pinned, or the WAL GC could trim past its durable checkpoint.
+        string? observedTreeId = null;
+        bool? rowPresentAtRetirement = null;
+        Func<bool>? rowPresent = null;
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        reporter.UnregisterAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                observedTreeId = call.ArgAt<string>(0);
+                rowPresentAtRetirement = rowPresent!();
+                return Task.CompletedTask;
+            });
+
+        var (grain, _, state) = CreateGrainWithReporter(reporter: reporter);
+        rowPresent = () => state.RecordExists;
+        var projection = AsProjection(grain);
+        projection.Apply(BuildSet("k1", Encoding.UTF8.GetBytes("v1"), hlcPhysical: 100));
+        await projection.SetCheckpointOffsetAsync(1, default);
+        await projection.FlushCheckpointAsync(default);
+
+        await grain.ClearGrainStateForPurgeAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(observedTreeId, Is.EqualTo(CursorTreeId),
+                "the pin must be retired under the tree id it was registered with, named before the clear.");
+            Assert.That(rowPresentAtRetirement, Is.False,
+                "a purge must retire the pin only after the row is cleared, so an interrupted purge's rowful leaf stays pinned.");
+        });
+    }
+
+    [Test]
+    public async Task ClearGrainStateForPurge_interrupted_at_the_row_clear_keeps_the_pin()
+    {
+        var reporter = Substitute.For<ILeafCursorReporter>();
+        var (grain, _, state) = CreateGrainWithReporter(reporter: reporter);
+        state.ThrowOnClear = new TimeoutException("storage fault at the row clear");
+
+        Assert.CatchAsync(async () => await grain.ClearGrainStateForPurgeAsync());
+
+        await reporter.DidNotReceive().UnregisterAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        Assert.That(state.RecordExists, Is.True, "precondition: the row survives the interrupted clear");
+    }
+
+    [Test]
     public async Task ClearGrainState_retires_one_pin_per_wal_partition()
     {
         // A partitioned WAL registers one materialiser cursor per partition, so

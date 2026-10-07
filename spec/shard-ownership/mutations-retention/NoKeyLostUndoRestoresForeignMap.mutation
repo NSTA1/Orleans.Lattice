@@ -1,0 +1,19 @@
+# Pairs with NoKeyLost. The undo moves the alias back with a map that is not
+# the one captured when the resize began, so a key routes to a shard of the
+# old copy that never held it.
+MODULE: NoKeyLostUndoRestoresForeignMap
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the undo moves the alias back with a map that routes a key to a shard the old copy never held it on
+PERTURBS: UndoSwap
+
+--- FIND
+    /\ alias' = T
+    /\ rmap' = rmapOld
+    /\ published' = published \cup {<<T, rmapOld>>}
+--- REPLACE
+    /\ alias' = T
+\* MUTATION: the restored map is not the captured one.
+    /\ rmap' = s2
+    /\ published' = published \cup {<<T, s2>>}
+--- END

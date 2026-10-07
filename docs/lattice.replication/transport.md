@@ -67,7 +67,7 @@ Three concerns the transport composes for every call:
 
 ### 1. Idempotency at the batch boundary
 
-Receivers de-duplicate re-deliveries by record identity - an exact `(origin, hlc, key, op)` match in a bounded recent-apply cache, backed by an idempotent leaf-level apply for a repeat that has aged out of the cache - so a transport that retries a batch on transient failure does not cause double-apply. (The per-origin high-water mark is not the drop threshold; only a snapshot-pinned floor from a bootstrap drops entries outright, because everything at or below it is already in the snapshot.) Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
+Receivers de-duplicate re-deliveries by record identity - an exact `(origin, hlc, key, op)` match in a bounded recent-apply cache, backed by an idempotent leaf-level apply for a repeat that has aged out of the cache - so a transport that retries a batch on transient failure does not cause double-apply. The per-origin high-water mark and legacy snapshot floor are not drop thresholds for point writes. Implementations are free to retry as aggressively as their reliability story requires; the receiver-side dedup is the correctness guarantee.
 
 ### 2. Advance-cursor-on-ack
 
@@ -125,6 +125,8 @@ The canonical sender + receiver pair ships in the `Orleans.Lattice.Replication.G
 The shipper's outbound path is unconditionally framing-only. Every batch the shipper hands to `SendAsync` carries a populated `ReplicationBatch.EncodedEnvelope` (a fixed 32-byte header plus length-prefixed pre-encoded entry segments produced by `IReplicationBatchEncoder.EncodeFraming`). Each entry's bytes are the verbatim segment the WAL stored at append time, read back through the WAL partition's shipping read path - except an entry that pre-ship coalescing folded on a CRDT tree, whose segment is re-encoded once with the combined delta - with no per-tick re-encode through an envelope-level Orleans serializer call, and no producer-side typed-envelope path. `ReplicationBatch.Payload` and `ReplicationBatch.Envelope` remain on the contract for receiver-side and test-fixture compatibility, and the anti-entropy repair path still ships them (a typed envelope plus its encoded `Payload`), but the producer-side shipper writes only `EncodedEnvelope`.
 
 Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (for example a host-supplied HTTP-framed transport) encode `EncodedEnvelope` with `IReplicationBatchEncoder.EncodeFraming` and forward the bytes as-is, as the gRPC transport's marshaller does; the default no-op transport discards the batch.
+
+A transport must also preserve the source-trim re-seed handshake. When `ReplicationBatch.ReseedAfterEpoch` is set, the receiver should run the same responder as the gRPC service and echo its completed export epoch in `ReplicationAck.BootstrapEpoch`. A transport that drops the request fails closed: the source keeps saga records withheld and peer health remains stalled until a bootstrap from a later export is observed.
 
 ## Caveats
 

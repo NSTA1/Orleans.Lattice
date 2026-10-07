@@ -15,12 +15,14 @@
 >   replication apply pipeline, per tree rather than per shard. An entry whose
 >   frontier names a clock the receiver's local vector clock has not reached
 >   (ignoring the entry's own origin and the receiver's own cluster) is parked in
->   a bounded per-tree buffer (`CausalBufferMaxEntries` /
->   `CausalBufferMaxBytes`, overflow routed to the dead-letter queue) and retried
->   as later applies advance the local clock. Unlike section 6, the per-origin
+>   a durable bounded per-tree buffer (`CausalBufferMaxEntries` /
+>   `CausalBufferMaxBytes`, overflow routed to the dead-letter queue before
+>   removal from the buffer) and retried by the buffer grain after parks,
+>   high-water-mark advances that observe it non-empty, first touch after restart,
+>   bootstrap handoff, and replication maintenance ticks. Unlike section 6, the per-origin
 >   high-water mark is not a duplicate-drop gate for steady-state writes:
->   re-delivery is filtered by a snapshot-pinned causal floor, a shadow-forward
->   identity cache, and per-key last-writer-wins idempotence. See
+>   re-delivery is filtered by a shadow-forward identity cache and per-key
+>   last-writer-wins idempotence. See
 >   [Replication apply](../lattice.replication/replication-apply.md).
 > - **Causal-stable GC clause (section 7)** - implemented in the core WAL GC:
 >   once any consumer reports a vector frontier through the vector overload of
@@ -32,8 +34,9 @@
 >   clause is inert.
 > - **Snapshot cut-point (section 8)** - the replication snapshot provider cuts
 >   at the causal-stable frontier when one exists and otherwise at the
->   producer's local vector clock; the receiver pins that frontier during the
->   bootstrap handoff.
+>   producer's local vector clock; the receiver merges that frontier by
+>   pointwise maximum during the bootstrap handoff and drains the durable
+>   causal-apply buffer.
 >
 > Companion to
 > [`../lattice.replication/wal.md`](../lattice.replication/wal.md) (the
@@ -75,7 +78,7 @@ The per-partition monotonic offset is **not** a field on the entry. It is assign
 
 A per-origin vector clock representing the full causal frontier at commit time.
 
-- Sparse map: `{ origin → hlc }`.
+- Sparse map: `{ origin -> hlc }`.
 - Designed to be encoded compactly (delta-encoded relative to the previous entry on the same WAL partition); the shipped record carries the absolute frontier (see the status note above).
 - Backwards compatible: a missing field decodes as `null`, which receivers treat as the empty frontier.
 
@@ -173,8 +176,8 @@ for entry in WAL in offset order:
 An entry `E` is safe to apply when:
 
 ```text
-∀ origin in E.VectorClock:
-    local_vector_clock[origin] ≥ E.VectorClock[origin]
+for every origin in E.VectorClock:
+    local_vector_clock[origin] >= E.VectorClock[origin]
 ```
 
 This ensures:
@@ -278,8 +281,8 @@ causal_stable = min_over_all_peers(peer_vector_clock)
 
 An entry is GC-eligible when:
 
-- its vector clock ≤ `causal_stable`, **and**
-- its WAL offset ≤ `min_acked_offset`.
+- its vector clock <= `causal_stable`, **and**
+- its WAL offset <= `min_acked_offset`.
 
 **Performance note:**
 
@@ -312,7 +315,7 @@ snapshot_frontier = causal_stable
 
 ### 8.2 Snapshot contents
 
-Include all entries whose vector clocks are ≤ `snapshot_frontier`.
+Include all entries whose vector clocks are <= `snapshot_frontier`.
 
 ### 8.3 Incremental catch-up
 
@@ -322,7 +325,7 @@ Incremental replication begins at:
 start = snapshot_frontier
 ```
 
-The receiver pins both the as-of HLC and the snapshot's VC frontier in its persistent metadata, then resumes incremental delivery from that VC. The dependency check in §4 runs from the pinned frontier on the first incremental entry - exactly-once across the snapshot/incremental boundary.
+The receiver records the as-of HLC and snapshot VC frontier as the bootstrap cut point, then merges the frontier into its durable per-tree local vector clock by pointwise maximum and resumes incremental delivery from that VC. The dependency check in section 4 runs from the merged frontier on the first incremental entry, and the handoff drains the durable causal-apply buffer in case the merge satisfied entries parked earlier.
 
 **Performance note:**
 
@@ -358,13 +361,13 @@ The transport only needs to:
 
 | Area      | Change                          | Backwards compatible | Performance notes                                |
 |-----------|---------------------------------|----------------------|--------------------------------------------------|
-| Schema    | Add vector clock                | ✔                    | Delta-encode per shard; absolute on batch / post-trim boundaries |
-| Schema    | Add dependency summary          | ✔                    | Start with VC; only optimise if needed           |
-| Replay    | Add dependency checks           | ✔                    | Per-shard, single-threaded, O(#origins)          |
-| Replay    | Add buffering                   | ✔                    | Cap buffers; backpressure transport              |
-| GC        | Causal-stable frontier          | ✔                    | Recompute on ack updates only                    |
-| Snapshot  | Cut at causal-stable frontier   | ✔                    | No change to scan algorithm                      |
-| Transport | Carry new metadata              | ✔                    | Keep transport simple; no causal logic           |
+| Schema    | Add vector clock                | yes                    | Delta-encode per shard; absolute on batch / post-trim boundaries |
+| Schema    | Add dependency summary          | yes                    | Start with VC; only optimise if needed           |
+| Replay    | Add dependency checks           | yes                    | Per-shard, single-threaded, O(#origins)          |
+| Replay    | Add buffering                   | yes                    | Cap buffers; backpressure transport              |
+| GC        | Causal-stable frontier          | yes                    | Recompute on ack updates only                    |
+| Snapshot  | Cut at causal-stable frontier   | yes                    | No change to scan algorithm                      |
+| Transport | Carry new metadata              | yes                    | Keep transport simple; no causal logic           |
 
 ---
 
@@ -402,7 +405,7 @@ With the performance notes above, the design avoids the four common failure mode
 
 ## 12. Completeness wave - full coverage of structural & atomic write paths
 
-Sections 1–11 cover the point-write, single-tree, single-shard-per-mutation path. The completeness-wave replication items (and their core-side wire-additive dependencies) extend the same causal+ guarantee to every write path the core library exposes, so a host that enables any one of those features still gets full causal+ semantics rather than dropping back to per-origin LWW for that specific path. Cross-tree causality is intentionally out of scope.
+Sections 1-11 cover the point-write, single-tree, single-shard-per-mutation path. The completeness-wave replication items (and their core-side wire-additive dependencies) extend the same causal+ guarantee to every write path the core library exposes, so a host that enables any one of those features still gets full causal+ semantics rather than dropping back to per-origin LWW for that specific path. Cross-tree causality is intentionally out of scope.
 
 ### 12.1 Coverage matrix
 
@@ -416,13 +419,13 @@ Sections 1–11 cover the point-write, single-tree, single-shard-per-mutation pa
 
 ### 12.2 Design invariants preserved
 
-Every item in the completeness wave is constrained by the same rules that bound sections 1–10:
+Every item in the completeness wave is constrained by the same rules that bound sections 1-10:
 
 - **No commit-path change for point writes.** VC capture happens on the leaf's existing commit path, where each WAL record is stamped. Atomic writes are the exception: their prepared writes are appended invisibly, the saga appends a separate per-shard `TxCommit` / `TxAbort` terminal record after them, and the batch becomes visible at the tree's transaction-registry decision rather than at each entry's append (see [Atomic writes](atomic-writes.md)).
 - **Append-only, monotonic, durable.** No item rewrites a WAL entry, no item changes offset semantics, no item changes the commit point.
 - **No cross-shard locks in apply.** The shadow-forward receiver-side dedupe cache is held per tree, and nothing in the apply path takes a cross-shard lock. The producer ships the causal frontier straight from the leaf's WAL append, so there is no separate in-memory producer-side cache to coordinate.
 - **Wire-additive only.** The new structural-rewrite and shadow-forward `[Id]` slots have decode-as-empty defaults. Legacy peers and legacy persisted state continue to decode, and apply exactly as entries whose slots are empty.
-- **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf, and entries at or below a snapshot-pinned causal floor are dropped up front. The per-origin high-water mark is not a drop criterion for steady-state writes.
+- **Idempotent under re-delivery.** The shadow-forward identity cache - a bounded FIFO of recent `(origin, hlc, key, op)` tuples per tree - is the receiver's primary exact-identity dedup for steady-state writes: a re-delivery it has already evicted falls through to the idempotent per-key last-writer-wins apply at the leaf. Neither the per-origin high-water mark nor a legacy snapshot floor is a drop criterion for steady-state point writes.
 
 ### 12.2.1 Atomic multi-key write shipped mechanism
 
@@ -430,7 +433,7 @@ The atomic-transaction boundary (`TransactionId`) is the per-emit signal a causa
 
 ### 12.2.2 Intra-cluster snapshot/restore shipped mechanism
 
-The intra-cluster snapshot/restore path (operator snapshots a tree, restores it later - same cluster, possibly different timestamp) is the dual of the cross-cluster bootstrap path. Cross-cluster bootstrap pins the snapshot's `causalStableFrontier` directly onto the receiver's durable per-tree local vector clock, because the wire envelope carries the frontier verbatim from sender to receiver. Intra-cluster restore has no such envelope: the operator workflow tears down the live tree state (including that per-tree local vector clock, the per-origin high-water marks the receiver's dependency check reads) and rehydrates the values from a snapshot artefact, but the frontier metadata that drove the dependency check is gone.
+The intra-cluster snapshot/restore path (operator snapshots a tree, restores it later - same cluster, possibly different timestamp) is the dual of the cross-cluster bootstrap path. Cross-cluster bootstrap merges the snapshot's `causalStableFrontier` into the receiver's durable per-tree local vector clock by pointwise maximum, because the receiver may already have applied writes above the source frontier. Intra-cluster restore has no such envelope: the operator workflow tears down the live tree state (including that per-tree local vector clock, the per-origin high-water marks the receiver's dependency check reads) and rehydrates the values from a snapshot artefact, but the frontier metadata that drove the dependency check is gone.
 
 The restore seeder reconstructs that frontier from the values themselves. The core library carries each entry's commit-time vector clock on its entry records (empty for legacy persisted state) and preserves it end-to-end through every persistence / merge / snapshot / restore / bulk-load / compaction path with the same discipline applied to `OriginClusterId`. The replication package ships `IReplicationLocalVcSeeder.SeedFromTreeAsync(treeName, ct)`: for every physical shard the tree's live routing reaches - the shards its shard map names on the physical copy its alias resolves to, so a restored or resized tree is read from the live copy rather than the retired one - it walks that shard's leaf chain from the leftmost leaf along the sibling pointers, reading each leaf's live raw entries (the same leaf walk a tree snapshot copy uses), accumulates `frontier.MergeFrom(entry.VectorClock)` for every non-null VC slot (pointwise-max - the same accumulator the bounded dependency buffer uses), and seeds the durable local vector clock. A shard an adaptive split added above the pinned shard count is walked like any other, because the map routes keys to it. The pin replaces the tree's whole local vector clock durably, so the receiver's dependency check reads the reconstructed frontier across silo restarts. There is no in-memory producer-side mirror to prime: the shipped causal frontier is sourced from the leaf WAL the shipper tails, so the durable pin is the only seed the restore path needs. The pin carries `HybridLogicalClock.Zero` as its snapshot as-of clock because intra-cluster restore has no snapshot timestamp - the frontier is the authoritative seed, and the pin does not consult the as-of value, which is kept only for symmetry with the cross-cluster path.
 

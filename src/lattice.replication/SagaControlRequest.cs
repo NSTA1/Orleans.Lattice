@@ -59,4 +59,15 @@ public readonly record struct SagaControlRequest
     /// it unset and the participant takes the unchanged single-tree path.
     /// </summary>
     [Id(4)] public string? SetId { get; init; }
+
+    /// <summary>
+    /// The cluster asking for the saga's decision on a <c>GetDecision</c> call
+    /// (issue #4637): a prepared participant whose cutover-fence timer expired.
+    /// Never an authorization input supplied by the caller: the receiving
+    /// transport overwrites it with the authenticated, transport-stamped origin
+    /// cluster before the request reaches the coordinator, which then checks it
+    /// against the saga's own recorded participant set. Ignored by every other
+    /// verb; <see langword="null"/> when unset.
+    /// </summary>
+    [Id(5)] public string? RequesterClusterId { get; init; }
 }

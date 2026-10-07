@@ -1,0 +1,16 @@
+# Pairs with RestoreReturns, under the fairness Spec asserts. A retry treats
+# the reservation its own failed attempt still holds as another operation's,
+# and waits for it to be released - which only the retry would do.
+MODULE: RestoreReturnsRetryNeedsFreeReservation
+TARGET: RestoreReturns
+CLASS: Temporal
+SUMMARY: a retry waits for a reservation that its own failed attempt holds
+PERTURBS: Retry
+
+--- FIND
+    /\ rp \in {"failed", "revertFailed"}
+--- REPLACE
+    /\ rp \in {"failed", "revertFailed"}
+    \* MUTATION: the retry needs a free reservation.
+    /\ ~reserved
+--- END

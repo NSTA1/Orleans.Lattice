@@ -135,4 +135,14 @@ internal interface IAtomicWriteGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="commit"><c>true</c> to commit the staged writes; <c>false</c> to abort them.</param>
     Task FinalizeAsync(bool commit);
+
+    /// <summary>
+    /// Records the cross-tree write's decision stamps on this sub-saga's
+    /// cross-tree membership in its tree's transaction registry (issue #4684),
+    /// before the coordinator finalizes it, so every terminal and snapshot
+    /// export row of the sub-saga can carry them. Idempotent; a no-op for a
+    /// sub-saga that has no transaction id.
+    /// </summary>
+    Task RecordCrossTreeDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null);
 }

@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence. Reproduces production before #4483 (#4464): the handoff
+# pin can raise the HWM vector past a parked entry's dependency, but nothing
+# drains the causal buffer, and a later apply of the dependency itself no
+# longer advances the vector, so it schedules no drain either.
+MODULE: EventualConvergencePinSkipsDrain
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the handoff pin satisfies a parked entry's dependency without draining the buffer
+PERTURBS: Bootstrap
+DEADLOCK: off
+BOUNDS: MaxFaults = 0, MaxHlc = 1
+
+--- FIND
+    /\ wake' = [wake EXCEPT ![BootTarget] = @ \/ buf[BootTarget] # {}]
+--- REPLACE
+\* MUTATION: no drain after the pin.
+    /\ wake' = wake
+--- END

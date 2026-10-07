@@ -120,6 +120,45 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task RegisterExternalDecisionAuthorityAsync(Guid txid, string coordinatorKey);
 
     /// <summary>
+    /// Durably records that sub-saga <paramref name="txid"/> belongs to the
+    /// cross-tree atomic write <paramref name="operationId"/> over
+    /// <paramref name="participants"/> (issue #4683). Called before the
+    /// sub-saga parks prepared, so it precedes every terminal of the saga. The
+    /// record lives exactly as long as the sub-saga's decision is stored, so a
+    /// snapshot export can name the operation on the decision row it ships.
+    /// Idempotent; the first recording wins.
+    /// </summary>
+    [AlwaysInterleave]
+    Task RecordCrossTreeMembershipAsync(Guid txid, string operationId, IReadOnlyList<string> participants);
+
+    /// <summary>
+    /// The cross-tree membership recorded for each of <paramref name="txids"/>
+    /// that has one (issue #4683). A txid with none is absent from the result.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, CrossTreeMembership>> GetCrossTreeMembershipsAsync(IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// Records the decision stamps of the cross-tree write sub-saga
+    /// <paramref name="txid"/> belongs to (issue #4684) on its cross-tree
+    /// membership. The first recorded stamps stand; a sub-saga with no
+    /// membership is left unchanged. Durable before it returns.
+    /// </summary>
+    [AlwaysInterleave]
+    Task RecordCrossTreeDecisionStampsAsync(
+        Guid txid, IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null);
+
+    /// <summary>
+    /// The lowest decision sequence of this tree among the cross-tree
+    /// sub-sagas whose decision this registry still stores (issue #4733), or
+    /// <see langword="null"/> when it stores none. A decided sub-saga recorded
+    /// before sequencing counts as <c>0</c>; an undecided one is skipped, since
+    /// it is sequenced only after the counter a caller reads first. Pure read.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<long?> GetCrossTreeSequenceFloorAsync();
+
+    /// <summary>
     /// Receiver-side analogue of
     /// <see cref="RegisterExternalDecisionAuthorityAsync"/>: registers that the
     /// replicated cross-tree sub-saga identified by <paramref name="txid"/>
@@ -369,6 +408,14 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// entry so the persisted footprint stays bounded by in-flight +
     /// recently-completed sagas.
     /// </para>
+    /// <para>
+    /// A forwarded prepare's registration (one carrying the forwarded-prepare
+    /// marker for this registry's tree, for a saga this cluster authored) joins
+    /// an existing row but never creates one (issue #4632): the saga's
+    /// coordinator holds the row from before its first prepare until
+    /// <see cref="ForgetAsync"/>, so an absent row means the saga was forgotten,
+    /// and a late forward must not make it read as live again.
+    /// </para>
     /// </summary>
     [AlwaysInterleave]
     Task RegisterParticipantAsync(Guid txid, int shardIndex);
@@ -569,6 +616,117 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<int> GetPinnedDecisionCountAsync();
+
+    /// <summary>
+    /// Acquires (or upgrades) a snapshot capture's hold on this registry under
+    /// <paramref name="token"/> for <paramref name="lease"/> (issue #4485).
+    /// Several captures may hold the registry at once; the strongest live hold
+    /// decides what is refused. Writes and prepares are never refused.
+    /// <list type="bullet">
+    /// <item><description>
+    /// <see cref="TxRegistryCaptureGateMode.Fence"/> refuses every NEW cross-tree
+    /// delegation registration (<see cref="RegisterExternalDecisionAuthorityAsync"/>
+    /// and <see cref="RegisterReceiverDecisionAuthorityAsync"/>) with
+    /// <see cref="TxDecisionGateRefusedException"/>.
+    /// </description></item>
+    /// <item><description>
+    /// <see cref="TxRegistryCaptureGateMode.Gate"/> additionally refuses every
+    /// <see cref="MarkCommittedAsync"/> / <see cref="MarkAbortedAsync"/> that
+    /// would record a new decision (a repeat of an existing decision is
+    /// admitted), never caches a delegated coordinator verdict, and answers
+    /// <see cref="GetStatusForTerminalAsync"/> from local decisions only. On
+    /// acquisition it snapshots its local decisions (read-committed, with
+    /// expired tombstones reported as <see cref="TxStatus.Indeterminate"/> and
+    /// no coordinator dialled): the capture's D0, served by
+    /// <see cref="GetCaptureGateStatusManyAsync"/>.
+    /// </description></item>
+    /// </list>
+    /// A hold that is neither renewed nor released lapses at the end of its
+    /// lease, so a crashed capture cannot wedge sagas. The hold is kept in
+    /// memory only: a registry reactivation drops it, which
+    /// <see cref="ReleaseCaptureGateAsync"/> then reports so the capture fails
+    /// closed.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="mode">The strength of the hold.</param>
+    /// <param name="lease">How long the hold lasts unless renewed.</param>
+    /// <returns>A task that completes once the hold is in force (and, for a gate, once D0 is captured).</returns>
+    [AlwaysInterleave]
+    Task AcquireCaptureGateAsync(Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease);
+
+    /// <summary>
+    /// Extends the hold under <paramref name="token"/> to <c>now + lease</c>.
+    /// Returns <see langword="false"/> when the hold is not live (never
+    /// acquired, released, lapsed, or lost to a reactivation); a lapsed hold is
+    /// never revived.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="lease">The new lease, measured from now.</param>
+    /// <returns>Whether the hold was live and is now extended.</returns>
+    [AlwaysInterleave]
+    Task<bool> RenewCaptureGateAsync(Guid token, TimeSpan lease);
+
+    /// <summary>
+    /// Releases the hold under <paramref name="token"/>. Returns
+    /// <see langword="true"/> only when the hold was live, without a lapse, from
+    /// its acquisition until this call; the capture accepts its cut only when
+    /// every registry it held returns <see langword="true"/>.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>Whether the hold was continuously live.</returns>
+    [AlwaysInterleave]
+    Task<bool> ReleaseCaptureGateAsync(Guid token);
+
+    /// <summary>
+    /// Resolves <paramref name="txids"/> against the decision snapshot (D0) the
+    /// gate under <paramref name="token"/> captured. A txid absent from D0 is
+    /// <see cref="TxStatus.InFlight"/>. Throws
+    /// <see cref="TxDecisionGateRefusedException"/> with
+    /// <see cref="TxDecisionGateRefusal.GateLapsed"/> when the gate is not live,
+    /// so a capture never resolves against a lapsed gate.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <param name="txids">The transaction ids to resolve.</param>
+    /// <returns>The per-txid status as of D0.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(Guid token, IReadOnlyList<Guid> txids);
+
+    /// <summary>
+    /// The transactions the capture under <paramref name="token"/> resolved through
+    /// <see cref="GetCaptureGateStatusManyAsync"/> as <see cref="TxStatus.InFlight"/>:
+    /// the sagas pending in the capture that it held pre-saga. An incremental backup
+    /// layered on the capture needs them, because such a saga can be decided later
+    /// with none of its records inside the increment's delta window (issue #4589).
+    /// Throws <see cref="TxDecisionGateRefusedException"/> with
+    /// <see cref="TxDecisionGateRefusal.GateLapsed"/> when the gate is not live.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>The transactions resolved as undecided under the gate.</returns>
+    [AlwaysInterleave]
+    Task<IReadOnlyList<Guid>> GetCaptureGateUndecidedAsync(Guid token);
+
+    /// <summary>
+    /// The status read for a caller about to APPLY a terminal on the strength of
+    /// the answer: the leaf self-terminalise sweep and the shard split's
+    /// retroactive sweep (issue #4485). A terminal verdict is returned only when
+    /// it is durably recorded on this registry, so every terminal applied
+    /// anywhere follows a local decision. A delegated txid is resolved against
+    /// its coordinator and the verdict returned only once it is durably cached;
+    /// while a capture holds the gate no verdict is cached, so such a txid reads
+    /// <see cref="TxStatus.InFlight"/>.
+    /// </summary>
+    /// <param name="txid">The transaction id.</param>
+    /// <returns>The recorded status.</returns>
+    [AlwaysInterleave]
+    Task<TxStatus> GetStatusForTerminalAsync(Guid txid);
+
+    /// <summary>
+    /// Batched <see cref="GetStatusForTerminalAsync"/>.
+    /// </summary>
+    /// <param name="txids">The transaction ids.</param>
+    /// <returns>The per-txid recorded status.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetStatusManyForTerminalAsync(IReadOnlyList<Guid> txids);
 }
 
 /// <summary>

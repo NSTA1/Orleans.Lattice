@@ -137,7 +137,10 @@ internal sealed partial class ViewMaintainerGrain(
     /// read.
     /// </remarks>
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
-        => await EnsureGenerationNamingPinnedAsync();
+    {
+        await EnsureGenerationNamingPinnedAsync();
+        PublishActivationReadPositions();
+    }
 
     private string ViewName => context.GrainId.Key.ToString()!;
 
@@ -398,6 +401,10 @@ internal sealed partial class ViewMaintainerGrain(
         batchSize = ApplyBackpressureBatchScaling(sourceTreeId, batchSize, options);
         var partitions = await optionsResolver.GetWalPartitionsAsync(walTreeId);
 
+        // Hold every entry of this log the view has not durably consumed against
+        // the WAL GC on every silo, before reading it (issue #4584).
+        await EnsureReadRegisteredAsync(walTreeId);
+
         // Tail the source WAL through the shared subscriber: the cursored read,
         // fall-off-log detection, dynamic shard onboarding and back-pressure all
         // live in one place. The handler classifies each surfaced entry into an
@@ -546,7 +553,9 @@ internal sealed partial class ViewMaintainerGrain(
 
         if (offsetsAdvanced || appliedCount > 0)
         {
+            LowerReadPositions(walTreeId, state.State.AppliedOffsets);
             await state.WriteStateAsync();
+            PublishReadPositions(walTreeId, state.State.AppliedOffsets);
         }
 
         var blockedAtHlc = ComputeBlockedAtHlc();
@@ -855,7 +864,11 @@ internal sealed partial class ViewMaintainerGrain(
                 currentPhysicalTreeId))
             {
                 await cursorRegistry.UnregisterAsync(treeId, ConsumerId, cancellationToken);
+                await WithdrawReadRegistrationAsync(treeId);
             }
+
+            // A suppressed maintainer reads no source log, so it holds none.
+            PublishNoReadPositions();
         }
 
         _shipViewSuppressed = true;
@@ -1161,6 +1174,10 @@ internal sealed partial class ViewMaintainerGrain(
 
         state.State.BoundPhysicalTreeId = physical;
         await state.WriteStateAsync();
+
+        // The rebuild registered this view with the new log before reading it, so
+        // the retired log can be released now without a window holding neither.
+        await WithdrawReadRegistrationAsync(bound);
         MarkConverged();
         return true;
     }

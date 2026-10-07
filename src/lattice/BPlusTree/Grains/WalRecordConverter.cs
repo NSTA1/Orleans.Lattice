@@ -72,6 +72,8 @@ internal static class WalRecordConverter
             MatchedKeys = mutation.MatchedKeys,
             CrossTreeOperationId = mutation.CrossTreeOperationId,
             CrossTreeParticipants = mutation.CrossTreeParticipants,
+            PrepareStampOriginal = mutation.PrepareStampOriginal,
+            IsMigrated = mutation.IsMigrated,
         };
     }
 
@@ -123,6 +125,8 @@ internal static class WalRecordConverter
             MatchedKeys = entry.MatchedKeys,
             CrossTreeOperationId = entry.CrossTreeOperationId,
             CrossTreeParticipants = entry.CrossTreeParticipants,
+            PrepareStampOriginal = entry.PrepareStampOriginal,
+            IsMigrated = entry.IsMigrated,
         };
     }
 }

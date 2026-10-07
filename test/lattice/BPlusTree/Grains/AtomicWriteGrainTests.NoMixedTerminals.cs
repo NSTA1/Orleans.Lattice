@@ -12,7 +12,7 @@ using Orleans.Timers;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Detector for the <c>NoMixedTerminals</c> row of <c>spec/Refinement.md</c>
+/// Detector for the <c>NoMixedTerminals</c> row of <c>spec/atomic-commit/Refinement.md</c>
 /// (issue #2552, epic #2556). The row claims that a saga records exactly one
 /// <c>TxStatus</c>, <em>so</em> its per-leaf terminals are uniformly commit or
 /// uniformly abort.
@@ -62,15 +62,17 @@ public partial class AtomicWriteGrainTests
         private readonly Lock _gate = new();
         private readonly List<bool> _broadcastVerdicts = [];
         private readonly List<Guid> _broadcastTxIds = [];
+        private readonly List<int?> _broadcastShardCounts = [];
         private readonly List<Guid> _committedDecisions = [];
         private readonly List<Guid> _abortedDecisions = [];
 
-        public void RecordBroadcast(Guid txid, bool committed)
+        public void RecordBroadcast(Guid txid, bool committed, int? shardCount)
         {
             lock (_gate)
             {
                 _broadcastTxIds.Add(txid);
                 _broadcastVerdicts.Add(committed);
+                _broadcastShardCounts.Add(shardCount);
             }
         }
 
@@ -92,6 +94,16 @@ public partial class AtomicWriteGrainTests
         public IReadOnlyList<Guid> BroadcastTxIds
         {
             get { lock (_gate) { return [.. _broadcastTxIds]; } }
+        }
+
+        /// <summary>
+        /// The touched-shard count ambient each terminal was appended under
+        /// (<see cref="LatticeAtomicShardCountContext"/>), which is what the
+        /// shard stamps on the replicated terminal record.
+        /// </summary>
+        public IReadOnlyList<int?> BroadcastShardCounts
+        {
+            get { lock (_gate) { return [.. _broadcastShardCounts]; } }
         }
 
         public IReadOnlyList<Guid> CommittedDecisions
@@ -147,7 +159,7 @@ public partial class AtomicWriteGrainTests
                 Arg.Any<bool>())
             .Returns(call =>
             {
-                log.RecordBroadcast(call.Arg<Guid>(), (bool)call[1]);
+                log.RecordBroadcast(call.Arg<Guid>(), (bool)call[1], LatticeAtomicShardCountContext.Current);
                 return Task.FromResult<WalRecord?>(null);
             });
 
@@ -176,6 +188,7 @@ public partial class AtomicWriteGrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(opts);
 
         var state = new FakePersistentState<AtomicWriteState>();
+        PreparedKeysReadBack.Stub(shard, () => state.State.Entries.Select(e => e.Key));
         var grain = new AtomicWriteGrain(
             context,
             grainFactory,
@@ -221,7 +234,7 @@ public partial class AtomicWriteGrainTests
     [Test]
     public async Task Aborting_saga_broadcasts_its_single_recorded_abort_verdict_to_every_touched_shard()
     {
-        // spec/Refinement.md, property NoMixedTerminals. The compensation
+        // spec/atomic-commit/Refinement.md, property NoMixedTerminals. The compensation
         // path is the half that runs when something has already gone wrong,
         // so it is the half where a mixed fan-out would do the most damage:
         // a leaf handed a commit terminal for an aborted saga drains its

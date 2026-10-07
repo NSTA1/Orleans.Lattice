@@ -1,0 +1,16 @@
+{
+  "mutations": "move-mutations",
+  "refinement": "MoveRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 2,
+    "actions": 13,
+    "mutations": 18,
+    "behaviourRows": 18,
+    "distinctStates": 1617
+  },
+  "variants": {
+    "TwoMoves": { "distinctStates": 16225 }
+  }
+}

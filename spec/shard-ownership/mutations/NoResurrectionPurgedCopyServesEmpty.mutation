@@ -1,0 +1,18 @@
+# Pairs with NoResurrection. Reproduces production before #4503 was fixed (#4528): once the
+# old copy of a completed resize is purged, a routed operation on it is no
+# longer refused. A read answers as the empty tree (the purge cleared its
+# rows, PrepareForReadAsync with purgedAnswersEmpty), so a router that cached
+# the old pair is served nothing for a key the resized copy holds. The edit
+# lies in RoutedRefused, an operator the read path and the routed actions
+# share, not in one action, so the mutation declares no PERTURBS.
+MODULE: NoResurrectionPurgedCopyServesEmpty
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: a routed read on the purged old copy answers empty, below an acknowledged value
+
+--- FIND
+RoutedRefused(c, s, k) == SplitRejects(c, s, k) \/ Fenced(c, s) \/ Redirected(c) \/ Gone(c)
+--- REPLACE
+\* MUTATION: a purged copy does not refuse routed operations.
+RoutedRefused(c, s, k) == SplitRejects(c, s, k) \/ Fenced(c, s) \/ Redirected(c)
+--- END

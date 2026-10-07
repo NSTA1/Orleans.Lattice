@@ -6,7 +6,7 @@ namespace Orleans.Lattice.Replication;
 /// Carries the snapshot cut-point a sender cluster captures atomically
 /// with the start of a remote snapshot stream. The cut-point lets the
 /// receiver call
-/// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+/// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
 /// before draining the entry stream, so the snapshot/incremental handoff
 /// stays exactly-once even though the metadata RPC and the streaming
 /// RPC are separate transport calls.
@@ -68,11 +68,45 @@ public readonly record struct RemoteSnapshotMetadata
     /// <summary>
     /// The sender's causal-stable frontier at the moment the snapshot
     /// was captured. Receivers pin this on
-    /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// before draining the entry stream so the causal dependency check
     /// on the first incremental entry runs from a non-empty frontier.
     /// Always non-null; the snapshot of an unreplicated tree carries
     /// the empty <see cref="Orleans.Lattice.VersionVector"/>.
     /// </summary>
     [Id(3)] public VersionVector CausalStableFrontier { get; init; }
+
+    /// <summary>
+    /// The source's snapshot export epoch for this export (issue #4534), or
+    /// <c>0</c> from a source that does not number its exports. The
+    /// receiver's bootstrap coordinator records it once the bootstrap
+    /// completes and echoes it on its replication acknowledgements
+    /// (<see cref="ReplicationAck.BootstrapEpoch"/>). Strictly additive on
+    /// the wire: an older source omits it and it decodes to <c>0</c>.
+    /// </summary>
+    [Id(4)] public long ExportEpoch { get; init; }
+
+    /// <summary>
+    /// Source tree generation captured before the sender opened the export.
+    /// Receivers treat <see langword="null"/> as unknown and skip delete
+    /// reconciliation fail-safe.
+    /// </summary>
+    [Id(5)] public SnapshotSourceGeneration? OpenGeneration { get; init; }
+
+    /// <summary>
+    /// The source's applied frontier for the tree as read when the export
+    /// opened (issue #4586 part 2b); see <c>SnapshotStream.OpenFrontier</c>.
+    /// A receiver that predates the slot ignores it.
+    /// </summary>
+    [Id(6)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the source served the export only once every
+    /// silo of its cluster honoured the cross-tree decision purge hold and
+    /// decision stamping (issue #4684). A receiver relies on it to treat a
+    /// cross-tree operation that carries no decision stamps as decided before
+    /// the export opened; a source that predates the slot reports
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(7)] internal bool CrossTreeHoldHonoured { get; init; }
 }

@@ -23,7 +23,7 @@ public partial class BPlusLeafGrainTests
         Guid txId, string registryKey, int registryShardCount = ShardedRegistryCount)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusAsync(txId).Returns(TxStatus.Committed);
+        registry.GetStatusForTerminalAsync(txId).Returns(TxStatus.Committed);
         return BuildSelfTerminaliseLeafCore(
             txId, registry, out _, persistedCheckpoint: 0,
             registryShardCount: registryShardCount,

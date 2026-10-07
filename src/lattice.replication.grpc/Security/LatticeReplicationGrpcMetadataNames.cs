@@ -29,4 +29,46 @@ internal static class LatticeReplicationGrpcMetadataNames
     /// secret to match the one configured for the stamped origin.
     /// </summary>
     public const string OriginClusterIdHeader = "x-lattice-replication-origin";
+
+    /// <summary>
+    /// Header that carries <see cref="ReplicationBatch.ReseedAfterEpoch"/> on a
+    /// live push (issue #4534): present only while the sender has taken the
+    /// receiver off the log and waits for it to re-seed.
+    /// </summary>
+    public const string ReseedAfterEpochHeader = "x-lattice-replication-reseed-after";
+
+    /// <summary>
+    /// Header that carries the sender's applied low watermark for the batch's
+    /// tree at the receiver (issue #4586) on a push. Read only after the
+    /// caller's origin is authenticated, parsed strictly and bounded; a
+    /// missing or malformed value means the batch vouches for nothing.
+    /// </summary>
+    public const string SourceFrontierHeader = "x-lattice-replication-source-frontier";
+
+    /// <summary>
+    /// Header that carries the sender's acknowledged read positions for the
+    /// batch's tree (issue #4684), beside <see cref="SourceFrontierHeader"/>.
+    /// Read only with a valid source frontier from an authenticated, configured
+    /// peer, parsed strictly and bounded; a missing or malformed value vouches no
+    /// positions.
+    /// </summary>
+    public const string AckedPositionsHeader = "x-lattice-replication-acked-positions";
+
+    /// <summary>
+    /// Header that carries a chunk of the sender's cross-tree purge frontier
+    /// (issue #4733) on a push. Read only on a push whose origin is
+    /// authenticated and a configured peer, parsed strictly and bounded; a
+    /// missing or malformed value advertises nothing.
+    /// </summary>
+    public const string CrossTreePurgeFrontierHeader = "x-lattice-replication-cross-tree-purge-frontier";
+
+    /// <summary>
+    /// Header that carries the source tree lineage the sender read a pushed
+    /// batch under (issue #4673), as a <see cref="Guid"/> in the <c>D</c>
+    /// format. Read only after the caller's origin is authenticated and parsed
+    /// strictly. A receiver that drained the sender under another lineage
+    /// refuses the batch; a missing header (a sender that predates it) applies
+    /// as before, and a malformed one is refused.
+    /// </summary>
+    public const string SourceLineageHeader = "x-lattice-replication-source-lineage";
 }

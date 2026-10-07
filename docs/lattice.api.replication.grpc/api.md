@@ -24,6 +24,7 @@ Each is an extension method on the public static `LatticeReplicationApiGrpcServi
 | Disable | `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)` |
 | Get config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` |
 | Get auth scheme | `Task<AuthSchemeAdvertisement> GetAuthSchemeAsync(AuthSchemeAdvertisementRequest request, CancellationToken cancellationToken = default)` |
+| Decommission peer | `Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)` |
 
 The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
 
@@ -43,8 +44,8 @@ The query, page, and entry records are the same facade model records, documented
 | `ILatticeReplicationApiAuthorizer` | interface | The transport meta-authorizer the interceptor consults for every guarded RPC. A host implements it to decide whether a call may run at all. |
 | `DenyAllReplicationApiAuthorizer` | class | The default-deny authorizer used when a host registers no authorizer and leaves `RequireAuthorization` on. Rejects every guarded RPC. |
 | `AllowAllReplicationApiAuthorizer` | class | Opt-in authorizer that permits every guarded RPC. Register it explicitly only when an outer trust boundary already guards the endpoint. |
-| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`, `GetPeerStatus`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
-| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request or the peer-status query's tree filter supplied it, before the facade's tenant-scoped resolution, or `null` for the config read, a peer-status read with no tree filter, and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
+| `LatticeReplicationApiOperation` | enum | The operation an inbound RPC maps to (`EnableReplication`, `DisableReplication`, `GetReplicationConfig`, `Unknown`, `GetPeerStatus`, `DecommissionPeer`). An unrecognized method maps to `Unknown`, which the default-deny posture never grants. |
+| `LatticeReplicationApiAuthorizationContext` | readonly struct | What the authorizer receives: `Call` (the `ServerCallContext`), `Operation`, and `TargetId` - the tree id exactly as the enable / disable request or the peer-status query's tree filter supplied it, or the peer cluster id for a `DecommissionPeer` call, before the facade's tenant-scoped resolution; `null` for the config read, a peer-status read with no tree filter, and an `Unknown` operation. The exempt `GetAuthScheme` RPC never reaches the authorizer. |
 | `ILatticeReplicationApiCredentialBridge` | interface | Resolves the caller credential from an inbound `ServerCallContext` into the ambient `LatticeCredential` the facade access gate authorizes. Runs after the transport authorizer; returning `null` leaves the caller anonymous, which auth-backed replication control denies. The default reads `CredentialHeaderName` / `CredentialScheme`. |
 | `ILatticeReplicationApiAuthSchemeSource` | interface | Supplies the advertisement the unauthenticated `GetAuthScheme` RPC returns; it must carry only public configuration. |
 | `GrpcReplicationTypeAliases` | static class | The binding's stable serialization aliases for its wire messages (prefix `oirg.`). |
@@ -69,6 +70,8 @@ The request and response records the RPCs carry are public, `[GenerateSerializer
 | `AuthSchemeAdvertisementRequest` | `GetAuthScheme` request | none |
 | `AuthSchemeAdvertisement` | `GetAuthScheme` response | `Schemes` (`IReadOnlyList<AuthSchemeDescriptor>`) |
 | `AuthSchemeDescriptor` | one advertised scheme | `SchemeId` (required), `DisplayName`, `Parameters` (`IReadOnlyDictionary<string, string>` of public configuration only) |
+| `ReplicationDecommissionPeerRequestMessage` | `DecommissionPeer` request | `PeerClusterId` (required) |
+| `ReplicationDecommissionPeerResponse` | `DecommissionPeer` response | `PeerClusterId` (required), `TreeCount`, `AlreadyDecommissioned` |
 
 The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, and `ReplicationConfigReport` rather than the wire records.
 
@@ -79,7 +82,7 @@ The peer-status service has no wire records of its own: its `GetPeerStatus` RPC 
 | Failure | gRPC status |
 |---|---|
 | Caller not authorized (interceptor or facade gate), or a fail-closed tenant resolution | `PermissionDenied` |
-| In-place mode change on an enabled tree; unmet enable or disable precondition | `FailedPrecondition` |
+| In-place mode change on an enabled tree; unmet enable or disable precondition; `DecommissionPeer` called while the peer is still present in `ReplicationPeers` | `FailedPrecondition` |
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Any other fault | `Internal` (with a non-leaking message) |

@@ -1,0 +1,19 @@
+# Pairs with AckedWriteDurable. An abandoned call that settles without landing
+# is reported to its writer as a success, so the write is acknowledged while no
+# durable state holds it. The base settles a hole silently: the writer was
+# already told the outcome is unknown.
+MODULE: AckedWriteDurableSettledHoleAcknowledged
+TARGET: AckedWriteDurable
+CLASS: Invariant
+SUMMARY: a settled hole is acknowledged to its writer
+PERTURBS: SettleHole
+
+--- FIND
+    /\ orphans' = orphans \ {o}
+    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+--- REPLACE
+\* MUTATION: the hole is reported to the writer as a success.
+    /\ orphans' = orphans \ {o}
+    /\ acked' = acked \cup {o}
+    /\ UNCHANGED <<next, inflight, durable, tail>>
+--- END

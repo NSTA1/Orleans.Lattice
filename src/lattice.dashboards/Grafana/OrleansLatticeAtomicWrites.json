@@ -519,6 +519,18 @@
       "targets": [
         { "refId": "D", "expr": "sum by (outcome) (rate(orleans_lattice_tx_registry_write_duration_milliseconds_sum{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])) / clamp_min(sum by (outcome) (rate(orleans_lattice_tx_registry_write_duration_milliseconds_count{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m])), 1e-12)", "legendFormat": "{{outcome}}" }
       ]
+    },
+    {
+      "id": 107,
+      "title": "Saga prepare-stamp read-back slow path (rate) by reason",
+      "description": "atomic_write.prepare_stamp_read_back.slow_path: atomic-write saga read-backs of their keys' original prepare stamps (issue #4522) that left the fast path. The saga reads every key's stamp before its execute phase ends, so its committed-values backstop applies each key at its own stamp and never over a write acknowledged after the prepare. reason=exhaustive means the first pass missed a key and every shard read its whole leaf chain (expected after a shard root reactivated or a split moved a bucket); reason=read_failed or incomplete means the batch failed and was retried, and the saga aborts once its retries are spent. Recorded only off the fast path, so an empty result is the usual reading; a sustained read_failed or incomplete rate is worth investigating.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 80 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "U", "expr": "sum by (reason) (rate(orleans_lattice_atomic_write_prepare_stamp_read_back_slow_path_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{reason}}" }
+      ]
     }
   ]
 }

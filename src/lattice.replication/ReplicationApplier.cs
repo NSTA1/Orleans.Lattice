@@ -123,14 +123,15 @@ internal sealed partial class ReplicationApplier(
     private readonly ReplicationPeerStats? _peerStats = peerStats;
 
     /// <summary>
-    /// Per-tree causal-apply buffers, lazily created on first park.
-    /// Each tree's buffer is independent - there is no cross-tree
-    /// coordination. The map itself is concurrent because Orleans
-    /// grain calls into a singleton applier may interleave across
-    /// trees; per-buffer concurrency is enforced by the buffer's
-    /// internal lock.
+    /// Per-tree hint: whether this silo last observed the tree's durable
+    /// causal-apply buffer (<see cref="ICausalApplyBufferGrain"/>) holding
+    /// entries. Absent means this silo has not touched the tree's buffer since
+    /// it started, which triggers a first-touch drain (re-arming entries a
+    /// previous process parked). It only gates the drain call on the hot
+    /// path; liveness does not depend on it being current (see
+    /// <see cref="DrainBufferAsync"/>).
     /// </summary>
-    private readonly ConcurrentDictionary<string, CausalApplyBuffer> _buffers = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, bool> _bufferMayHoldEntries = new(StringComparer.Ordinal);
 
     /// <summary>
     /// Per-tree shadow-forward dedupe caches, lazily created on first
@@ -141,8 +142,8 @@ internal sealed partial class ReplicationApplier(
     /// rejects the duplicate-emit pair a structural rewrite (shard split /
     /// merge) generates when it shadow-forwards a user write into a
     /// different shard, and any other recent re-delivery, without a leaf
-    /// hop. The per-origin high-water-mark is not a drop threshold for
-    /// incremental writes (only the snapshot-pinned causal floor is), so a
+    /// hop. There is no per-origin HLC drop threshold for point writes but
+    /// the bootstrap drop floor (#1060, #4463, #4549), so a
     /// re-delivery evicted from the bounded cache under sustained churn falls
     /// through to the idempotent leaf-level last-writer-wins apply, which is
     /// a no-op for identical bytes.
@@ -235,6 +236,8 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "the tree is not enrolled for replication on this receiver.",
                         entry.TreeId, entry.OriginClusterId);
+                    await RecordNotEnrolledLostAsync(entry.OriginClusterId, [entry.Timestamp], cancellationToken);
+                    await NotifyCrossTreeParticipantAbsentAsync(entry, cancellationToken);
                     outcome = LatticeReplicationMetrics.OutcomeRejectedNotReplicated;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
 
@@ -265,7 +268,14 @@ internal sealed partial class ReplicationApplier(
                         "Rejected inbound replication entry for tree '{Tree}' from origin '{Origin}': "
                         + "wire merge mode '{WireMode}' disagrees with the locally resolved mode '{LocalMode}'.",
                         entry.TreeId, entry.OriginClusterId, entry.Mode, expectedMode);
-                    await DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken).ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterModeMismatchAsync(entry, expectedMode, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
             }
@@ -290,8 +300,14 @@ internal sealed partial class ReplicationApplier(
                     .EvaluateAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
                 if (decision != ReplicationTenantIsolationDecision.Admit)
                 {
-                    await DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)
-                        .ConfigureAwait(false);
+                    if (!await TryDeadLetterAsync(entry, DeadLetterTenantIsolationAsync(entry, decision, cancellationToken)).ConfigureAwait(false))
+                    {
+                        // The dead-letter queue is full (#4603): defer rather than
+                        // acknowledge an entry nothing holds.
+                        outcome = LatticeReplicationMetrics.OutcomeDedup;
+                        return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, Deferred = true };
+                    }
+
                     outcome = decision switch
                     {
                         ReplicationTenantIsolationDecision.RejectOutOfRegion => LatticeReplicationMetrics.OutcomeRejectedTenantOffline,
@@ -300,6 +316,20 @@ internal sealed partial class ReplicationApplier(
                     };
                     return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
                 }
+            }
+
+            // SOURCE LINEAGE (issues #4673, #4707). An entry its sender read under
+            // a source lineage this tree no longer holds - before a source restore,
+            // purge and recreate, or alias move, arriving after this tree drained
+            // the new lineage - must not land, whichever path delivers it: a push,
+            // the causal-buffer drain, or a dead-letter replay. Checked after the
+            // enrollment and tenant gates, so a peer-controlled tree id activates
+            // no coordinator.
+            var lineageVerdict = await AdmitSourceLineageAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+            if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+            {
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return SourceLineageRefusal(lineageVerdict);
             }
 
             // DURABLE RECEIVE FENCE (issue #1173). While a cross-cluster restore
@@ -312,16 +342,26 @@ internal sealed partial class ReplicationApplier(
             // same entry once the fence lifts on global completion. The gate is
             // fronted by a short in-memory cache so this is not a per-entry grain
             // call.
-            if (_receiveGate is not null
-                && await _receiveGate.IsReceivePausedAsync(entry.TreeId, cancellationToken).ConfigureAwait(false))
+            //
+            // The answer carries the fence's epoch, and the admitted entry is
+            // stamped with it (issue #4593): a restored copy refuses an entry
+            // admitted under an epoch older than its restore's pause, so a
+            // stale cached answer can never carry a pre-cutover write onto it.
+            if (_receiveGate is not null)
             {
-                outcome = LatticeReplicationMetrics.OutcomeDedup;
-                return new ApplyResult
+                var observed = await _receiveGate.ObserveAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+                if (observed.Paused)
                 {
-                    Applied = false,
-                    HighWaterMark = HybridLogicalClock.Zero,
-                    Deferred = true,
-                };
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult
+                    {
+                        Applied = false,
+                        HighWaterMark = HybridLogicalClock.Zero,
+                        Deferred = true,
+                    };
+                }
+
+                ReplicationAdmissionEpoch.Stamp(entry.TreeId, observed.Epoch);
             }
 
             // Defence-in-depth: tombstone-reap envelopes
@@ -343,7 +383,7 @@ internal sealed partial class ReplicationApplier(
             }
 
             var resolved = options.Get(entry.TreeId);
-            if (string.Equals(entry.OriginClusterId, resolved.ClusterId, StringComparison.Ordinal))
+            if (ReplicationReceiveDedup.IsOwnOrigin(entry.OriginClusterId, resolved.ClusterId))
             {
                 // This is the receiving cluster's ONLY enforcement that a
                 // local-origin entry is never applied back onto its authoring
@@ -409,7 +449,7 @@ internal sealed partial class ReplicationApplier(
             // saga-id-keyed and idempotent on the receiver
             // (per-tree TxRegistry repeat-same-outcome no-op + per-leaf
             // _recentlyTerminal HashSet dedup). They bypass the
-            // snapshot-pinned floor check, the shadow-forward dedup cache, and
+            // shadow-forward dedup cache and
             // the causal-buffer parking path: those primitives are
             // per-key data-flow dedup primitives and have no defined
             // semantics on saga linearization records. The receiver-side
@@ -428,10 +468,43 @@ internal sealed partial class ReplicationApplier(
             }
 
             var hwmGrain = GetHwmGrain(entry.TreeId);
-            var hwm = await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
+            var admission = await hwmGrain.GetAdmissionAsync(entry.OriginClusterId!, cancellationToken);
+            var hwm = admission.HighWaterMark;
 
-            // Point-write dedup gate: the SNAPSHOT-PINNED CAUSAL FLOOR,
-            // not the incrementally-advanced per-origin diagonal.
+            // Bootstrap drop floor (#4549): the tree's last full bootstrap
+            // already reflects every write of this origin stamped below the
+            // source's low watermark at export open and not held there, so a
+            // late delivery of one is acknowledged without being merged; merged,
+            // a write the source has since deleted and reaped would come back.
+            // While the import has not closed stable the floor is provisional and
+            // the delivery is deferred instead: an unstable import clears the
+            // floor, and a dropped delivery is never re-sent. The drain's own
+            // rows are exempt. Every other write is stamped with the floor epoch
+            // it was admitted under, so a shard armed by a later install refuses
+            // it rather than let it land after that bootstrap's reconcile scan.
+            if (!LatticeBootstrapApplyContext.IsActive)
+            {
+                if (admission.Drops(entry.Timestamp))
+                {
+                    if (admission.FloorProvisional)
+                    {
+                        outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                    }
+
+                    outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDropped;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                }
+
+                ReplicationFloorAdmission.Stamp(admission.FloorEpoch);
+            }
+
+            // Apart from the bootstrap drop floor above, there is NO per-origin
+            // HLC drop threshold for point writes - neither the
+            // incrementally-advanced diagonal nor a snapshot-pinned floor. The
+            // drop floor is sound where these are not because it is the
+            // source's per-origin applied low watermark, which is downward-
+            // closed (#4586), and is final only once its import closed stable.
             //
             // The source HLC is stamped per leaf (BPlusLeafGrain's own
             // clock) and WAL/replog partitions are keyed by
@@ -444,53 +517,34 @@ internal sealed partial class ReplicationApplier(
             // the incremental diagonal (`entry.Timestamp <= hwm`) treated
             // every such entry as a duplicate and silently discarded it -
             // the receiver half of the #1060 replication-gap (US
-            // shipped == EU applied == 1041 of 3967). Correctness for the
-            // incremental stream is instead upheld by the shadow-forward
-            // identity cache below (exact (origin, hlc, key, op) tuple)
-            // plus the leaf-level per-key LWW guard (re-applying an
-            // already-present (key, source-HLC) is a no-op). A below-
-            // diagonal entry that survives both is a new write; its
+            // shipped == EU applied == 1041 of 3967).
+            //
+            // A snapshot-pinned floor is not a valid threshold either, for
+            // the same reason (#4463): no single HLC per origin is
+            // downward-closed over what a snapshot holds. The bootstrap
+            // pin seals the source coordinate at the maximum HLC anywhere
+            // in the snapshot, so a later source write on a leaf whose
+            // clock is at or below it is not in the snapshot; and a third
+            // origin's coordinate is the source's maximum applied HLC,
+            // which is non-monotonic in delivery order. Dropping at or
+            // below either silently lost writes the snapshot never held.
+            //
+            // Correctness for every point write is instead upheld by the
+            // shadow-forward identity cache below (exact (origin, hlc, key,
+            // op) tuple) plus the leaf-level per-key LWW guard
+            // (re-applying an already-present (key, source-HLC) is a
+            // no-op), exactly as for steady-state replication since #1060.
+            // A below-diagonal entry that survives both is a new write; its
             // out-of-order arrival is surfaced (observability-only) by the
             // FIFO-violation counter in RecordFifoState.
-            //
-            // The pinned floor IS a valid drop threshold: it is written
-            // only by PinSnapshotAsync (bootstrap-snapshot handoff or
-            // operator rollback re-pin), never by incremental
-            // TryAdvanceAsync, so every origin entry at or below it is
-            // provably contained in the pinned snapshot. Dropping those is
-            // the exactly-once optimisation for the snapshot -> incremental
-            // handoff: the peer may re-deliver a large below-snapshot
-            // backlog that is already captured by the restore, and the
-            // floor short-circuits it without a leaf round-trip. When no
-            // snapshot has been pinned the floor is HybridLogicalClock.Zero
-            // for every origin, so nothing is dropped.
-            //
-            // Bypasses (unchanged): bootstrap-drain delivery runs before
-            // the post-drain pin, so its floor is still Zero and the
-            // bypass is belt-and-braces; saga prepare-phase entries
-            // (IsPrepared && AtomicBatchSize > 0) carry non-monotonic
-            // per-leaf HLCs across the saga's touched leaves and are
-            // deduped by the per-leaf AddPreparedMutation LWW merge + the
-            // per-tx terminal-mark idempotency instead.
             var isBootstrapDrain = LatticeBootstrapApplyContext.IsActive;
             var isPreparedAtomicBatch = entry.IsPrepared && entry.AtomicBatchSize > 0;
-            if (!isBootstrapDrain && !isPreparedAtomicBatch)
-            {
-                var pinnedFloor = await hwmGrain.GetPinnedFloorAsync(entry.OriginClusterId!, cancellationToken);
-                if (entry.Timestamp <= pinnedFloor)
-                {
-                    outcome = LatticeReplicationMetrics.OutcomeDedup;
-                    return new ApplyResult { Applied = false, HighWaterMark = hwm };
-                }
-            }
-
             // Shadow-forward dedupe cache: a structural rewrite (shard
             // split / merge) that shadow-forwards a
             // user write into a different shard generates a duplicate
             // emit pair with identical (origin, hlc, key, op). This cache
-            // is the primary exact-identity dedup for incremental point
-            // writes (the pinned-floor gate above only covers entries
-            // provably inside a snapshot); it catches recent re-deliveries
+            // is the exact-identity dedup for point writes (there is no
+            // HLC drop threshold above); it catches recent re-deliveries
             // without a leaf hop, and any re-delivery evicted from the
             // bounded cache falls through to the idempotent leaf-level LWW
             // apply (a no-op for identical bytes). Range deletes bypass it
@@ -499,8 +553,25 @@ internal sealed partial class ReplicationApplier(
                 entry.TreeId,
                 static (_, capacity) => new RecentApplyCache(capacity),
                 resolved.ShadowForwardDedupeCacheSize);
-            if (!cache.TryAdd(entry))
+            if (!cache.TryAdd(entry, out var duplicateInFlight))
             {
+                if (duplicateInFlight)
+                {
+                    // IN-FLIGHT DUPLICATE (#4465). The delivery holding this
+                    // identity's reservation has not completed its apply or
+                    // park yet, and it can still be aborted (a restart
+                    // mid-call, or a failure whose transport-level response
+                    // the sender has already moved past). Acknowledging this
+                    // duplicate as applied would move the sender's cursor
+                    // past an entry that may then be neither applied nor
+                    // dead-lettered. Defer it instead, exactly as the receive
+                    // fence does: a not-accepted, cursor-preserving ack, so
+                    // the sender re-sends and the re-delivery is classified
+                    // once the first delivery has completed or rolled back.
+                    outcome = LatticeReplicationMetrics.OutcomeDedup;
+                    return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                }
+
                 outcome = LatticeReplicationMetrics.OutcomeShadowForwardDedup;
                 return new ApplyResult { Applied = false, HighWaterMark = hwm };
             }
@@ -514,12 +585,12 @@ internal sealed partial class ReplicationApplier(
             // dead-letter decorator's retry-counter contract would clear
             // the failure counter on what looks like a filtered call -,
             // silently dropping the entry until FIFO eviction admits a
-            // future retry. The park branch returns normally inside the
-            // try, so its cache reservation is correctly retained: the
-            // drained entry routes through ApplyPointAsync directly,
-            // bypassing the cache, and the retained reservation
-            // continues to suppress duplicate-emit pairs of the parked
-            // entry that arrive while it is buffered.
+            // future retry. The reservation is in flight until the apply
+            // completes, and is then marked completed so a later duplicate is
+            // acknowledged as a genuine re-delivery (#4465). The park branch
+            // releases the reservation once the durable buffer holds the
+            // entry: the buffer then dedups the parked entry's re-deliveries
+            // itself (#4464).
             try
             {
                 // Causal-plus dependency check. Skip the fetch entirely
@@ -531,8 +602,7 @@ internal sealed partial class ReplicationApplier(
                 //
                 // Phase D1c: saga prepare-phase entries
                 // (IsPrepared && AtomicBatchSize > 0) bypass the
-                // causal-park gate for the same reason they bypass
-                // the snapshot-pinned floor gate (see the floor comment above):
+                // causal-park gate:
                 // parallel cross-leaf saga writes carry VectorClock
                 // frontiers whose entries point at sibling per-leaf
                 // clocks, and parking them would produce a
@@ -542,18 +612,44 @@ internal sealed partial class ReplicationApplier(
                 // ordering across the saga's keys is irrelevant -
                 // the terminal flip is the single atomic-visibility
                 // transition.
-                if (!isPreparedAtomicBatch && HasCausalDependencies(entry))
+                if (!isPreparedAtomicBatch
+                    && CausalApplyBuffer.RequiredDependencies(entry, resolved.ClusterId) is { } required)
                 {
-                    var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-                    if (!CausalApplyBuffer.DependenciesSatisfied(entry, localVc, resolved.ClusterId))
+                    var verdicts = await hwmGrain.CheckDependenciesAsync([required], cancellationToken);
+                    var verdict = verdicts.Length == 0 ? CausalDependencyVerdict.Unmet : verdicts[0];
+                    if (verdict == CausalDependencyVerdict.Lost)
                     {
-                        await ParkAsync(entry, resolved, cancellationToken);
+                        // A dependency names a write this tree acknowledged and then
+                        // lost for good (#4603): the entry can never apply in causal
+                        // order, so dead-letter it as a terminal state. A full queue
+                        // defers it instead, so nothing is acknowledged and lost.
+                        cache.Remove(entry);
+                        if (!await TryDeadLetterDependencyLostAsync(entry, cancellationToken))
+                        {
+                            outcome = LatticeReplicationMetrics.OutcomeDedup;
+                            return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+                        }
+
+                        outcome = LatticeReplicationMetrics.OutcomeRejectedDependencyLost;
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                    }
+
+                    if (verdict == CausalDependencyVerdict.Unmet)
+                    {
+                        await ParkAsync(entry, cancellationToken);
+                        // The durable buffer now holds the entry and dedups its
+                        // re-deliveries itself, so release the shadow-forward
+                        // reservation: this per-silo cache must not outlive the
+                        // park, or a re-delivery after the drain - or a
+                        // dead-letter replay on this silo - would be suppressed.
+                        cache.Remove(entry);
                         outcome = LatticeReplicationMetrics.OutcomeParkedCausalBuffer;
                         return new ApplyResult { Applied = false, HighWaterMark = hwm };
                     }
                 }
 
                 await ApplyPointAsync(entry);
+                cache.Complete(entry);
                 RecordApplyLag(entry);
                 RecordAppliedContentForIndex(in entry, resolved);
 
@@ -575,7 +671,7 @@ internal sealed partial class ReplicationApplier(
                 // transport-side FIFO-regression signal, which is
                 // expressly not what bootstrap delivery is). The
                 // post-drain
-                // <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+                // <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
                 // call installs the per-origin HWM at the snapshot
                 // cut atomically; the first live-incremental entry
                 // delivered after the pin seeds
@@ -590,24 +686,60 @@ internal sealed partial class ReplicationApplier(
 
                 RecordFifoState(entry);
 
-                // Advance the HWM only after the apply commits.
-                var advanced = await hwmGrain.TryAdvanceAsync(entry.OriginClusterId!, entry.Timestamp, cancellationToken);
+                // Advance the HWM only after the apply commits, and record the
+                // write's identity in the same call (issue #4586).
+                var advanced = await hwmGrain.AdvanceAppliedAsync(
+                    entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken);
                 var newHwm = advanced
                     ? entry.Timestamp
                     : await hwmGrain.GetAsync(entry.OriginClusterId!, cancellationToken);
 
-                // The advance may have unblocked entries parked by an earlier
-                // delivery whose deps included this origin's diagonal. Drain
-                // FIFO until the buffer reaches a fixed point - each drained
-                // apply may itself advance the local vector clock, so re-fetch
-                // before each pass.
-                if (advanced)
+                // A recorded identity may meet a parked entry's dependency whether
+                // or not the high-water mark moved: a write below the mark is still
+                // a new identity (issue #4586). Drain FIFO to a fixed point; the
+                // call is skipped unless this silo last saw the buffer non-empty.
+                if (advanced || !entry.IsPrepared)
                 {
-                    await DrainBufferAsync(entry.TreeId, hwmGrain, resolved, cancellationToken);
+                    await DrainBufferAsync(entry.TreeId, cancellationToken);
                 }
 
                 outcome = LatticeReplicationMetrics.OutcomeSuccess;
                 return new ApplyResult { Applied = true, HighWaterMark = newHwm };
+            }
+            catch (TxDecisionGateRefusedException ex) when (ex.Refusal is TxDecisionGateRefusal.DecisionGated or TxDecisionGateRefusal.RegistrationFenced)
+            {
+                // Issue #4485: a snapshot capture holds this tree's saga decision
+                // gate (or a backup set holds its fence), so the receiver may not
+                // record the replicated saga's decision or register its
+                // cross-tree delegation yet. Defer exactly as the receive fence
+                // does: a not-accepted, cursor-preserving ack, so the sender
+                // re-ships the entry once the capture has released the registry.
+                // The terminal tally the call recorded first is idempotent per
+                // source shard, so the re-delivery re-evaluates it unchanged.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
+            catch (CopyReceiveFencedException)
+            {
+                // Issue #4593: the apply routed to a restored copy whose receive
+                // fence a coordinated restore still holds closed (its alias swap
+                // ran after this entry passed the cached receive gate). Defer it
+                // like the receive fence, so the sender re-ships it once the
+                // restore's fence lifts and opens the copy.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeDedup;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
+            }
+            catch (ReplicationFloorAdmissionStaleException)
+            {
+                // Issue #4549: a bootstrap drop floor was installed after this
+                // entry was admitted, and its shard is armed against it. Defer it,
+                // so the sender re-ships it and the re-delivery is admitted
+                // against the floor.
+                cache.Remove(entry);
+                outcome = LatticeReplicationMetrics.OutcomeBootstrapFloorDeferred;
+                return new ApplyResult { Applied = false, HighWaterMark = hwm, Deferred = true };
             }
             catch
             {
@@ -655,14 +787,39 @@ internal sealed partial class ReplicationApplier(
             });
     }
 
-    private static bool HasCausalDependencies(WalRecord entry) =>
-        entry.VectorClock is { Entries.Count: > 0 };
+    /// <summary>
+    /// Dead-letters <paramref name="entry"/> with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> (#4603), or
+    /// returns <see langword="false"/> when the dead-letter queue is full so the
+    /// caller defers the entry rather than acknowledge and lose it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterDependencyLostAsync(WalRecord entry, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId).EnqueueAsync(
+                entry,
+                failureReason: "A causal dependency of this entry names a write this cluster acknowledged and then lost "
+                    + "(it was discarded from the dead-letter queue), so the entry can never be applied in causal order.",
+                retryCount: 0,
+                reasonTag: LatticeReplicationMetrics.ReasonDependencyLost,
+                cancellationToken,
+                ReplicationSourceLineageScope.Current).ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
 
     /// <summary>
     /// Records a successfully-applied point mutation into the
     /// receiver-side applied-content index so a subsequent inbound
-    /// content-manifest exchange can answer "do I already hold
-    /// byte-identical content for this key?". No-op when no index is
+    /// content-manifest exchange can answer "did I already merge exactly this
+    /// write?" (its source origin and HLC as well as its bytes, #4585). No-op when no index is
     /// registered or the tree's content-hash dedup master switch is off,
     /// so the index is maintained off-path-free under the default
     /// behaviour. Only last-writer-wins point Set / Delete entries that
@@ -687,10 +844,15 @@ internal sealed partial class ReplicationApplier(
 
         if (entry.Op == MutationKind.Set)
         {
+            // The write's own source identity is recorded with the hash (#4585):
+            // the exchange elides only this exact write, and only while the leaf
+            // still holds it or a newer one.
             _appliedContentIndex.RecordSet(
                 entry.TreeId!,
                 entry.Key ?? string.Empty,
                 ReplicationContentHash.Compute(in entry),
+                entry.OriginClusterId,
+                entry.Timestamp,
                 resolved.ContentHashDedupCacheSize);
         }
         else if (entry.Op == MutationKind.Delete)
@@ -723,129 +885,152 @@ internal sealed partial class ReplicationApplier(
         _appliedContentIndex.InvalidateTree(entry.TreeId!);
     }
 
-    private async Task ParkAsync(
-        WalRecord entry,
-        LatticeReplicationOptions resolved,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Durably parks <paramref name="entry"/> in the per-tree
+    /// <see cref="ICausalApplyBufferGrain"/> (#4464). The grain writes the
+    /// entry before returning - so the caller may acknowledge it - and then
+    /// re-checks the vector and drains, which closes the lost wakeup between
+    /// this call's dependency check and the insert. Overflow evicts the
+    /// oldest parked entry to the dead-letter queue inside the grain.
+    /// </summary>
+    private async Task ParkAsync(WalRecord entry, CancellationToken cancellationToken)
     {
-        var buffer = _buffers.GetOrAdd(entry.TreeId, static treeId => new CausalApplyBuffer(treeId));
-        var outcome = buffer.TryAdd(
-            entry,
-            resolved.CausalBufferMaxEntries,
-            resolved.CausalBufferMaxBytes,
-            out var evicted);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        if (outcome == AddOutcome.AddedWithEviction && evicted.Count > 0)
+        // Issue #4593: a parked entry is acknowledged and drained later, so the
+        // fence is re-read UNCACHED now. An entry a stale cached answer admitted
+        // while the fence is in fact paused, or admitted under an epoch a pause
+        // has since superseded, is deferred instead of parked - the sender
+        // re-ships it and a fresh admission stamps it again - so a parked entry
+        // always carries the epoch current when it was parked. The drain stamps
+        // that epoch, so a restored copy refuses an entry parked before its
+        // restore's pause.
+        long admissionEpoch = 0;
+        if (_receiveGate is not null)
         {
-            // A displaced entry was never applied, yet the shadow-forward cache
-            // still holds the reservation taken when it was parked. Release each
-            // one (as the drain-failure path does) before handing the entries to
-            // the dead-letter queue, so a dead-letter replay or a peer re-delivery
-            // is applied instead of being classified as a shadow-forward duplicate
-            // and dropped - including when an enqueue below faults part-way.
-            if (_dedupeCaches.TryGetValue(entry.TreeId, out var cache))
+            var fence = await grainFactory.GetGrain<ITreeReceiveFenceGrain>(entry.TreeId).ObserveAsync().ConfigureAwait(false);
+            var superseded = ReplicationAdmissionEpoch.TryGet(out _, out var admittedUnder) && admittedUnder < fence.Epoch;
+            if (fence.Paused || superseded)
             {
-                foreach (var displaced in evicted)
-                {
-                    cache.Remove(displaced);
-                }
+                throw new CopyReceiveFencedException(entry.TreeId, entry.TreeId, admittedBeforeRestore: superseded);
             }
 
-            var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(entry.TreeId);
-            foreach (var displaced in evicted)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                await dlq.EnqueueAsync(
-                    displaced,
-                    failureReason: "Causal-apply buffer full; evicted blocked entry to make room.",
-                    retryCount: 0,
-                    reasonTag: LatticeReplicationMetrics.ReasonHlcSkew,
-                    cancellationToken).ConfigureAwait(false);
-            }
+            admissionEpoch = fence.Epoch;
         }
+
+        // Issue #4707: the entry keeps the source lineage its sender stamped, so
+        // its drain is checked against the lineage drained by then.
+        var remaining = await GetBufferGrain(entry.TreeId)
+            .ParkAsync(entry, admissionEpoch, ReplicationSourceLineageScope.Current)
+            .ConfigureAwait(false);
+        _bufferMayHoldEntries[entry.TreeId] = remaining > 0;
     }
 
-    private async Task DrainBufferAsync(
-        string treeId,
-        IReplicationHighWaterMarkGrain hwmGrain,
-        LatticeReplicationOptions resolved,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// Asks the per-tree <see cref="ICausalApplyBufferGrain"/> to drain after
+    /// a high-water-mark advance. The grain call is skipped on the hot path
+    /// unless this silo has not yet touched the tree since it started (the
+    /// first-touch re-arm after a restart) or last observed the tree's buffer
+    /// non-empty. An entry parked through another silo while this silo's
+    /// observation is stale is still drained by that silo's next advance, and
+    /// in any case by the per-tree replication maintenance tick
+    /// (<see cref="ReplicationMaintenanceGrain"/>), which drains every phase
+    /// tick.
+    /// </summary>
+    private async Task DrainBufferAsync(string treeId, CancellationToken cancellationToken)
     {
-        if (!_buffers.TryGetValue(treeId, out var buffer) || buffer.Count == 0)
+        if (_bufferMayHoldEntries.TryGetValue(treeId, out var mayHoldEntries) && !mayHoldEntries)
         {
             return;
         }
 
-        // Iterate to a fixed point: each drained apply may advance the
-        // local vector clock and unblock further entries on the next
-        // pass. Bounded by the buffer's current size + any retried
-        // entries that fail and re-park; in practice convergence is
-        // O(n) where n is the gap between received and applied.
-        while (true)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var localVc = await hwmGrain.GetVectorAsync(cancellationToken);
-            var ready = buffer.DrainSatisfied(localVc, resolved.ClusterId);
-            if (ready.Count == 0)
-            {
-                return;
-            }
-
-            foreach (var ent in ready)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    await ApplyPointAsync(ent);
-                    RecordApplyLag(ent);
-                    RecordFifoState(ent);
-                    RecordAppliedContentForIndex(in ent, resolved);
-                    await hwmGrain
-                        .TryAdvanceAsync(ent.OriginClusterId!, ent.Timestamp, cancellationToken)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    // A drained apply has no transport-level retry
-                    // path: the original delivery was already ack'd
-                    // when ApplyAsync returned for the entry that
-                    // unblocked this one. Route the failed drained
-                    // entry to the dead-letter queue rather than
-                    // dropping it silently. ArgumentException /
-                    // InvalidOperationException are schema-shaped
-                    // faults; everything else is unknown.
-                    var reasonTag = ex is ArgumentException or InvalidOperationException
-                        ? LatticeReplicationMetrics.ReasonSchema
-                        : LatticeReplicationMetrics.ReasonUnknown;
-                    var dlq = grainFactory.GetGrain<IReplicationDeadLetterGrain>(ent.TreeId);
-                    await dlq.EnqueueAsync(
-                        ent,
-                        failureReason: ex.Message ?? "<no message>",
-                        retryCount: 0,
-                        reasonTag: reasonTag,
-                        cancellationToken).ConfigureAwait(false);
-
-                    // Roll back the shadow-forward cache reservation
-                    // that was made when ApplyAsync originally parked
-                    // this entry. Without rollback, an operator-driven
-                    // retry from the DLQ would observe TryAdd=false on
-                    // the cache and be classified as Applied=false
-                    // (shadow-forward-dedup); the dead-letter
-                    // decorator's "Applied=false clears the counter"
-                    // contract would then silently drop the entry
-                    // until FIFO eviction. The incremental HWM was never
-                    // advanced for this entry (apply threw before TryAdvance),
-                    // and is not a retry drop threshold - the
-                    // cache rollback is the only step required.
-                    if (_dedupeCaches.TryGetValue(ent.TreeId, out var cache))
-                    {
-                        cache.Remove(ent);
-                    }
-                }
-            }
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        var remaining = await GetBufferGrain(treeId).DrainAsync().ConfigureAwait(false);
+        _bufferMayHoldEntries[treeId] = remaining > 0;
     }
 
+    /// <summary>
+    /// Applies one entry the <see cref="CausalApplyBufferGrain"/> drained
+    /// because its causal dependencies are now satisfied: the point apply,
+    /// the per-entry observability, and the high-water-mark advance a direct
+    /// apply performs. Runs under the system-origin access scope, as
+    /// <see cref="ApplyAsync"/> does. Throws on failure; the grain dead-letters
+    /// the entry.
+    /// <para>
+    /// The entry is first checked against the source lineage it was stamped
+    /// with when it was parked (issue #4707), through the same seam as a pushed
+    /// entry: a verdict other than
+    /// <see cref="ReplicationSourceLineageGate.Verdict.Apply"/> is returned
+    /// without applying anything, and the grain discards a lineage-refused entry
+    /// and keeps a transiently refused one parked.
+    /// </para>
+    /// </summary>
+    internal async Task<ReplicationSourceLineageGate.Verdict> ApplyDrainedEntryAsync(
+        WalRecord entry,
+        long admissionEpoch,
+        ReplicationSourceLineageStamp? sourceLineage,
+        CancellationToken cancellationToken)
+    {
+        using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+        using var lineageScope = ReplicationSourceLineageScope.Enter(sourceLineage);
+
+        var lineageVerdict = await AdmitSourceLineageAsync(entry.TreeId, cancellationToken).ConfigureAwait(false);
+        if (lineageVerdict != ReplicationSourceLineageGate.Verdict.Apply)
+        {
+            return lineageVerdict;
+        }
+
+        // Issue #4593: the drained entry carries the epoch it was parked under.
+        ReplicationAdmissionEpoch.Stamp(entry.TreeId, admissionEpoch);
+        var resolved = options.Get(entry.TreeId);
+        await ApplyPointAsync(entry).ConfigureAwait(false);
+        RecordApplyLag(entry);
+        RecordFifoState(entry);
+        RecordAppliedContentForIndex(in entry, resolved);
+        await GetHwmGrain(entry.TreeId)
+            .AdvanceAppliedAsync(entry.OriginClusterId!, entry.Timestamp, AppliedIdentity(entry), advanceHighWaterMark: true, cancellationToken)
+            .ConfigureAwait(false);
+        return lineageVerdict;
+    }
+
+    /// <summary>
+    /// Marks the writes a not-enrolled tree's drop acknowledged as lost on their
+    /// origin's frontier (issue #4586). The sender's low watermark passes a
+    /// dropped write, so without the mark a dependent of it would be released
+    /// although the write is never visible here; with it, the dependent is
+    /// dead-lettered. The origin is wire-supplied, so a mark is recorded only for
+    /// a configured <see cref="LatticeReplicationOptions.ReplicationPeers"/>
+    /// member when that list is set, which bounds the frontiers a peer can make
+    /// this receiver keep.
+    /// </summary>
+    private Task RecordNotEnrolledLostAsync(string? originClusterId, IReadOnlyCollection<HybridLogicalClock> dropped, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(originClusterId) || dropped.Count == 0)
+        {
+            return Task.CompletedTask;
+        }
+
+        var peers = options.CurrentValue.ReplicationPeers;
+        if (peers is not null && !peers.Contains(originClusterId))
+        {
+            return Task.CompletedTask;
+        }
+
+        return grainFactory.GetGrain<IReplicationOriginFrontierGrain>(originClusterId)
+            .RecordLostAsync(dropped, cancellationToken);
+    }
+
+    /// <summary>
+    /// The identity an applied <paramref name="entry"/> records on the tree's
+    /// high-water-mark grain (issue #4586): its source HLC, or nothing for a saga
+    /// prepare, which is not visible until its terminal - a dependent of it is
+    /// decided by the origin's frontier instead.
+    /// </summary>
+    private static HybridLogicalClock[] AppliedIdentity(in WalRecord entry) =>
+        entry.IsPrepared ? Array.Empty<HybridLogicalClock>() : [entry.Timestamp];
+
+    private ICausalApplyBufferGrain GetBufferGrain(string treeId) =>
+        grainFactory.GetGrain<ICausalApplyBufferGrain>(treeId);
     private Task ApplyPointAsync(WalRecord entry)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
@@ -1024,7 +1209,10 @@ internal sealed partial class ReplicationApplier(
     /// <see cref="WalRecord.Key"/> for back-compat with pre-Option A WAL
     /// records authored before the typed slot was introduced.
     /// </summary>
-    private Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
+    private static readonly IReadOnlyDictionary<string, long> EmptyStamps =
+        new Dictionary<string, long>(StringComparer.Ordinal);
+
+    private async Task ApplyTxTerminalCoreAsync(WalRecord entry, CancellationToken cancellationToken)
     {
         var apply = grainFactory.GetGrain<IReplicationApplyGrain>(entry.TreeId);
         var committed = entry.Op == MutationKind.TxCommit;
@@ -1078,9 +1266,23 @@ internal sealed partial class ReplicationApplier(
                 }
             }
             crossTreeWaitSet = waitSet;
+
+            // The decision stamps reach the barrier before the terminal does, so
+            // the barrier compares its trees' imports with them from the moment
+            // the terminal opens it (#4684).
+            // The decision sequences and the full participant list, too: what the
+            // barrier's tombstone is dropped against (#4733). Recorded for an
+            // operation decided before stamping as well, so its tombstone can
+            // still be dropped once the origin stores none of its decisions.
+            await grainFactory.GetGrain<ILatticeCrossTreeReceiverGrain>(
+                    LatticeCrossTreeReceiverGrain.ComputeKey(entry.OriginClusterId!, crossTreeOperationId))
+                .RecordDecisionStampsAsync(
+                    entry.CrossTreeDecisionStamps ?? EmptyStamps,
+                    entry.CrossTreeDecisionSequences,
+                    entry.CrossTreeParticipants);
         }
 
-        return apply.ApplyTxTerminalAsync(
+        await apply.ApplyTxTerminalAsync(
             entry.TransactionId,
             committed,
             shardIndex,
@@ -1202,6 +1404,46 @@ internal sealed partial class ReplicationApplier(
         ReplicationInboundAdmission.ResolveLocalMergeMode(_replicationContext, options, treeId, out hasEnrollmentSource);
 
     /// <summary>
+    /// Awaits a dead-letter enqueue and reports whether it parked the entry:
+    /// <see langword="false"/> when the queue is full (#4603), in which case the
+    /// caller must keep the entry unacknowledged (defer it) rather than drop it.
+    /// </summary>
+    private async Task<bool> TryDeadLetterAsync(WalRecord entry, Task enqueue)
+    {
+        try
+        {
+            await enqueue.ConfigureAwait(false);
+            RecordDeadLetterFull(entry, full: false);
+            return true;
+        }
+        catch (ReplicationDeadLetterQueueFullException)
+        {
+            RecordDeadLetterFull(entry, full: true);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Marks (or clears) the inbound link of <paramref name="entry"/> as stalled
+    /// on a full dead-letter queue (#4603), so the peer-status read path reports
+    /// it as stalled rather than quiet while its entries are deferred. Only an
+    /// existing inbound row is updated.
+    /// </summary>
+    private void RecordDeadLetterFull(WalRecord entry, bool full)
+    {
+        if (_peerStats is null || string.IsNullOrEmpty(entry.TreeId) || string.IsNullOrEmpty(entry.OriginClusterId))
+        {
+            return;
+        }
+
+        _peerStats.RecordDeadLetterFull(
+            entry.TreeId,
+            entry.OriginClusterId,
+            ReplicationContactDirection.Inbound,
+            full ? DateTimeOffset.UtcNow : null);
+    }
+
+    /// <summary>
     /// Dead-letters an inbound entry the receiver-side merge-mode gate rejected
     /// because its peer-supplied <see cref="WalRecord.Mode"/> disagreed with
     /// the locally resolved mode for its tree. Only reached on the rejection
@@ -1223,7 +1465,8 @@ internal sealed partial class ReplicationApplier(
                 + "rejected so a peer cannot override the local merge algebra via the wire mode field.",
             retryCount: 0,
             reasonTag: LatticeReplicationMetrics.ReasonModeMismatch,
-            cancellationToken);
+            cancellationToken,
+            ReplicationSourceLineageScope.Current);
     }
 
     /// <summary>
@@ -1265,7 +1508,8 @@ internal sealed partial class ReplicationApplier(
             failureReason: failureReason,
             retryCount: 0,
             reasonTag: reasonTag,
-            cancellationToken);
+            cancellationToken,
+            ReplicationSourceLineageScope.Current);
     }
 
 

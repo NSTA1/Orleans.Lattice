@@ -1,0 +1,20 @@
+# Pairs with RNoStrandedPrepare. The replay filter clears before every cursor
+# has passed its horizon, so a purged saga's retained prepare ships after it under
+# no decision and nothing ever drains it. #4533 clears the filter only once every
+# cursor is past ReplicationShipperState.ReplayFilterHorizon.
+MODULE: RNoStrandedPrepareFilterClearsBeforeHorizon
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the replay filter clears while records below its horizon are still unshipped
+PERTURBS: FilterClear
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ rs = "none"
+    /\ ~\E r \in outbox : Aff(r)
+    /\ filt' = FALSE
+--- REPLACE
+    /\ rs = "none"
+\* MUTATION: the filter clears before the horizon.
+    /\ filt' = FALSE
+--- END

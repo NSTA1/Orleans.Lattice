@@ -33,6 +33,8 @@ public partial class SagaWriteFenceGrainTests
         public required ITreeReceiveFenceGrain Receive { get; init; }
         public required FakeSagaCompletionSource Completion { get; init; }
         public required IReminderRegistry Reminders { get; init; }
+        public required IGrainFactory Factory { get; init; }
+        public required ICopyReceiveFenceGrain CopyFence { get; init; }
     }
 
     /// <summary>
@@ -73,6 +75,8 @@ public partial class SagaWriteFenceGrainTests
         factory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shard);
         factory.GetGrain<IReplicationShipperGrain>(Arg.Any<string>()).Returns(shipper);
         factory.GetGrain<ITreeReceiveFenceGrain>(Arg.Any<string>()).Returns(receive);
+        var copyFence = Substitute.For<ICopyReceiveFenceGrain>();
+        factory.GetGrain<ICopyReceiveFenceGrain>(Arg.Any<string>()).Returns(copyFence);
 
         var topology = new FakeReplicationTopology(peers);
         var completion = new FakeSagaCompletionSource();
@@ -94,6 +98,8 @@ public partial class SagaWriteFenceGrainTests
             Receive = receive,
             Completion = completion,
             Reminders = reminders,
+            Factory = factory,
+            CopyFence = copyFence,
         };
     }
 

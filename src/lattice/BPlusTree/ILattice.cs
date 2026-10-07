@@ -735,12 +735,10 @@ public interface ILattice : IGrainWithStringKey
     /// <para>
     /// The tree ID is preserved - it becomes an alias to the new physical tree.
     /// The snapshot runs online: the tree stays available for reads and writes
-    /// throughout, with writes accepted during the copy shadow-forwarded to the
-    /// new physical tree - except typed CRDT delta applies and bulk appends,
-    /// which are not forwarded (see <see cref="SnapshotAsync"/>), so one that
-    /// reaches a shard after the copy has read past the key it writes is not
-    /// reflected in the resized tree. After the alias swap, the tree serves the
-    /// new sizing.
+    /// throughout, with writes accepted during the copy - typed CRDT delta
+    /// applies and bulk appends included - shadow-forwarded to the new physical
+    /// tree (see <see cref="SnapshotAsync"/>). After the alias swap, the tree
+    /// serves the new sizing.
     /// Cache invalidation is automatic: different physical trees produce different
     /// leaf grain IDs, which create fresh cache grain instances.
     /// </para>
@@ -775,13 +773,22 @@ public interface ILattice : IGrainWithStringKey
     /// to follow an unwind that outlasted the call. Retrying while an undo is
     /// pending is acknowledged again rather than refused.
     /// </para>
+    /// <para>
+    /// <b>Replicated trees.</b> A replicated tree cannot be undone once its alias
+    /// has swapped onto the resized copy: writes that copy took may already have
+    /// been shipped to a peer, and cross-cluster shipping never retracts them, so
+    /// the undo would discard them on this cluster only. Resize the tree again,
+    /// back to its previous sizing, instead. An undo before the swap is
+    /// unaffected.
+    /// </para>
     /// </summary>
     /// <param name="cancellationToken">Cancels the call before the undo is accepted, or stops waiting for an accepted undo to finish; an accepted undo still runs to completion.</param>
     /// <exception cref="InvalidOperationException">
     /// Thrown if no resize exists to undo (the message names the most recent
     /// resize when it was already undone, so a retry after success is not read as a
     /// failure), or if the accepted unwind could not be applied - for example
-    /// because the old tree has already been purged.
+    /// because the old tree has already been purged, or because the tree is
+    /// replicated and its alias has already swapped onto the resized copy.
     /// </exception>
     Task UndoResizeAsync(CancellationToken cancellationToken = default);
 
@@ -806,9 +813,10 @@ public interface ILattice : IGrainWithStringKey
     /// (<see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], CancellationToken)"/>,
     /// <see cref="ApplyCrdtDeltaManyAsync(List{KeyValuePair{string, byte[]}}, LatticeMergeMode, CancellationToken)"/>
     /// and the typed CRDT accessors built on them) and bulk appends
-    /// (<see cref="BulkAppendChunkAsync"/>) are not forwarded, so one that
-    /// reaches a source shard after the copy has read past the key it writes is
-    /// not reflected on the destination.
+    /// (<see cref="BulkAppendChunkAsync"/>) are forwarded as the rows they
+    /// stored, and where a CRDT row meets one the destination holds of its own
+    /// the destination joins the two states rather than keeping the higher
+    /// timestamp.
     /// </para>
     /// <para>
     /// In both modes the destination is registered with the source's shard map
@@ -949,7 +957,10 @@ public interface ILattice : IGrainWithStringKey
     /// <summary>
     /// Returns <c>true</c> if no resize operation is in progress for this tree -
     /// either the most recent resize has completed or no resize has ever been initiated.
-    /// Answers without waiting for an in-flight resize phase.
+    /// Answers without waiting for an in-flight resize phase. A completed resize
+    /// reports <c>true</c> only once it has released the tree's alias reservation,
+    /// so a <see cref="DeleteTreeAsync"/> issued as soon as this returns
+    /// <c>true</c> is not refused as an alias operation in progress.
     /// </summary>
     Task<bool> IsResizeCompleteAsync(CancellationToken cancellationToken = default);
 
@@ -993,7 +1004,12 @@ public interface ILattice : IGrainWithStringKey
     /// An observably empty tree is instead re-pinned directly to any count in
     /// range, smaller or larger, without running a migration; its shard map is
     /// rebuilt over the same virtual slot count. Throws
-    /// <see cref="InvalidOperationException"/> when a resize is in flight.
+    /// <see cref="InvalidOperationException"/> when a resize is in flight, and
+    /// after a resize completes for as long as it can still be undone and the
+    /// tree's previous physical copy still mirrors into the resized one - until
+    /// that copy is purged, <see cref="LatticeOptions.SoftDeleteDuration"/> after
+    /// the resize - because that shard-for-shard mirror cannot follow the splits
+    /// and folds a reshard is made of.
     /// </para>
     /// <para>
     /// Idempotent: a call with the same <paramref name="newShardCount"/>
@@ -1252,7 +1268,7 @@ public interface ILattice : IGrainWithStringKey
     /// re-materialises the projection through the ordinary
     /// activation-time path. That path first reloads the leaf's
     /// captured snapshot where a usable one exists - the rebuild neither
-    /// clears nor bypasses it - and then replays the write-ahead log
+    /// clears nor bypasses a readable one - and then replays the write-ahead log
     /// after it: each partition the snapshot covers replays only the
     /// entries after the snapshot's captured offset, and a partition no
     /// snapshot covers replays from its oldest readable entry.
@@ -1273,6 +1289,17 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is not a reason to
     /// rebuild: that budget is advisory, and an over-budget leaf replays
     /// anyway.
+    /// </para>
+    /// <para>
+    /// It is also how a leaf whose snapshot is permanently unreadable is brought
+    /// back. Such a leaf fails every replay closed, because under coverage-gated
+    /// write-ahead-log trimming the snapshot may be the only durable copy of the
+    /// prefix it covers. The rebuild clears a snapshot that is present but proven
+    /// unreadable (an unreadable row payload, or a missing or unreadable segment),
+    /// logging a warning that names the accepted loss, so the next activation
+    /// rebuilds from the log that survives. A readable or absent snapshot is left
+    /// alone, and a snapshot load that throws fails the rebuild rather than
+    /// discarding a snapshot that may merely have been unreachable.
     /// </para>
     /// <para>
     /// The operator surface deliberately does not expose "edit the

@@ -1,0 +1,16 @@
+# Pairs with PublishedPinWithinPersistedBelief, and reproduces issue #3476: the
+# pin resolves min(current, covered), where current includes the pending
+# advance, so once coverage has been stamped over the pending checkpoint the pin
+# store receives an offset the leaf has not persisted - and can never lower it.
+MODULE: PublishedPinWithinPersistedBeliefPublishesPending
+TARGET: PublishedPinWithinPersistedBelief
+CLASS: Action
+SUMMARY: the published pin is bounded by the pending checkpoint rather than the persisted one
+PERTURBS: PublishPin
+
+--- FIND
+    /\ LET safe == IF stCp[l] < cov[l] THEN stCp[l] ELSE cov[l]
+--- REPLACE
+\* MUTATION: the pending checkpoint reaches the pin.
+    /\ LET safe == IF Cur(l) < cov[l] THEN Cur(l) ELSE cov[l]
+--- END

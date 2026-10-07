@@ -1,0 +1,32 @@
+# Pairs with ClearRecorded, and reproduces issue #4700's first half: recovery
+# drops the purge's evidence once its pass has run, whether or not every leaf the
+# purge cleared was re-created (a walk truncated at its node budget, or a
+# re-create refused). The leaves it missed can never be named again. The base
+# resets a leaf's marker only when that leaf's row is durable again.
+MODULE: ClearRecordedRecoveryResetsEveryMarker
+TARGET: ClearRecorded
+CLASS: Invariant
+SUMMARY: recovery resets every marker after re-creating one leaf
+PERTURBS: Recover
+
+--- FIND
+    /\ purgeRec' = [purgeRec EXCEPT ![l] = FALSE]
+    /\ cleared' = [cleared EXCEPT ![l] = FALSE]
+--- REPLACE
+\* MUTATION: the recovery pass drops every leaf's marker.
+    /\ purgeRec' = [k \in Leaves |-> FALSE]
+    /\ cleared' = [cleared EXCEPT ![l] = FALSE]
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

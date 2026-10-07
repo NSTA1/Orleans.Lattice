@@ -35,6 +35,8 @@ public partial class ReplicationApplierTests
         public required IReplicationDeadLetterGrain Dlq { get; init; }
         public required Dictionary<string, HybridLogicalClock> HwmRows { get; init; }
         public required VersionVector Vc { get; init; }
+        public required IOptionsMonitor<LatticeReplicationOptions> Monitor { get; init; }
+        public required Fakes.FakePersistentState<CausalApplyBufferState> BufferState { get; init; }
     }
 
     private static CausalHarness CreateCausalHarness(LatticeReplicationOptions? options = null)
@@ -44,7 +46,7 @@ public partial class ReplicationApplierTests
 
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var dlq = Substitute.For<IReplicationDeadLetterGrain>();
 
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
@@ -87,20 +89,27 @@ public partial class ReplicationApplierTests
                 return Task.FromResult(clone);
             });
 
+        CausalDependencyTestDouble.Wire(hwm, vc);
+
         var resolved = options ?? new LatticeReplicationOptions { ClusterId = LocalCluster };
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
         monitor.CurrentValue.Returns(resolved);
         monitor.Get(Arg.Any<string>()).Returns(resolved);
 
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
+        var (_, bufferState) = CausalBufferTestWiring.Wire(factory, applier, monitor, Tree);
+
         return new CausalHarness
         {
-            Applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext()),
+            Applier = applier,
             Factory = factory,
             Apply = apply,
             Hwm = hwm,
             Dlq = dlq,
             HwmRows = rows,
             Vc = vc,
+            Monitor = monitor,
+            BufferState = bufferState,
         };
     }
 
@@ -159,7 +168,7 @@ public partial class ReplicationApplierTests
         var result = await h.Applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await h.Hwm.DidNotReceiveWithAnyArgs().GetVectorAsync(default);
+        await h.Hwm.DidNotReceiveWithAnyArgs().CheckDependenciesAsync(default!, default);
     }
 
     [Test]
@@ -172,7 +181,7 @@ public partial class ReplicationApplierTests
         var result = await h.Applier.ApplyAsync(entry);
 
         Assert.That(result.Applied, Is.True);
-        await h.Hwm.DidNotReceiveWithAnyArgs().GetVectorAsync(default);
+        await h.Hwm.DidNotReceiveWithAnyArgs().CheckDependenciesAsync(default!, default);
     }
 
     [Test]

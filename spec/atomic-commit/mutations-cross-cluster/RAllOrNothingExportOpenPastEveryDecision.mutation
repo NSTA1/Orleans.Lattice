@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The export records no open epoch that a decision stamp
+# can be compared with, and is taken as opened after every decision: an export
+# that names nothing of an operation is then a uniform arrival even when it was
+# opened, and closed, before the operation touched the tree, and the barrier
+# serves the sibling post-saga beside this tree's pre-saga rows.
+MODULE: RAllOrNothingExportOpenPastEveryDecision
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the export's open point is read as past every decision stamp
+PERTURBS: ExportOpen
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ xo' = IF decision[T] # "inflight" THEN "decided" ELSE "undecided"
+
+--- REPLACE
+\* MUTATION: no open point is recorded.
+    /\ xo' = "decided"
+
+--- END

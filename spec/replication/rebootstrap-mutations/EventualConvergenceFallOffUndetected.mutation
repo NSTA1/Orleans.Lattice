@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces production before
+# #4599 (#4587): the only fall-off probe read the receiver's own WAL, so a source trim
+# requested no re-bootstrap and the entries it skipped never reached r.
+MODULE: EventualConvergenceFallOffUndetected
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a trim past the receiver is not detected, so no re-bootstrap repairs the entries it skipped
+PERTURBS: Trim
+
+--- FIND
+    /\ \E t \in (cursor[<<s, r>>] + 1)..Len(wal[s]) : cursor' = [cursor EXCEPT ![<<s, r>>] = t]
+    /\ fellOff' = TRUE
+--- REPLACE
+    /\ \E t \in (cursor[<<s, r>>] + 1)..Len(wal[s]) : cursor' = [cursor EXCEPT ![<<s, r>>] = t]
+\* MUTATION: fall-off is not detected.
+    /\ fellOff' = fellOff
+--- END

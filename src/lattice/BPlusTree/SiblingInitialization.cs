@@ -1,3 +1,5 @@
+using Orleans.Lattice.BPlusTree.State;
+
 namespace Orleans.Lattice.BPlusTree;
 
 /// <summary>
@@ -112,4 +114,25 @@ internal readonly record struct SiblingInitialization
     /// </para>
     /// </summary>
     [Id(8)] public long[]? WalHeadsAtBirth { get; init; }
+
+    /// <summary>
+    /// The donor's hybrid logical clock at split time (issue #4522), or the
+    /// default when an older donor sent none. The sibling merges it into its own
+    /// clock, so every write the sibling stamps is above every stamp the donor
+    /// minted - in particular above a prepare stamp P of a key the sibling now
+    /// owns. Without it a newborn sibling's clock starts below P, a write
+    /// acknowledged after the prepare could be stamped below P, and a terminal
+    /// applying the saga's value at its own P would overwrite that later write.
+    /// </summary>
+    [Id(9)] public HybridLogicalClock DonorClock { get; init; }
+
+    /// <summary>
+    /// The donor's applied-terminal witnesses for the keys that move to the
+    /// sibling (issue #4545), or <see langword="null"/> when there are none or
+    /// an older donor sent none. The sibling adopts them before it receives a
+    /// single migrated row, so a delayed shadow marker for a saga whose
+    /// terminal the donor already applied to a moved key is recognised on the
+    /// sibling, which never sees that terminal.
+    /// </summary>
+    [Id(10)] public AppliedTerminalWitness[]? TerminalWitnesses { get; init; }
 }

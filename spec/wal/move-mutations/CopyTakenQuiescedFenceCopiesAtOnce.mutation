@@ -1,0 +1,24 @@
+# Pairs with CopyTakenQuiesced. Raising the fence and copying the stream are
+# done in one step, with no quiesce between them, so the copy is taken while
+# appends admitted before the fence are still in flight.
+MODULE: CopyTakenQuiescedFenceCopiesAtOnce
+TARGET: CopyTakenQuiesced
+CLASS: Invariant
+SUMMARY: the move copies at the instant it fences, before in-flight appends drain
+PERTURBS: MoveFence
+
+--- FIND
+    /\ move' = [move EXCEPT ![m] = "fenced"]
+    /\ dfence' = m
+    /\ lapsed' = FALSE
+    /\ afence' = TRUE
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, moveCopy, crashes, coordCrashes>>
+--- REPLACE
+\* MUTATION: fence and copy in one step.
+    /\ move' = [move EXCEPT ![m] = "copied"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = durable]
+    /\ dfence' = m
+    /\ lapsed' = FALSE
+    /\ afence' = TRUE
+    /\ UNCHANGED <<next, inflight, durable, tail, acked, cons, crashes, coordCrashes>>
+--- END

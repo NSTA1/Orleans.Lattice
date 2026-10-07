@@ -1,0 +1,21 @@
+# Pairs with RImportFenceLifts. Regression check for issue #4730's third route.
+# The barrier's retention TTL clears its decision with the rest of its state. A
+# later arrival for the operation - a terminal a rewind re-ships, or an import
+# whose export still carries the decision row - then reopens it with a fresh
+# wait set, and it waits for ever on a sibling acknowledged long ago, keeping
+# the imported tree read-fenced. #4732 keeps a tombstone of the verdict.
+MODULE: RImportFenceLiftsTombstoneDroppedAtTtl
+TARGET: RImportFenceLifts
+CLASS: Temporal
+SUMMARY: a decided barrier's retention TTL clears its verdict along with its state
+PERTURBS: BarrierTtlExpire
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0, BarrierTtl = 1, IndexFaults = 1
+
+--- FIND
+    /\ cdec' = cdec
+    /\ rout' = [w \in Trees |-> "none"]
+--- REPLACE
+\* MUTATION: the TTL drops the verdict too.
+    /\ cdec' = "inflight"
+    /\ rout' = [w \in Trees |-> "none"]
+--- END

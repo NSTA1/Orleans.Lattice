@@ -104,27 +104,29 @@ flowchart LR
    holds the tree's inbound receive fence, so the sender re-ships it once the
    fence lifts; a single-entry apply checks the fence after those two gates,
    while a multi-entry batch checks it first and defers a fenced run whole. It
-   then drops entries a pinned bootstrap snapshot already
-   covers, suppresses repeated records by exact `(origin, hlc, key, op)` identity
+   then suppresses repeated records by exact `(origin, hlc, key, op)` identity
    (shadow-forward de-duplication), parks entries whose causal dependencies have
    not arrived, and performs CRDT-aware merges
    before committing through the same core leaf path that local writes use. See
    [`replication-apply.md`](replication-apply.md).
 
 7. **Bootstrap.** A peer seeds from a point-in-time snapshot and then
-   switches to incremental shipping at the snapshot's HLC - automatically when
-   the fall-off detector finds its per-origin high-water mark behind the
-   retained WAL, or on an explicit re-seed request, which is how a new peer is
-   seeded. See
+   switches to incremental shipping at the snapshot's HLC. A receiver-side
+   fall-off probe can start that automatically when the receiver's own local WAL
+   no longer retains entries for an origin it has already recorded. A source-side
+   shipper can also detect that its read cursor was trimmed past, stamp the next
+   push with `ReplicationBatch.ReseedAfterEpoch`, and ask the receiver to run the
+   same full bootstrap. An explicit re-seed request seeds a new peer. See
    [`snapshot-bootstrap.md`](snapshot-bootstrap.md) and
    [`auto-bootstrap.md`](auto-bootstrap.md).
 
 8. **Dead-letter quarantine.** An entry whose apply keeps failing is
    quarantined per tree after a configurable retry budget, and entries the
-   merge-mode or tenant-isolation gate refuses, the causal-apply buffer evicts
-   or fails to apply when it drains, or the sender cannot encode are parked at
-   once, so replication continues
-   past them. See
+   merge-mode or tenant-isolation gate refuses, or the causal-apply buffer
+   evicts or fails to apply when it drains, are parked at once, so replication continues
+   past them. The queue is bounded but never evicts: when it is full it
+   refuses the park and the affected link is held back, so no acknowledged
+   write is ever lost. See
    [`dead-letter-queue.md`](dead-letter-queue.md).
 
 ## Invariants the pipeline preserves
@@ -176,6 +178,91 @@ flowchart LR
    publication is enabled; a subscriber attached at every cluster should treat
    those as duplicates of the originating cluster's events. See
    [`../lattice/events.md`](../lattice/events.md#operations-that-deliberately-do-not-emit-events).
+
+## Formal verification
+
+The plain replication protocol has a design-level TLA+ specification,
+[`spec/replication/Replication.tla`](../../spec/replication/README.md), checked
+exhaustively by TLC on every pull request over a bounded instance of three
+clusters. Its transport loses, duplicates, reorders, and partitions entries,
+receivers restart, and the merge is abstracted over both last-writer-wins and a
+grow-only counter. It checks eight properties:
+
+| Property | What it guarantees |
+|----------|--------------------|
+| `TypeOK` | Every model variable stays within its declared domain. |
+| `NoRelay` | A cluster ships only the writes it authored, so nothing is relayed or ping-pongs around a ring. |
+| `NoReflection` | A cluster never applies its own write received back from a peer. |
+| `CursorNeverSkipsUnshipped` | A shipper's cursor never passes a write the peer has not absorbed. |
+| `DedupNeverDropsNew` | A receiver discards an entry as a duplicate only when its replica already reflects it. |
+| `BootstrapHandoffLosesNothing` | After a snapshot bootstrap, every write the snapshot does not hold is still applied when it arrives. |
+| `CausalOrder` | No replica holds a write without the write its dependency names (#4586). |
+| `EventualConvergence` | Once writing stops, with a fair transport and dead letters eventually replayed, every replica of every key converges to the value of all its writes. |
+
+A companion module,
+[`ReplicationCausalDelivery.tla`](../../spec/replication/ReplicationCausalDelivery.tla),
+checks that a receiver cannot deadlock on causal dependencies when shipping
+order inverts a cross-origin dependency cycle and every shipper waits on each
+acknowledgement. It checks `CausalOrder` too. A third,
+[`ReplicationLowWatermark.tla`](../../spec/replication/ReplicationLowWatermark.tla),
+checks the low watermark that also meets a dependency: the per-partition WAL
+clock floors, the watermark counted from the acknowledged cursor and clamped
+below open prepares, the capability gate, the writes held back unapplied, and
+the bootstrap pin.
+
+The specification is tied to the code three ways. The decisions it checks run
+in production through pure cores (`ReplicationShipEligibility` for the
+shipper's cycle-break and cursor filter, `ReplicationReceiveDedup` for the
+receiver's cycle-break and high-water mark), which Coyote models in
+`test/lattice.replication/Coyote/` execute under systematic interleaving. Every
+spec action and property is mapped to the production seam it abstracts, and to
+a test that was proven to fail when that seam is broken, in the
+[refinement note](../../spec/replication/Refinement.md). And every property has
+a mutation that makes it fail, so none holds vacuously.
+
+The specifications reproduce production defects, each now fixed and kept as a
+mutation that reproduces it: a bootstrap pin that discarded writes
+(#4463), a causal buffer that could strand or lose parked entries (#4464), a
+duplicate of an in-flight entry that was acknowledged and lost (#4465), a
+snapshot bootstrap that shipped no deletes (#4504), content-hash elision that
+kept a stale value (#4585), a source WAL trim that nothing re-bootstrapped
+(#4587), and a batch the sender could not encode that was dead-lettered on the
+sender and skipped, with no re-seed of the peer (#4614). In the companions: a
+dependency met by the high-water mark, which is not downward-closed (#4586),
+and a full dead-letter queue that evicted (#4603).
+
+A second companion,
+[`ReplicationReBootstrap.tla`](../../spec/replication/ReplicationReBootstrap.tla),
+covers what happens once the source has garbage-collected a tombstone. A
+receiver that fell off the source's log past a delete whose tombstone was
+then reaped receives it by no path, and keeps the deleted value. The module
+checks the receiver-side reconcile and its safety gates, each built: the
+reconcile of a key the source wrote (#4647, the fix for #4537), and of a key
+another cluster wrote, below the source's low watermark for its origin,
+behind a bootstrap drop floor that stops an in-flight write resurrecting it
+(#4675, the fix for #4549). The floor is checked in the module's Floor
+variant, which adds a third cluster: it drops only below the source's applied
+watermark, defers until its import closes stable, is cleared by an unstable
+close, and arms the shard roots so a write admitted before it is refused
+rather than land after the reconcile. It also checks:
+
+- The reap gate: a tombstone is reaped only below every origin's applied
+  frontier and every attached peer's vouched watermark (#4678, the fix for
+  #4615).
+- The stale-lineage refusal: a receiver aligned with a new source lineage
+  refuses a batch read under the old one (#4681, the fix for #4673), on every
+  apply path - a push, the causal-buffer drain and a dead-letter replay
+  (#4707).
+- The source-restore contract: a unilateral source restore never makes a
+  peer delete a row it dropped, so peers may diverge, and a coordinated
+  restore converges them.
+
+**Scope.** The specification covers plain replication only. Atomic-write sagas
+carried over replication (invariant 4 above) are not modelled here; that is
+owned by #4436, as is saga atomicity across a bootstrap (#4683, #4684,
+#4685). The refinement note lists every other abstraction the
+model makes, among them anti-entropy repair, a single WAL partition per
+cluster, a bounded fault budget, and an unbounded identity cache.
 
 ## Relationship to the core library
 

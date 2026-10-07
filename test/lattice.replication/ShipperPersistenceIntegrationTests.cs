@@ -185,8 +185,17 @@ public class ShipperPersistenceIntegrationTests
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
+        public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult((long)Entries.Count);
+
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
+
+        public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Entries.Count == 0 ? -1L : 0L);
+
+        public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<long?>(-1L);
 
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);

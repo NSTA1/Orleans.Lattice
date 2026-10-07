@@ -1,0 +1,21 @@
+# Pairs with RAllOrNothing. With both trees off the log, the re-seed of one is
+# served at once: tree A's export names nothing of an operation a pre-upgrade
+# silo purged, so it reads post-saga, while tree B has not been re-seeded and
+# still reads pre-saga.
+MODULE: RAllOrNothingMutualReseedUnfenced
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a tree re-seeded alongside its sibling is served without a read fence
+PERTURBS: TreeReseed
+BOUNDS: LossPath = 5, JoinStart = 0, SagaOutcome = 2, Shape = 1, PreHold = 1, DialFaults = 0, Purges = 1, AckLoss = 0
+
+--- FIND
+                /\ afence' = (afence \/ (tr = "A" /\ ImportFences(tr, snap, purged)))
+                /\ bfence' = (bfence \/ (tr = "B" /\ ImportFences(tr, snap, bpur)))
+
+--- REPLACE
+\* MUTATION: the re-seed raises no read fence.
+                /\ afence' = afence
+                /\ bfence' = bfence
+
+--- END

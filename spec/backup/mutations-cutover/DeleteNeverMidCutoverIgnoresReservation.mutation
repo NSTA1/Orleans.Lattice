@@ -1,0 +1,17 @@
+# Pairs with DeleteNeverMidCutover. A delete does not consult the alias
+# reservation.
+MODULE: DeleteNeverMidCutoverIgnoresReservation
+TARGET: DeleteNeverMidCutover
+CLASS: Invariant
+SUMMARY: a delete proceeds while the reservation is held
+PERTURBS: Delete
+
+--- FIND
+    /\ ~deleted
+    /\ ~reserved
+    /\ deleted' = TRUE
+--- REPLACE
+    /\ ~deleted
+    \* MUTATION: the reservation is not checked.
+    /\ deleted' = TRUE
+--- END

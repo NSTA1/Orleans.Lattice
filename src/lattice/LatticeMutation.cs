@@ -352,4 +352,35 @@ public readonly record struct LatticeMutation
     /// preserves the legacy last-writer-wins prepared-apply behaviour.
     /// </summary>
     [Id(24)] public LatticeMergeMode Mode { get; init; }
+
+    /// <summary>
+    /// Whether this saga prepare-phase mutation is stamped with its prepare's
+    /// <i>original</i> stamp: minted by the leaf the routing tier dispatched the
+    /// prepare to, or carried verbatim from that leaf by a forward (issue #4522).
+    /// A marked prepare's terminal installs the saga's value under
+    /// last-writer-wins at this mutation's <see cref="Timestamp"/>, so a write
+    /// stamped above it survives. An unmarked prepare - written by an older silo,
+    /// or by any path that cannot vouch for its stamp - keeps the pre-#4522
+    /// drain. Meaningful only when <see cref="IsPrepared"/> is set.
+    /// <para>
+    /// Strictly additive: a mutation decoded from a record that predates the
+    /// field reads <see langword="false"/> (unmarked), and an older decoder skips
+    /// the field.
+    /// </para>
+    /// </summary>
+    [Id(25)] public bool PrepareStampOriginal { get; init; }
+
+    /// <summary>
+    /// The migration provenance (<c>LwwValue.IsMigrated</c>) of the value this
+    /// mutation stores: set on a cross-shard migration import, and on a saga
+    /// value stored at an original prepare stamp carried from another shard
+    /// (issue #4564). Replay restores it on the rebuilt row or pending bucket, so
+    /// a later migration import is admitted or dropped as it was before the leaf
+    /// reactivated.
+    /// <para>
+    /// Strictly additive: a mutation decoded from a record that predates the
+    /// field reads <see langword="false"/>, and an older decoder skips the field.
+    /// </para>
+    /// </summary>
+    [Id(26)] public bool IsMigrated { get; init; }
 }

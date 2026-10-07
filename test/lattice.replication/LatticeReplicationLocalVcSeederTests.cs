@@ -69,7 +69,7 @@ public partial class LatticeReplicationLocalVcSeederTests
 
         // HWM grain: pinned with the computed frontier. Returns an
         // empty vector by default.
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkTestGrains.Substitute();
         hwmGrain.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwmGrain);
 

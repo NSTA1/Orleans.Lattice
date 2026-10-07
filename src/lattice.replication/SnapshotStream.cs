@@ -38,7 +38,7 @@ public sealed class SnapshotStream
     /// reported a vector through
     /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>.
     /// Receivers pin this on
-    /// <see cref="Grains.IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// <see cref="Grains.IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// once <see cref="Entries"/> has been drained, at the hand-off to
     /// incremental replication, so the causal dependency
     /// check in the apply path starts from a non-empty frontier and
@@ -52,6 +52,45 @@ public sealed class SnapshotStream
     /// returns the empty <see cref="VersionVector"/>.
     /// </summary>
     public VersionVector CausalStableFrontier { get; }
+
+    /// <summary>
+    /// Source tree generation captured immediately before the export started,
+    /// or <see langword="null"/> when the sender predates generation trailers.
+    /// </summary>
+    public SnapshotSourceGeneration? OpenGeneration { get; init; }
+
+    /// <summary>
+    /// Source tree generation captured after <see cref="Entries"/> has been
+    /// fully enumerated. A <see langword="null"/> value means the stream has not
+    /// completed yet or the sender predates generation trailers.
+    /// </summary>
+    public SnapshotSourceGeneration? CloseGeneration { get; internal set; }
+
+    /// <summary>
+    /// The source's applied low watermarks and held writes for the tree (issue
+    /// #4586 part 2b), set when an unbounded export's entries have been
+    /// enumerated; <see langword="null"/> for a bounded or scoped export, or a
+    /// source that predates it.
+    /// </summary>
+    internal SnapshotSourceFrontier? SourceFrontier { get; set; }
+
+    /// <summary>
+    /// The sibling boundaries the source captured at the export's end (issue
+    /// #4684), set once the stream is drained; <see langword="null"/> from a
+    /// source that did not serve the export under the cross-tree hold.
+    /// </summary>
+    internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; set; }
+
+    /// <summary>
+    /// The same frontier as read when the export opened, before any entry is
+    /// enumerated (issue #4586 part 2b), so a receiver can put its bootstrap drop
+    /// floor in force before the drain applies anything. Its own-origin entry is
+    /// the source's WAL clock floor without the clamp below prepared rows, which
+    /// is known only at close: sound for dropping deliveries the export reflects
+    /// (a prepared row ships as prepared), not for meeting a causal dependency,
+    /// which uses <see cref="SourceFrontier"/>.
+    /// </summary>
+    internal SnapshotSourceFrontier? OpenFrontier { get; init; }
 
     /// <summary>
     /// Async stream of every key the source tree carries at
@@ -86,6 +125,21 @@ public sealed class SnapshotStream
     /// </para>
     /// </summary>
     public IAsyncEnumerable<SnapshotEntry> Entries { get; }
+
+    /// <summary>
+    /// The source's snapshot export epoch this export took (issue #4534), or
+    /// <c>0</c> when the producer does not number its exports. A receiver that
+    /// completes a full bootstrap from the export echoes it back so a sender
+    /// that took it off the log knows it has been re-seeded.
+    /// </summary>
+    internal long ExportEpoch { get; init; }
+
+    /// <summary>
+    /// Whether the source served the export under the cross-tree decision purge
+    /// hold and decision stamping (issue #4684); see
+    /// <see cref="RemoteSnapshotMetadata.CrossTreeHoldHonoured"/>.
+    /// </summary>
+    internal bool CrossTreeHoldHonoured { get; init; }
 
     /// <summary>
     /// Constructs a new <see cref="SnapshotStream"/>. The constructor

@@ -77,6 +77,7 @@ public partial class TreeShardSplitGrainTests
 
         var logs = new RecordingLoggerFactory();
         var state = new FakePersistentState<TreeShardSplitState>();
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context,
             grainFactory,
@@ -577,6 +578,7 @@ public partial class TreeShardSplitGrainTests
 
         var logs = new RecordingLoggerFactory();
         var state = new FakePersistentState<TreeShardSplitState>();
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
             TestOptionsResolver.ForFactory(grainFactory, options),
@@ -667,6 +669,7 @@ public partial class TreeShardSplitGrainTests
             },
         };
 
+        grainFactory.StubResizeIdle();
         var grain = new TreeShardSplitGrain(
             context, grainFactory, reminderRegistry, optionsMonitor,
             TestOptionsResolver.ForFactory(grainFactory, options),

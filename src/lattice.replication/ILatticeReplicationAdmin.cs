@@ -104,4 +104,85 @@ public interface ILatticeReplicationAdmin
         string treeName,
         string sourceClusterId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Alarmed operator override.</b> Lifts the read fence a failed snapshot
+    /// bootstrap of <paramref name="treeName"/> left up over a partial import
+    /// (issue #4526), and stops that bootstrap's automatic re-drive.
+    /// <para>
+    /// <b>Consequence.</b> While a bootstrap drains a snapshot into a tree, every
+    /// read of the tree is refused with <see cref="LatticeTreeBootstrappingException"/>
+    /// so no reader observes a partial import. A bootstrap that fails part-way
+    /// keeps the fence up and is re-driven automatically until one completes.
+    /// Lifting it here makes the tree readable at once, but readers may then
+    /// observe the partial import - a committed atomic batch with some keys
+    /// present and others missing or stale - until a later bootstrap completes.
+    /// It is never part of an automatic recovery path; prefer waiting for the
+    /// re-drive, or start a fresh bootstrap with <see cref="ForceRequestSnapshotAsync"/>.
+    /// </para>
+    /// <para>
+    /// Every call is audit-logged at <see cref="Microsoft.Extensions.Logging.LogLevel.Warning"/>
+    /// with the supplied <paramref name="reason"/> before it is dispatched, and
+    /// every lift increments
+    /// <see cref="LatticeReplicationMetrics.BootstrapReadFenceForceLifted"/>.
+    /// Refused with <see cref="InvalidOperationException"/> while a drain is
+    /// running. Fails closed: a shard that cannot be lifted leaves the fence up
+    /// and the call throws. Like the other verbs on this in-silo seam, it is
+    /// available to host code only; it is not exposed by any network API.
+    /// </para>
+    /// </summary>
+    /// <param name="treeName">The logical tree id whose fence to lift. Must be non-null and non-empty.</param>
+    /// <param name="reason">Why the operator is lifting the fence, recorded in the audit log. Must be non-null and non-empty.</param>
+    /// <param name="cancellationToken">Cancellation token observed before dispatch.</param>
+    /// <returns><see langword="true"/> when a fence was lifted; <see langword="false"/> when none was armed.</returns>
+    Task<bool> ForceLiftBootstrapReadFenceAsync(
+        string treeName,
+        string reason,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            $"This {nameof(ILatticeReplicationAdmin)} implementation does not support force-lifting a bootstrap read fence.");
+
+    /// <summary>
+    /// <b>Alarmed operator override.</b> Resolves this cluster's prepared
+    /// participant in the cross-cluster saga <paramref name="sagaId"/> - a
+    /// coordinated restore - when its coordinator cluster is lost (issue #4637).
+    /// <para>
+    /// A prepared participant whose cutover-fence timer expires asks the
+    /// coordinator for the saga's decision and applies it; while the
+    /// coordinator cannot be reached it keeps its fence up and raises the
+    /// <c>orleans.lattice.replication.saga.participant.fence_held_age</c> gauge
+    /// rather than compensate on its own, because the other clusters may
+    /// already have committed. This verb is the way out when the coordinator
+    /// will never answer.
+    /// </para>
+    /// <para>
+    /// <b>Consequence.</b> The participant still asks the coordinator first: if
+    /// it answers, its decision is applied and a contradicting request is
+    /// refused with <see cref="InvalidOperationException"/>, and a coordinator
+    /// that is still deciding refuses the call outright. Only when it cannot be
+    /// reached is <paramref name="commit"/> applied - and then nothing checks it
+    /// against the other clusters: resolve every cluster of the saga the same
+    /// way, or the restore ends with some clusters on the restored copy and
+    /// others on the pre-restore tree. It is never part of an automatic
+    /// recovery path.
+    /// </para>
+    /// <para>
+    /// Every call is audit-logged at <see cref="Microsoft.Extensions.Logging.LogLevel.Warning"/>
+    /// with the supplied <paramref name="reason"/> before it is dispatched. Like
+    /// the other verbs on this in-silo seam, it is available to host code only;
+    /// it is not exposed by any network API.
+    /// </para>
+    /// </summary>
+    /// <param name="sagaId">The saga id (the coordinated restore's operation id). Must be non-null and non-empty.</param>
+    /// <param name="commit"><see langword="true"/> to commit the restore on this cluster, <see langword="false"/> to compensate it.</param>
+    /// <param name="reason">Why the operator is resolving the participant, recorded in the audit log. Must be non-null and non-empty.</param>
+    /// <param name="cancellationToken">Cancellation token observed before dispatch.</param>
+    /// <returns><see langword="true"/> when the participant was moved to a terminal phase; <see langword="false"/> when it already held the requested one.</returns>
+    Task<bool> ResolveCrossClusterSagaParticipantAsync(
+        string sagaId,
+        bool commit,
+        string reason,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException(
+            $"This {nameof(ILatticeReplicationAdmin)} implementation does not support resolving a cross-cluster saga participant.");
 }

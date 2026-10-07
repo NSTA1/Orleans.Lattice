@@ -1,0 +1,29 @@
+# Pairs with RAllOrNothing, and reproduces issue #4480 as production had it
+# before ReplicationShipperGrain's terminal hold: the transport may deliver a
+# source shard's terminal before that shard's prepare. The receiver's tally
+# completes, its leaf applies the commit with no bucket to drain - recording
+# the terminal and materialising nothing - and one key is served post-saga while
+# the other is still pre-saga. Before #4510 the prepare that arrived next was
+# refused as late and the split was permanent; the receiver's settle now
+# materialises it under the committed registry, so the split is transient, which
+# this state invariant still reports.
+#
+# The shipper merged WAL partitions by HLC within one pump tick only, and HLCs
+# are not monotonic in a partition's append order, so a terminal could ship
+# ahead of a prepare of its own saga. The hold now keeps every terminal back
+# until the peer has acknowledged every prepare of its saga; with it switched
+# off (TerminalHoldsRequired false) the shipper's ordering detectors go red, and
+# the end-to-end skewed-log detector goes red once the settle is switched off
+# too. That is this mutation's production analogue.
+MODULE: RAllOrNothingTerminalOvertakesPrepare
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a source shard's terminal may be delivered before that shard's prepare, which the receiver then refuses
+PERTURBS: DeliverTerminal
+
+--- FIND
+    /\ \A p \in outbox : (p.type = "prep" /\ p.key = m.key) => p \in dlv
+--- REPLACE
+\* MUTATION: no per-shard ordering; any terminal may overtake its prepare.
+    /\ TRUE
+--- END

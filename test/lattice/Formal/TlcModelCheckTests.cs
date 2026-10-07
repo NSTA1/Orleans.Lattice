@@ -1,13 +1,17 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Orleans.Lattice.Testing.Hygiene;
 
 namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
-/// Runs TLC over the TLA+ specification in <c>spec/</c> and over a mutation of
-/// it per checked property, so that every property is required to demonstrate
-/// it can go red.
+/// Runs TLC over every TLA+ module under <c>spec/</c> (see
+/// <see cref="SpecModuleCatalogue"/>) and over a mutation of each per checked
+/// property, so that every property is required to demonstrate it can go red.
 /// <para>
 /// WHY THIS EXISTS. The atomicity audit (epic #2299) found verification
 /// artefacts that were green because they could not reach the state they were
@@ -38,6 +42,20 @@ namespace Orleans.Lattice.Tests.Formal;
 /// drift unexpressible instead of merely detectable.
 /// </para>
 /// <para>
+/// EVERY MODULE, EVERY CASE NAMED. The cases come from
+/// <see cref="SpecModuleCases"/>, so each is labelled with its module and a new
+/// module is checked as soon as discovery can see it.
+/// <see cref="A_synthetic_module_is_model_checked_by_every_TLC_gate"/> proves
+/// that against a module built in a temp directory.
+/// </para>
+/// <para>
+/// BUDGET. Cases run in parallel, at most <see cref="TlcConcurrency"/> TLC
+/// processes at once, each with an equal share of the cores as TLC workers.
+/// The atomic-commit module's base model and twenty mutations are 43 TLC runs;
+/// see "CI budget" in <c>spec/README.md</c> for the measured figures and how
+/// they scale with modules.
+/// </para>
+/// <para>
 /// TIER. Tagged <c>[Category("Tlc")]</c> because it needs an external toolchain
 /// (a JVM and <c>tla2tools.jar</c>) - the same reason
 /// <c>AzureStorageEmulator</c> exists as a category. The documented Tier 2
@@ -57,7 +75,8 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// </summary>
 [TestFixture]
-[Category("Tlc")]
+[Category(SpecModuleGates.TlcCategory)]
+[Parallelizable(ParallelScope.Children)]
 public sealed class TlcModelCheckTests
 {
     private const string CleanBanner = "Model checking completed. No error has been found.";
@@ -65,27 +84,54 @@ public sealed class TlcModelCheckTests
     private const string DeadlockBanner = "Error: Deadlock reached.";
 
     /// <summary>
-    /// TLC is fast on these bounded instances: the base model count was measured
-    /// before the model changed in #2612, and a mutant usually trips in about
-    /// one. This ceiling is a hang guard rather than a budget, and a run
-    /// approaching it means the model is wrong, not that the timeout is tight.
+    /// TLC is fast on these bounded instances: the atomic-commit base model
+    /// finishes in a few seconds and a mutant usually trips in about one. This
+    /// ceiling is a hang guard rather than a budget, and a run approaching it
+    /// means the model is wrong, not that the timeout is tight. It is per TLC
+    /// run, not per fixture, so it does not shrink as modules are added; the
+    /// wait for a concurrency slot is outside it.
     /// </summary>
     private static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(5);
 
-    private static string SpecDirectory => Path.Combine(HygieneRepository.FindRepoRoot(), "spec");
+    /// <summary>
+    /// How many TLC processes may run at once: half the cores, between one and
+    /// four, unless <c>LATTICE_TLC_CONCURRENCY</c> sets it (1 runs serially,
+    /// which is how the serial budget in <c>spec/README.md</c> was measured).
+    /// Most of a small model's wall-clock is JVM start-up, which parallelises
+    /// well; capping it keeps a shared machine responsive and bounds the JVM
+    /// heaps resident at once.
+    /// </summary>
+    private static readonly int TlcConcurrency =
+        int.TryParse(Environment.GetEnvironmentVariable("LATTICE_TLC_CONCURRENCY"), NumberStyles.None, CultureInfo.InvariantCulture, out var configured) && configured > 0
+            ? configured
+            : Math.Clamp(Environment.ProcessorCount / 2, 1, 4);
 
-    private static string MutationDirectory => Path.Combine(SpecDirectory, "mutations");
+    /// <summary>TLC worker threads per process: an equal share of the cores.</summary>
+    private static readonly int TlcWorkers = Math.Max(1, Environment.ProcessorCount / TlcConcurrency);
 
-    private static string BaseSpecification => File.ReadAllText(Path.Combine(SpecDirectory, "AtomicCommit.tla"));
-
-    private static string BaseConfig => File.ReadAllText(Path.Combine(SpecDirectory, "AtomicCommit.cfg"));
+    private static readonly SemaphoreSlim TlcSlots = new(TlcConcurrency, TlcConcurrency);
 
     /// <summary>
-    /// Exposed as a test-case source so each mutation is an individually named
-    /// test. A single test looping over the catalogue would stop at the first
-    /// failure and hide how many of the pairings are broken.
+    /// Control-arm results, once per distinct input within this test process.
+    /// Every mutation of a module that targets the same property with the same
+    /// TLC options builds a byte-identical control run - the unmutated base
+    /// under the same single-property cfg - so it is run once and shared. The
+    /// key is a hash of everything TLC reads (the module and its siblings, the
+    /// cfg and the options), so two inputs that differ in anything are two
+    /// runs. The <see cref="Lazy{T}"/> runs the first request and makes every
+    /// concurrent one wait for it, and a run that fails or throws - a timeout
+    /// included - is cached as such, so every case sharing that control fails
+    /// rather than only the first. Process-local by design: nothing is reused
+    /// across runs.
     /// </summary>
-    public static IEnumerable<SpecMutation> Mutations() => SpecMutationCatalogue.Load(MutationDirectory);
+    private static readonly ConcurrentDictionary<string, Lazy<TlcResult>> ControlRuns = new(StringComparer.Ordinal);
+
+    /// <summary>TLC's switch that defers every liveness check to the end of the state search.</summary>
+    private static readonly string[] LivenessAtEnd = ["-lncheck", "final"];
+
+    private static readonly Regex DistinctStates = new(
+        @"^(\d+) states generated, (\d+) distinct states found, 0 states left on queue\.",
+        RegexOptions.Multiline);
 
     private string _java = string.Empty;
     private string _jar = string.Empty;
@@ -125,34 +171,103 @@ public sealed class TlcModelCheckTests
     }
 
     /// <summary>
-    /// The base specification holds against its own full model: all seven
-    /// invariants and all six action and temporal properties at once, with
-    /// TLC's deadlock check on.
+    /// The module's base specification holds against its own full model: every
+    /// invariant and every action and temporal property at once, with TLC's
+    /// deadlock check on, over exactly the number of distinct states the
+    /// module's manifest records.
     /// <para>
     /// This is separate from the per-mutation control arms, and both are needed.
     /// A control arm checks one property in isolation; this checks that they
-    /// hold together, which is the claim <c>spec/README.md</c> makes and the one
+    /// hold together, which is the claim the module's README makes and the one
     /// a reader of the repository relies on.
     /// </para>
+    /// <para>
+    /// The state count is asserted because it is the one number that moves
+    /// whenever the reachable behaviour does. A change that quietly shrinks the
+    /// model - a guard tightened, an action that can no longer fire - can leave
+    /// every property green while checking less; an equality on the count makes
+    /// that change announce itself and its README restate the count.
+    /// </para>
     /// </summary>
-    [Test]
-    public void The_base_specification_holds()
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Modules))]
+    public void The_base_specification_holds(SpecModule module)
     {
-        var result = RunTlc(BaseSpecification, BaseConfig, "AtomicCommit", []);
+        ArgumentNullException.ThrowIfNull(module);
+
+        var result = RunTlc(module, module.ReadSpecification(), module.ReadConfig(), module.Name, []);
 
         Assert.That(
             result.Output,
             Does.Contain(CleanBanner),
-            "spec/AtomicCommit.cfg must hold against spec/AtomicCommit.tla."
+            $"{module.Describe(module.ConfigPath)} must hold against {module.Describe(module.SpecificationPath)}."
             + Environment.NewLine + result.Output);
-        Assert.That(result.ExitCode, Is.Zero, "TLC reported a failure exit code for the base specification.");
+        Assert.That(result.ExitCode, Is.Zero, $"TLC reported a failure exit code for {module.Name}.");
+
+        var distinct = DistinctStates.Match(result.Output);
+        Assert.That(distinct.Success, Is.True, "TLC's output carried no final state-count line." + Environment.NewLine + result.Output);
+        Assert.That(
+            long.Parse(distinct.Groups[2].Value, CultureInfo.InvariantCulture),
+            Is.EqualTo(module.Manifest.Counts.DistinctStates),
+            $"TLC found a different number of distinct states for {module.Name} than "
+            + $"{module.Describe(module.ManifestPath)} records. If the specification changed on purpose, restate "
+            + "'distinctStates' there and the counts table in the module README; if it did not, the reachable "
+            + "behaviour has changed under it.");
+    }
+
+    /// <summary>
+    /// The base specification holds under each of the module's variant
+    /// configurations - the same specification checked under a different bound
+    /// (see "Variant configurations" in <c>spec/README.md</c>) - over exactly
+    /// the number of distinct states the manifest records for that variant.
+    /// <para>
+    /// The count must also DIFFER from the base configuration's. That is the
+    /// assertion that the variant's override took effect: TLC accepts a value
+    /// assignment to a name the specification does not have and checks the
+    /// unchanged model, so a variant whose bound is misspelt would otherwise
+    /// pass as a second, larger check while re-checking the base. A variant
+    /// that genuinely reaches the base's state count changes nothing and has no
+    /// reason to exist.
+    /// </para>
+    /// </summary>
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Variants))]
+    public void Each_variant_configuration_holds(SpecModule module, string variant)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentException.ThrowIfNullOrEmpty(variant);
+
+        var where = module.Describe(module.VariantConfigPath(variant));
+        var result = RunTlc(module, module.ReadSpecification(), module.ReadVariantConfig(variant), module.Name, []);
+
+        Assert.That(
+            result.Output,
+            Does.Contain(CleanBanner),
+            $"{where} must hold against {module.Describe(module.SpecificationPath)}." + Environment.NewLine + result.Output);
+        Assert.That(result.ExitCode, Is.Zero, $"TLC reported a failure exit code for {where}.");
+
+        var distinct = DistinctStates.Match(result.Output);
+        Assert.That(distinct.Success, Is.True, "TLC's output carried no final state-count line." + Environment.NewLine + result.Output);
+        var states = long.Parse(distinct.Groups[2].Value, CultureInfo.InvariantCulture);
+
+        Assert.That(
+            states,
+            Is.Not.EqualTo(module.Manifest.Counts.DistinctStates),
+            $"{where} reached exactly the base configuration's {module.Manifest.Counts.DistinctStates} distinct "
+            + "states, so its override did not take effect: it re-checked the base model under the base's bound. "
+            + "Check that every name it assigns is spelt as the specification declares or defines it.");
+        Assert.That(
+            states,
+            Is.EqualTo(module.Manifest.Variants[variant]),
+            $"TLC found a different number of distinct states for {where} than {module.Describe(module.ManifestPath)} "
+            + $"records under 'variants.{variant}'. If the specification or the variant changed on purpose, restate "
+            + "it there; if not, the reachable behaviour under the variant's bound has changed.");
     }
 
     /// <summary>
     /// The paired mutation for one property, run as a two-arm experiment.
     /// <para>
     /// Arm 1 (control) runs the generated single-property cfg against the
-    /// unmutated base and requires it to be clean. This is what stops the test
+    /// unmutated base and requires it to be clean. Mutations that build the
+    /// same control share one run of it (see <see cref="ControlRuns"/>). This is what stops the test
     /// passing for the wrong reason. Without it, a mutation that broke the
     /// module outright, or a property already violated on the base, would
     /// produce a red mutant and read as a successful pairing.
@@ -168,6 +283,13 @@ public sealed class TlcModelCheckTests
     /// single-property cfg plus the violation count asserted below.
     /// </para>
     /// <para>
+    /// A mutation may declare <c>BOUNDS:</c> to run its mutant on a smaller
+    /// instance (<see cref="SpecMutation.Bounds"/>). Only arms 2 and 3 use it;
+    /// arm 1 is built without it, so the control is unchanged, and an override
+    /// that shrinks the instance below the violation leaves arm 2 clean and
+    /// fails here like any mutation that does not fire.
+    /// </para>
+    /// <para>
     /// Arm 3 runs only for a mutation that declares <c>DEADLOCK: off</c>, and
     /// is what keeps that declaration honest. Both arms above run with TLC's
     /// deadlock check off for such a mutation; arm 3 runs the mutant again
@@ -176,23 +298,30 @@ public sealed class TlcModelCheckTests
     /// and one that stopped being needed would never be noticed.
     /// </para>
     /// </summary>
-    [TestCaseSource(nameof(Mutations))]
-    public void Each_property_fires_under_its_mutation_and_not_on_the_base(SpecMutation mutation)
+    [TestCaseSource(typeof(SpecModuleCases), nameof(SpecModuleCases.Mutations))]
+    public void Each_property_fires_under_its_mutation_and_not_on_the_base(SpecModule module, SpecMutation mutation)
     {
-        var baseSpec = BaseSpecification;
-        var config = mutation.BuildConfig(BaseConfig);
+        ArgumentNullException.ThrowIfNull(module);
+        ArgumentNullException.ThrowIfNull(mutation);
 
-        var control = RunTlc(baseSpec, config, "AtomicCommit", mutation.TlcOptions);
+        var baseSpec = module.ReadSpecification();
+        var config = mutation.BuildConfig(module.ReadConfig());
+
+        // The control arm always runs at the module's own bounds. A mutation's
+        // BOUNDS header shrinks only the mutant arm's instance, so "the property
+        // holds on the base" is still decided over the full model.
+        var control = RunControl(module, baseSpec, config, mutation.TlcOptions);
         Assert.That(
             control.Output,
             Does.Contain(CleanBanner),
             $"CONTROL ARM FAILED for '{mutation.Name}'. Property '{mutation.Target}' must HOLD on the "
-            + "unmutated base specification, otherwise the mutant going red proves nothing about the "
+            + $"unmutated {module.Name} specification, otherwise the mutant going red proves nothing about the "
             + "mutation. Either the base specification is broken or the generated cfg is wrong."
             + Environment.NewLine + control.Output);
 
-        var mutantSpec = mutation.Apply(baseSpec);
-        var mutant = RunTlc(mutantSpec, config, mutation.Module, mutation.TlcOptions);
+        var mutantSpec = mutation.Apply(baseSpec, module.Name);
+        var mutantConfig = mutation.BuildMutantConfig(module.ReadConfig());
+        var mutant = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, mutation.TlcOptions);
 
         Assert.That(
             mutant.ExitCode,
@@ -219,7 +348,12 @@ public sealed class TlcModelCheckTests
 
         if (mutation.DeadlockCheckDisabled)
         {
-            var withDeadlockCheck = RunTlc(mutantSpec, config, mutation.Module, []);
+            // Liveness is checked only once the search completes, so the
+            // deadlock - found during the search - is reported first if it is
+            // reachable. Left to TLC's default, a periodic mid-search liveness
+            // check can report the target first on a slow machine, and the arm
+            // would then fail for timing rather than for the declaration.
+            var withDeadlockCheck = RunTlc(module, mutantSpec, mutantConfig, mutation.Module, LivenessAtEnd);
             Assert.That(
                 withDeadlockCheck.Output,
                 Does.Contain(DeadlockBanner),
@@ -227,6 +361,129 @@ public sealed class TlcModelCheckTests
                 + "does not deadlock. The declaration weakens the experiment's checking for no reason; remove "
                 + "it from the .mutation file."
                 + Environment.NewLine + withDeadlockCheck.Output);
+        }
+    }
+
+    /// <summary>
+    /// The discovery control for the TLC gates: every TLC gate, found by
+    /// signature rather than listed, is run over a module built in a temp
+    /// directory and must pass; then each broken copy - a silent mutation, a mutation whose BOUNDS shrink it below its violation, a wrong state count, a drifted variant count, a misspelt variant bound and an unresolved variant override - must fail the gate. A mutation whose BOUNDS would break the base must still pass, which proves the control arm never sees them
+    /// that owns the fault. The toolchain-free gates have the same control in
+    /// <see cref="SpecModuleDiscoveryControlTests"/>.
+    /// </summary>
+    [Test]
+    public void A_synthetic_module_is_model_checked_by_every_TLC_gate()
+    {
+        var gates = SpecModuleGates.All().Where(g => g.RunsTlc).ToArray();
+        Assert.That(
+            gates.Select(g => g.Method.Name),
+            Is.SupersetOf(new[] { nameof(The_base_specification_holds), nameof(Each_variant_configuration_holds), nameof(Each_property_fires_under_its_mutation_and_not_on_the_base) }),
+            "the reflection that finds TLC gates missed one this fixture declares, so the control below would "
+            + "run over fewer gates than exist.");
+
+        using (var synthetic = SyntheticSpecModule.Create())
+        {
+            var module = synthetic.Discover();
+            foreach (var gate in gates)
+            {
+                Assert.That(SpecModuleGates.Run(gate, module, this), Is.GreaterThan(0), $"{gate.Name} ran no case for the synthetic module.");
+            }
+        }
+
+        using (var silent = SyntheticSpecModule.Create())
+        {
+            silent.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "    /\\ x' = (x + 1) % (Wrap + 1)",
+                "    /\\ x' = (1 + x) % Wrap");
+            var module = silent.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("model-checked CLEAN"),
+                "a mutation that changes the text but not the behaviour passed the pairing gate.");
+        }
+
+        using (var undersized = SyntheticSpecModule.Create())
+        {
+            // A bound that shrinks the instance below the violation: with Wrap
+            // = 1 the late wrap keeps x in 0..1, so the mutant is clean.
+            undersized.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "PERTURBS: Step\n",
+                "PERTURBS: Step\nBOUNDS: Wrap = 1\n");
+            var module = undersized.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("model-checked CLEAN"),
+                "a mutation whose BOUNDS shrink the instance below its violation passed the pairing gate.");
+        }
+
+        using (var controlKeepsBase = SyntheticSpecModule.Create())
+        {
+            // A bound under which the BASE violates the target too: with Wrap =
+            // 4 the unmutated step reaches 3, outside TypeOK. The mutant still
+            // fires, and the gate passes only because the control arm never
+            // sees the bound and checks the base at Wrap = 3.
+            controlKeepsBase.Replace(
+                $"mutations/{SyntheticSpecModule.MutationName}.mutation",
+                "PERTURBS: Step\n",
+                "PERTURBS: Step\nBOUNDS: Wrap = 4\n");
+            var module = controlKeepsBase.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(Each_property_fires_under_its_mutation_and_not_on_the_base));
+            Assert.That(
+                SpecModuleGates.Run(gate, module, this),
+                Is.GreaterThan(0),
+                "the pairing gate ran no case for a mutation declaring BOUNDS.");
+        }
+
+        using (var miscounted = SyntheticSpecModule.Create())
+        {
+            miscounted.Replace($"{SyntheticSpecModule.ModuleName}{SpecModuleManifest.FileSuffix}", "\"distinctStates\": 3", "\"distinctStates\": 4");
+            var module = miscounted.Discover();
+            var gate = gates.Single(g => g.Method.Name == nameof(The_base_specification_holds));
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(gate, module, this))?.Message,
+                Does.Contain("different number of distinct states"),
+                "a manifest recording the wrong state count passed the base-model gate.");
+        }
+
+        var variantGate = gates.Single(g => g.Method.Name == nameof(Each_variant_configuration_holds));
+        var variantFile = $"{SyntheticSpecModule.ModuleName}.{SyntheticSpecModule.VariantName}.cfg";
+
+        using (var drifted = SyntheticSpecModule.Create())
+        {
+            drifted.Replace($"{SyntheticSpecModule.ModuleName}{SpecModuleManifest.FileSuffix}", "\"Narrow\": { \"distinctStates\": 2 }", "\"Narrow\": { \"distinctStates\": 5 }");
+            var module = drifted.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("records under 'variants.Narrow'"),
+                "a manifest recording the wrong variant state count passed the variant gate.");
+        }
+
+        using (var misspelt = SyntheticSpecModule.Create())
+        {
+            // TLC accepts a value assignment to a name the specification does
+            // not have and checks the unchanged model, so this run is clean at
+            // the base's own state count. Only the count assertion stands
+            // between it and a pass.
+            misspelt.Replace(variantFile, "    Wrap = 2", "    Wrpa = 2");
+            var module = misspelt.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("override did not take effect"),
+                "a variant whose bound is misspelt re-checked the base and passed the variant gate.");
+        }
+
+        using (var unresolved = SyntheticSpecModule.Create())
+        {
+            unresolved.Replace(variantFile, "    Wrap = 2", "    Wrap <- Narrower");
+            var module = unresolved.Discover();
+            Assert.That(
+                Assert.Catch(() => SpecModuleGates.Run(variantGate, module, this))?.Message,
+                Does.Contain("must hold against"),
+                "a variant overriding with an undefined name passed the variant gate.");
         }
     }
 
@@ -275,9 +532,37 @@ public sealed class TlcModelCheckTests
     /// <summary>
     /// Writes a module and cfg into a scratch directory and runs TLC there.
     /// TLC emits its state files beside the module it checks, so running in
-    /// <c>spec/</c> would leave build output in the repository.
+    /// <c>spec/</c> would leave build output in the repository. Every sibling
+    /// <c>.tla</c> of the module is copied in first, so a module that extends
+    /// or instantiates a sibling resolves it.
     /// </summary>
+    /// <summary>
+    /// Runs a mutation's control arm through <see cref="ControlRuns"/>: once
+    /// per distinct input in this process, shared by every case that builds
+    /// the same one.
+    /// </summary>
+    private TlcResult RunControl(SpecModule module, string baseSpec, string config, IReadOnlyList<string> options)
+    {
+        var key = new StringBuilder()
+            .Append(module.SpecificationPath).Append('\0')
+            .Append(baseSpec).Append('\0')
+            .Append(config).Append('\0')
+            .AppendJoin(' ', options).Append('\0');
+        foreach (var (name, text) in module.ReadSiblingSpecifications().OrderBy(s => s.Key, StringComparer.Ordinal))
+        {
+            key.Append(name).Append('\0').Append(text).Append('\0');
+        }
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key.ToString())));
+        return ControlRuns
+            .GetOrAdd(hash, _ => new Lazy<TlcResult>(
+                () => RunTlc(module, baseSpec, config, module.Name, options),
+                LazyThreadSafetyMode.ExecutionAndPublication))
+            .Value;
+    }
+
     private TlcResult RunTlc(
+        SpecModule module,
         string moduleText,
         string configText,
         string moduleName,
@@ -286,12 +571,18 @@ public sealed class TlcModelCheckTests
         var scratch = Path.Combine(Path.GetTempPath(), $"lattice-tlc-{Guid.NewGuid():N}");
         Directory.CreateDirectory(scratch);
 
+        TlcSlots.Wait();
         try
         {
-            var module = $"{moduleName}.tla";
-            var config = $"{moduleName}.cfg";
-            File.WriteAllText(Path.Combine(scratch, module), moduleText);
-            File.WriteAllText(Path.Combine(scratch, config), configText);
+            foreach (var (name, text) in module.ReadSiblingSpecifications())
+            {
+                File.WriteAllText(Path.Combine(scratch, name), text);
+            }
+
+            var tla = $"{moduleName}.tla";
+            var cfg = $"{moduleName}.cfg";
+            File.WriteAllText(Path.Combine(scratch, tla), moduleText);
+            File.WriteAllText(Path.Combine(scratch, cfg), configText);
 
             var info = new ProcessStartInfo(_java)
             {
@@ -301,6 +592,13 @@ public sealed class TlcModelCheckTests
                 UseShellExecute = false,
             };
 
+            // Each JVM gets its own temp directory because TLC extracts the
+            // standard modules (Naturals, FiniteSets, ...) into java.io.tmpdir
+            // and parses them from there. With the system temp directory shared,
+            // one concurrent run deletes or rewrites a file another is reading,
+            // and the second fails with "Cannot find source file for module".
+            info.ArgumentList.Add($"-Djava.io.tmpdir={scratch}");
+            info.ArgumentList.Add("-XX:+UseParallelGC");
             info.ArgumentList.Add("-cp");
             info.ArgumentList.Add(_jar);
             info.ArgumentList.Add("tlc2.TLC");
@@ -310,11 +608,11 @@ public sealed class TlcModelCheckTests
             }
 
             info.ArgumentList.Add("-config");
-            info.ArgumentList.Add(config);
+            info.ArgumentList.Add(cfg);
             info.ArgumentList.Add("-workers");
-            info.ArgumentList.Add("auto");
+            info.ArgumentList.Add(TlcWorkers.ToString(CultureInfo.InvariantCulture));
             info.ArgumentList.Add("-cleanup");
-            info.ArgumentList.Add(module);
+            info.ArgumentList.Add(tla);
 
             using var process = Process.Start(info)
                 ?? throw new InvalidOperationException($"could not start '{_java}'");
@@ -328,7 +626,20 @@ public sealed class TlcModelCheckTests
             if (!process.WaitForExit((int)RunTimeout.TotalMilliseconds))
             {
                 process.Kill(entireProcessTree: true);
-                Assert.Fail($"TLC did not finish within {RunTimeout.TotalMinutes} minutes for {moduleName}.");
+
+                // The last progress line tells a hang (no progress, or none for
+                // minutes) from a state explosion (states still climbing), which
+                // the bare timeout cannot. The streams close once the process
+                // dies, so the drain finishes promptly; it is bounded anyway.
+                var partial = stdout.Wait(TimeSpan.FromSeconds(10)) ? stdout.Result : string.Empty;
+                var progress = partial
+                    .ReplaceLineEndings("\n")
+                    .Split('\n')
+                    .LastOrDefault(l => l.StartsWith("Progress(", StringComparison.Ordinal))
+                    ?? "(TLC reported no progress line)";
+                Assert.Fail(
+                    $"TLC did not finish within {RunTimeout.TotalMinutes} minutes for {moduleName}. "
+                    + $"Its last progress line was: {progress}");
             }
 
             var output = string.Concat(stdout.GetAwaiter().GetResult(), stderr.GetAwaiter().GetResult());
@@ -336,6 +647,8 @@ public sealed class TlcModelCheckTests
         }
         finally
         {
+            TlcSlots.Release();
+
             try
             {
                 Directory.Delete(scratch, recursive: true);

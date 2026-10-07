@@ -15,4 +15,11 @@ internal sealed class TreeReceiveFenceState
     /// </summary>
     [Id(0)]
     public string? PauseSagaId { get; set; }
+
+    /// <summary>
+    /// The fence's epoch: bumped by every new pause (issue #4593), never by a
+    /// resume. Zero for a tree no saga ever paused.
+    /// </summary>
+    [Id(1)]
+    public long Epoch { get; set; }
 }

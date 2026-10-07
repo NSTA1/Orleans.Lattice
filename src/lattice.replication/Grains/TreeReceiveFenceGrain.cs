@@ -4,8 +4,8 @@ namespace Orleans.Lattice.Replication.Grains;
 
 /// <summary>
 /// Durable per-tree inbound-apply gate. See <see cref="ITreeReceiveFenceGrain"/>
-/// for the contract. State is a single owning saga id, so the pause is
-/// crash-durable and idempotent.
+/// for the contract. State is the owning saga id and the pause epoch, so the
+/// pause is crash-durable and idempotent.
 /// </summary>
 internal sealed class TreeReceiveFenceGrain(
     [PersistentState("tree-receive-fence", LatticeOptions.StorageProviderName)]
@@ -14,18 +14,19 @@ internal sealed class TreeReceiveFenceGrain(
     : ITreeReceiveFenceGrain
 {
     /// <inheritdoc />
-    public async Task PauseAsync(string sagaId)
+    public async Task<long> PauseAsync(string sagaId)
     {
         ArgumentException.ThrowIfNullOrEmpty(sagaId);
 
         if (string.Equals(state.State.PauseSagaId, sagaId, StringComparison.Ordinal))
         {
-            return;
+            return state.State.Epoch;
         }
 
-        await PersistOwnerAsync(sagaId);
+        await PersistAsync(sagaId, state.State.Epoch + 1);
         logger.LogInformation(
-            "Inbound apply paused for a tree by saga '{SagaId}'.", sagaId);
+            "Inbound apply paused for a tree by saga '{SagaId}' (epoch {Epoch}).", sagaId, state.State.Epoch);
+        return state.State.Epoch;
     }
 
     /// <inheritdoc />
@@ -40,7 +41,7 @@ internal sealed class TreeReceiveFenceGrain(
             return;
         }
 
-        await PersistOwnerAsync(null);
+        await PersistAsync(null, state.State.Epoch);
         logger.LogInformation(
             "Inbound apply resumed for a tree by saga '{SagaId}'.", sagaId);
     }
@@ -49,23 +50,34 @@ internal sealed class TreeReceiveFenceGrain(
     public Task<bool> IsPausedAsync()
         => Task.FromResult(state.State.PauseSagaId is not null);
 
+    /// <inheritdoc />
+    public Task<ReceiveFenceObservation> ObserveAsync()
+        => Task.FromResult(new ReceiveFenceObservation
+        {
+            Paused = state.State.PauseSagaId is not null,
+            Epoch = state.State.Epoch,
+        });
+
     /// <summary>
-    /// Assigns and persists the owning saga, restoring the previous owner when the
-    /// write fails. Both callers short-circuit on the in-memory owner, so an owner
-    /// left assigned by a failed write would turn the saga's retry into a no-op and
-    /// the pause or resume would never reach storage.
+    /// Assigns and persists the owning saga and epoch, restoring the previous
+    /// values when the write fails. Both callers short-circuit on the in-memory
+    /// owner, so an owner left assigned by a failed write would turn the saga's
+    /// retry into a no-op and the pause or resume would never reach storage.
     /// </summary>
-    private async Task PersistOwnerAsync(string? sagaId)
+    private async Task PersistAsync(string? sagaId, long epoch)
     {
-        var previous = state.State.PauseSagaId;
+        var previousSaga = state.State.PauseSagaId;
+        var previousEpoch = state.State.Epoch;
         state.State.PauseSagaId = sagaId;
+        state.State.Epoch = epoch;
         try
         {
             await state.WriteStateAsync();
         }
         catch
         {
-            state.State.PauseSagaId = previous;
+            state.State.PauseSagaId = previousSaga;
+            state.State.Epoch = previousEpoch;
             throw;
         }
     }

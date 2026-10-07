@@ -1,0 +1,14 @@
+# Pairs with NoKeyLost. The purge clears the copy the tree resolves to instead
+# of the retired one, so every acknowledged value on the owner is lost.
+MODULE: NoKeyLostPurgeWipesResizedCopy
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the purge clears the resized copy instead of the old one
+PERTURBS: ResizePurge
+
+--- FIND
+    /\ row' = [row EXCEPT ![T] = [s \in Shards |-> [k \in Keys |-> Absent]]]
+--- REPLACE
+\* MUTATION: the wrong copy is purged.
+    /\ row' = [row EXCEPT ![R] = [s \in Shards |-> [k \in Keys |-> Absent]]]
+--- END

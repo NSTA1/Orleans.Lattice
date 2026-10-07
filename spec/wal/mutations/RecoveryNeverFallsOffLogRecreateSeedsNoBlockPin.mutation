@@ -1,0 +1,30 @@
+# Pairs with RecoveryNeverFallsOffLog. A leaf recovery re-creates gets no fresh
+# Zero block pin, so the GC, which no longer sees the retired entry, trims past
+# writes the re-created leaf has not yet checkpointed. The base seeds the block
+# pin on re-create (SetTreeIdAsync); the #4433 confirmation pass found its
+# absence in the model.
+MODULE: RecoveryNeverFallsOffLogRecreateSeedsNoBlockPin
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: a re-created leaf is not given a fresh block pin
+PERTURBS: Recover
+
+--- FIND
+            /\ pinHlc' = [pinHlc EXCEPT ![l] = "zero"]
+--- REPLACE
+\* MUTATION: the retired entry is left in place.
+            /\ pinHlc' = pinHlc
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

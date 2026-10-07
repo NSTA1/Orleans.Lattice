@@ -1,0 +1,23 @@
+# Pairs with RAllOrNothing. A detached shipper rewinds and leaves the log when the
+# peer echoes an export epoch past its marker. The WAL GC no longer holds the log
+# for a detached consumer, so a later trim can pass a prepare the shipper has not
+# read while its terminal ships. MaybeClearReseedAsync never rewinds while
+# detached (#4691's detector).
+MODULE: RAllOrNothingRewindWhileDetached
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a detached shipper rewinds on the peer's echo of a later export epoch
+PERTURBS: ReseedRewind
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ rs = "drained"
+    /\ ~detached
+    /\ ~preguard
+
+--- REPLACE
+    /\ rs = "drained"
+\* MUTATION: the rewind ignores the detach.
+    /\ ~preguard
+
+--- END

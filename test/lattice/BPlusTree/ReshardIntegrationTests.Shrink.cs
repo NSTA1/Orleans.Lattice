@@ -51,8 +51,13 @@ public partial class ReshardIntegrationTests
             foreach (var leafId in leavesBefore[idx])
             {
                 var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-                Assert.That(await leaf.CountAsync(), Is.Zero, $"leaf {leafId} of retired shard {idx} must be cleared");
+                Assert.That(await leaf.GetTreeIdAsync(), Is.Null, $"leaf {leafId} of retired shard {idx} must be cleared");
                 Assert.That(await leaf.GetNextSiblingAsync(), Is.Null);
+
+                // A cleared leaf has no state row, so a direct data operation on
+                // it fails closed rather than reading it as empty (#4654).
+                Assert.That(Assert.CatchAsync(async () => await leaf.CountAsync()), Is.InstanceOf<ILatticeLeafUnavailable>(),
+                    $"cleared leaf {leafId} of retired shard {idx} fails closed");
             }
 
             // A caller still holding the pre-shrink map is redirected, never

@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Skipping the reconcile when
+# the shard map changed mid-export is safe only if the pass is retried;
+# otherwise r keeps the deleted value.
+MODULE: EventualConvergenceReshardSkipNotRetried
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a pass whose reconcile a reshard skipped is not retried, so the reaped delete is never reconciled
+PERTURBS: EndExport
+
+--- FIND
+               ELSE \/ topo # ex.topo0 \/ phys # ex.phys0 \/ ex.del0 \/ deleted \/ delDone # ex.dep0
+--- REPLACE
+\* MUTATION: a shard-map change does not leave the pass owed.
+               ELSE \/ phys # ex.phys0 \/ ex.del0 \/ deleted \/ delDone # ex.dep0
+--- END

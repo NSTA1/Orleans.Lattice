@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.Grains;
 namespace Orleans.Lattice.Replication.Grains;
 
@@ -23,10 +24,15 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// <summary>
     /// Parks <paramref name="entry"/> on the queue with the supplied
     /// <paramref name="failureReason"/> and <paramref name="retryCount"/>.
-    /// Returns the assigned <see cref="DeadLetterEntry.EntryId"/>. When
-    /// the queue is at
-    /// <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/>
-    /// the oldest entry is evicted to make room (FIFO).
+    /// Returns the assigned <see cref="DeadLetterEntry.EntryId"/>. Idempotent
+    /// by the entry's <c>(origin, timestamp, key, op)</c> identity: parking an
+    /// entry that is already parked returns its existing id. When the queue
+    /// already holds
+    /// <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/> entries
+    /// the enqueue is refused with
+    /// <see cref="ReplicationDeadLetterQueueFullException"/> - the queue never
+    /// evicts, because every parked entry is the only copy of an acknowledged
+    /// write (#4603) - and the caller must keep the entry unacknowledged.
     /// <para>
     /// <paramref name="reasonTag"/> is the canonical reason value
     /// stamped on the
@@ -39,8 +45,20 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// <see cref="LatticeReplicationMetrics.ReasonUnknown"/>) so the
     /// <c>reason</c> dimension stays stable across publishers.
     /// </para>
+    /// <para>
+    /// <paramref name="sourceLineage"/> is the source lineage the entry's sender
+    /// stamped on the batch it arrived in (issue #4707), kept with the parked
+    /// entry so an operator replay is checked against the lineage the tree has
+    /// drained by then. <see langword="null"/> for an unstamped entry.
+    /// </para>
     /// </summary>
-    Task<long> EnqueueAsync(WalRecord entry, string failureReason, int retryCount, string reasonTag, CancellationToken cancellationToken);
+    Task<long> EnqueueAsync(
+        WalRecord entry,
+        string failureReason,
+        int retryCount,
+        string reasonTag,
+        CancellationToken cancellationToken,
+        ReplicationSourceLineageStamp? sourceLineage = null);
 
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);
@@ -48,7 +66,14 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// <summary>Returns the number of entries currently parked.</summary>
     Task<int> CountAsync(CancellationToken cancellationToken);
 
-    /// <summary>Removes the entry with the supplied id. Returns <c>true</c> on removal; <c>false</c> otherwise.</summary>
+    /// <summary>
+    /// Removes the entry with the supplied id without applying it. Returns
+    /// <c>true</c> on removal; <c>false</c> otherwise. A foreign-origin entry's
+    /// write is then lost on this cluster for good, so its identity is first
+    /// recorded as lost on the tree's high-water-mark grain
+    /// (<see cref="IReplicationHighWaterMarkGrain.RecordLostAsync"/>), and an
+    /// entry that depends on it is dead-lettered rather than released (#4603).
+    /// </summary>
     Task<bool> DiscardAsync(long entryId, CancellationToken cancellationToken);
 
     /// <summary>
@@ -62,5 +87,14 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
 
     /// <summary>Returns the parked entry with the supplied id, or <c>null</c> when no such entry is parked.</summary>
     Task<DeadLetterEntry?> TryGetAsync(long entryId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether the queue holds a parked write of <paramref name="originClusterId"/>
+    /// at <paramref name="timestamp"/> (issue #4586). An entry counts as held from
+    /// its durable enqueue until its durable removal. Interleaves, so the origin
+    /// frontier grain can ask while this grain waits on it.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsHoldingAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken);
 }
 

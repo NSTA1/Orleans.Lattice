@@ -615,6 +615,8 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var undo = ApplyPendingCheckpointAdvance(pending);
+        var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+        PruneDiscardedSagaPreparesCoveredByCheckpoints();
         try
         {
             await PersistAsync();
@@ -624,6 +626,7 @@ internal sealed partial class BPlusLeafGrain
             // Issue #4017: the durable write failed, so the advance is NOT
             // durable and must not be readable as though it were.
             RollbackCheckpointCommit(in undo, pending);
+            RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
             throw;
         }
 
@@ -649,9 +652,16 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     private async Task FlushPendingCheckpointAsync(bool persistEvenWithoutPendingAdvance)
     {
+        // Retire applied-terminal witnesses the registry has forgotten (issue
+        // #4545) ahead of the write that persists the witness. Throttled and
+        // best-effort: it never fails the flush.
+        await PruneTerminalWitnessAsync();
+
         if (_pendingCheckpointOffsetsByPartition is { Count: > 0 } pending)
         {
             var undo = ApplyPendingCheckpointAdvance(pending);
+            var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+            PruneDiscardedSagaPreparesCoveredByCheckpoints();
             try
             {
                 await PersistAsync();
@@ -661,6 +671,7 @@ internal sealed partial class BPlusLeafGrain
                 // Issue #4017: the durable write failed, so the advance is NOT
                 // durable and must not be readable as though it were.
                 RollbackCheckpointCommit(in undo, pending);
+                RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
                 throw;
             }
             // The durable advance has now committed. Per the #2220
@@ -674,7 +685,17 @@ internal sealed partial class BPlusLeafGrain
 
         if (persistEvenWithoutPendingAdvance)
         {
-            await PersistAsync();
+            var discardedSagaPrepareUndo = CloneDiscardedSagaPrepares(state.State.DiscardedSagaPrepares);
+            PruneDiscardedSagaPreparesCoveredByCheckpoints();
+            try
+            {
+                await PersistAsync();
+            }
+            catch
+            {
+                RestoreDiscardedSagaPrepares(discardedSagaPrepareUndo);
+                throw;
+            }
             // Durable write committed; contain the post-persist tail so a
             // notification failure cannot destroy the activation (#2220).
             await CompleteCheckpointFlushTailAsync();
@@ -1202,9 +1223,16 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         MergeIntoProjection(mutation.Key, incoming);
         AdvanceProjectionClock(mutation.Timestamp);
+        // A replayed terminal backstop settled its key here (issue #4545). The
+        // record does not say whether it carried a prepare stamp, so it is
+        // recorded either way: a superset of the witness is still exact about
+        // what the terminal settled.
+        if (mutation.IsBackstop)
+            RecordTerminalWitness(mutation.TransactionId, mutation.Key);
     }
 
     /// <summary>
@@ -1223,6 +1251,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = mutation.ExpiresAtTicks,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         // Carry the WAL-stamped typed CRDT delta and merge mode into the
         // pending-tx delta side-map so the activation-time replay
@@ -1237,7 +1266,9 @@ internal sealed partial class BPlusLeafGrain
             mutation.Key,
             incoming,
             delta: mutation.Delta,
-            mode: mutation.Mode);
+            mode: mutation.Mode,
+            batch: (mutation.AtomicBatchSize, mutation.AtomicBatchIndex),
+            stampOriginal: mutation.PrepareStampOriginal);
         AdvanceProjectionClock(mutation.Timestamp);
     }
 
@@ -1251,6 +1282,7 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = 0,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
         MergeIntoProjection(mutation.Key, tombstone);
         AdvanceProjectionClock(mutation.Timestamp);
@@ -1271,8 +1303,9 @@ internal sealed partial class BPlusLeafGrain
             ExpiresAtTicks = 0,
             OriginClusterId = mutation.OriginClusterId,
             VectorClock = mutation.VectorClock,
+            IsMigrated = mutation.IsMigrated,
         };
-        AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone);
+        AddPreparedMutation(mutation.TransactionId, mutation.Key, tombstone, batch: (mutation.AtomicBatchSize, mutation.AtomicBatchIndex), stampOriginal: mutation.PrepareStampOriginal);
         AdvanceProjectionClock(mutation.Timestamp);
     }
 

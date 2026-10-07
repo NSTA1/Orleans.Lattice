@@ -34,6 +34,9 @@ internal sealed class LatticeReplicationGrpcMethods
     /// <summary>The unary get-config RPC method name.</summary>
     public const string GetReplicationConfigMethodName = "GetReplicationConfig";
 
+    /// <summary>The unary decommission-peer RPC method name.</summary>
+    public const string DecommissionPeerMethodName = "DecommissionPeer";
+
     /// <summary>The unary, unauthenticated auth-scheme advertisement RPC method name.</summary>
     public const string GetAuthSchemeMethodName = "GetAuthScheme";
 
@@ -45,6 +48,8 @@ internal sealed class LatticeReplicationGrpcMethods
         Serializer<ReplicationDisableResponse> disableResponseSerializer,
         Serializer<ReplicationGetConfigRequest> getConfigRequestSerializer,
         Serializer<ReplicationConfigResponse> getConfigResponseSerializer,
+        Serializer<ReplicationDecommissionPeerRequestMessage> decommissionPeerRequestSerializer,
+        Serializer<ReplicationDecommissionPeerResponse> decommissionPeerResponseSerializer,
         Serializer<AuthSchemeAdvertisementRequest> authSchemeRequestSerializer,
         Serializer<AuthSchemeAdvertisement> authSchemeAdvertisementSerializer)
     {
@@ -54,6 +59,8 @@ internal sealed class LatticeReplicationGrpcMethods
         ArgumentNullException.ThrowIfNull(disableResponseSerializer);
         ArgumentNullException.ThrowIfNull(getConfigRequestSerializer);
         ArgumentNullException.ThrowIfNull(getConfigResponseSerializer);
+        ArgumentNullException.ThrowIfNull(decommissionPeerRequestSerializer);
+        ArgumentNullException.ThrowIfNull(decommissionPeerResponseSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeRequestSerializer);
         ArgumentNullException.ThrowIfNull(authSchemeAdvertisementSerializer);
 
@@ -78,6 +85,13 @@ internal sealed class LatticeReplicationGrpcMethods
             requestMarshaller: LatticeReplicationGrpcMarshallers.Create(getConfigRequestSerializer),
             responseMarshaller: LatticeReplicationGrpcMarshallers.Create(getConfigResponseSerializer));
 
+        DecommissionPeer = new Method<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse>(
+            type: MethodType.Unary,
+            serviceName: ServiceName,
+            name: DecommissionPeerMethodName,
+            requestMarshaller: LatticeReplicationGrpcMarshallers.Create(decommissionPeerRequestSerializer),
+            responseMarshaller: LatticeReplicationGrpcMarshallers.Create(decommissionPeerResponseSerializer));
+
         GetAuthScheme = new Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(
             type: MethodType.Unary,
             serviceName: ServiceName,
@@ -94,6 +108,9 @@ internal sealed class LatticeReplicationGrpcMethods
 
     /// <summary>The unary <c>GetReplicationConfig</c> RPC.</summary>
     public Method<ReplicationGetConfigRequest, ReplicationConfigResponse> GetReplicationConfig { get; }
+
+    /// <summary>The unary <c>DecommissionPeer</c> RPC.</summary>
+    public Method<ReplicationDecommissionPeerRequestMessage, ReplicationDecommissionPeerResponse> DecommissionPeer { get; }
 
     /// <summary>The unary, unauthenticated <c>GetAuthScheme</c> advertisement RPC.</summary>
     public Method<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement> GetAuthScheme { get; }
@@ -114,6 +131,8 @@ internal sealed class LatticeReplicationGrpcMethods
             serializerProvider.GetRequiredService<Serializer<ReplicationDisableResponse>>(),
             serializerProvider.GetRequiredService<Serializer<ReplicationGetConfigRequest>>(),
             serializerProvider.GetRequiredService<Serializer<ReplicationConfigResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<ReplicationDecommissionPeerRequestMessage>>(),
+            serializerProvider.GetRequiredService<Serializer<ReplicationDecommissionPeerResponse>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisementRequest>>(),
             serializerProvider.GetRequiredService<Serializer<AuthSchemeAdvertisement>>());
     }

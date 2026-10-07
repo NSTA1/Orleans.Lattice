@@ -1,0 +1,28 @@
+# Pairs with RImportFenceLifts. Regression check for issue #4730 as filed. A
+# decided barrier's withdrawal from its trees' indexes fails, its retention TTL
+# clears it, and a reader of the index takes the cleared barrier's answer -
+# not decided - as an undecided barrier: every later import of the tree is
+# read-fenced for good. #4732 settles each entry at the barrier, where one that
+# holds no arrival holds nothing, and withdraws before the TTL clears.
+MODULE: RImportFenceLiftsStaleIndexEntry
+TARGET: RImportFenceLifts
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a barrier the TTL cleared stays in its trees' index, and a reader counts its entry as undecided
+PERTURBS: BarrierTtlExpire
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0, BarrierTtl = 1, IndexFaults = 1
+
+--- FIND
+    /\ idx' = FALSE
+    /\ bclr' = TRUE
+--- REPLACE
+\* MUTATION: the TTL clears without withdrawing.
+    /\ idx' = idx
+    /\ bclr' = TRUE
+--- END
+--- FIND
+IndexedHolds == idx /\ cdec = "inflight" /\ \E w \in Trees : carr[w] # "none"
+--- REPLACE
+\* MUTATION: an entry is read through GetDecisionAsync, not settled.
+IndexedHolds == idx /\ cdec = "inflight"
+--- END

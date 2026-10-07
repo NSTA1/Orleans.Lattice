@@ -92,6 +92,50 @@ public partial class AtomicWriteGrainTests
     }
 
     [Test]
+    public async Task ExecuteAsync_stays_bound_after_a_refusal_when_its_bound_copy_mirrors_into_the_new_copy()
+    {
+        // Issue #4454: a refusal that names the bound copy arrives after part of
+        // the batch was prepared there, and the tree has flipped to a resize's
+        // destination the bound copy mirrors into. Re-binding would leave those
+        // prepares on the old copy for a resize undo to re-expose; the saga stays
+        // bound and dispatches again (the routing tier then places it on the bound
+        // copy), without spending its retry budget.
+        var (grain, state, _, lattice, shard) = CreateGrain();
+        var current = RoutingTo(TreeId);
+        lattice.GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(current));
+        lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
+            .Returns(_ => new ValueTask<RoutingInfo>(current));
+        shard.GetMirrorDestinationAsync().Returns(Task.FromResult<string?>(MovedCopy));
+
+        var bindings = new List<string?>();
+        lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>()).Returns(_ =>
+        {
+            bindings.Add(LatticeAtomicBindingContext.Current);
+            if (bindings.Count == 1)
+            {
+                current = RoutingTo(MovedCopy);
+                throw new StaleTreeRoutingException(TreeId, TreeId, MovedCopy);
+            }
+
+            return Task.CompletedTask;
+        });
+        var retriesPersisted = new List<int>();
+        state.OnWriteState = s => retriesPersisted.Add(s.RetriesOnCurrentStep);
+
+        await grain.ExecuteAsync(TreeId, MakeEntries(("a", [1]), ("b", [2])));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(bindings, Is.EqualTo(new[] { TreeId, TreeId }),
+                "the batch is dispatched again bound to the same copy, never re-bound to the destination");
+            Assert.That(state.State.BoundPhysicalTreeId, Is.EqualTo(TreeId));
+            Assert.That(state.State.Phase, Is.EqualTo(AtomicWritePhase.Completed));
+            Assert.That(retriesPersisted, Is.All.EqualTo(0), "staying bound must not spend the retry budget");
+        });
+    }
+
+    [Test]
     public async Task ReceiveReminder_binds_a_saga_resumed_from_state_without_a_binding_before_it_dispatches()
     {
         // State persisted before the binding existed: the resumed dispatch must

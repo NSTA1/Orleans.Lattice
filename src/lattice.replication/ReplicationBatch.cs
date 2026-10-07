@@ -121,4 +121,43 @@ public readonly record struct ReplicationBatch
     /// </para>
     /// </summary>
     public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }
+
+    /// <summary>
+    /// Set while the sender has taken this peer off the log after a
+    /// write-ahead-log trim lost records it never shipped (issue #4534): the
+    /// export epoch the peer must bootstrap past. The receiver starts a full
+    /// bootstrap from the sender when it has not completed one with a greater
+    /// epoch, and echoes its last completed epoch in
+    /// <see cref="ReplicationAck.BootstrapEpoch"/>. Carried out of band by the
+    /// transport (the gRPC transport sends it as a call header), so the batch
+    /// framing is unchanged.
+    /// </summary>
+    internal long? ReseedAfterEpoch { get; init; }
+
+    /// <summary>
+    /// The sender's applied low watermark for this batch's tree at the
+    /// receiver (issue #4586), or <see langword="null"/> when the sender has
+    /// none to vouch for. Carried out of band by the transport (the gRPC
+    /// transport sends it as a call header), so the batch framing is
+    /// unchanged and a receiver that predates it ignores it.
+    /// </summary>
+    internal ReplicationSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// A chunk of this cluster's cross-tree purge frontier (issue #4733), or
+    /// <see langword="null"/>. Carried out of band beside the batch (a gRPC call
+    /// header), whatever the batch's tree.
+    /// </summary>
+    internal CrossTreePurgeFrontier? CrossTreePurgeFrontier { get; init; }
+
+    /// <summary>
+    /// The source tree lineage the sender read this batch's records under
+    /// (issue #4673): <see langword="null"/> when the source registry tracks no
+    /// lineage for the tree, <see cref="Guid.Empty"/> when the sender cannot tell
+    /// yet. A receiver that drained the source under another lineage refuses the
+    /// batch. Carried out of band by the transport (the gRPC transport sends it
+    /// as a call header), so the batch framing is unchanged and a receiver that
+    /// predates it ignores it.
+    /// </summary>
+    internal Guid? SourceLineage { get; init; }
 }

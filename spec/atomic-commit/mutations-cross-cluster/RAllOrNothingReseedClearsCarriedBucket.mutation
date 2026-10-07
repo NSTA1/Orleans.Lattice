@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. The re-seed clear discards the buckets of a saga the
+# export carried as prepared rows (undecided at the cut), so its terminals after
+# the rewind commit keys with no bucket. #4631 keeps a carried saga's buckets.
+MODULE: RAllOrNothingReseedClearsCarriedBucket
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the re-seed drain discards every leftover bucket of an undecided saga, the carried ones included
+PERTURBS: ReseedDrain
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+                        ELSE IF snap = "inflight" /\ ~ACarried(snap) THEN "none"
+
+--- REPLACE
+\* MUTATION: the clear discards carried buckets too.
+                        ELSE IF snap = "inflight" THEN "none"
+                        ELSE IF APrep(snap, k) /\ rterm[k] = "none" THEN "pending"
+
+--- END

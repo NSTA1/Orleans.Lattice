@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted in ReplicationReBootstrap. The low watermark is per lineage (#4586): a
+# restore drops what s had applied, so a watermark carried across it vouches for
+# writes the new contents lack, and their absence is reconciled as a delete.
+MODULE: ReconcileDeletesOnlyDeletedWatermarkKeptAcrossRestore
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the source keeps its watermark across a lineage re-stamp, so a value the restore dropped is taken for one it deleted
+PERTURBS: Restore
+
+--- FIND
+    /\ lost' = [o \in Others |-> cursor[<<o, s>>]]
+--- REPLACE
+\* MUTATION: the watermark is not reset by the re-stamp.
+    /\ lost' = lost
+--- END

@@ -545,6 +545,13 @@ if (options.SetManyEnvelopeBudget <= TimeSpan.Zero
         + "every batch write immediately and is never a useful configuration).");
 }
 
+if (options.ReplicationClockFloorLag < TimeSpan.FromSeconds(1)
+    || options.ReplicationClockFloorLag > TimeSpan.FromDays(1))
+{
+    return ValidateOptionsResult.Fail(
+        $"{nameof(LatticeOptions.ReplicationClockFloorLag)} must be between one second and one day "
+        + "(how far a replicated tree's WAL clock floor trails the wall clock; it bounds how long an idempotency key stays usable).");
+}
 if (options.WalThrottledAdmissionPace < TimeSpan.Zero)
 {
     return ValidateOptionsResult.Fail(

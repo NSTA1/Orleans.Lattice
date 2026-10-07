@@ -1,0 +1,20 @@
+# Pairs with RAllOrNothing. A detach releases the peer's cross-tree purge hold:
+# the origin purges the sub-saga while the peer's barrier has not decided. Only a
+# decommission releases the hold.
+MODULE: RAllOrNothingCrossTreeHoldReleasedOnDetach
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a detached peer releases the cross-tree purge hold
+PERTURBS: OriginPurge
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0
+
+--- FIND
+       ELSE /\ ~Held
+            /\ CrossTreeAcked
+
+--- REPLACE
+\* MUTATION: a detach releases the cross-tree hold.
+       ELSE /\ ~Held
+            /\ (CrossTreeAcked \/ detached)
+
+--- END

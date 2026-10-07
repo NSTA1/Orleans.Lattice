@@ -1,0 +1,40 @@
+# Pairs with UniqueOwner. Reproduces production before #4453 was fixed (#4457):
+# the undo cleared T's shadow-forward state (lifting its fence) before moving
+# the alias back, and armed R's redirect only after the swap. In the first
+# window T serves while the alias names R; in the second, R serves while the
+# alias names T.
+MODULE: UniqueOwnerUndoClearsBeforeSwap
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: the undo lifts the old copy's fence before the swap and arms the new copy after it, so both serve
+PERTURBS: UndoArm, UndoClear
+
+--- FIND
+UndoArm ==
+    /\ rz \in {"swapped", "retired"}
+    /\ alias = R
+    /\ redir' = TRUE
+    /\ rz' = "undoing"
+--- REPLACE
+UndoArm ==
+\* MUTATION: production order - R is armed last, after the swap.
+    /\ rz = "undoing"
+    /\ alias = T
+    /\ redir' = TRUE
+    /\ rz' = "undone"
+--- END
+
+--- FIND
+UndoClear ==
+    /\ rz = "undoing"
+    /\ alias = T
+    /\ fence' = {}
+    /\ rz' = "undone"
+--- REPLACE
+UndoClear ==
+\* MUTATION: production order - T's fence is lifted first, before the swap.
+    /\ rz \in {"swapped", "retired"}
+    /\ alias = R
+    /\ fence' = {}
+    /\ rz' = "undoing"
+--- END

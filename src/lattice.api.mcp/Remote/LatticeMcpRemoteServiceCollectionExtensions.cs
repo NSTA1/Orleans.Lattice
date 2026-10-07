@@ -168,6 +168,10 @@ public static class LatticeMcpRemoteServiceCollectionExtensions
             services.TryAddSingleton<ILatticeReplicationControl>(sp =>
                 new GrpcLatticeReplicationControl(LatticeReplicationApiGrpcClient.Create(
                     BuildRoutingInvoker(sp, options, replication, static r => r.Replication), sp)));
+            // Both facades share one adapter instance, so the peer-admin verb
+            // resolves to the same gRPC client as the control facade.
+            services.TryAddSingleton<ILatticeReplicationPeerAdmin>(sp =>
+                (ILatticeReplicationPeerAdmin)sp.GetRequiredService<ILatticeReplicationControl>());
             services.AddReplicationTools(options.EnableReplicationControl);
         }
 

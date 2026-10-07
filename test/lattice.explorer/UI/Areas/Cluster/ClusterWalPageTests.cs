@@ -1,4 +1,6 @@
 using Bunit;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using Orleans.Lattice.Api.Operations;
@@ -71,24 +73,29 @@ public sealed class ClusterWalPageTests : ClusterTestContext
         });
     }
 
+    // The page's WAL reclamation section finishes its own read on another thread, and
+    // its render can hold the renderer while the test fills the dialog in. Each step
+    // therefore finds its element and fires its event in one turn of the renderer and
+    // waits for the handler, so no step acts on a DOM a pending render has replaced
+    // (#4630).
     [Test]
-    public void The_plan_command_has_a_visible_control_whose_dialog_plans_at_a_resumable_address()
+    public async Task The_plan_command_has_a_visible_control_whose_dialog_plans_at_a_resumable_address()
     {
         UseTrees(Tree("orders"));
         var cut = RenderAt("/cluster/wal?tree=orders");
         var command = Services.GetServices<IExplorerArea>().OfType<ClusterArea>().Single().Commands.Single(candidate => candidate.Id == ClusterArea.PlanWalMoveCommandId);
 
         ExplorerCommandControls.AssertVisibleControl(cut, command);
-        cut.Find($"[data-lt-command=\"{command.Id}\"]").Click();
+        await cut.FireAsync(page => page.Find($"[data-lt-command=\"{command.Id}\"]").ClickAsync(new MouseEventArgs()));
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog input").GetAttribute("value"), Is.EqualTo("orders")));
         Assert.That(cut.Markup, Does.Contain("Known keys: blob-a, blob-b."));
 
-        cut.Find(".lt-dialog form").Submit();
+        await cut.FireAsync(page => page.Find(".lt-dialog form").SubmitAsync());
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog .lt-field__error"), Has.Count.EqualTo(2)));
 
-        cut.FindAll(".lt-dialog input")[1].Input("1");
-        cut.FindAll(".lt-dialog input")[2].Input("blob-b");
-        cut.Find(".lt-dialog form").Submit();
+        await cut.FireAsync(page => page.FindAll(".lt-dialog input")[1].InputAsync(new ChangeEventArgs { Value = "1" }));
+        await cut.FireAsync(page => page.FindAll(".lt-dialog input")[2].InputAsync(new ChangeEventArgs { Value = "blob-b" }));
+        await cut.FireAsync(page => page.Find(".lt-dialog form").SubmitAsync());
 
         cut.WaitUntil(() => Assert.That(Navigation.Uri, Does.EndWith("/cluster/wal?tree=orders&partition=1&target=blob-b")));
     }

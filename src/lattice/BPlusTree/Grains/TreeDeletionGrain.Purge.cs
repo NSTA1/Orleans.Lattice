@@ -52,7 +52,8 @@ internal sealed partial class TreeDeletionGrain
         DateTimeOffset? LogicalDeletedAtUtc,
         bool LogicalPurgeInProgress,
         bool LogicalPurgeComplete,
-        bool RegistryUnregisterPending);
+        bool RegistryUnregisterPending,
+        long DeletionEpoch);
 
     private DurableDeletion Durable => _durable ??= CaptureDurable();
 
@@ -62,7 +63,7 @@ internal sealed partial class TreeDeletionGrain
         return new DurableDeletion(
             s.IsDeleted, s.DeletedAtUtc, s.RetainsRegistryEntry, s.PurgeInProgress, s.PurgeComplete,
             s.NextShardIndex, s.PurgeShardCount, s.LogicalPhysicalTreeId, s.LogicalDeletedAtUtc,
-            s.LogicalPurgeInProgress, s.LogicalPurgeComplete, s.RegistryUnregisterPending);
+            s.LogicalPurgeInProgress, s.LogicalPurgeComplete, s.RegistryUnregisterPending, s.DeletionEpoch);
     }
 
     /// <inheritdoc />
@@ -118,6 +119,7 @@ internal sealed partial class TreeDeletionGrain
                 PurgeComplete = d.LogicalPurgeComplete,
                 PurgedShardCount = done,
                 PurgeShardCount = total,
+                DeletionEpoch = d.DeletionEpoch,
             };
         }
 
@@ -141,6 +143,7 @@ internal sealed partial class TreeDeletionGrain
             PurgeComplete = !retired && d.PurgeComplete && !finalising,
             PurgedShardCount = purged,
             PurgeShardCount = shards,
+            DeletionEpoch = d.DeletionEpoch,
         };
     }
 
@@ -230,6 +233,7 @@ internal sealed partial class TreeDeletionGrain
         if (!target.PurgeComplete)
             await ValidateOwnedTargetAsync(physical);
 
+        await AnnouncePurgeAsync();
         if (!state.State.LogicalPurgeInProgress)
         {
             state.State.LogicalPurgeInProgress = true;

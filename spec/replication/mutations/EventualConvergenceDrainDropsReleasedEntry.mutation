@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence. A drained entry leaves the buffer without
+# being merged - a drained apply that fails and is neither retried nor
+# dead-lettered (DrainBufferAsync dead-letters it). The entry was acknowledged
+# when it was parked, so nothing re-sends it.
+MODULE: EventualConvergenceDrainDropsReleasedEntry
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a drained entry is removed from the buffer without being applied
+PERTURBS: Drain
+BOUNDS: MaxFaults = 0, MaxHlc = 1
+
+--- FIND
+               /\ val' = Merged(x, r)
+--- REPLACE
+\* MUTATION: the released entry is not merged.
+               /\ val' = val
+--- END

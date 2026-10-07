@@ -119,16 +119,58 @@ public sealed class RemoteSnapshotProvider : IBootstrapSnapshotSource
             sourceClusterId,
             metadata.AsOfHlc);
 
-        var entries = DrainAsync(treeName, sourceClusterId, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, metadata.AsOfHlc, metadata.CausalStableFrontier, entries);
+        SnapshotStream? stream = null;
+        var entries = DrainAsync(
+            treeName,
+            sourceClusterId,
+            asOfHlc,
+            trailer =>
+            {
+                stream!.CloseGeneration = trailer.CloseGeneration;
+                stream.SiblingBoundaries = trailer.SiblingBoundaries;
+                stream.SourceFrontier = trailer.SourceFrontier;
+            },
+            cancellationToken);
+        stream = new SnapshotStream(
+            treeName,
+            metadata.AsOfHlc,
+            metadata.CausalStableFrontier,
+            entries)
+        {
+            OpenGeneration = metadata.OpenGeneration,
+            OpenFrontier = metadata.SourceFrontier,
+            ExportEpoch = metadata.ExportEpoch,
+            CrossTreeHoldHonoured = metadata.CrossTreeHoldHonoured,
+        };
+        return stream;
     }
 
     private async IAsyncEnumerable<SnapshotEntry> DrainAsync(
         string treeName,
         string sourceClusterId,
         HybridLogicalClock asOfHlc,
+        Action<RemoteSnapshotStreamItem> setTrailer,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (_transport is IRemoteSnapshotItemTransport itemTransport)
+        {
+            await foreach (var item in itemTransport
+                .RequestSnapshotItemsAsync(treeName, sourceClusterId, asOfHlc, cancellationToken)
+                .WithCancellation(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                if (item.IsTrailer)
+                {
+                    setTrailer(item);
+                    continue;
+                }
+
+                yield return item.Entry;
+            }
+
+            yield break;
+        }
+
         await foreach (var entry in _transport
             .RequestSnapshotAsync(treeName, sourceClusterId, asOfHlc, cancellationToken)
             .WithCancellation(cancellationToken)

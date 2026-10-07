@@ -1,0 +1,16 @@
+# Pairs with RevertReturns, under the fairness Spec asserts (issue #4441 F9).
+# A retried revert that finds the alias already back on the previous copy
+# returns without redoing the redirect fix-up, so a revert that crashed
+# between its swap and that fix-up never returns.
+MODULE: RevertReturnsRetryStopsAfterSwap
+TARGET: RevertReturns
+CLASS: Temporal
+SUMMARY: a retried revert never resumes the redirect fix-up after a crash
+PERTURBS: Retry
+
+--- FIND
+               [] alias = "prev" -> "reverting"
+--- REPLACE
+               \* MUTATION: the retry stays failed once the alias is back.
+               [] alias = "prev" -> "revertFailed"
+--- END

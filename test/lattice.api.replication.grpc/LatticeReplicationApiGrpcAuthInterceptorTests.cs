@@ -74,6 +74,20 @@ public sealed class LatticeReplicationApiGrpcAuthInterceptorTests
     }
 
     [Test]
+    public void DescribeCall_maps_decommission_to_operation_and_target()
+    {
+        var (operation, target) = LatticeReplicationApiGrpcAuthInterceptor.DescribeCall(
+            FullMethod("DecommissionPeer"),
+            new ReplicationDecommissionPeerRequestMessage { PeerClusterId = "peer-b" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(operation, Is.EqualTo(LatticeReplicationApiOperation.DecommissionPeer));
+            Assert.That(target, Is.EqualTo("peer-b"));
+        });
+    }
+
+    [Test]
     public void DescribeCall_maps_unknown_method_to_Unknown()
     {
         var (operation, target) = LatticeReplicationApiGrpcAuthInterceptor.DescribeCall(

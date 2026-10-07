@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Tests.Formal;
 
 /// <summary>
 /// Resolves the <c>Fixture.TestMethod</c> names cited as detectors by the
-/// Detector column of <c>spec/Refinement.md</c> against the C# under
+/// Detector column of <c>spec/atomic-commit/Refinement.md</c> against the C# under
 /// <c>test/</c>, using nothing but the source text.
 /// <para>
 /// WHY THIS EXISTS. A refinement row claims the spec abstracts a production
@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// </para>
 /// <para>
 /// A NAMED TEST IS NOT A TLA+ MUTATION, AND THE DISTINCTION IS THE POINT. Every
-/// property the base model checks already has a paired <c>spec/mutations</c>
+/// property the base model checks already has a paired <c>spec/&lt;area&gt;/mutations</c>
 /// file, guaranteed by
 /// <c>SpecMutationCatalogueTests.Every_property_the_base_model_checks_has_a_mutation</c>.
 /// Those mutations perturb the SPEC. They would not notice a production
@@ -90,9 +90,16 @@ internal sealed class RefinementDetectorResolver
         }
     }
 
-    /// <summary>A resolver over the repository's own <c>test/</c> tree.</summary>
-    public static RefinementDetectorResolver ForRepository() =>
-        new(Path.Combine(HygieneRepository.FindRepoRoot(), "test"));
+    private static readonly Lazy<RefinementDetectorResolver> Repository =
+        new(() => new RefinementDetectorResolver(Path.Combine(HygieneRepository.FindRepoRoot(), "test")));
+
+    /// <summary>
+    /// A resolver over the repository's own <c>test/</c> tree, built once per
+    /// test run. Indexing the tree takes seconds and the tracked tree does not
+    /// change during a run, while the per-module gates and the discovery
+    /// controls ask for it dozens of times.
+    /// </summary>
+    public static RefinementDetectorResolver ForRepository() => Repository.Value;
 
     /// <summary>The test root this resolver was built over.</summary>
     public string TestRoot => _testRoot;

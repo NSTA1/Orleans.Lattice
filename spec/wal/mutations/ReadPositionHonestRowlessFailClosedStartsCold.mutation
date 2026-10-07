@@ -1,0 +1,41 @@
+# Pairs with ReadPositionHonest. A leaf whose row is gone, and which no create
+# path claims, comes up cold and empty instead of failing closed, and writes a
+# first row: the leaf guessing that a missing row means a new leaf. It reads past
+# owned writes the GC trimmed under its lost snapshot. The base fails closed.
+# Production analogue: #4671's R2 (detect skipped).
+MODULE: ReadPositionHonestRowlessFailClosedStartsCold
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a rowless leaf with no create intent comes up cold instead of failing closed
+PERTURBS: ActivateRowless
+
+--- FIND
+    /\ ~row[l]
+    /\ ~CreateIntent(l)
+    /\ UNCHANGED vars
+--- REPLACE
+    /\ ~row[l]
+    /\ ~CreateIntent(l)
+\* MUTATION: the rowless leaf comes up cold and empty instead of failing closed.
+    /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ row' = [row EXCEPT ![l] = TRUE]
+    /\ cache' = [cache EXCEPT ![l] = {}]
+    /\ rp' = [rp EXCEPT ![l] = -1]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED <<pinOff, pinHlc, hadSnap, purgeRec, cleared, deleted, purged>>
+    /\ UNCHANGED faults
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

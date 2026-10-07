@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication.Grains;
 
@@ -19,7 +20,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="IWalCursorRegistry.GetCausalStableAsync"/>:
 /// the snapshot is cut at the producer's causal-stable frontier
 /// (<c>min(consumer VC)</c>), so a receiver pinning that frontier on
-/// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/> can
+/// <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/> can
 /// safely accept the first incremental entry under the dependency
 /// check without parking it. When no consumer has reported a vector
 /// yet (the common case for a single-peer cluster, a fresh deployment
@@ -57,6 +58,42 @@ namespace Orleans.Lattice.Replication;
 /// This means a saga that lands a prepare-commit pair concurrent with
 /// the export is observed by the bootstrapped peer either at every
 /// key or at none, never at a strict subset.
+/// </para>
+/// <para>
+/// <b>Sagas that decide while the export reads (issue #4685).</b> The passes
+/// read each leaf at its own instant, so a saga that decides between two of
+/// those reads can be captured pre-saga on one key and post-saga (drained) on
+/// another - including a saga the registry snapshot never saw, which ships no
+/// decision row. The export therefore closes with a completion step: it takes
+/// a second registry snapshot once the passes are done, and for every saga
+/// decided since the first ships a decision row and, when it committed, every
+/// prepare of it the source's write-ahead log holds from the export's opening
+/// head onwards, as committed rows at their own prepare stamps. See
+/// <c>EnumerateCompletionAsync</c> for the argument.
+/// </para>
+/// <para>
+/// <b>Aged-out decisions over a resident prepare.</b> A saga snap0 reports as
+/// <see cref="TxStatus.Indeterminate"/> because its decision tombstone outlived
+/// the retention window is resolved to the verdict the registry still stores
+/// (<see cref="ITxRegistryGrain.GetRecordedStatusAsync"/>, the read the source
+/// leaf's self-terminalise sweep finishes such a prepare by) before either pass
+/// runs over it, so a saga whose terminal drained some keys and stranded others
+/// ships whole rather than split (#4481). An Indeterminate saga with no stored
+/// verdict (an unreachable cross-tree delegation) still ships as prepared rows,
+/// and a row already purged reads as absent and exports the split the source
+/// itself serves (#4508).
+/// </para>
+/// <para>
+/// <b>Deletes.</b> The committed projection enumerates live keys only, so the
+/// export ends with a tombstone pass that ships every tombstone a source leaf
+/// still holds as a committed tombstone row (<see cref="SnapshotEntry.IsTombstone"/>
+/// set, <see cref="SnapshotEntry.IsPrepared"/> clear), and the prepared-row pass
+/// ships a pending delete of a saga the frozen registry view recorded as
+/// <see cref="TxStatus.Committed"/> the same way. A receiver that bootstraps in
+/// place over an existing copy - a peer that fell off the log - applies each as a
+/// Delete, so a key deleted while it was behind does not keep its old value
+/// (#4504). A tombstone the source has already reaped past
+/// <c>TombstoneGracePeriod</c> cannot ship (#4537).
 /// </para>
 /// <para>
 /// <b>Performance note.</b> The default implementation pays one
@@ -109,8 +146,137 @@ internal sealed class LatticeSnapshotProvider(
             frontier = await hwm.GetVectorAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        var entries = EnumerateAsync(treeName, asOfHlc, cancellationToken);
-        return new SnapshotStream(treeName, asOfHlc, frontier, entries);
+        // Number the export before its registry snap0, which the enumeration
+        // takes when it starts (#4534): an epoch greater than the one a
+        // shipper recorded when it took a peer off the log therefore proves
+        // this export's snap0 came after that point.
+        var epoch = await _grainFactory
+            .GetGrain<Orleans.Lattice.Replication.Grains.IReplicationExportEpochGrain>(treeName)
+            .AdvanceAsync()
+            .ConfigureAwait(false);
+
+
+        var openGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+
+        // The source's applied low watermarks (#4586 part 2b), read after the
+        // open generation and before the enumeration's prepared pass and snap0.
+        // Only an unbounded export carries them: a bounded one omits every key
+        // overwritten after its cut, so it does not reflect what they cover.
+        var frontierAtOpen = asOfHlc == HybridLogicalClock.Zero
+            ? await CaptureFrontierAtOpenAsync(treeName, openGeneration, cancellationToken).ConfigureAwait(false)
+            : null;
+        SnapshotStream? stream = null;
+        var entries = EnumerateWithCloseGenerationAsync();
+        stream = new SnapshotStream(treeName, asOfHlc, frontier, entries)
+        {
+            OpenGeneration = openGeneration,
+            OpenFrontier = frontierAtOpen,
+            ExportEpoch = epoch,
+        };
+        return stream;
+
+        async IAsyncEnumerable<SnapshotEntry> EnumerateWithCloseGenerationAsync(
+            [EnumeratorCancellation] CancellationToken iteratorCancellationToken = default)
+        {
+            var linked = iteratorCancellationToken.CanBeCanceled
+                ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, iteratorCancellationToken)
+                : null;
+            var effectiveCancellationToken = linked?.Token ?? cancellationToken;
+            try
+            {
+                await foreach (var entry in EnumerateAsync(treeName, asOfHlc, effectiveCancellationToken)
+                    .ConfigureAwait(false))
+                {
+                    yield return entry;
+                }
+
+                stream!.CloseGeneration = await CaptureSourceGenerationAsync(treeName).ConfigureAwait(false);
+                stream.SourceFrontier = frontierAtOpen;
+            }
+            finally
+            {
+                linked?.Dispose();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads the source's applied frontier for the tree when the export opens
+    /// (issue #4586 part 2b): every foreign origin's low watermark and held
+    /// writes from this cluster's receiver tree frontier, kept only when the
+    /// frontier observed the open generation's lineage. <see langword="null"/>
+    /// when the tree registry tracks no lineage for the tree.
+    /// <para>
+    /// The source's own origin is never covered. A restore, revert or alias
+    /// move of the source's tree can lose its own writes without deleting them,
+    /// and no floor bounds the lost range soundly, so a positive own-origin
+    /// watermark could fabricate deletes or drop deliveries the receiver needs.
+    /// Nothing needs one: the source's shipped watermark, tagged with the
+    /// receiver's lineage after its re-seed rewind, covers the source's writes
+    /// at that receiver.
+    /// </para>
+    /// </summary>
+    private async Task<SnapshotSourceFrontier?> CaptureFrontierAtOpenAsync(
+        string treeName,
+        SnapshotSourceGeneration openGeneration,
+        CancellationToken cancellationToken)
+    {
+        if (openGeneration.Lineage is not { } lineage)
+        {
+            return null;
+        }
+
+        var ownOrigin = _options.Get(treeName).ClusterId;
+        var lows = new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+        var held = new Dictionary<string, HybridLogicalClock[]>(StringComparer.Ordinal);
+        var frontier = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
+            .GetAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (frontier.Epoch != Guid.Empty && frontier.RegistryLineage == lineage)
+        {
+            foreach (var (origin, lowWatermark) in frontier.LowWatermarks)
+            {
+                if (string.Equals(origin, ownOrigin, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                lows[origin] = lowWatermark;
+                var identities = await _grainFactory.GetGrain<IReplicationOriginFrontierGrain>(origin)
+                    .GetHeldForTreeAsync(treeName, cancellationToken)
+                    .ConfigureAwait(false);
+                if (identities.Length > 0)
+                {
+                    held[origin] = identities;
+                }
+            }
+        }
+
+        return new SnapshotSourceFrontier { Lineage = lineage, LowWatermarks = lows, Held = held };
+    }
+
+    private async Task<SnapshotSourceGeneration> CaptureSourceGenerationAsync(string treeName)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(false);
+        if (entry is null)
+        {
+            return new SnapshotSourceGeneration();
+        }
+
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false);
+        var deletion = await _grainFactory.GetGrain<ITreeDeletionGrain>(treeName)
+            .GetDeletionStatusAsync()
+            .ConfigureAwait(false);
+        return new SnapshotSourceGeneration
+        {
+            PhysicalTreeId = physicalTreeId,
+            ShardMapVersion = shardMap?.Version ?? 0L,
+            Lineage = entry.Lineage,
+            DeleteEpoch = deletion.DeletionEpoch,
+            IsDeleted = deletion.IsDeleted || deletion.PurgeInProgress || deletion.PurgeComplete,
+        };
     }
 
     private async IAsyncEnumerable<SnapshotEntry> EnumerateAsync(
@@ -118,8 +284,49 @@ internal sealed class LatticeSnapshotProvider(
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var lattice = _grainFactory.GetGrain<ILattice>(treeName);
+        // Issue #4685: hold the tree's saga decisions from before snap0 until the
+        // completion has read them, so a saga that decides during the export is
+        // still recorded at close and ships its decision row.
+        var physicalTreeId = await _grainFactory.GetLatticeRegistry().ResolveAsync(treeName).ConfigureAwait(false);
+        var purgeHold = _grainFactory.GetGrain<IWalPurgeHoldGrain>(physicalTreeId);
+        var holdKey = ExportPurgeHoldPrefix + Guid.NewGuid().ToString("N");
+        await ReleaseStaleExportHoldsAsync(purgeHold).ConfigureAwait(false);
+        await purgeHold.AddAsync(holdKey, Array.Empty<long>()).ConfigureAwait(false);
+        try
+        {
+            await foreach (var entry in EnumerateHeldAsync(treeName, asOfHlc, physicalTreeId, cancellationToken)
+                .ConfigureAwait(false))
+            {
+                yield return entry;
+            }
+        }
+        finally
+        {
+            await purgeHold.RemoveAsync(holdKey).ConfigureAwait(false);
+        }
+    }
+
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateHeldAsync(
+        string treeName,
+        HybridLogicalClock asOfHlc,
+        string physicalTreeId,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        // Read the rows from the physical copy the export stamps, never through
+        // the logical tree's grain: a LatticeGrain caches its physical routing
+        // per activation and drops it only on a routing error, so after an alias
+        // move that leaves the old copy intact it keeps reading the old copy,
+        // while the heads, the generation, the lineage and the close check are
+        // all of physicalTreeId. Mixing the two shipped the old copy's rows
+        // under the new copy's lineage (issue #4673's re-seed after an alias move).
+        var lattice = _grainFactory.GetGrain<ILattice>(physicalTreeId);
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
+
+        // Issue #4685: every WAL partition's readable head, captured BEFORE
+        // snap0, so every prepare a saga stages after snap0 is at or above it.
+        // See EnumerateCompletionAsync.
+        var partitions = Math.Max(1, _options.Get(treeName).ReplogPartitions);
+        var openHeads = await ReadHeadsAsync(physicalTreeId, partitions, readable: true, cancellationToken).ConfigureAwait(false);
 
         // Freeze a tree-wide view of saga decisions for the duration of
         // this export. The TxRegistry is the single tree-wide
@@ -131,6 +338,10 @@ internal sealed class LatticeSnapshotProvider(
         var snap0 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
             .StableSnapshotAsync(_grainFactory, treeName)
             .ConfigureAwait(false);
+        if (AfterRegistrySnapshotForTesting is { } afterSnapshot)
+        {
+            await afterSnapshot().ConfigureAwait(false);
+        }
 
         // The prepared-row pass runs BEFORE the committed-projection
         // pass. Order matters because a source-side terminal that
@@ -161,10 +372,22 @@ internal sealed class LatticeSnapshotProvider(
         // bootstrap) it is emitted and LWW dominates the prepare-time
         // HLC stamped on the pending bucket, so the post-saga value
         // is the steady-state result either way.
-        await foreach (var prepared in EnumeratePreparedAsync(treeName, snap0, asOfHlc, cancellationToken)
+        var recordedResolved = new HashSet<Guid>();
+        var preparedSagas = new HashSet<Guid>();
+        var lateDecided = new HashSet<Guid>();
+        // Every row of a cross-tree sub-saga names its operation, so a receiver
+        // can tell which cross-tree barriers the import settles (#4683).
+        var crossTreeNames = new CrossTreeNames(_grainFactory, treeName);
+        await foreach (var prepared in EnumeratePreparedAsync(
+                treeName, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
-            yield return prepared;
+            yield return await crossTreeNames.NameAsync(prepared).ConfigureAwait(false);
+        }
+
+        if (AfterPreparedPassForTesting is { } afterPrepared)
+        {
+            await afterPrepared().ConfigureAwait(false);
         }
 
         using (LatticeRegistrySnapshotContext.BeginScope(snap0))
@@ -199,6 +422,11 @@ internal sealed class LatticeSnapshotProvider(
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                if (BeforeCommittedEntryForTesting is { } beforeEntry)
+                {
+                    await beforeEntry(pair.Key).ConfigureAwait(false);
+                }
+
                 var versioned = await lattice
                     .GetWithVersionAsync(pair.Key, cancellationToken)
                     .ConfigureAwait(false);
@@ -226,6 +454,476 @@ internal sealed class LatticeSnapshotProvider(
                     Timestamp = versioned.Version,
                     ExpiresAtTicks = versioned.ExpiresAtTicks,
                 };
+            }
+        }
+
+        // Tombstone pass (#4504). The committed projection enumerates live
+        // keys only, so on its own a snapshot never ships a delete. A
+        // receiver that bootstraps in place - a peer that fell off the log
+        // re-bootstraps over its existing copy, which the drain does not
+        // clear - would keep the old value of every key the source deleted
+        // while it was behind, and the delete's WAL record is behind the trim
+        // point, so the incremental stream never delivers it either. Every
+        // tombstone the source still holds therefore ships as a committed
+        // tombstone row, which the drain applies as a Delete. Pass order is
+        // immaterial: a tombstone and a live row for the same key resolve by
+        // HLC under last-writer-wins on the receiver. A tombstone the source
+        // has already reaped (CompactTombstonesAsync, past
+        // TombstoneGracePeriod) cannot ship and remains a residual (#4537).
+        await foreach (var tombstone in EnumerateTombstonesAsync(treeName, asOfHlc, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return tombstone;
+        }
+
+        // Decision rows (#4482): every saga the source still STORES a decision
+        // for, settled as of this export. The source's write-ahead log can
+        // still retain a saga record from before the cut - a prepare in one
+        // partition whose terminal's partition was already trimmed - and the
+        // incremental stream re-ships it after the bootstrap. The receiver
+        // records these outcomes in its registry and settles a re-shipped
+        // prepare against them instead of staging it where no terminal will
+        // drain it. An aged-out row with no resident bucket is resolved to its
+        // recorded verdict here, exactly as the prepared pass resolves one
+        // over a bucket (#4481). A row the source has already purged cannot
+        // be exported; a re-seed's receiver decides such a saga's stale
+        // pending buckets aborted (#4533), so a saga the source still knows
+        // but cannot settle (an unresolved Indeterminate row) ships as a
+        // value-less row naming it, which keeps the receiver from treating it
+        // as purged. A receiver that predates it skips a row with no value.
+        await crossTreeNames.PrefetchAsync(snap0?.Keys ?? Enumerable.Empty<Guid>()).ConfigureAwait(false);
+        foreach (var (txid, decided) in snap0?.ToList() ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var status = decided;
+            if (status == TxStatus.Indeterminate && recordedResolved.Add(txid))
+            {
+                var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                    .GetRegistry(_grainFactory, treeName, txid)
+                    .GetRecordedStatusAsync(txid)
+                    .ConfigureAwait(false);
+                if (recorded is TxStatus.Committed or TxStatus.Aborted)
+                {
+                    snap0![txid] = recorded;
+                    status = recorded;
+                }
+            }
+
+            if (status is TxStatus.Committed or TxStatus.Aborted)
+            {
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    // No value: a receiver that predates the decision slot
+                    // skips a committed row that carries none.
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = status == TxStatus.Committed,
+                }).ConfigureAwait(false);
+            }
+            else
+            {
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                }).ConfigureAwait(false);
+            }
+        }
+
+        // Late decisions (#4627). A saga snap0 had in flight can decide and
+        // drain some of its keys while the passes run: those keys reach the
+        // committed pass as plain values, the rest ship as prepared rows. Were
+        // its terminal then trimmed (a forced gap), nothing would ever settle
+        // the prepared rows on the receiver, which would serve the saga split.
+        // So every saga shipped as prepared rows is re-read once the passes are
+        // done, and a decision recorded meanwhile ships as a decision row too.
+        foreach (var txid in preparedSagas)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snap0 is not null && snap0.TryGetValue(txid, out var known) && known is TxStatus.Committed or TxStatus.Aborted)
+            {
+                continue;
+            }
+
+            var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                .GetRegistry(_grainFactory, treeName, txid)
+                .GetRecordedStatusAsync(txid)
+                .ConfigureAwait(false);
+            if (recorded is TxStatus.Committed or TxStatus.Aborted)
+            {
+                lateDecided.Add(txid);
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = recorded == TxStatus.Committed,
+                }).ConfigureAwait(false);
+            }
+        }
+
+        if (SkipCompletionForTesting)
+        {
+            yield break;
+        }
+
+        await foreach (var completion in EnumerateCompletionAsync(
+                treeName, physicalTreeId, partitions, snap0, openHeads, lateDecided, crossTreeNames, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return completion;
+        }
+    }
+
+    /// <summary>
+    /// The export's completion step (issue #4685).
+    /// <para>
+    /// The passes read each leaf at its own instant. A saga S that decides
+    /// while they run can therefore be captured with one key pre-saga (read
+    /// before S prepared it) and another post-saga (read after S's terminal
+    /// drained it); and when S is absent from snap0 and the prepared pass
+    /// shipped no bucket of it, no decision row names it either. The receiver
+    /// would serve S split until the incremental stream delivered S's last
+    /// source-shard terminal.
+    /// </para>
+    /// <para>
+    /// The completion takes snap1 once the passes are done, then every WAL
+    /// partition's head C1. L is every saga decided in snap1 that snap0 did not
+    /// have decided. For each S in L it ships a decision row, and, when S
+    /// committed, every prepare of S the log holds in [C0, C1) as a committed
+    /// row at the prepare's own stamp. Why that ships every saga whole:
+    /// </para>
+    /// <list type="bullet">
+    /// <item><description>A saga undecided at snap1 has drained nothing before
+    /// the passes ended (a terminal drains only after the decision), so every
+    /// key of it shipped pre-saga or as a bucket; the receiver's tally hides it
+    /// until the stream settles it.</description></item>
+    /// <item><description>A saga decided at snap0 is shipped whole by the
+    /// passes, as before.</description></item>
+    /// <item><description>A key of an S in L whose prepare is below C0 was
+    /// prepared before the passes read it, so they captured it as its bucket
+    /// (which S's decision row settles) or as its drained value: never as
+    /// neither. C0 is read before snap0, so every prepare S stages after snap0
+    /// is at or above it.</description></item>
+    /// <item><description>A prepare of S at or above C0 precedes S's decision,
+    /// which precedes snap1, which precedes C1, so it is in [C0, C1) and ships
+    /// committed. Last-writer-wins at the prepare's own stamp keeps it above
+    /// the pre-saga value the passes may have shipped for the key (the leaf
+    /// stamped the prepare after that value), and makes it a no-op over the
+    /// drained value, which carries the same stamp. A typed CRDT prepare ships
+    /// its delta: CRDT deltas are joins, so applying it over a drained state
+    /// that already includes it changes nothing.</description></item>
+    /// </list>
+    /// <para>
+    /// The decision rows rely on S still being recorded at snap1: the export
+    /// holds the tree's decision purges (<see cref="IWalPurgeHoldGrain"/>) from
+    /// before snap0 until this step has read the log. The step fails closed,
+    /// with a retryable <see cref="TimeoutException"/> the bootstrap retries
+    /// whole, when the log no longer holds [C0, C1) or the tree was moved to
+    /// another physical copy while the export ran.
+    /// </para>
+    /// </summary>
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateCompletionAsync(
+        string treeName,
+        string physicalTreeId,
+        int partitions,
+        Dictionary<Guid, TxStatus>? snap0,
+        long[] openHeads,
+        HashSet<Guid> decisionRowsShipped,
+        CrossTreeNames crossTreeNames,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var snap1 = await Orleans.Lattice.BPlusTree.Grains.TxRegistryFanOut
+            .StableSnapshotAsync(_grainFactory, treeName)
+            .ConfigureAwait(false);
+
+        var committedLate = new HashSet<Guid>();
+        foreach (var (txid, decided) in snap1?.ToList() ?? [])
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (snap0 is not null && snap0.TryGetValue(txid, out var atOpen) && atOpen is TxStatus.Committed or TxStatus.Aborted)
+            {
+                continue;
+            }
+
+            var status = decided;
+            if (status == TxStatus.Indeterminate)
+            {
+                status = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                    .GetRegistry(_grainFactory, treeName, txid)
+                    .GetRecordedStatusAsync(txid)
+                    .ConfigureAwait(false);
+            }
+
+            if (status is not (TxStatus.Committed or TxStatus.Aborted))
+            {
+                continue;
+            }
+
+            if (status == TxStatus.Committed)
+            {
+                committedLate.Add(txid);
+            }
+
+            if (decisionRowsShipped.Add(txid))
+            {
+                yield return await crossTreeNames.NameAsync(new SnapshotEntry
+                {
+                    Key = string.Empty,
+                    Value = null!,
+                    TransactionId = txid,
+                    SettledDecision = status == TxStatus.Committed,
+                }).ConfigureAwait(false);
+            }
+        }
+
+        var closeHeads = await ReadHeadsAsync(physicalTreeId, partitions, readable: false, cancellationToken).ConfigureAwait(false);
+        var physicalAtClose = await _grainFactory.GetLatticeRegistry().ResolveAsync(treeName).ConfigureAwait(false);
+        if (!string.Equals(physicalAtClose, physicalTreeId, StringComparison.Ordinal))
+        {
+            throw new TimeoutException(
+                $"Tree '{treeName}' moved from physical copy '{physicalTreeId}' to '{physicalAtClose}' while it was exported; "
+                + "the export cannot complete the sagas that decided during it from one log. Retry the export.");
+        }
+
+        if (committedLate.Count == 0 || SkipCompletionSegmentForTesting)
+        {
+            yield break;
+        }
+
+        // Stream each partition's segment page by page, keeping only the
+        // prepares of the sagas being completed: memory is one page.
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var from = openHeads[partition];
+            var to = closeHeads[partition];
+            if (to <= from)
+            {
+                continue;
+            }
+
+            var wal = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            await AwaitReadableAsync(wal, to, treeName, partition, cancellationToken).ConfigureAwait(false);
+
+            var next = from;
+            while (next < to)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var page = await wal.ReadAsync(next, CompletionPageSize, cancellationToken).ConfigureAwait(false);
+                if (page.Entries.Count == 0)
+                {
+                    break;
+                }
+
+                foreach (var sequenced in page.Entries)
+                {
+                    if (sequenced.Sequence >= to)
+                    {
+                        break;
+                    }
+
+                    var record = sequenced.Entry;
+                    if (!record.IsPrepared
+                        || record.Op is not (MutationKind.Set or MutationKind.Delete)
+                        || !committedLate.Contains(record.TransactionId))
+                    {
+                        continue;
+                    }
+
+                    var isTombstone = record.Op == MutationKind.Delete || record.IsTombstone;
+                    yield return new SnapshotEntry
+                    {
+                        Key = record.Key,
+                        Value = isTombstone ? Array.Empty<byte>() : (record.Value ?? Array.Empty<byte>()),
+                        Timestamp = record.Timestamp,
+                        IsTombstone = isTombstone,
+                        ExpiresAtTicks = record.ExpiresAtTicks,
+                        Delta = record.Delta,
+                        Mode = record.Mode,
+                    };
+                }
+
+                if (page.NextSequence <= next)
+                {
+                    break;
+                }
+
+                next = page.NextSequence;
+            }
+
+            // Fail closed when a trim reached into the segment: a prepare it
+            // removed cannot be shipped, so the completion would be partial.
+            var lowest = await wal.GetLowestRetainedSequenceAsync(cancellationToken).ConfigureAwait(false);
+            if (lowest < 0 || lowest > from)
+            {
+                throw new TimeoutException(
+                    $"WAL partition {partition} of tree '{treeName}' was trimmed past the export's opening head {from} "
+                    + $"(lowest retained {lowest}) before the export read the sagas that decided during it. Retry the export.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Every WAL partition's head: the readable head (one past the highest
+    /// sequence a read exposes, below any write still in flight) when
+    /// <paramref name="readable"/>, else the next sequence an append takes.
+    /// </summary>
+    private async Task<long[]> ReadHeadsAsync(string physicalTreeId, int partitions, bool readable, CancellationToken cancellationToken)
+    {
+        var heads = new Task<long>[partitions];
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            var wal = _grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            heads[partition] = readable
+                ? wal.GetReadableHeadAsync(cancellationToken).AsTask()
+                : wal.GetNextSequenceAsync(cancellationToken).AsTask();
+        }
+
+        return await Task.WhenAll(heads).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits, bounded, until <paramref name="wal"/> exposes every sequence below
+    /// <paramref name="head"/>, so a read below it sees each write that landed.
+    /// </summary>
+    private static async Task AwaitReadableAsync(IWalShardGrain wal, long head, string treeName, int partition, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow + CompletionReadableWait;
+        while (await wal.GetReadableHeadAsync(cancellationToken).ConfigureAwait(false) < head)
+        {
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    $"WAL partition {partition} of tree '{treeName}' did not expose sequence {head - 1} within {CompletionReadableWait}; "
+                    + "the export cannot read the sagas that decided during it. Retry the export.");
+            }
+
+            await Task.Delay(CompletionReadablePoll, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Releases export purge holds a crashed export left behind. A live export
+    /// removes its own hold when it ends; one older than
+    /// <see cref="StaleExportHoldAge"/> belongs to an export that cannot still
+    /// be running, and left in place it would suspend the tree's decision purges
+    /// for ever.
+    /// </summary>
+    private static async Task ReleaseStaleExportHoldsAsync(IWalPurgeHoldGrain purgeHold)
+    {
+        var holds = await purgeHold.GetAsync().ConfigureAwait(false);
+        var cutoff = DateTimeOffset.UtcNow - StaleExportHoldAge;
+        foreach (var (consumerId, hold) in holds)
+        {
+            if (consumerId.StartsWith(ExportPurgeHoldPrefix, StringComparison.Ordinal) && hold.Since < cutoff)
+            {
+                await purgeHold.RemoveAsync(consumerId).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>The purge-hold consumer id prefix of an export's hold (issue #4685).</summary>
+    internal const string ExportPurgeHoldPrefix = "snapshot-export/";
+
+    /// <summary>How long a crashed export's purge hold outlives it before the next export releases it.</summary>
+    internal static readonly TimeSpan StaleExportHoldAge = TimeSpan.FromHours(24);
+
+    private const int CompletionPageSize = 256;
+
+    private static readonly TimeSpan CompletionReadableWait = TimeSpan.FromSeconds(30);
+
+    private static readonly TimeSpan CompletionReadablePoll = TimeSpan.FromMilliseconds(10);
+
+    /// <summary>Test seam: skips the completion step entirely (issue #4685 perturbation).</summary>
+    internal bool SkipCompletionForTesting { get; set; }
+
+    /// <summary>Test seam: ships the completion's decision rows but not its log segment (issue #4685 perturbation).</summary>
+    internal bool SkipCompletionSegmentForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: runs after the export's registry snapshot (snap0) is taken
+    /// and before any pass reads the tree, so a test can decide a saga
+    /// mid-export (#4627).
+    /// </summary>
+    internal Func<Task>? AfterRegistrySnapshotForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: runs after the prepared-row pass and before the
+    /// committed-projection pass, so a test can run a saga the prepared pass
+    /// never saw and drain part of it before the committed pass reads it
+    /// (#4598).
+    /// </summary>
+    internal Func<Task>? AfterPreparedPassForTesting { get; set; }
+
+    /// <summary>
+    /// Test seam: runs in the committed-projection pass before each key is
+    /// read, so a test can run a saga between two of the pass's reads (#4685).
+    /// </summary>
+    internal Func<string, Task>? BeforeCommittedEntryForTesting { get; set; }
+
+    /// <summary>
+    /// Walks every shard's leaf chain on the source tree and emits a
+    /// committed tombstone row (<see cref="SnapshotEntry.IsTombstone"/> set,
+    /// <see cref="SnapshotEntry.IsPrepared"/> clear) for every key a leaf
+    /// still holds as a tombstone, stamped with the tombstone's own HLC. A
+    /// tombstone authored after a bounded export's <paramref name="asOfHlc"/>
+    /// is left to the incremental stream.
+    /// </summary>
+    private async IAsyncEnumerable<SnapshotEntry> EnumerateTombstonesAsync(
+        string treeName,
+        HybridLogicalClock asOfHlc,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var registry = _grainFactory.GetLatticeRegistry();
+        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(false);
+        var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(false)
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+
+        var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
+
+        // An empty version vector dominates nothing, so every leaf answers
+        // with every entry it holds, tombstones included.
+        var everything = new VersionVector();
+
+        foreach (var shardIndex in shardMap.GetPhysicalShardIndices())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var shard = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+            var leafId = await shard.GetLeftmostLeafIdAsync().ConfigureAwait(false);
+            while (leafId is not null)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var leaf = _grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
+                var delta = await leaf.GetDeltaSinceAsync(everything).ConfigureAwait(false);
+                foreach (var (key, lww) in delta.Entries)
+                {
+                    if (!lww.IsTombstone)
+                    {
+                        continue;
+                    }
+
+                    if (hasUpperBound && lww.Timestamp > asOfHlc)
+                    {
+                        continue;
+                    }
+
+                    yield return new SnapshotEntry
+                    {
+                        Key = key,
+                        Value = Array.Empty<byte>(),
+                        Timestamp = lww.Timestamp,
+                        IsTombstone = true,
+                    };
+                }
+
+                leafId = await leaf.GetNextSiblingAsync().ConfigureAwait(false);
             }
         }
     }
@@ -260,6 +958,8 @@ internal sealed class LatticeSnapshotProvider(
     private async IAsyncEnumerable<SnapshotEntry> EnumeratePreparedAsync(
         string treeName,
         Dictionary<Guid, TxStatus> snap0,
+        HashSet<Guid> recordedResolved,
+        HashSet<Guid> preparedSagas,
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
@@ -330,18 +1030,42 @@ internal sealed class LatticeSnapshotProvider(
                     // not the skipping side. The committed pass runs under the
                     // same snap0 and does not surface an indeterminate saga's
                     // keys, so skipping here too would drop the prepared rows
-                    // from the export entirely and lose the write. Shipping
-                    // them leaves the receiver holding exactly what the source
-                    // holds - a resident prepare whose outcome is not currently
-                    // determinable - which is honest, is repaired by the same
-                    // mechanisms that repair the source, and is strictly better
-                    // than the receiver silently concluding the saga never
-                    // committed.
+                    // from the export entirely and lose the write.
+                    //
+                    // An Indeterminate row whose decision is still STORED
+                    // (its tombstone aged out of the readable window) is
+                    // resolved to that recorded verdict first (#4481). The
+                    // receiver's registry has no row for the saga, so a key
+                    // shipped as a prepared row there reads as in flight and
+                    // serves its pre-saga value beside the keys the saga's
+                    // terminal already drained - a split no mechanism on
+                    // either side repairs. The recorded verdict is what the
+                    // source's own leaf sweep finishes the stranded prepare
+                    // by, so overriding snap0 with it for both passes ships
+                    // the saga whole, as committed rows (or not at all on an
+                    // abort), exactly as a saga snap0 had as decided. This is
+                    // a transfer of state the source owns, not a disclosure
+                    // to a reader, so the read path's retention mask does not
+                    // apply. An Indeterminate with no stored verdict (an
+                    // unreachable cross-tree delegation) still ships as
+                    // prepared rows, and a row already purged reads as absent
+                    // and exports the split the source itself serves (#4508).
                     if (snap0.TryGetValue(m.TransactionId, out var status)
-                        && status is TxStatus.Committed or TxStatus.Aborted)
+                        && status == TxStatus.Indeterminate
+                        && recordedResolved.Add(m.TransactionId))
                     {
-                        continue;
+                        var recorded = await Orleans.Lattice.BPlusTree.Grains.TxRegistryRouting
+                            .GetRegistry(_grainFactory, treeName, m.TransactionId)
+                            .GetRecordedStatusAsync(m.TransactionId)
+                            .ConfigureAwait(false);
+                        if (recorded is TxStatus.Committed or TxStatus.Aborted)
+                        {
+                            snap0[m.TransactionId] = recorded;
+                        }
                     }
+
+                    var committedBucket = snap0.TryGetValue(m.TransactionId, out status)
+                        && status == TxStatus.Committed;
 
                     if (hasUpperBound && m.Timestamp > asOfHlc)
                     {
@@ -352,6 +1076,61 @@ internal sealed class LatticeSnapshotProvider(
                         continue;
                     }
 
+                    if (committedBucket)
+                    {
+                        // A resident bucket of a committed saga - one snap0
+                        // has as Committed whose terminal has not drained this
+                        // leaf yet, or a recorded commit behind an aged-out
+                        // row - ships as the committed value the terminal (or
+                        // the source's leaf sweep) will install. The
+                        // committed-projection pass need not enumerate a key
+                        // held only in a pending bucket, so this pass emits
+                        // it; without it such a saga left the export entirely
+                        // and the receiver depended on the incremental stream
+                        // re-shipping its prepares. A committed delete ships as a
+                        // committed tombstone row, not as an absence: a
+                        // bootstrap can land on a receiver copy that still
+                        // holds the key's older value (a peer that fell off
+                        // the log re-bootstraps in place), and an absence
+                        // would leave that value beside the saga's other keys.
+                        yield return new SnapshotEntry
+                        {
+                            Key = m.Key,
+                            Value = m.IsTombstone ? Array.Empty<byte>() : (m.Value ?? Array.Empty<byte>()),
+                            Timestamp = m.Timestamp,
+                            IsTombstone = m.IsTombstone,
+                            ExpiresAtTicks = m.ExpiresAtTicks,
+                            Delta = m.Delta,
+                            Mode = m.Mode,
+                        };
+
+                        continue;
+                    }
+
+                    if (snap0.TryGetValue(m.TransactionId, out status)
+                        && status is TxStatus.Committed or TxStatus.Aborted)
+                    {
+                        if (status == TxStatus.Committed && m.IsTombstone)
+                        {
+                            // The committed pass reads a committed saga's
+                            // pending delete as an absent key and emits
+                            // nothing, so a receiver re-bootstrapping over a
+                            // copy that still holds the key would keep it
+                            // (#4504). Ship the delete as a committed
+                            // tombstone row instead.
+                            yield return new SnapshotEntry
+                            {
+                                Key = m.Key,
+                                Value = Array.Empty<byte>(),
+                                Timestamp = m.Timestamp,
+                                IsTombstone = true,
+                            };
+                        }
+
+                        continue;
+                    }
+
+                    preparedSagas.Add(m.TransactionId);
                     yield return new SnapshotEntry
                     {
                         Key = m.Key,
@@ -376,5 +1155,75 @@ internal sealed class LatticeSnapshotProvider(
             }
         }
     }
-}
 
+    /// <summary>
+    /// Names the cross-tree operation on the export's rows of a sub-saga the
+    /// source authored as part of one (issue #4683), from the authoring tree's
+    /// transaction registry, which keeps the membership for as long as it
+    /// stores the decision. Each saga is looked up once per export.
+    /// </summary>
+    internal sealed class CrossTreeNames(IGrainFactory grainFactory, string treeName)
+    {
+        private readonly Dictionary<Guid, CrossTreeMembership?> _known = new();
+
+        /// <summary>Looks up <paramref name="txids"/> in one call per registry shard.</summary>
+        public async Task PrefetchAsync(IEnumerable<Guid> txids)
+        {
+            var byRegistry = new Dictionary<GrainId, (ITxRegistryGrain Registry, List<Guid> Txids)>();
+            foreach (var txid in txids)
+            {
+                if (txid == Guid.Empty || _known.ContainsKey(txid))
+                {
+                    continue;
+                }
+
+                var registry = TxRegistryRouting.GetRegistry(grainFactory, treeName, txid);
+                var id = registry.GetGrainId();
+                if (!byRegistry.TryGetValue(id, out var group))
+                {
+                    group = (registry, []);
+                    byRegistry[id] = group;
+                }
+
+                group.Txids.Add(txid);
+            }
+
+            foreach (var (registry, group) in byRegistry.Values)
+            {
+                var found = await registry.GetCrossTreeMembershipsAsync(group).ConfigureAwait(false);
+                foreach (var txid in group)
+                {
+                    _known[txid] = found.TryGetValue(txid, out var membership) ? membership : null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="row"/>, naming the cross-tree operation its saga
+        /// belongs to when it belongs to one.
+        /// </summary>
+        public async ValueTask<SnapshotEntry> NameAsync(SnapshotEntry row)
+        {
+            if (row.TransactionId == Guid.Empty)
+            {
+                return row;
+            }
+
+            if (!_known.TryGetValue(row.TransactionId, out var membership))
+            {
+                await PrefetchAsync([row.TransactionId]).ConfigureAwait(false);
+                membership = _known[row.TransactionId];
+            }
+
+            return membership is null
+                ? row
+                : row with
+                {
+                    CrossTreeOperationId = membership.OperationId,
+                    CrossTreeParticipants = membership.Participants,
+                    CrossTreeDecisionStamps = membership.DecisionStamps,
+                    CrossTreeDecisionSequences = membership.DecisionSequences,
+                };
+        }
+    }
+}

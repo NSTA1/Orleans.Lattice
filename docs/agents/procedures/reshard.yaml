@@ -55,7 +55,7 @@ failure_modes:
     effect: "Existing reshard remains authoritative."
     response: "Poll status and retry after completion."
   - id: resize-conflict
-    signal: "InvalidOperationException when resize is in flight and the target requires a migration."
+    signal: "InvalidOperationException when a resize is in flight, or a completed resize can still be undone while its previous copy mirrors into the resized one (until the purge, SoftDeleteDuration after the resize), and the target requires a migration."
     effect: "No reshard is started."
     response: "Wait for resize completion or undo."
   - id: out-of-range-target

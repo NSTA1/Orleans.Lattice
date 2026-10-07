@@ -1,0 +1,25 @@
+# Pairs with NoKeyLost. The saga acknowledges its caller before it has recorded
+# the commit decision or delivered a terminal, so an acknowledged batch is not
+# visible on its owner.
+MODULE: NoKeyLostAckBeforeDecision
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the caller is acknowledged before the decision is recorded
+PERTURBS: SagaComplete
+
+--- FIND
+SagaComplete ==
+    /\ sg = "decided"
+    /\ TermTargets \subseteq told
+--- REPLACE
+SagaComplete ==
+\* MUTATION: completion does not wait for the decision or the broadcast.
+    /\ sg \in {"exec", "decided"}
+--- END
+
+--- FIND
+                    IF dec = "committed" /\ c \in AckCopies(bound) THEN Max(ackOn[c][k], SagaV) ELSE ackOn[c][k]]]
+--- REPLACE
+\* MUTATION: the caller is acknowledged whatever the decision.
+                    IF c \in AckCopies(bound) THEN Max(ackOn[c][k], SagaV) ELSE ackOn[c][k]]]
+--- END

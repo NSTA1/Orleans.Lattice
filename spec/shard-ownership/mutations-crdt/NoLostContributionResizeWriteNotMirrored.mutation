@@ -1,0 +1,16 @@
+# Pairs with NoLostContribution. Reproduces production before #4618 was fixed
+# (#4665): the resize mirror does not forward a typed CRDT write, so one
+# applied to the old copy after the snapshot drain passed its key never
+# reaches the resized copy, which the swap then makes the owner.
+MODULE: NoLostContributionResizeWriteNotMirrored
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: a CRDT write after the resize's drain passed its key is not mirrored and is lost at the swap
+PERTURBS: WriteB
+
+--- FIND
+          /\ IF owner = "src" /\ Forwarding
+--- REPLACE
+\* MUTATION: the resize mirror does not forward a CRDT write.
+          /\ IF owner = "src" /\ Forwarding /\ kind = "split"
+--- END

@@ -1,0 +1,16 @@
+# Pairs with NoLiveBucketAfterForget. #4632's guard without its join-only
+# registration: the forwarded prepare's own participant registration recreates
+# the forgotten saga's row before the leaf checks for it, so the check finds a
+# row and the late forward is bucketed. The edit lies in PRow, the operator the
+# guard reads, so the mutation declares no PERTURBS.
+MODULE: NoLiveBucketAfterForgetForwardRecreatesRow
+TARGET: NoLiveBucketAfterForget
+CLASS: Invariant
+SUMMARY: the late forward's registration recreates the forgotten saga's row, so the guard never fires
+
+--- FIND
+PRow == sg # "idle" /\ ~forgotten
+--- REPLACE
+\* MUTATION: a forward in flight recreates the row it then checks for.
+PRow == sg # "idle" /\ (~forgotten \/ late = "inflight")
+--- END

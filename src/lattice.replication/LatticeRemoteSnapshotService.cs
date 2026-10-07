@@ -1,4 +1,5 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -48,11 +49,35 @@ namespace Orleans.Lattice.Replication;
 /// cluster-local by not enrolling it.
 /// </para>
 /// </summary>
-public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
+public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
 {
     private readonly ISnapshotProvider _provider;
     private readonly ILatticeReplicationContext? _replicationContext;
     private readonly ILogger<LatticeRemoteSnapshotService> _logger;
+
+    /// <summary>
+    /// The cross-tree export preconditions (issue #4684), set when the service
+    /// is resolved from a host that registered replication. A service built
+    /// directly has none and serves exports as before.
+    /// </summary>
+    internal CrossTreeExportGate? ExportGate { get; init; }
+
+    /// <summary>
+    /// The container factory: the overload the container would select, with
+    /// the cross-tree export gate attached.
+    /// </summary>
+    internal static LatticeRemoteSnapshotService Create(IServiceProvider services)
+    {
+        var provider = services.GetRequiredService<ISnapshotProvider>();
+        var logger = services.GetRequiredService<ILogger<LatticeRemoteSnapshotService>>();
+        var context = services.GetService<ILatticeReplicationContext>();
+        return context is null
+            ? new LatticeRemoteSnapshotService(provider, logger)
+            : new LatticeRemoteSnapshotService(provider, context, logger)
+            {
+                ExportGate = services.GetService<CrossTreeExportGate>(),
+            };
+    }
 
     /// <summary>
     /// Constructs a new <see cref="LatticeRemoteSnapshotService"/>
@@ -190,6 +215,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
@@ -207,6 +233,10 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
             SourceClusterId = sourceClusterId,
             AsOfHlc = stream.AsOfHlc,
             CausalStableFrontier = stream.CausalStableFrontier,
+            ExportEpoch = stream.ExportEpoch,
+            CrossTreeHoldHonoured = ExportGate is not null,
+            OpenGeneration = stream.OpenGeneration,
+            SourceFrontier = stream.OpenFrontier,
         };
     }
 
@@ -221,6 +251,7 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         cancellationToken.ThrowIfCancellationRequested();
         EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
 
         var stream = await _provider
             .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
@@ -237,6 +268,46 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotTransport
             .ConfigureAwait(false))
         {
             yield return entry;
+        }
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureTreeEnrolledForExport(treeName);
+        ExportGate?.EnsureMayExport(treeName);
+
+        var stream = await _provider
+            .ExportAsync(treeName, fromAsOfHlc, cancellationToken)
+            .ConfigureAwait(false);
+
+        await foreach (var entry in stream.Entries
+            .WithCancellation(cancellationToken)
+            .ConfigureAwait(false))
+        {
+            yield return new RemoteSnapshotStreamItem { Entry = entry };
+        }
+
+        // Captured after the last entry, so every sibling record the receiver
+        // must have before it serves this tree is below the boundary (#4684).
+        var siblings = ExportGate is null || _replicationContext is null
+            ? null
+            : await ExportGate.CaptureSiblingBoundariesAsync(treeName, _replicationContext, cancellationToken).ConfigureAwait(false);
+        if (stream.CloseGeneration is not null || siblings is not null)
+        {
+            yield return new RemoteSnapshotStreamItem
+            {
+                CloseGeneration = stream.CloseGeneration,
+                SourceFrontier = stream.SourceFrontier,
+                SiblingBoundaries = siblings,
+            };
         }
     }
 }

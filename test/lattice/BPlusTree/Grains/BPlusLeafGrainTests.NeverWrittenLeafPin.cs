@@ -60,11 +60,24 @@ public partial class BPlusLeafGrainTests
         ILeafReplayCoordinatorGrain coordinator,
         long persistedCheckpoint = -1L,
         ILatticeFallOffLogDetector? detector = null,
-        bool failSnapshotCapture = false)
+        bool failSnapshotCapture = false,
+        LeafSnapshotBlob? snapshot = null,
+        List<LeafSnapshotBlob>? keptSnapshots = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+            .Returns(Task.FromResult(snapshot));
+        if (keptSnapshots is not null)
+        {
+            // Every capture the store keeps is recorded, in order.
+            snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+                .Returns(call =>
+                {
+                    keptSnapshots.Add(call.ArgAt<LeafSnapshotBlob>(0));
+                    return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
+                });
+        }
+
         if (failSnapshotCapture)
         {
             // Every capture path faults, so no partition can gain durable
@@ -431,5 +444,117 @@ public partial class BPlusLeafGrainTests
                 BuildCommittedSet(key, Encoding.UTF8.GetBytes($"v-{key}"), hlcPhysical: 100 + offset, treeId: NeverWrittenTreeId)));
             _head = offset + 1;
         }
+    }
+
+    /// <summary>
+    /// Issue #4456. A never-written leaf that HOLDS a snapshot must bound its
+    /// #3453 release by that snapshot's coverage. Its next activation rehydrates
+    /// the snapshot, which lowers the checkpoint to the coverage, so a release at
+    /// the higher persisted checkpoint licenses a trim past <c>coverage + 1</c>
+    /// and the fall-off detector then latches the leaf stale over a prefix it
+    /// never owned. Found by the WAL durability TLA+ model
+    /// (<c>RecoveryNeverFallsOffLog</c>).
+    /// </summary>
+    [Test]
+    public async Task Never_written_leaf_holding_a_snapshot_releases_no_further_than_its_coverage()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(1);
+        var (grain, state, published) = CreateNeverWrittenLeafWithPinCapture(
+            wal.Coordinator,
+            persistedCheckpoint: 1L,
+            // Captures fail, so the snapshot's coverage cannot move past 1 and the
+            // release has nothing but the persisted checkpoint to grow into.
+            failSnapshotCapture: true,
+            snapshot: new LeafSnapshotBlob
+            {
+                SnapshotOffset = 1L,
+                Rows = [],
+                CapturedAtTicks = 1L,
+                SnapshotOffsetsByPartition = [1L],
+            });
+
+        await ActivateAsync(grain);
+
+        // Other leaves' writes accrue; the drive scans through and persists them.
+        wal.GrowTo(3);
+        published.Clear();
+        await grain.DriveStarvedCheckpointAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Clock, Is.EqualTo(HybridLogicalClock.Zero), "precondition: never-written.");
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
+                "precondition: the drive persisted the scanned-through checkpoint above the coverage.");
+            Assert.That(published, Is.Not.Empty, "precondition: the drive republished the pin.");
+            Assert.That(published.Select(p => p.PublishedOffset), Is.All.LessThanOrEqualTo(1L),
+                "THE assertion: the release may not pass the snapshot's coverage (1). The next "
+                    + "activation rehydrates that snapshot and lowers the checkpoint to 1, so a "
+                    + "release at the persisted 3 lets the GC trim to tail 4 and latches the leaf "
+                    + "stale. Published: " + string.Join(", ", published.Select(p => p.PublishedOffset)));
+        });
+    }
+
+    /// <summary>
+    /// Issue #4523, the other half of #4456: with no snapshot the never-written
+    /// leaf publishes no release - its partition keeps the block pin the seed
+    /// published - because a snapshot the next cold rebuild creates can land
+    /// below any release published without one, and the pin store can never take
+    /// that release back. Captures fault here, so nothing ever covers the
+    /// partition and the drive must publish nothing and grade NoAdvance.
+    /// </summary>
+    [Test]
+    public async Task Never_written_leaf_without_a_snapshot_keeps_its_block_pin()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(1);
+        var (grain, state, published) = CreateNeverWrittenLeafWithPinCapture(
+            wal.Coordinator, persistedCheckpoint: 1L, failSnapshotCapture: true);
+
+        await ActivateAsync(grain);
+        wal.GrowTo(3);
+        published.Clear();
+        var verdict = await grain.DriveStarvedCheckpointAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.Clock, Is.EqualTo(HybridLogicalClock.Zero), "precondition: never-written.");
+            Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(3L),
+                "precondition: the drive persisted the scanned-through checkpoint.");
+            Assert.That(published.Where(p => p.PublishedOffset >= 0), Is.Empty,
+                "THE assertion: no trim entitlement without durable snapshot coverage. Published: "
+                    + string.Join(", ", published.Select(p => p.PublishedOffset)));
+            Assert.That(verdict, Is.EqualTo(LeafStarvationDriveOutcome.NoAdvance),
+                "nothing was released, so the drive must not report a lift.");
+        });
+    }
+
+    /// <summary>
+    /// Issue #4523, liveness: a never-written leaf whose capture is kept releases
+    /// at the coverage the capture stamped, which is its persisted checkpoint.
+    /// </summary>
+    [Test]
+    public async Task Never_written_leaf_releases_once_a_kept_capture_covers_its_persisted_checkpoint()
+    {
+        var wal = new GrowingWal();
+        wal.GrowTo(1);
+        var kept = new List<LeafSnapshotBlob>();
+        var (grain, _, published) = CreateNeverWrittenLeafWithPinCapture(
+            wal.Coordinator, persistedCheckpoint: 1L, keptSnapshots: kept);
+
+        await ActivateAsync(grain);
+        wal.GrowTo(3);
+        published.Clear();
+        var verdict = await grain.DriveStarvedCheckpointAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(kept.Select(b => b.SnapshotOffsetsByPartition![0]), Has.Some.EqualTo(3L),
+                "precondition: the drive's capture stamped the persisted checkpoint.");
+            Assert.That(published.Select(p => (p.Frontier, p.PublishedOffset)),
+                Has.Some.EqualTo((HybridLogicalClock.Zero, 3L)),
+                "the release follows the capture that covers it.");
+            Assert.That(verdict, Is.EqualTo(LeafStarvationDriveOutcome.Lifted));
+        });
     }
 }

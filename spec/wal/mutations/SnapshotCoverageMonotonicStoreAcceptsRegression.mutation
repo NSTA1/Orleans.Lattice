@@ -1,0 +1,39 @@
+# Pairs with SnapshotCoverageMonotonic. The store keeps a capture whose claim is
+# below the coverage it already holds (LeafSnapshotStorageGrain's monotone
+# refusal is dropped). In the base model no activation holding a snapshot starts
+# below its coverage - a failed load fails closed - so the refusal is
+# load-bearing only in composition with a path that does. The second edit
+# supplies one: a failed load cold-starts over an intact WAL (the design
+# ReadPositionHonestLoadFailureColdStartsOverIntactWal shows unsafe for its own
+# reason). Read the pairing as evidence the property and the refusal would catch
+# a regression, not that the base can make one.
+MODULE: SnapshotCoverageMonotonicStoreAcceptsRegression
+TARGET: SnapshotCoverageMonotonic
+CLASS: Action
+SUMMARY: the snapshot store keeps a claim below the coverage it already holds, reached through a cold start below the snapshot
+PERTURBS: Capture, ActivateLoadFail
+
+--- FIND
+    /\ rp[l] >= 0
+    /\ rp[l] >= snapCov[l]
+--- REPLACE
+\* MUTATION: the store's monotone refusal is dropped.
+    /\ rp[l] >= 0
+--- END
+--- FIND
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
+    /\ UNCHANGED vars
+--- REPLACE
+    /\ snapCov[l] # NoSnap
+\* MUTATION: cold start when the prefix probes intact.
+    /\ tail = 0
+    /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ cache' = [cache EXCEPT ![l] = {}]
+    /\ rp' = [rp EXCEPT ![l] = -1]
+    /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]
+    /\ anchor' = [anchor EXCEPT ![l] = durCp[l]]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<durCp, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+--- END

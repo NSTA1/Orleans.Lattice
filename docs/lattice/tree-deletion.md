@@ -86,7 +86,7 @@ For each shard, `PurgeAsync()`:
 1. Clears every leaf the shard root still records as owed a state clear - leaves an earlier [empty-leaf reclaim](tree-structure.md) or orphan repair took out of the tree but could not clear. They are on neither the chain nor any routing table, so no walk below reaches them, and the shard row cleared in the last step is the only thing that names them (issue [#2207](https://github.com/NSTA1/Orleans.Lattice/issues/2207)).
 2. Walks the doubly-linked leaf chain from the leftmost leaf, calling `ClearGrainStateAsync()` on each leaf (which clears persistent state and deactivates the grain).
 3. Collects all internal node grain IDs by walking the tree from the root level by level, and with them every leaf the bottom internal level routes to. Any routed leaf the chain walk did not reach is cleared too, then each internal node.
-4. Clears the shard root's own state via `ClearStateAsync()`.
+4. Replaces the shard root's own state with a purge tombstone - a record that holds nothing but the fact that the shard was purged (`ShardRootState.IsPurged`) - so a router that still addresses the purged copy is refused rather than served an empty shard; see [Routers that still address a purged copy](#routers-that-still-address-a-purged-copy). A system tree's shard root has its state cleared via `ClearStateAsync()` instead.
 
 Step 3's routed-leaf sweep matters on a **retried** purge. A purge that fails part-way has already cleared the head of the chain, and a cleared leaf has no sibling pointer left, so the retry's chain walk stops at the first leaf. The internal nodes are cleared only after the leaves, so on the retry they still name every routed leaf, and the sweep reaches the ones beyond the break. Any failure propagates out of `PurgeAsync()` with the shard row still in place, so the retry has the same record to work from.
 
@@ -101,7 +101,7 @@ After all shards are purged, the deletion grain records the purge as complete, r
 | During Phase 1 (some shards marked) | Some shards have `IsDeleted = true` | `DeleteTreeAsync` is idempotent - re-calling marks remaining shards |
 | After Phase 2, before Phase 3 | `IsDeleted` persisted, reminder registered | Reminder fires after soft-delete window, starts purge |
 | During Phase 3 (mid-purge) | `PurgeInProgress = true`, `NextShardIndex` persisted | Keepalive reminder (1 min) reactivates grain, resumes from persisted shard index - including an explicitly requested purge, at its own cadence |
-| A purge interrupted mid-shard | Shard root still routes to nodes whose state was cleared | Typed CRDT write path re-binds the node on demand; `RecoverTreeAsync()` also re-asserts proactively - see [Repairing an unbound node](#repairing-an-unbound-node) |
+| A purge interrupted mid-shard | Shard root still routes to nodes whose state was cleared | A cleared leaf fails closed until `RecoverTreeAsync()` re-creates it empty; its data is not restored - see [Leaves a purge has already cleared](#leaves-a-purge-has-already-cleared) |
 | After Phase 3, before the registry entry is removed | `PurgeComplete = true`, registry removal recorded as owed | Keepalive reminder (1 min), or the next `PurgeTreeAsync()`, removes the entry, then unregisters the reminders and deactivates; the status reports `PurgeInProgress` until it lands |
 | After Phase 3 | `PurgeComplete = true` | Reminder fires, detects completion, unregisters and deactivates |
 
@@ -164,7 +164,7 @@ A node's owning-tree binding is written when the node is *created* and never re-
 - **An interrupted purge.** `PurgeTreeAsync()` clears a shard's leaf and internal nodes *before* it clears the shard root itself, so an interruption part-way through - a grain call timeout on a large tree, a silo restart, an abandoned reminder tick - leaves a shard root whose `RootNodeId` still routes writes to nodes whose state has already been wiped.
 - **A split from an unbound donor.** A splitting leaf seeds its new sibling with its own tree id, so one unbound leaf mints another every time it splits, spreading the damage across the key range. The donor logs a warning when this happens.
 
-**The write path repairs it.** When a typed CRDT write faults because the target leaf has no bound tree id, the owning shard root - which always knows the tree id and shard index the leaf is missing - re-asserts the binding and retries the write once. The repair is driven from the fault rather than from a probe, so a tree that is *already* in this state heals on its very next write, with no operator action, no recover call, and no restart. A healthy write pays nothing for it: an exception filter is only evaluated once a fault is in flight.
+**The write path repairs it** - for a leaf that kept its state row. When a typed CRDT write faults because the target leaf has no bound tree id, the owning shard root - which always knows the tree id and shard index the leaf is missing - re-asserts the binding and retries the write once. The repair is driven from the fault rather than from a probe, so a tree that is *already* in this state heals on its very next write, with no operator action, no recover call, and no restart. A healthy write pays nothing for it: an exception filter is only evaluated once a fault is in flight.
 
 The repair is deliberately narrow, so it cannot mask a genuine fault:
 
@@ -177,6 +177,12 @@ The repair is deliberately narrow, so it cannot mask a genuine fault:
 The two cases are distinguishable because `LatticeCrdtShapeNotRegisteredException.TreeId` is empty only for an unbound leaf; a genuinely unregistered shape carries the tree id it could not resolve.
 
 `RecoverTreeAsync()` additionally repairs proactively: after clearing the `IsDeleted` flag on every shard it asks each shard root to walk its topology and re-assert `SetTreeIdAsync` (and `SetShardIndexAsync` on leaves) on every node it can still route to, bounded to 4096 nodes at a fan-out of 16 so the repair cannot reproduce the timeout that caused the damage. `SetTreeIdAsync` and `SetShardIndexAsync` are idempotent and short-circuit inside the callee, so re-asserting a healthy binding costs one round trip and no storage write. This pass is best-effort: a node the purge already cleared reports no children, so the walk simply stops there, and if the walk fails - for example because a node's silo is momentarily unreachable - the shard root logs a warning and recovery continues, since the write path repairs the same damage on demand anyway.
+
+#### Leaves a purge has already cleared
+
+A leaf the purge has cleared has lost its whole state row, not only its binding, and a leaf with no state row cannot be told apart from one whose row was lost to storage (issue [#4654](https://github.com/NSTA1/Orleans.Lattice/issues/4654)). So the write path never re-creates it: a read or write that reaches it fails closed with `LeafStateRowLostException`, see [Projection Rebuild](projection-rebuild.md). Only `RecoverTreeAsync()` re-creates such a leaf, and only on a shard that recorded, before its first leaf clear, that its purge began clearing leaves; on any other shard a leaf with no row stays failed closed.
+
+**Recovery after a purge has started cannot restore the leaves it cleared.** Such a recovery is possible only when the deletion grain never recorded the purge's progress - a `PurgeTreeAsync()` call that timed out part-way, for example; otherwise `RecoverTreeAsync()` throws, as the table above shows. The cleared leaves' data was deleted on purpose, so a re-created leaf comes back empty and serves its key range as empty from then on, while the leaves the purge had not yet reached keep their data. A re-create is refused while the leaf's snapshot or row record survives, so a leaf whose clear was interrupted part-way stays failed closed, rather than coming back empty over data that still exists, until a purge retry finishes the clear.
 
 ## Manual Purge
 
@@ -206,7 +212,7 @@ Before issue [#3941](https://github.com/NSTA1/Orleans.Lattice/issues/3941) the w
 
 ## Resized, aliased, and re-created trees
 
-Deletion, recovery and purge keep one deletion record per tree ID. These situations need care: the original copy a resize retires, a tree whose ID is aliased to another physical tree, and a tree created again under the ID of a purged one.
+Deletion, recovery and purge keep one deletion record per tree ID. These situations need care: the original copy a resize retires, a tree whose ID is aliased to another physical tree, a tree created again under the ID of a purged one, and a router that still addresses a copy after its purge.
 
 ### Retiring a resized tree's original copy
 
@@ -256,3 +262,16 @@ Only a completed purge is treated this way. A soft-deleted tree keeps its regist
 An [adaptive shard split](shard-splitting.md), a shard consolidation or an [online reshard](online-reshard.md) still in flight when its tree is purged abandons itself: the first phase step that faults after the purge finds the tree purged, clears the saga's state, stops its phase timer, unregisters its keepalive reminder, and counts the abandonment on `orleans.lattice.coordinator.purged_tree_abandonments` (see [Metrics](metrics.md)). Before issue #4271 such a saga faulted on every tick and kept its reminder for as long as the cluster ran. A saga whose tree is soft-deleted but not purged keeps retrying, since the tree can still be recovered, and so does one whose purge verdict cannot be read.
 
 Before issue #3940 the record went on describing the new tree: `DeleteTreeAsync` returned without deleting anything, recovery and purge threw as for a purged tree, and every alias change involving the ID - `ResizeAsync` and `UndoResizeAsync`, a shadow-cutover restore or its revert, a schema remediation cut-over, and an administrative alias - was refused, so a purged tree's ID could never be resized.
+
+### Routers that still address a purged copy
+
+A routing activation caches the tree's (physical copy, shard map) pair for its whole lifetime and refreshes it only when a shard refuses it. Through the soft-delete window a retired, discarded or deleted copy refuses every routed call with the stale-routing signal, so the router refreshes and retries on the live copy. An activation that saw no call for the tree during the window still holds the old pair after the purge, however long or short `SoftDeleteDuration` is - nothing collects an idle routing activation within it.
+
+So every purged shard keeps a purge tombstone, and while it is set the shard admits a call only when the registry names the copy live again:
+
+- A call routed through a logical tree's alias is served when the registry resolves that tree to this copy - the deliberate [reuse of a purged ID](#reusing-a-purged-tree-id), for example a write through the tree's own name after its purge - and refused with the stale-routing signal otherwise, so a router still caching a resized tree's old copy refreshes and retries on the live copy, exactly as it would have in the window.
+- A call with no routed identity - a maintenance verb, a write or an atomic-write terminal addressed to the copy itself - is served when the copy's ID is registered and not aliased elsewhere. Otherwise a data read answers as the empty tree the purge left, and any other call is refused with an `InvalidOperationException` (the internal `LatticeTreePurgedException`); it never re-seeds a root on the purged copy.
+
+The first call the registry admits seeds the shard again and lifts the tombstone, so a reused tree pays the registry check once per shard and nothing afterwards; a live shard never carries a tombstone. Probes that only read a shard's own state, such as the resize's check of whether the old copy still mirrors, are unaffected: a tombstone mirrors nowhere.
+
+Before issue [#4503](https://github.com/NSTA1/Orleans.Lattice/issues/4503) the purge deleted the shard's row, so such a router met a fresh, empty shard: its read of an acknowledged key answered empty, and its write was accepted on a copy nothing read again, and lost. On a later resize's purged copy, whose registry entry the purge had removed, that write also registered the copy again.

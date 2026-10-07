@@ -387,4 +387,62 @@ internal sealed class TxRegistryState
     /// </para>
     /// </summary>
     [Id(11)] public long TombstonePinUnmaskEpoch { get; set; }
+
+    /// <summary>
+    /// The write-ahead-log sample generation each tombstone was stamped with
+    /// when <c>ForgetAsync</c> created it, on a tree the decision-purge guard
+    /// covers (issue #4508). A tombstone is physically purged only once a
+    /// sample of generation greater than its stamp - read after the forget -
+    /// has every WAL partition trimmed past that sample's tail, so no prepare
+    /// of the saga can still be re-shipped to a peer without a decision the
+    /// export can ship. Removed with the tombstone.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state with no Id-12 slot decodes to
+    /// an empty map; an unstamped tombstone on a guarded tree is treated as
+    /// generation 0, which the first cleared sample covers.
+    /// </para>
+    /// </summary>
+    [Id(12)] public Dictionary<Guid, long> ForgetWalGenerations { get; set; } = [];
+
+    /// <summary>
+    /// Number of write-ahead-log tail samples the decision-purge guard has
+    /// started (issue #4508). A sample takes the next generation before it
+    /// reads the partition tails, and a tombstone is stamped with the current
+    /// value, so only a sample started after the forget can clear it. The
+    /// samples themselves live in memory; persisting the counter keeps a
+    /// reactivated registry's samples above every stamp it persisted.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state decodes to <c>0L</c>.
+    /// </para>
+    /// </summary>
+    [Id(13)] public long WalSampleGeneration { get; set; }
+
+    /// <summary>
+    /// The highest sample generation the decision-purge guard has seen every
+    /// write-ahead-log partition trim past (issue #4508): a tombstone stamped
+    /// below it may be purged once its retention has elapsed. Persisted so a
+    /// reactivation, which loses the in-memory samples, never regresses it.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state decodes to <c>0L</c>, which
+    /// clears nothing.
+    /// </para>
+    /// </summary>
+    [Id(14)] public long WalClearedGeneration { get; set; }
+
+    /// <summary>
+    /// The cross-tree atomic write each sub-saga this tree authored belongs to
+    /// (issue #4683): the operation id and the participating trees, recorded
+    /// durably when the sub-saga parks prepared, before any terminal of it
+    /// exists. Kept for exactly as long as the sub-saga's decision is stored,
+    /// so a snapshot export that ships the decision row can name the
+    /// operation, and a receiver that imports this tree can record the tree's
+    /// arrival at its cross-tree barrier, as a shipped terminal would. An entry
+    /// whose txid has neither a decision nor a delegation is a purged saga's,
+    /// and the next prune drops it.
+    /// <para>
+    /// Wire-compatibility: legacy persisted state decodes to an empty map, so a
+    /// sub-saga parked by an older build names no operation.
+    /// </para>
+    /// </summary>
+    [Id(15)] public Dictionary<Guid, CrossTreeMembership> CrossTreeMemberships { get; set; } = [];
 }
