@@ -322,14 +322,21 @@ jobs:
           # is not the convention.
           prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
 
-          if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
+          # Dependabot owns its generated namespace; package names may be
+          # mixed-case (for example NuGet). This is not a human branch prefix.
+          dependabot_branch=false
+          if [ "${AUTHOR}" = 'dependabot[bot]' ] && printf '%s' "${BRANCH}" | grep -Eq '^dependabot/[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'; then
+            dependabot_branch=true
+          fi
+
+          if [ "${dependabot_branch}" = false ] && ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
             echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Push to a conforming name with an explicit refspec - 'git push <remote> HEAD:refs/heads/<type>/<description>' - which works regardless of what your local or harness-generated branch is called, then update this PR. Agents: prefer this over a rename tool, which may be single-shot and may re-apply a harness username prefix to the name you choose."
             failed=1
           fi
 
           # Never a username. Checked against the PR author's actual login
           # rather than a heuristic, so this cannot misfire on ordinary words.
-          if [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
+          if [ "${dependabot_branch}" = false ] && [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
             if printf '%s' "${BRANCH}" | grep -qiF "${AUTHOR}"; then
               echo "::error::Branch '${BRANCH}' contains the author's username ('${AUTHOR}'). Branch names describe the change, never who made it."
               failed=1
