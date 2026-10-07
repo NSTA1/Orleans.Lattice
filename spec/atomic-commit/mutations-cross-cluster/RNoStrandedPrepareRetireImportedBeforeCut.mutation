@@ -13,9 +13,12 @@ PERTURBS: ReceiverRetireImported
 BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
 
 --- FIND
+    /\ ~filt
+    /\ rs = "none"
     /\ ~\E r \in outbox : r.type = "prep" /\ TreeOf(r.key) = tr
     /\ ~\E k \in rtodo : TreeOf(k) = tr
 --- REPLACE
 \* MUTATION: the row is retired before the stream passes the export's cut.
+    /\ rs = "none"
     /\ ~\E k \in rtodo : TreeOf(k) = tr
 --- END
