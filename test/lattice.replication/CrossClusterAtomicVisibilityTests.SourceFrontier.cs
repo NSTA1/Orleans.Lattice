@@ -24,6 +24,7 @@ public partial class CrossClusterAtomicVisibilityTests
         public List<WalRecord> Shipped { get; } = new();
         public Guid? Lineage { get; set; }
         public long? Echo { get; set; }
+        public int? SupportedWireVersion { get; set; }
         public bool Accepting { get; set; } = true;
 
         public IReplicationTransport Build()
@@ -46,6 +47,7 @@ public partial class CrossClusterAtomicVisibilityTests
                         HighestAppliedHlc = HybridLogicalClock.Zero,
                         BootstrapEpoch = Echo,
                         ReceiverLineage = Lineage,
+                        SupportedWireVersion = SupportedWireVersion,
                     });
                 });
             return transport;
@@ -171,6 +173,53 @@ public partial class CrossClusterAtomicVisibilityTests
         feeds[0].Append(LocalSet(tree, "c", Hlc(ticks, 61)));
         await PumpAsync(shipper, ticks: 1);
         Assert.That(shipper.CurrentSourceFrontierForTesting?.ReceiverLineage, Is.EqualTo(lineage), "the same lineage reported again resumes it");
+    }
+
+    [Test]
+    public async Task A_modern_peer_first_reporting_its_lineage_after_accepted_writes_does_not_trigger_a_reseed()
+    {
+        const string tree = "ccv-frontier-first-modern-lineage";
+        var ticks = DateTime.UtcNow.Ticks;
+        var (shipper, feeds, transport, state) = FrontierShipper(tree, Hlc(ticks, 50));
+        transport.SupportedWireVersion = EncodedBatchHeader.CurrentWireVersion;
+        transport.Lineage = Guid.Empty;
+
+        feeds[0].Append(LocalSet(tree, "a", Hlc(ticks, 10)));
+        await PumpAsync(shipper, ticks: 1);
+        Assert.That(state.State.PartitionCursors.Values, Has.Some.GreaterThan(0), "precondition: the modern peer accepted data");
+        Assert.That(state.State.Frontier.LineageObserved, Is.False);
+        Assert.That(state.State.Frontier.ModernAcceptedBeforeFirstLineage, Is.True);
+
+        var lineage = Guid.NewGuid();
+        transport.Lineage = lineage;
+        feeds[1].Append(LocalSet(tree, "b", Hlc(ticks, 60)));
+        await PumpAsync(shipper, ticks: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "the first lineage identifies the contents that the modern peer already acknowledged");
+            Assert.That(state.State.Frontier.Lineage, Is.EqualTo(lineage));
+            Assert.That(state.State.Frontier.ModernAcceptedBeforeFirstLineage, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_legacy_peer_first_reporting_its_lineage_after_accepted_writes_still_triggers_a_reseed()
+    {
+        const string tree = "ccv-frontier-first-legacy-lineage";
+        var ticks = DateTime.UtcNow.Ticks;
+        var (shipper, feeds, transport, state) = FrontierShipper(tree, Hlc(ticks, 50));
+
+        feeds[0].Append(LocalSet(tree, "a", Hlc(ticks, 10)));
+        await PumpAsync(shipper, ticks: 1);
+        Assert.That(state.State.PartitionCursors.Values, Has.Some.GreaterThan(0), "precondition: the legacy peer accepted data");
+        Assert.That(state.State.Frontier.LineageObserved, Is.False);
+
+        transport.Lineage = Guid.NewGuid();
+        feeds[1].Append(LocalSet(tree, "b", Hlc(ticks, 60)));
+        await PumpAsync(shipper, ticks: 1);
+
+        Assert.That(shipper.ReseedRequired, Is.True, "a legacy peer's first lineage cannot identify what its earlier acknowledgements covered");
     }
 
     [Test]

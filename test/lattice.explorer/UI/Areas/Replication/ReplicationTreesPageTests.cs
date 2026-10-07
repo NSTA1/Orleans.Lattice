@@ -242,6 +242,21 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
         cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Has.Count.EqualTo(6)));
     }
 
+    [Test]
+    public void A_bootstrapping_tree_has_a_specific_enrolment_read_message()
+    {
+        Control.ReadFailure = new Orleans.Lattice.LatticeTreeBootstrappingException("secret detail", "t/acme/orders");
+
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Tree is bootstrapping"));
+            Assert.That(cut.Find(".lt-empty").TextContent, Does.Contain("This tree is bootstrapping from a peer; reads resume when it completes."));
+            Assert.That(cut.Markup, Does.Not.Contain("secret detail").And.Not.Contain("t/acme"));
+        });
+    }
+
     [TestCase("replication/trees?app=crm", new[] { "a/crm/contacts" })]
     [TestCase("replication/trees?health=stalled", new[] { "a/crm/contacts" })]
     [TestCase("replication/trees?health=healthy", new[] { "orders" })]

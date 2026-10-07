@@ -125,4 +125,14 @@ internal static class ReplicationFormat
     /// <param name="direction">The direction.</param>
     public static string Direction(ReplicationLinkDirection direction) =>
         direction == ReplicationLinkDirection.Inbound ? "Inbound" : "Outbound";
+
+    /// <summary>The operator-actionable cause of a stalled link, or <see langword="null"/>.</summary>
+    /// <param name="reason">The stalled-link cause.</param>
+    public static string? StallReason(ReplicationLinkStallReason? reason) => reason switch
+    {
+        ReplicationLinkStallReason.ReseedRequired => "Re-seed required",
+        ReplicationLinkStallReason.DeadLetterQueueFull => "Dead-letter queue full",
+        null => null,
+        _ => "Unknown",
+    };
 }

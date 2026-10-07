@@ -188,8 +188,10 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
 
     private static ReplicationPeerStatusEntry ToEntry(
         in ReplicationPeerStatusRow row,
-        LatticeReplicationStatusOptions options) =>
-        new(
+        LatticeReplicationStatusOptions options)
+    {
+        var health = ReplicationLinkHealthClassifier.Classify(row, options, out var stallReason);
+        return new(
             row.Tree,
             row.Peer,
             row.Direction == ReplicationContactDirection.Inbound
@@ -200,7 +202,11 @@ internal sealed class LatticeReplicationStatus : ILatticeReplicationStatus
             row.ConsecutiveErrors,
             ToTimeSpan(row.LastContactSeconds),
             row.InFlight,
-            ReplicationLinkHealthClassifier.Classify(row, options));
+            health)
+        {
+            StallReason = stallReason,
+        };
+    }
 
     private static TimeSpan? ToTimeSpan(double seconds)
     {

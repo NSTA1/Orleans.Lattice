@@ -101,9 +101,9 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
             var rows = cut.FindAll("tbody tr");
             Assert.That(rows, Has.Count.EqualTo(6));
             var cells = rows[0].Children.Select(cell => cell.TextContent.Trim()).ToArray();
-            Assert.That(cells, Is.EqualTo(new[] { "a/crm/contacts", "ap-south", "Outbound", "Stalled", "1,204", "3.2 MB", "7", "14 min ago", "0" }));
+            Assert.That(cells, Is.EqualTo(new[] { "a/crm/contacts", "ap-south", "Outbound", "Stalled", "Re-seed required", "1,204", "3.2 MB", "7", "14 min ago", "0" }));
             Assert.That(rows[0].QuerySelector("th a")!.GetAttribute("href"), Is.EqualTo("replication/trees/a/crm/contacts"));
-            Assert.That(rows.Select(row => row.Children[7].TextContent.Trim()), Does.Contain("Never"));
+            Assert.That(rows.Select(row => row.Children[8].TextContent.Trim()), Does.Contain("Never"));
         });
     }
 
@@ -332,7 +332,7 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
         Assert.Multiple(() =>
         {
             Assert.That(cut.FindAll("table"), Is.Empty, "no booktabs table at the compact width");
-            Assert.That(first.QuerySelector(".lt-compact-row")!.TextContent, Does.Contain("a/crm/contacts").And.Contain("Stalled").And.Contain("To ap-south - 1,204 entries, 3.2 MB behind"));
+            Assert.That(first.QuerySelector(".lt-compact-row")!.TextContent, Does.Contain("a/crm/contacts").And.Contain("Stalled").And.Contain("To ap-south - 1,204 entries, 3.2 MB behind - Re-seed required"));
             Assert.That(cut.FindAll(".lt-table-list__sort select"), Has.Count.EqualTo(1), "sorting becomes a select");
         });
 
@@ -341,7 +341,7 @@ public sealed class ReplicationEstatePageTests : ReplicationTestContext
         cut.WaitUntil(() =>
         {
             var sheet = cut.Find(".lt-dialog");
-            Assert.That(sheet.TextContent, Does.Contain("a/crm/contacts: to ap-south").And.Contain("Consecutive errors").And.Contain("14 min ago"));
+            Assert.That(sheet.TextContent, Does.Contain("a/crm/contacts: to ap-south").And.Contain("Stall reason").And.Contain("Re-seed required").And.Contain("Consecutive errors").And.Contain("14 min ago"));
             Assert.That(sheet.QuerySelector("a.lt-btn")!.GetAttribute("href"), Is.EqualTo("replication/trees/a/crm/contacts"));
         });
     }

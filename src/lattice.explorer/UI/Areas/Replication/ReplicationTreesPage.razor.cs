@@ -65,6 +65,7 @@ public partial class ReplicationTreesPage
     {
         ReplicationFaultKind.Denied => "Replication enrolment is not open to you",
         ReplicationFaultKind.NotServed => "Replication enrolment is not served here",
+        ReplicationFaultKind.Bootstrapping => "Tree is bootstrapping",
         _ => "Replication enrolment could not be read",
     };
 

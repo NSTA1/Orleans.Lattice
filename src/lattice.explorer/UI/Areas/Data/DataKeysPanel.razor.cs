@@ -44,6 +44,8 @@ public partial class DataKeysPanel : IDisposable
     private bool _loading;
     private bool _refreshing;
     private bool _pendingRefresh;
+    private int _changeRefreshFailures;
+    private DateTimeOffset _nextChangeRefreshUtc;
     private string? _error;
     private bool _cursorExpired;
     private bool _stale;
@@ -253,6 +255,7 @@ public partial class DataKeysPanel : IDisposable
         if (_reader is null)
         {
             _error = "This Explorer has no state API to read keys through.";
+            RecordLoadFailure();
             return;
         }
 
@@ -264,6 +267,7 @@ public partial class DataKeysPanel : IDisposable
         try
         {
             await _pager.ResetAsync(workspace.Tree.StateId, _pageSize, ActiveTagFilter, ActiveTagFilter is null ? workspace.Prefix : null, _mode, _lifetime.Token);
+            RecordLoadSuccess();
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
@@ -271,6 +275,7 @@ public partial class DataKeysPanel : IDisposable
         catch (Exception exception)
         {
             _error = DataErrors.Describe(exception, "read this tree's keys");
+            RecordLoadFailure();
         }
         finally
         {
@@ -287,9 +292,11 @@ public partial class DataKeysPanel : IDisposable
 
         _loading = true;
         _stale = false;
+        _error = null;
         try
         {
             await _pager.NextAsync(_lifetime.Token);
+            RecordLoadSuccess();
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
@@ -301,6 +308,7 @@ public partial class DataKeysPanel : IDisposable
         catch (Exception exception)
         {
             _error = DataErrors.Describe(exception, "read the next page of keys");
+            RecordLoadFailure();
         }
         finally
         {
@@ -454,6 +462,11 @@ public partial class DataKeysPanel : IDisposable
             return;
         }
 
+        if (_error is not null && DateTimeOffset.UtcNow < _nextChangeRefreshUtc)
+        {
+            return;
+        }
+
         if (_refreshing)
         {
             _pendingRefresh = true;
@@ -469,12 +482,28 @@ public partial class DataKeysPanel : IDisposable
                 await ResetAsync();
                 StateHasChanged();
             }
-            while (_pendingRefresh && !_lifetime.IsLeft);
+            while (_pendingRefresh
+                && !_lifetime.IsLeft
+                && (_error is null || DateTimeOffset.UtcNow >= _nextChangeRefreshUtc));
         }
         finally
         {
             _refreshing = false;
+            _pendingRefresh = false;
         }
+    }
+
+    private void RecordLoadSuccess()
+    {
+        _changeRefreshFailures = 0;
+        _nextChangeRefreshUtc = DateTimeOffset.MinValue;
+    }
+
+    private void RecordLoadFailure()
+    {
+        _changeRefreshFailures = Math.Min(_changeRefreshFailures + 1, 6);
+        var delaySeconds = Math.Min(30, 1 << (_changeRefreshFailures - 1));
+        _nextChangeRefreshUtc = DateTimeOffset.UtcNow.AddSeconds(delaySeconds);
     }
 
     private static bool HistoryLiveTailCovers(StateChangeNotification change, string key) =>

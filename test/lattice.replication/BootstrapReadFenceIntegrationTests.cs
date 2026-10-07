@@ -21,6 +21,11 @@ namespace Orleans.Lattice.Replication.Tests;
 /// committed values for both. A gated snapshot source pauses the drain after the
 /// first row so the test can read mid-import.
 /// </para>
+/// <para>
+/// A second scenario changes the source generation during an export while writes
+/// continue, proving that the unstable-export reconcile retry does not keep the
+/// receiver read-fenced after the import has drained.
+/// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -134,6 +139,54 @@ public sealed class BootstrapReadFenceIntegrationTests
             Assert.That(Str(after.GetValueOrDefault("k2")), Is.EqualTo("batch"));
             Assert.That(Str(after.GetValueOrDefault("k3")), Is.EqualTo("written-mid-drain"));
         });
+    }
+
+    [Test]
+    public async Task An_unstable_export_under_continuous_writes_lifts_the_read_fence_when_the_drain_finishes()
+    {
+        var treeName = $"fence-unstable-{Guid.NewGuid():N}";
+        await SeedPreBatchAsync(treeName);
+        GatedSnapshotSource.Arm(treeName, failFirstAttempts: 0, unstableGeneration: true);
+
+        await Coordinator.BootstrapAsync(treeName, SourceCluster);
+        await GatedSnapshotSource.FirstRowAppliedAsync(TimeSpan.FromSeconds(30));
+        Assert.That((await Coordinator.GetStatusAsync(treeName)).ReadFenced, Is.True);
+
+        using var stopWriter = new CancellationTokenSource();
+        var writes = 0;
+        var writer = Task.Run(async () =>
+        {
+            while (!stopWriter.IsCancellationRequested)
+            {
+                var write = Interlocked.Increment(ref writes);
+                await Tree(treeName).SetAsync($"live/{write}", Bytes(write.ToString()));
+                await Task.Delay(10, stopWriter.Token);
+            }
+        });
+
+        try
+        {
+            await Task.Delay(100, stopWriter.Token);
+            Assert.That(writes, Is.GreaterThan(0), "the writer is active while the export is paused");
+            GatedSnapshotSource.Release();
+            await WaitForPhaseAsync(
+                Coordinator,
+                treeName,
+                status => status.Phase == LatticeBootstrapState.LiveIncremental && !status.ReadFenced,
+                TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            GatedSnapshotSource.Release();
+            stopWriter.Cancel();
+            try
+            {
+                await writer;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+        }
     }
 
     [Test]
@@ -271,6 +324,7 @@ public sealed class BootstrapReadFenceIntegrationTests
         private static readonly object Sync = new();
         private static string? _tree;
         private static bool _gate;
+        private static bool _unstableGeneration;
         private static int _failuresLeft;
         private static TaskCompletionSource _firstRowApplied = New();
         private static TaskCompletionSource _released = New();
@@ -278,12 +332,18 @@ public sealed class BootstrapReadFenceIntegrationTests
 
         private static TaskCompletionSource New() => new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public static void Arm(string tree, int failFirstAttempts, bool gate = true, Guid preparedSaga = default)
+        public static void Arm(
+            string tree,
+            int failFirstAttempts,
+            bool gate = true,
+            Guid preparedSaga = default,
+            bool unstableGeneration = false)
         {
             lock (Sync)
             {
                 _tree = tree;
                 _gate = gate;
+                _unstableGeneration = unstableGeneration;
                 _failuresLeft = failFirstAttempts;
                 _preparedSaga = preparedSaga;
                 _firstRowApplied = New();
@@ -298,6 +358,7 @@ public sealed class BootstrapReadFenceIntegrationTests
             lock (Sync)
             {
                 _tree = null;
+                _unstableGeneration = false;
                 _released.TrySetResult();
             }
         }
@@ -320,8 +381,34 @@ public sealed class BootstrapReadFenceIntegrationTests
             AtomicBatchIndex = index,
         };
 
-        public Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new SnapshotStream(treeName, asOfHlc, new VersionVector(), RowsAsync(treeName)));
+        public Task<SnapshotStream> ExportAsync(string treeName, HybridLogicalClock asOfHlc, CancellationToken cancellationToken = default)
+        {
+            bool unstableGeneration;
+            lock (Sync)
+            {
+                unstableGeneration = string.Equals(treeName, _tree, StringComparison.Ordinal) && _unstableGeneration;
+            }
+
+            if (!unstableGeneration)
+            {
+                return Task.FromResult(new SnapshotStream(treeName, asOfHlc, new VersionVector(), RowsAsync(treeName)));
+            }
+
+            var open = new SnapshotSourceGeneration
+            {
+                PhysicalTreeId = $"physical-{treeName}",
+                ShardMapVersion = 1,
+                Lineage = Guid.NewGuid(),
+                DeleteEpoch = 0,
+                IsDeleted = false,
+            };
+            return Task.FromResult(new SnapshotStream(treeName, asOfHlc, new VersionVector(), RowsAsync(treeName))
+            {
+                OpenGeneration = open,
+                CloseGeneration = open with { Lineage = Guid.NewGuid() },
+                OpenFrontier = new SnapshotSourceFrontier { Lineage = open.Lineage },
+            });
+        }
 
         private static async IAsyncEnumerable<SnapshotEntry> RowsAsync(string treeName)
         {
