@@ -6,11 +6,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 
 /// <summary>
 /// Bounds how long a batch write's per-shard fan-out may run on this deployment
-/// before it is refused with a <c>LatticeSaturatedException</c>. The library
-/// ships this unbounded and is right to - a finite default would be a contract
-/// break for every existing caller (#3386) - but this host is not a library
-/// consumer with an unknown workload, it is one known deployment whose fan-out
-/// collapse was measured, so it arms the bound explicitly.
+/// before it is refused with a <c>LatticeSaturatedException</c>. From 10.0 the
+/// library also defaults to 30 seconds (#3386). This host retains the environment
+/// override and explicit zero opt-out for its measured ingest workload.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -23,10 +21,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// which is itself unbounded.
 /// </para>
 /// <para>
-/// Why this host arms it when the library does not. The unbounded default exists
-/// so that no conforming caller regresses on upgrade, which is the correct
-/// default for a library whose callers are unknown. It is the wrong setting
-/// <em>here</em>: this deployment's ingest path issues wide batch writes against
+/// Why this host keeps a finite default, matching the library from 10.0.
+/// This deployment's ingest path issues wide batch writes against
 /// trees that are demonstrably saturated, and an unbounded fan-out converts that
 /// saturation into an indefinitely-held call rather than a refusal the caller can
 /// see, retry, or shed. An indefinitely-held call is the wedge - a refusal is a
@@ -50,8 +46,8 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// it never fires in the regime it is not meant to police.
 /// </para>
 /// <para>
-/// Rollback is setting the variable to <c>0</c>, which restores the library
-/// default of an unbounded fan-out exactly. That is a rollback to the wedge
+/// Rollback is setting the variable to <c>0</c>, which restores the pre-10.0
+/// unbounded fan-out. That is a rollback to the wedge
 /// rather than to data loss, which is the correct direction for this seam to
 /// fail.
 /// </para>

@@ -8,9 +8,9 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Tests.Host;
 
 /// <summary>
 /// Unit tests for the batch-write fan-out budget wiring (issues #3348, #3386):
-/// the host's armed default against the library's unbounded one, the environment
+/// the host's finite default matching the library's 10.0 default, the environment
 /// override and its fail-fast validation, the explicit zero that restores the
-/// unbounded library behaviour, and - the load-bearing one - that the zero
+/// pre-10.0 unbounded behaviour, and - the load-bearing one - that the zero
 /// rollback resolves to <see cref="Timeout.InfiniteTimeSpan"/> rather than
 /// <see cref="TimeSpan.Zero"/>.
 /// </summary>
@@ -29,17 +29,16 @@ public sealed class RepoContextFanOutBudgetTests
     }
 
     [Test]
-    public void The_host_default_is_armed_where_the_library_default_is_not()
+    public void The_host_default_matches_the_finite_library_default()
         => Assert.Multiple(() =>
         {
             Assert.That(RepoContextFanOutBudget.DefaultFanOutBudgetSeconds, Is.GreaterThan(0),
-                "the library ships this unbounded so no existing caller regresses on upgrade "
-                + "(#3386), which is right for a library and wrong for one known deployment "
-                + "whose fan-out collapse was measured");
-            Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan),
-                "if the library default ever becomes finite, this host wiring stops being the "
-                + "thing that arms the bound and its rationale must be re-read rather than "
-                + "silently inherited");
+                "the host and library both bound fan-out from 10.0 (#3386)");
+            Assert.That(
+                TimeSpan.FromSeconds(RepoContextFanOutBudget.DefaultFanOutBudgetSeconds),
+                Is.EqualTo(LatticeOptions.DefaultSetManyFanOutBudget),
+                "the host retains its environment override and explicit zero opt-out, "
+                + "but its absent-variable default must match the finite library default");
             Assert.That(
                 RepoContextFanOutBudget.DefaultFanOutBudgetSeconds,
                 Is.LessThanOrEqualTo(RepoContextFanOutBudget.MaxFanOutBudgetSeconds));
@@ -62,12 +61,12 @@ public sealed class RepoContextFanOutBudgetTests
         => Assert.That(RepoContextFanOutBudget.ResolveBudgetSeconds(Configuration(" 45 ")), Is.EqualTo(45));
 
     [Test]
-    public void Zero_is_accepted_as_the_explicit_rollback_to_the_unbounded_library_behaviour()
+    public void Zero_is_accepted_as_the_explicit_rollback_to_the_pre_10_0_behaviour()
         => Assert.That(
             RepoContextFanOutBudget.ResolveBudgetSeconds(Configuration("0")),
             Is.Zero,
             "rollback must be expressible as a VALUE rather than by unsetting the variable - "
-            + "unsetting resolves the armed default, so an operator who wanted the library's "
+            + "unsetting resolves the armed default, so an operator who wanted the previous "
             + "unbounded behaviour back would otherwise have no way to ask for it");
 
     [TestCase("-1")]
@@ -135,7 +134,7 @@ public sealed class RepoContextFanOutBudgetTests
         Assert.That(
             monitor.Get(string.Empty).SetManyFanOutBudget,
             Is.EqualTo(Timeout.InfiniteTimeSpan),
-            "the rollback value must restore the library default exactly; resolving it to "
+            "the rollback value must restore the pre-10.0 unbounded behaviour; resolving it to "
             + "TimeSpan.Zero would turn an operator's rollback into an outage");
     }
 
