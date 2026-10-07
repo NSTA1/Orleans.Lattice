@@ -21,8 +21,10 @@ namespace Orleans.Lattice.Operations;
 /// index request adds no wait, and a reconciliation tick shares one 250 ms remote
 /// budget. One such tick ahead of a poll therefore adds at most 500 ms total remote
 /// bookkeeping wait. Legacy-record activation additionally allows 250 ms to install
-/// recovery before migration. Storage, scheduling and unrelated queued requests are
-/// not bounded here. Listings can lag while the durable outbox is pending.
+/// recovery before migration; reminder faults are logged and retried by the timer,
+/// not propagated to polls. Begin allows five seconds to install recovery before
+/// accepting work. Storage, scheduling and unrelated queued requests are not bounded
+/// here. Listings can lag while the durable outbox is pending.
 /// </remarks>
 internal sealed class LatticeOperationGrain(
     IGrainContext context,
@@ -35,6 +37,8 @@ internal sealed class LatticeOperationGrain(
     IReminderRegistry reminderRegistry) : IGrainBase, ILatticeOperationGrain, IRemindable
 {
     internal static readonly TimeSpan IndexWaitBudget = TimeSpan.FromMilliseconds(250);
+    internal static readonly TimeSpan ReminderRegistrationWaitBudget = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan ReconcileWaitBudget = TimeSpan.FromMilliseconds(250);
     private const string IndexReminderName = "operation-index";
     private static readonly TimeSpan ReconcilePeriod = TimeSpan.FromSeconds(5);
     private IGrainTimer? _timer;
@@ -52,10 +56,18 @@ internal sealed class LatticeOperationGrain(
         if (!state.State.IndexOutboxInitialized && state.State.Record is { } record)
         {
             // Upgrade records written before the durable outbox existed.
-            await reminderRegistry.RegisterOrUpdateReminder(
-                context.GrainId, IndexReminderName, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1))
-                .WaitAsync(IndexWaitBudget);
-            _reminderRegistered = true;
+            try
+            {
+                await reminderRegistry.RegisterOrUpdateReminder(
+                    context.GrainId, IndexReminderName, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1))
+                    .WaitAsync(ReconcileWaitBudget);
+                _reminderRegistered = true;
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Operation {OperationId} legacy recovery reminder registration failed; the timer will retry",
+                    record.OperationId);
+            }
             state.State.PendingIndexRecord = record;
             state.State.IndexOutboxInitialized = true;
             await state.WriteStateAsync();
@@ -133,7 +145,7 @@ internal sealed class LatticeOperationGrain(
         {
             await reminderRegistry.RegisterOrUpdateReminder(
                 context.GrainId, IndexReminderName, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1))
-                .WaitAsync(IndexWaitBudget);
+                .WaitAsync(ReminderRegistrationWaitBudget);
             _reminderRegistered = true;
         }
         state.State.PendingIndexRecord = record;
@@ -374,7 +386,7 @@ internal sealed class LatticeOperationGrain(
 
     private static TimeSpan RemainingWait(long started)
     {
-        var remaining = IndexWaitBudget - Stopwatch.GetElapsedTime(started);
+        var remaining = ReconcileWaitBudget - Stopwatch.GetElapsedTime(started);
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
@@ -444,7 +456,14 @@ internal sealed class LatticeOperationGrain(
             state.State.PendingIndexRemoval = false;
             try
             {
-                await state.WriteStateAsync();
+                if (_indexRemoval && state.State.Record is null)
+                {
+                    await state.ClearStateAsync();
+                }
+                else
+                {
+                    await state.WriteStateAsync();
+                }
             }
             catch
             {

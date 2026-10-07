@@ -8,6 +8,83 @@ namespace Orleans.Lattice.Tests.Operations;
 public sealed partial class LatticeOperationGrainTests
 {
     [Test]
+    public async Task Begin_allows_a_reminder_registration_slower_than_the_index_budget()
+    {
+        var blocked = new TaskCompletionSource<IGrainReminder>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders.RegisterOrUpdateReminder(Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns(blocked.Task);
+        var begin = CreateGrain(reminders: reminders).BeginAsync(Begin());
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(350));
+            Assert.That(begin.IsCompleted, Is.False, "The index's 250 ms deadline must not fail reminder registration.");
+            blocked.TrySetResult(Substitute.For<IGrainReminder>());
+            Assert.That((await begin.WaitAsync(TimeSpan.FromSeconds(2))).Created, Is.True);
+        }
+        finally
+        {
+            blocked.TrySetResult(Substitute.For<IGrainReminder>());
+        }
+    }
+
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task Legacy_activation_keeps_polling_and_retries_failed_reminder_registration(bool blockedRegistration)
+    {
+        await CreateGrain().BeginAsync(Begin());
+        _state.State.IndexOutboxInitialized = false;
+        var blocked = new TaskCompletionSource<IGrainReminder>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var reminders = Substitute.For<IReminderRegistry>();
+        reminders.RegisterOrUpdateReminder(Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+            .Returns(blockedRegistration ? blocked.Task : Task.FromException<IGrainReminder>(new IOException("reminder unavailable")));
+        Func<CancellationToken, Task>? tick = null;
+        var grain = CreateGrain(reminders: reminders);
+        grain.TimerFactory = callback =>
+        {
+            tick = callback;
+            return Substitute.For<IGrainTimer>();
+        };
+        try
+        {
+            await grain.OnActivateAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.That((await grain.GetAsync().WaitAsync(TimeSpan.FromSeconds(2)))!.State, Is.EqualTo(LatticeOperationState.Queued));
+            Assert.That(_state.State.PendingIndexRecord, Is.Not.Null, "Migration persists intent despite the reminder failure.");
+            Assert.That(_state.State.IndexOutboxInitialized, Is.True);
+            Assert.That(tick, Is.Not.Null, "Migration must wire autonomous recovery after a reminder fault.");
+
+            blocked.TrySetResult(Substitute.For<IGrainReminder>());
+            reminders.RegisterOrUpdateReminder(Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>())
+                .Returns(Substitute.For<IGrainReminder>());
+            await tick!(CancellationToken.None);
+            Assert.That(_state.State.PendingIndexRecord, Is.Null);
+            await reminders.Received(2).RegisterOrUpdateReminder(
+                Arg.Any<GrainId>(), Arg.Any<string>(), Arg.Any<TimeSpan>(), Arg.Any<TimeSpan>());
+        }
+        finally
+        {
+            blocked.TrySetResult(Substitute.For<IGrainReminder>());
+        }
+    }
+
+    [Test]
+    public async Task A_failed_expiry_clear_retains_removal_intent_until_the_row_can_be_deleted()
+    {
+        var grain = CreateGrain();
+        await grain.BeginAsync(Begin());
+        await grain.CompleteAsync(LatticeOperationCompletion.Succeeded());
+        _clock.Advance(_options.Retention);
+        _state.ThrowOnClear = new IOException("clear failed");
+
+        Assert.That(async () => await grain.GetAsync(), Throws.TypeOf<IOException>());
+        Assert.That(_state.State.PendingIndexRemoval, Is.True);
+        Assert.That(_state.RecordExists, Is.True);
+        await grain.ReceiveReminder("operation-index", default);
+        Assert.That(_state.State.PendingIndexRecord, Is.Null);
+        Assert.That(_state.RecordExists, Is.False);
+    }
+
+    [Test]
     public async Task Failed_acknowledgement_write_retains_the_outbox_for_an_autonomous_retry()
     {
         var grain = CreateGrain();
@@ -57,6 +134,7 @@ public sealed partial class LatticeOperationGrainTests
 
         Assert.That(_state.State.Record, Is.Null);
         Assert.That(_state.State.PendingIndexRecord, Is.Null);
+        Assert.That(_state.RecordExists, Is.False, "An acknowledged expiry must delete the storage row, not write an empty one.");
         await reminders.Received(1).UnregisterReminder(Arg.Any<GrainId>(), reminder);
         timer.Received(1).Dispose();
     }
