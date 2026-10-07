@@ -65,7 +65,8 @@ lifecycle, quota, and region-residency verbs and the
   `LatticeAuthorizationDeniedException` (unified into `TenantNotFoundException` on
   the quota-usage read) and no change is made. The read-only self-service surface
   scopes its answers to the caller instead of refusing, and the tenant-scoped tree
-  facade relies on the facades it wraps (see
+  facade authorizes schema-policy calls itself and delegates lifecycle authorization
+  to the tree facade it wraps (see
   [`ILatticeTenantScopedTreeAdmin`](#ilatticetenantscopedtreeadmin)). The bindings
   additionally gate every lifecycle, region-residency, access, grant, and quota-usage
   call they serve behind an explicit opt-in (the gRPC binding's default-deny
@@ -338,10 +339,16 @@ supplied and does not use the two-tier gate above. Its tree verbs delegate to
 access gate as it would for any caller - whole-tree `Admin` to create (also checked
 here before any quota accounting), `TreeLifecycle` to delete, recover, or purge, and
 `Read` to check existence or deletion status - so the caller's membership
-validation and tenancy's isolation apply there. Its schema-policy verbs delegate to
-the in-process `ILatticeSchemaAdmin`, which performs no authorization of its own (see
-[Capability gate](../lattice.schema/README.md#capability-gate)), and the facade adds
-no check for them.
+validation and tenancy's isolation apply there. Its schema-policy verbs authorize
+the caller over the whole composed tree before delegating: `SchemaAdmin` for
+`SetSchemaPolicyAsync` and `ClearSchemaPolicyAsync`, and `Read` for
+`GetSchemaPolicyAsync`. A denied or key-filtered allow throws
+`LatticeAuthorizationDeniedException` without calling the schema admin, so an
+asserted active tenant cannot grant access to another tenant's policy. This check
+is required because the in-process `ILatticeSchemaAdmin` performs no authorization
+of its own and its store uses system origin (see
+[Capability gate](../lattice.schema/README.md#capability-gate)). The shared gate's
+system-origin and no-op-host bypasses are unchanged.
 
 ### `ILatticeTenantAccessAdmin`
 
