@@ -1,10 +1,6 @@
 using Grpc.Core;
 using NSubstitute;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
-// they stay supported until the next major version.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.TreeAdmin.Grpc.Tests;
 
 /// <summary>
@@ -501,14 +497,6 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
     }
 
     [Test]
-    public void wal_move_execute_into_a_reserved_tree_is_rejected_over_the_client()
-    {
-        Assert.That(
-            async () => await _host.Client.ExecuteWalMoveAsync("_lattice_trees", 0, "wal-secondary"),
-            Throws.Exception);
-    }
-
-    [Test]
     public void wal_move_reclaim_into_a_reserved_tree_is_rejected_over_the_client()
     {
         Assert.That(
@@ -651,14 +639,6 @@ public sealed class LatticeTreeAdminGrpcClientE2ETests
         // so the facade fails closed to KeyNotFound, surfaced as an RpcException.
         Assert.That(
             async () => await _host.Client.GetTagIndexStatusAsync("no-such-index"),
-            Throws.Exception);
-    }
-
-    [Test]
-    public void tag_index_reconcile_over_the_client_throws_for_an_unknown_index()
-    {
-        Assert.That(
-            async () => await _host.Client.ReconcileTagIndexAsync("no-such-index"),
             Throws.Exception);
     }
 

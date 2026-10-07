@@ -10,15 +10,6 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// </summary>
 public enum LatticeBackupApiOperation
 {
-    /// <summary>The <c>CreateBackup</c> full-capture RPC.</summary>
-    CreateBackup,
-
-    /// <summary>The <c>CreateIncrementalBackup</c> incremental-capture RPC.</summary>
-    CreateIncrementalBackup,
-
-    /// <summary>The <c>CreateBackupSet</c> multi-tree backup-set-capture RPC.</summary>
-    CreateBackupSet,
-
     /// <summary>The <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
     ListBackups,
 
@@ -30,9 +21,6 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The <c>DeleteBackup</c> RPC.</summary>
     DeleteBackup,
-
-    /// <summary>The <c>RestoreBackup</c> RPC.</summary>
-    RestoreBackup,
 
     /// <summary>The <c>RevertRestore</c> RPC.</summary>
     RevertRestore,
@@ -51,9 +39,6 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The <c>IsHealthMonitoringAvailable</c> capability RPC.</summary>
     IsHealthMonitoringAvailable,
-
-    /// <summary>The <c>CheckBackupHealth</c> on-demand verification RPC.</summary>
-    CheckBackupHealth,
 
     /// <summary>The <c>GetBackupHealth</c> stored-report read RPC.</summary>
     GetBackupHealth,

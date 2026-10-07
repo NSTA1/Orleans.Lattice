@@ -14,10 +14,6 @@ using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Testing;
 using static Orleans.Lattice.Explorer.Tests.UI.Operations.TreeAdminOperationScript;
 
-// These tests exercise the deprecated blocking tree-administration verbs (LATTICE0002) on purpose:
-// they stay supported until the next major version.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Cluster;
 
 /// <summary>

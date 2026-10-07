@@ -1,10 +1,7 @@
 using System.Text;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -40,9 +37,10 @@ public sealed class LatticeBackupControlHealthTests
     {
         var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
         await source.SetAsync("k1", Bytes("v1"));
-        var result = await _fixture.Control.CreateBackupAsync(
+        var handle = await Operations.StartBackupAsync(
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
-        return result.BackupId;
+        var status = await UntilTerminalAsync(handle.OperationId);
+        return status.ResultReference!;
     }
 
     [Test]
@@ -57,40 +55,12 @@ public sealed class LatticeBackupControlHealthTests
     }
 
     [Test]
-    public async Task CheckBackupHealthAsync_verifies_a_captured_backup_and_persists_the_report()
-    {
-        await _fixture.InitializeAsync();
-        var backupId = await CaptureBackupAsync();
-
-        var report = await _fixture.Control.CheckBackupHealthAsync(backupId);
-        var stored = await _fixture.Control.GetBackupHealthAsync(backupId);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.BackupId, Is.EqualTo(backupId));
-            Assert.That(report.Status, Is.EqualTo(BackupHealthStatus.Healthy));
-            Assert.That(stored, Is.Not.Null);
-            Assert.That(stored!.Status, Is.EqualTo(BackupHealthStatus.Healthy));
-        });
-    }
-
-    [Test]
     public async Task GetBackupHealthAsync_returns_null_before_any_check()
     {
         await _fixture.InitializeAsync();
         var backupId = await CaptureBackupAsync();
 
         Assert.That(await _fixture.Control.GetBackupHealthAsync(backupId), Is.Null);
-    }
-
-    [Test]
-    public async Task CheckBackupHealthAsync_unknown_backup_throws()
-    {
-        await _fixture.InitializeAsync();
-
-        Assert.That(
-            async () => await _fixture.Control.CheckBackupHealthAsync("does-not-exist"),
-            Throws.TypeOf<KeyNotFoundException>());
     }
 
     [Test]
@@ -121,15 +91,6 @@ public sealed class LatticeBackupControlHealthTests
     }
 
     [Test]
-    public async Task CheckBackupHealthAsync_empty_id_throws()
-    {
-        await _fixture.InitializeAsync();
-        Assert.That(
-            async () => await _fixture.Control.CheckBackupHealthAsync(string.Empty),
-            Throws.ArgumentException);
-    }
-
-    [Test]
     public async Task ConfigureBackupHealthAsync_null_config_throws()
     {
         await _fixture.InitializeAsync();
@@ -137,5 +98,16 @@ public sealed class LatticeBackupControlHealthTests
         Assert.That(
             async () => await _fixture.Control.ConfigureBackupHealthAsync(backupId, null!),
             Throws.ArgumentNullException);
+    }
+
+    private ILatticeBackupOperations Operations => (ILatticeBackupOperations)_fixture.Control;
+
+    private async Task<LatticeOperationStatus> UntilTerminalAsync(string operationId)
+    {
+        LatticeOperationStatus? status = null;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () => (status = await Operations.GetOperationStatusAsync(operationId)) is { IsTerminal: true },
+            $"operation {operationId} to finish");
+        return status!;
     }
 }

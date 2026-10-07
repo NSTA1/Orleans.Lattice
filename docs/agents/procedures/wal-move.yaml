@@ -3,17 +3,17 @@ id: wal-move
 name: "Move WAL partition placement"
 surfaces:
   in_process:
-    api: "ILatticeTreeAdmin.PlanWalMoveAsync, ExecuteWalMoveAsync, ReclaimMovedWalSourceAsync"
+    api: "ILatticeTreeAdmin.PlanWalMoveAsync, ILatticeTreeAdminOperations.StartWalMoveAsync, ReclaimMovedWalSourceAsync"
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#PlanWalMoveAsync"
   grpc:
     api: "/orleans.lattice.api.treeadmin/PlanWalMove, ExecuteWalMove, ReclaimMovedWalSource"
     source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#PlanWalMoveMethodName"
   mcp_tool:
-    api: "lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_execute, lattice_treeadmin_wal_move_reclaim"
+    api: "lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_start, lattice_treeadmin_wal_move_reclaim"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_wal_move_execute, lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_reclaim, lattice_treeadmin_wal_move_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_wal_move_plan, lattice_treeadmin_wal_move_reclaim, lattice_treeadmin_wal_move_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/treeadmin.json"
   - id: lifecycle-for-move
     check: "Caller has TreeLifecycle authority for execute and reclaim."
@@ -52,7 +52,7 @@ steps:
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
 postconditions:
   - check: "The moved source tail is retained until explicit reclaim."
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
   - check: "After reclaim, moving back cannot recover the discarded source data."
     source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReclaimMovedWalSourceAsync"
   - check: "A tracked WAL move cancelled before the placement flip leaves the partition on the source provider; cancellation after the flip does not undo the move."
@@ -79,8 +79,8 @@ rollback:
   mechanism: "Move the partition back to its original provider before ReclaimMovedWalSourceAsync; after reclaim rollback is unsupported."
   steps:
     - action: "Execute another WAL move to the original provider key."
-      api: "ILatticeTreeAdmin.ExecuteWalMoveAsync"
-      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
+      api: "ILatticeTreeAdminOperations.StartWalMoveAsync"
+      source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartWalMoveAsync"
   source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ExecuteWalMoveAsync"
 concurrency:
   - rule: "Placement mutation must not interleave with another move of the same partition."

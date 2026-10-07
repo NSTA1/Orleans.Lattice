@@ -70,41 +70,14 @@ internal sealed class GrpcLatticeSchemaControl : ILatticeSchemaControl, ILattice
         string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
         => _client.AdvanceTargetVersionAsync(treeId, newTargetVersion, cancellationToken);
 
-#pragma warning disable LATTICE0002 // The deprecated facade members forward to the deprecated client verbs until both are removed.
-    /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
-        => _client.AdvanceAndMigrateAsync(treeId, newTargetVersion, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
-        string treeId, CancellationToken cancellationToken = default)
-        => _client.MigrateToTargetVersionAsync(treeId, cancellationToken);
-
     /// <inheritdoc />
     public Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
         => _client.ClearVersionConfigAsync(treeId, cancellationToken);
 
     /// <inheritdoc />
-    public Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-        => _client.RemediateAsync(treeId, transform, targetPolicy, cancellationToken);
-#pragma warning restore LATTICE0002
-
-    /// <inheritdoc />
     public Task<LatticeSchemaRemediationReport> GetRemediationStatusAsync(
         string treeId, CancellationToken cancellationToken = default)
         => _client.GetRemediationStatusAsync(treeId, cancellationToken);
-
-    /// <inheritdoc />
-    public Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
-        string treeId, CancellationToken cancellationToken = default)
-#pragma warning disable LATTICE0002 // Forwards the deprecated verb to the client's deprecated twin.
-        => _client.ScanComplianceAsync(treeId, cancellationToken);
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public Task<LatticeSchemaCapabilities> ProbeCapabilitiesAsync(

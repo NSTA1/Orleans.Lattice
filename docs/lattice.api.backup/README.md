@@ -25,7 +25,7 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 ## Surface
 
-The facade operations. Long captures, restores, health checks, and catalog rebuild or scrub passes should use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The older blocking verbs still behave as before, but are deprecated with warning `LATTICE0002` and will be removed in the next major version. The gRPC binding exposes the remote-safe subset as RPCs; inventory and the blocking catalog rebuild / scrub methods are in-process-only, while tracked catalog rebuild and scrub start over gRPC.
+The facade operations. Long captures, restores, health checks, and catalog rebuild or scrub passes use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The blocking `LATTICE0002` verbs were removed in this major version; see [Backup operations](operations.md#migrating-from-the-removed-blocking-verbs) for the old-to-new migration table. The gRPC binding exposes the remote-safe subset as RPCs; inventory stays in-process-only, while tracked catalog rebuild and scrub start over gRPC.
 
 | Operation | Purpose |
 |---|---|
@@ -34,27 +34,22 @@ The facade operations. Long captures, restores, health checks, and catalog rebui
 | Start backup set | Accept a tracked backup-set capture and return an operation handle. |
 | Start restore | Accept a tracked restore and return an operation handle. |
 | Start cold restore | Accept a tracked catalog-free restore from the sink and return an operation handle. |
+| Start backup health check | Start a tracked health verification of one backup. |
+| Start catalog rebuild | Start a tracked rebuild of the catalog from sink manifests. |
+| Start catalog scrub | Start a tracked scrub of catalog rows against the sink. |
 | Get / list / cancel backup operations | Poll progress, page recent operations, and request cancellation. |
-| Create backup | Deprecated blocking wrapper for full capture; use Start backup. |
-| Create incremental backup | Deprecated blocking wrapper for incremental capture; use Start incremental backup. |
-| Create backup set | Deprecated blocking wrapper for backup-set capture; use Start backup set. |
 | List backups | One deterministic, cursor-resumable, read-filtered catalog page. |
 | Stream backups | Drain the whole readable catalog with bounded memory. |
 | Describe backup | A manifest and its base-first restore chain, or absent. |
 | Delete backup | Remove a manifest and its unshared artifacts. |
-| Restore backup | Deprecated blocking wrapper for restore; use Start restore. |
-| Cold restore | Deprecated blocking wrapper for catalog-free disaster restore; use Start cold restore. |
 | Revert restore | Undo a shadow-cutover restore. |
 | Export artifact | Stream one of a backup's artifacts back chunk-wise. |
 | Get inventory | A catalog-wide inventory summary of every readable backup (in-process only). |
-| Rebuild catalog from sink | Re-project every sink manifest into the in-cluster catalog (in-process only). |
-| Scrub catalog against sink | Report or prune catalog rows whose sink payload is gone (in-process only). |
 | Get scope status | A single scope's schedule and last-run status. |
 | Probe capabilities | Report, with no side effects, which backup and restore operations the caller may perform over a scope. |
 | Schedule backup | Register or update a runtime recurring full or incremental backup schedule. |
 | Cancel schedule | Remove a runtime full or incremental backup schedule. |
 | Is health monitoring available | Report whether backup-health monitoring applies for the configured sink. |
-| Check backup health | Verify one backup now and persist the report. |
 | Get backup health | Read the latest stored health report. |
 | Configure backup health | Override one backup's periodic health-monitor settings. |
 

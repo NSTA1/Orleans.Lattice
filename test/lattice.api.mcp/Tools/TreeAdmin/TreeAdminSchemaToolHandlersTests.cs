@@ -3,10 +3,6 @@ using NSubstitute;
 using Orleans.Lattice.Api.Schema;
 using Orleans.Lattice.Schema;
 
-// The deprecated blocking compliance scan (LATTICE0002, #4126) is exercised on purpose
-// until its removal.
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.Mcp.Tests;
 
 /// <summary>
@@ -106,18 +102,6 @@ public sealed class TreeAdminSchemaToolHandlersTests
         schema.GetRemediationStatusAsync("orders", Arg.Any<CancellationToken>()).Returns(report);
 
         var result = await TreeAdminSchemaToolHandlers.GetRemediationStatusAsync(schema, "orders", CancellationToken.None);
-
-        Assert.That(result, Is.EqualTo(report));
-    }
-
-    [Test]
-    public async Task ScanComplianceAsync_forwards_to_the_facade()
-    {
-        var schema = Schema();
-        var report = LatticeSchemaComplianceReport.Ungoverned("orders");
-        schema.ScanComplianceAsync("orders", Arg.Any<CancellationToken>()).Returns(report);
-
-        var result = await TreeAdminSchemaToolHandlers.ScanComplianceAsync(schema, "orders", CancellationToken.None);
 
         Assert.That(result, Is.EqualTo(report));
     }
@@ -226,7 +210,6 @@ public sealed class TreeAdminSchemaToolHandlersTests
             Assert.That(() => TreeAdminSchemaToolHandlers.CountDeadLettersAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.GetVersionConfigAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.GetRemediationStatusAsync(null!, "t"), Throws.ArgumentNullException);
-            Assert.That(() => TreeAdminSchemaToolHandlers.ScanComplianceAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.ProbeCapabilitiesAsync(null!, "t"), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.SetPolicyAsync(null!, "t", policy), Throws.ArgumentNullException);
             Assert.That(() => TreeAdminSchemaToolHandlers.ClearPolicyAsync(null!, "t"), Throws.ArgumentNullException);

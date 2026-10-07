@@ -17,66 +17,9 @@ namespace Orleans.Lattice.Api.Backup;
 /// and artifact export are streamed as <see cref="IAsyncEnumerable{T}"/> so a
 /// large catalog or artifact enumerates with bounded memory rather than being
 /// materialized whole.
-/// <para>
-/// The blocking capture and restore verbs (<see cref="CreateBackupAsync"/>,
-/// <see cref="CreateIncrementalBackupAsync"/>, <see cref="CreateBackupSetAsync"/>,
-/// <see cref="RestoreBackupAsync"/> and <see cref="ColdRestoreAsync"/>) and the
-/// blocking sink scans (<see cref="CheckBackupHealthAsync"/>,
-/// <see cref="RebuildCatalogFromSinkAsync"/> and <see cref="ScrubCatalogAgainstSinkAsync"/>)
-/// are deprecated (diagnostic <c>LATTICE0002</c>) in favour of the accept-then-poll
-/// <see cref="ILatticeBackupOperations"/>, and will be removed in the next major version.
-/// Each is now a thin wrapper that starts the matching tracked operation and waits
-/// for it, so it behaves as before and the work is visible to the operation verbs.
-/// </para>
 /// </remarks>
 public interface ILatticeBackupControl
 {
-    /// <summary>
-    /// Captures a full backup of the request's scope, after authorizing the
-    /// scope fail-closed.
-    /// </summary>
-    /// <param name="request">The full-capture request. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The captured backup's id and manifest.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
-    [Obsolete("CreateBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupAsync and poll GetOperationStatusAsync instead. CreateBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeBackupCaptureResult> CreateBackupAsync(
-        LatticeBackupCaptureRequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Captures an incremental backup layered on a base backup, after
-    /// authorizing the scope fail-closed.
-    /// </summary>
-    /// <param name="request">The incremental-capture request. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The captured backup's id and manifest.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up the scope.</exception>
-    [Obsolete("CreateIncrementalBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartIncrementalBackupAsync and poll GetOperationStatusAsync instead. CreateIncrementalBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(
-        LatticeBackupIncrementalCaptureRequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Captures a backup <i>set</i> - one full backup per scope in the request,
-    /// grouped under a single set manifest - after authorizing every member
-    /// scope fail-closed. When the request asks for cross-tree consistency and
-    /// the set covers more than one tree, every member is captured at a single
-    /// causal fence so a cross-tree atomic write is never torn across the set
-    /// boundary; a single-tree set pays no extra coordination.
-    /// </summary>
-    /// <param name="request">The set-capture request. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The set manifest and the per-tree member results in scope order.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a scope in the set.</exception>
-    [Obsolete("CreateBackupSetAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupSetAsync and poll GetOperationStatusAsync instead. CreateBackupSetAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(
-        LatticeBackupSetCaptureRequest request,
-        CancellationToken cancellationToken = default);
-
     /// <summary>
     /// Registers (or updates) a recurring backup schedule for the request's
     /// scope, after authorizing the scope fail-closed with the same grant a
@@ -164,24 +107,6 @@ public interface ILatticeBackupControl
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Restores a backup into its target tree, after authorizing the target
-    /// scope fail-closed with the <see cref="LatticeOperation.Restore"/> grant. The
-    /// target is the explicitly requested tree, or else the tree the catalogued
-    /// backup was captured from; when neither can be resolved the check is not
-    /// skipped, and the caller must instead hold that grant over the reserved
-    /// backup catalog tree.
-    /// </summary>
-    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The restore outcome.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
-    [Obsolete("RestoreBackupAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartRestoreAsync and poll GetOperationStatusAsync instead. RestoreBackupAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeRestoreResult> RestoreBackupAsync(
-        LatticeRestoreRequest request,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Reverts a shadow-cutover restore, after authorizing the target scope
     /// fail-closed. Idempotent.
     /// </summary>
@@ -220,79 +145,6 @@ public interface ILatticeBackupControl
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The catalog-wide inventory report.</returns>
     Task<BackupInventoryReport> GetInventoryAsync(
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Rebuilds the in-cluster backup catalog from the durable sink, after
-    /// authorizing the operation fail-closed as a high-privilege administrative
-    /// action. Scans every self-describing manifest the sink holds and
-    /// re-registers each into the reserved <c>sys-backup-catalog</c> tree, so the
-    /// sink is treated as the single source of truth and the catalog as a
-    /// disposable, self-healing projection over it. Idempotent and safe to re-run:
-    /// a manifest already catalogued is reconciled in place (keeping its immutable
-    /// capture timestamp) rather than duplicated, and a catalog missing rows the
-    /// sink has is repopulated.
-    /// </summary>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A summary of how many manifests were scanned, freshly added, and reconciled.</returns>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to rebuild the catalog.</exception>
-    [Obsolete("RebuildCatalogFromSinkAsync blocks until the whole sink has been scanned, so a long rebuild is cut off by the caller's timeout. Use ILatticeBackupOperations.StartCatalogRebuildAsync and poll GetOperationStatusAsync instead. RebuildCatalogFromSinkAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Reconciles the in-cluster backup catalog against the durable sink, after
-    /// authorizing the operation fail-closed as a high-privilege administrative
-    /// action. Cross-checks every catalog row for a resolvable sink payload (the
-    /// manifest present and every referenced artifact present and committed) and
-    /// reports orphans - catalog rows whose sink payload is gone and which must
-    /// never be offered as a restore point. <b>Non-destructive by default</b>: with
-    /// <paramref name="pruneOrphans"/> <see langword="false"/> the orphans are only
-    /// flagged and returned; with <see langword="true"/> each orphan row is removed
-    /// from the reserved <c>sys-backup-catalog</c> tree. Idempotent and safe to
-    /// re-run: a pruning re-run reports no further orphans.
-    /// </summary>
-    /// <param name="pruneOrphans">
-    /// <see langword="true"/> to destructively remove orphan rows; <see langword="false"/>
-    /// (the default) to flag them non-destructively.
-    /// </param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>A summary of how many rows were scanned, how many are orphans, and how many were removed.</returns>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to scrub the catalog.</exception>
-    [Obsolete("ScrubCatalogAgainstSinkAsync blocks until every catalog row has been probed, so a long scrub is cut off by the caller's timeout. Use ILatticeBackupOperations.StartCatalogScrubAsync and poll GetOperationStatusAsync instead. ScrubCatalogAgainstSinkAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(
-        bool pruneOrphans = false,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Restores a backup into a <b>fresh</b> cluster from the durable sink alone,
-    /// after authorizing the target scope fail-closed with the
-    /// <see cref="LatticeOperation.Restore"/> grant: over the explicitly requested
-    /// tree, or else the tree the sink-held manifest was captured from, falling back
-    /// to the reserved backup catalog tree when neither can be resolved, so the check
-    /// is never skipped. Resolves the target backup's
-    /// manifest from the sink alone (never the catalog), walks its base chain
-    /// catalog-first with a sink fallback so it works while the catalog is
-    /// still empty, bootstraps the
-    /// reserved <c>sys-</c> trees if they are absent, replays the chain through the
-    /// HLC-preserving restore engine, and re-projects the catalog from the sink so
-    /// the recovered cluster ends up with a correct catalog. This is the cold entry
-    /// point that lets a cluster which lost its grain storage - and therefore its
-    /// <c>sys-backup-catalog</c> - recover its backups using only the backup
-    /// medium. Idempotent: re-running the same request converges to the same state.
-    /// </summary>
-    /// <param name="request">The restore request. Must not be <c>null</c>.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The restore outcome.</returns>
-    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
-    /// <exception cref="LatticeRestoreValidationException">
-    /// No backup with the requested id exists in the sink, or the backup fails
-    /// pre-apply validation (a broken base chain or a missing / tampered artifact).
-    /// </exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to restore the target scope, or - when no target tree can be resolved - the reserved backup catalog tree.</exception>
-    [Obsolete("ColdRestoreAsync blocks until the work completes, so a long capture or restore is cut off by the caller's timeout. Use ILatticeBackupOperations.StartColdRestoreAsync and poll GetOperationStatusAsync instead. ColdRestoreAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<LatticeRestoreResult> ColdRestoreAsync(
-        LatticeRestoreRequest request,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -342,25 +194,6 @@ public interface ILatticeBackupControl
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns><see langword="true"/> when the sink is durable and monitoring applies; otherwise <see langword="false"/>.</returns>
     Task<bool> IsHealthMonitoringAvailableAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Runs a fresh health verification of the backup identified by
-    /// <paramref name="backupId"/> against the durable sink - checking manifest and
-    /// artifact presence <b>and</b> re-hashing every present artifact against its
-    /// recorded content hash - persists the resulting report as the backup's latest
-    /// health state, and returns it. Authorizes the backup's scope fail-closed
-    /// before touching data.
-    /// </summary>
-    /// <param name="backupId">The backup id to verify. Must not be <c>null</c> or empty.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>The fresh health report.</returns>
-    /// <exception cref="ArgumentException"><paramref name="backupId"/> is <c>null</c> or empty.</exception>
-    /// <exception cref="KeyNotFoundException">No backup with <paramref name="backupId"/> exists in the catalog.</exception>
-    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the backup's scope.</exception>
-    [Obsolete("CheckBackupHealthAsync blocks until every artifact has been re-hashed, so a large backup's check is cut off by the caller's timeout. Use ILatticeBackupOperations.StartBackupHealthCheckAsync and poll GetOperationStatusAsync instead. CheckBackupHealthAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.backup/operations.html#migrating-from-the-blocking-verbs")]
-    Task<BackupHealthReport> CheckBackupHealthAsync(
-        string backupId,
-        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reads the latest stored health report for the backup identified by

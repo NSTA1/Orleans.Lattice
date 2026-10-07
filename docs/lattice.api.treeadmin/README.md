@@ -146,7 +146,6 @@ The exact `ILatticeTreeAdmin` contract (published in `Orleans.Lattice.Api.Abstra
 | `GetWalPlacementAsync` | `Task<TreeWalPlacement> GetWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `AuditWalPlacementAsync` | `Task<TreeWalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `PlanWalMoveAsync` | `Task<TreeWalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)` |
-| `ExecuteWalMoveAsync` | `Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)` |
 | `ReclaimMovedWalSourceAsync` | `Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` |
 | `AuditOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
 | `SurveyOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
@@ -154,12 +153,9 @@ The exact `ILatticeTreeAdmin` contract (published in `Orleans.Lattice.Api.Abstra
 | `ListViewsAsync` | `Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)` |
 | `CreateViewAsync` | `Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)` |
 | `GetViewStatusAsync` | `Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)` |
-| `RebuildViewAsync` | `Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)` |
-| `ReconcileViewAsync` | `Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `DropViewAsync` | `Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `ListTagIndexesAsync` | `Task<TreeTagIndexCatalog> ListTagIndexesAsync(CancellationToken cancellationToken = default)` |
 | `GetTagIndexStatusAsync` | `Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, CancellationToken cancellationToken = default)` |
-| `ReconcileTagIndexAsync` | `Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)` |
 | `TriggerShardCompactionAsync` | `Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)` |
 | `GetHistoryRetentionAsync` | `Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `SetHistoryRetentionAsync` | `Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)` |
@@ -181,7 +177,7 @@ The wedge is keyed on the holder, never on growth: a wedged tree need not be gro
 
 ## Operation progress
 
-View rebuild and reconcile, tag-index reconcile, WAL moves and whole-tree orphaned-leaf passes are accept-then-poll through `ILatticeTreeAdminOperations`, the facade's adoption of the shared [long-running operation contract](../lattice.api.abstractions/operations.md): a start verb returns a `LatticeOperationHandle` at once and `GetOperationStatusAsync` reports the phase and the units completed (keys projected, trees probed and repaired, WAL entries copied, shards walked). The blocking `RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` are deprecated (`LATTICE0002`) and now wrap an operation. See [Tree-administration operations](operations.md) for the kinds, phases, units, result keys and migration.
+View rebuild and reconcile, tag-index reconcile, WAL moves and whole-tree orphaned-leaf passes are accept-then-poll through `ILatticeTreeAdminOperations`, the facade's adoption of the shared [long-running operation contract](../lattice.api.abstractions/operations.md): a start verb returns a `LatticeOperationHandle` at once and `GetOperationStatusAsync` reports the phase and the units completed (keys projected, trees probed and repaired, WAL entries copied, shards walked). The blocking `LATTICE0002` verbs were removed in this major version; see [Tree-administration operations](operations.md#migrating-from-the-removed-blocking-verbs) for the migration table.
 
 Resize, snapshot and reshard are accept-then-poll: the trigger returns once the
 coordinator accepts the intent, and the operation runs on its own,

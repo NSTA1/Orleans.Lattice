@@ -43,7 +43,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
             Assert.That(operation.ClusterOperationId, Is.EqualTo("op-1"));
             Assert.That(operation.Message, Does.Contain("keeps running if you close this page"));
             Assert.That(Backups.LastOf<LatticeBackupCaptureRequest>(nameof(ILatticeBackupOperations.StartBackupAsync)).Name, Is.EqualTo("nightly"));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CreateBackupAsync)), Is.Zero, "the deprecated blocking verb is never called");
+            Assert.That(Backups.CountOf("CreateBackupAsync"), Is.Zero, "the deprecated blocking verb is never called");
         });
     }
 
@@ -128,7 +128,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
             Assert.That(operation.ClusterOperationId, Is.Not.Null);
             Assert.That(request.Mode, Is.EqualTo(LatticeRestoreMode.ShadowCutover));
             Assert.That(request.TargetTreeId, Is.EqualTo("orders"));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RestoreBackupAsync)), Is.Zero);
+            Assert.That(Backups.CountOf("RestoreBackupAsync"), Is.Zero);
         });
     }
 
@@ -238,7 +238,7 @@ public sealed class BackupOperationsTests : BackupsTestContext
             Assert.That(prune.ClusterOperationId, Is.EqualTo("op-3"));
             Assert.That(Backups.Statuses["op-1"].Kind, Is.EqualTo(BackupOperationKinds.CatalogRebuild));
             Assert.That(Backups.Calls.Where(call => call.Verb == nameof(ILatticeBackupOperations.StartCatalogScrubAsync)).Select(call => call.Argument), Is.EqualTo(new object[] { false, true }));
-            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.RebuildCatalogFromSinkAsync)) + Backups.CountOf(nameof(ILatticeBackupControl.ScrubCatalogAgainstSinkAsync)), Is.Zero);
+            Assert.That(Backups.CountOf("RebuildCatalogFromSinkAsync") + Backups.CountOf("ScrubCatalogAgainstSinkAsync"), Is.Zero);
             Assert.That(Operations.Latest(BackupOperationKind.ScrubCatalogue), Is.SameAs(prune));
         });
     }

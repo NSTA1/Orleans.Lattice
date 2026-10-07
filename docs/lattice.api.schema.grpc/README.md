@@ -36,12 +36,8 @@ The gRPC service name is `orleans.lattice.api.schema`.
 | `SetVersionConfig` | unary | Set version config |
 | `GetVersionConfig` | unary | Get version config |
 | `AdvanceTargetVersion` | unary | Advance target version |
-| `AdvanceAndMigrate` | unary | Advance and migrate |
-| `MigrateToTargetVersion` | unary | Migrate to target version |
 | `ClearVersionConfig` | unary | Clear version config |
-| `Remediate` | unary | Remediate |
 | `GetRemediationStatus` | unary | Get remediation status |
-| `ScanCompliance` | unary | Scan compliance (deprecated; blocking). |
 | `ProbeCapabilities` | unary | Probe capabilities. |
 | `StartComplianceScan` | unary | Start a compliance scan and return a `LatticeOperationHandle`. |
 | `GetComplianceScanStatus` | unary | Read a compliance-scan operation status. |
@@ -55,7 +51,7 @@ The gRPC service name is `orleans.lattice.api.schema`.
 | `CancelSchemaOperation` | unary | Request cancellation of a remediation or migration operation. |
 | `GetAuthScheme` | unary (unauthenticated) | Advertise accepted auth schemes. |
 
-`Remediate`, `MigrateToTargetVersion`, `AdvanceAndMigrate`, and `ScanCompliance` stay on the wire as deprecated blocking RPCs until the next major version. New clients should use the `Start*` RPCs and poll the matching status RPC instead.
+The blocking `LATTICE0002` RPCs were removed in this major version. New and upgraded clients use the `Start*` RPCs and poll the matching status RPC instead.
 
 ## Quick Start
 

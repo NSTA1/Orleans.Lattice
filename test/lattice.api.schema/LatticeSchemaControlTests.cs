@@ -4,10 +4,6 @@ using NSubstitute;
 using Orleans.Lattice;
 using Orleans.Lattice.Schema;
 
-// These tests exercise the deprecated blocking compliance scan (LATTICE0002) on purpose:
-// it is still served, unchanged, until the next major version removes it (#4126).
-#pragma warning disable LATTICE0002
-
 namespace Orleans.Lattice.Api.Schema.Tests;
 
 /// <summary>
@@ -137,37 +133,6 @@ public sealed class LatticeSchemaControlTests
     }
 
     [Test]
-    public async Task ScanComplianceAsync_allowed_delegates_to_compliance_under_read_gate()
-    {
-        var gate = RecordingAccessGate.Allow();
-        var h = CreateHarness(gate);
-        h.Compliance.ScanComplianceAsync(Tree, Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaComplianceReport.Ungoverned(Tree));
-
-        var report = await h.Control.ScanComplianceAsync(Tree);
-
-        Assert.That(report.TreeId, Is.EqualTo(Tree));
-        Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.Read));
-        await h.Compliance.Received(1).ScanComplianceAsync(Tree, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task RemediateAsync_allowed_delegates_to_remediation_under_schema_admin_gate()
-    {
-        var gate = RecordingAccessGate.Allow();
-        var h = CreateHarness(gate);
-        var transform = LatticeValueTransform.Passthrough();
-        var policy = JsonPolicy();
-        h.Remediation.RemediateAsync(Tree, transform, policy, Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaRemediationReport.Idle);
-
-        await h.Control.RemediateAsync(Tree, transform, policy);
-
-        Assert.That(gate.Last.Operation, Is.EqualTo(LatticeOperation.SchemaAdmin));
-        await h.Remediation.Received(1).RemediateAsync(Tree, transform, policy, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
     public async Task GetRemediationStatusAsync_allowed_uses_read_gate()
     {
         var gate = RecordingAccessGate.Allow();
@@ -203,29 +168,6 @@ public sealed class LatticeSchemaControlTests
             async () => await h.Control.GetPolicyAsync(Tree));
 
         h.Admin.DidNotReceive().GetPolicyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public void ScanComplianceAsync_denied_throws_and_does_not_scan()
-    {
-        var h = CreateHarness(RecordingAccessGate.Deny());
-
-        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await h.Control.ScanComplianceAsync(Tree));
-
-        h.Compliance.DidNotReceive().ScanComplianceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public void RemediateAsync_denied_throws_and_does_not_remediate()
-    {
-        var h = CreateHarness(RecordingAccessGate.Deny());
-
-        Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
-            async () => await h.Control.RemediateAsync(Tree, LatticeValueTransform.Passthrough(), JsonPolicy()));
-
-        h.Remediation.DidNotReceive().RemediateAsync(
-            Arg.Any<string>(), Arg.Any<LatticeValueTransform>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -266,24 +208,6 @@ public sealed class LatticeSchemaControlTests
     }
 
     [Test]
-    public void RemediateAsync_null_target_policy_throws()
-    {
-        var h = CreateHarness(RecordingAccessGate.Allow());
-
-        Assert.That(
-            async () => await h.Control.RemediateAsync(Tree, LatticeValueTransform.Passthrough(), null!),
-            Throws.TypeOf<ArgumentNullException>());
-    }
-
-    [Test]
-    public void ScanComplianceAsync_empty_tree_id_throws()
-    {
-        var h = CreateHarness(RecordingAccessGate.Allow());
-
-        Assert.That(async () => await h.Control.ScanComplianceAsync(""), Throws.ArgumentException);
-    }
-
-    [Test]
     public void Constructor_null_dependencies_throw()
     {
         var admin = Substitute.For<ILatticeSchemaAdmin>();
@@ -303,7 +227,6 @@ public sealed class LatticeSchemaControlTests
             Assert.That(() => new LatticeSchemaControl(admin, remediation, compliance, authorizer, options, null!, new DefaultTenantContextResolver()), Throws.ArgumentNullException);
         });
     }
-
     private static async IAsyncEnumerable<LatticeSchemaDeadLetterEntry> ToAsync(LatticeSchemaDeadLetterEntry entry)
     {
         yield return entry;

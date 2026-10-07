@@ -280,8 +280,8 @@ accept-then-poll compliance operation with
 `ILatticeSchemaComplianceOperations.StartComplianceScanAsync`: it returns a
 `LatticeOperationHandle` immediately, then reports `Counting` and `Scanning` phases
 with `entries` progress and the same report encoded in the operation result. The
-blocking facade method `ILatticeSchemaControl.ScanComplianceAsync` still works in
-9.9.0 but is deprecated with `LATTICE0002`.
+blocking `ILatticeSchemaControl.ScanComplianceAsync` verb was removed in this major
+version after its 9.9.0 `LATTICE0002` deprecation.
 
 ## Composition with versioning
 

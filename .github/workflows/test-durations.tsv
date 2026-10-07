@@ -1,3 +1,7 @@
+# Refreshed measured rows from CI run 37589416238 (2026-10-07).
+# Passed, full-scope items >= 0.1 minutes replace their previous estimates;
+# other rows retain their earlier provenance below. No shard or tier is removed.
+
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
 # shard of an unsharded package and `all` for its single untiered invocation.
@@ -93,23 +97,23 @@
 # TLC time of AtomicCommitCrossCluster's 35 variants at two workers, 33
 # test-minutes, / 3.9. The atomic row is re-priced for its mutants alone,
 # whose controls now run over a larger base, as an estimate.
-lattice	formal-tlc	deterministic	8.9
-lattice	formal-tlc-shard-ownership	deterministic	15.7
-lattice	formal-tlc-convergence	deterministic	15.1
-lattice	formal-tlc-replication-wal	deterministic	13.8
-lattice	formal-tlc-rebootstrap	deterministic	16.8
-lattice	formal-tlc-atomic	deterministic	11.5
-lattice	formal-tlc-atomic-variants	deterministic	8.5
-lattice	formal-tlc-backup	deterministic	7.7
-lattice	bplustree	deterministic	5.0
-lattice	rest	deterministic	2.5
-lattice	bplustree	chaos	3.8
-lattice	bplustree-grains	deterministic	3.8
-lattice	bplustree-chaos	chaos	2.8
-lattice	bplustree-chaos-predicate	chaos	2.4
-lattice	bplustree-publicapi	deterministic	1.4
-lattice	crdt-views-wal	deterministic	0.9
-lattice	bplustree	coyote	0.4
+lattice	formal-tlc	deterministic	9.1
+lattice	formal-tlc-shard-ownership	deterministic	15.3
+lattice	formal-tlc-convergence	deterministic	14.1
+lattice	formal-tlc-replication-wal	deterministic	18.4
+lattice	formal-tlc-rebootstrap	deterministic	18.7
+lattice	formal-tlc-atomic	deterministic	23.3
+lattice	formal-tlc-atomic-variants	deterministic	23.6
+lattice	formal-tlc-backup	deterministic	8.1
+lattice	bplustree	deterministic	7.9
+lattice	rest	deterministic	4.8
+lattice	bplustree	chaos	5.5
+lattice	bplustree-grains	deterministic	5.0
+lattice	bplustree-chaos	chaos	3.0
+lattice	bplustree-chaos-predicate	chaos	5.5
+lattice	bplustree-publicapi	deterministic	1.5
+lattice	crdt-views-wal	deterministic	1.1
+lattice	bplustree	coyote	0.7
 lattice	crdt-views-wal	chaos	0.2
 lattice	bplustree-state	deterministic	0.1
 lattice	primitives	deterministic	0.1
@@ -126,7 +130,7 @@ lattice	bplustree-state	coyote	0.0
 lattice	crdt-views-wal	coyote	0.0
 lattice	primitives	chaos	0.0
 lattice	primitives	coyote	0.0
-lattice	rest	chaos	0.0
+lattice	rest	chaos	0.1
 lattice	rest	coyote	0.0
 lattice	formal-tlc-convergence	chaos	0.0
 lattice	formal-tlc-convergence	coyote	0.0
@@ -146,35 +150,35 @@ lattice	formal-tlc-backup	chaos	0.0
 lattice	formal-tlc-backup	coyote	0.0
 
 # -- lattice.api.mcp.repocontext, sharded (untiered: see crossTiers) ----------
-lattice.api.mcp.repocontext	capture	all	3.9
-lattice.api.mcp.repocontext	retrieval	all	3.0
-lattice.api.mcp.repocontext	rest	all	2.5
-lattice.api.mcp.repocontext	host	all	2.2
+lattice.api.mcp.repocontext	capture	all	3.3
+lattice.api.mcp.repocontext	retrieval	all	2.1
+lattice.api.mcp.repocontext	rest	all	2.1
+lattice.api.mcp.repocontext	host	all	1.9
 
 # -- other packages, unsharded -----------------------------------------------
-lattice.dashboards	-	all	4.7
-lattice.replication	-	all	2.9
-lattice.backup	-	all	1.9
-lattice.storage.azuretable	-	all	1.6
-lattice.api.state	-	all	1.5
+lattice.dashboards	-	all	3.3
+lattice.replication	-	all	8.4
+lattice.backup	-	all	4.0
+lattice.storage.azuretable	-	all	0.7
+lattice.api.state	-	all	1.2
 lattice.api.backup	-	all	1.0
-lattice.api.state.grpc	-	all	1.0
+lattice.api.state.grpc	-	all	1.1
 lattice.auth	-	all	0.7
 lattice.vector	-	all	0.6
-lattice.integration	-	all	0.5
-lattice.tenancy	-	all	0.5
-lattice.api.backup.grpc	-	all	0.4
-lattice.explorer	-	all	0.4
-lattice.grainindex	-	all	0.4
-lattice.replication.grpc	-	all	0.4
-lattice.api.auth	-	all	0.2
+lattice.integration	-	all	0.4
+lattice.tenancy	-	all	1.0
+lattice.api.backup.grpc	-	all	0.5
+lattice.explorer	-	all	2.1
+lattice.grainindex	-	all	0.5
+lattice.replication.grpc	-	all	0.3
+lattice.api.auth	-	all	0.1
 lattice.api.data	-	all	0.2
 lattice.api.data.grpc	-	all	0.2
-lattice.api.mcp	-	all	0.2
-lattice.api.tenantadmin.grpc	-	all	0.2
+lattice.api.mcp	-	all	0.3
+lattice.api.tenantadmin.grpc	-	all	0.6
 lattice.membership	-	all	0.2
 lattice.membership.oidc	-	all	0.2
-lattice.schema	-	all	0.2
+lattice.schema	-	all	0.4
 lattice.api.abstractions	-	all	0.1
 lattice.api.auth.grpc	-	all	0.1
 lattice.api.mcp.repocontext.replication	-	all	0.1
@@ -184,7 +188,7 @@ lattice.api.replication.grpc	-	all	0.1
 lattice.api.schema.grpc	-	all	0.1
 lattice.api.telemetry	-	all	0.1
 lattice.api.telemetry.grpc	-	all	0.1
-lattice.api.tenantadmin	-	all	0.1
+lattice.api.tenantadmin	-	all	0.5
 lattice.api.treeadmin.grpc	-	all	0.1
 lattice.backup.azureblob	-	all	0.1
 lattice.caching.azureblob	-	all	0.1
@@ -192,8 +196,10 @@ lattice.explorer.entra.web	-	all	0.1
 lattice.membership.entra	-	all	0.1
 lattice.scaling	-	all	0.1
 lattice.storage.file	-	all	0.1
-lattice.api.replication	-	all	0.0
+lattice.api.replication	-	all	0.1
 lattice.api.schema	-	all	0.0
-lattice.api.treeadmin	-	all	0.0
+lattice.api.treeadmin	-	all	0.3
 lattice.explorer.entra	-	all	0.0
 lattice.membership.entra.graph	-	all	0.0
+lattice.api.apps	-	all	0.1
+lattice.apps	-	all	0.2

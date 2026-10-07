@@ -3,17 +3,17 @@ id: tag-index-reconcile
 name: "Reconcile a tag index"
 surfaces:
   in_process:
-    api: "ILatticeTreeAdmin.ReconcileTagIndexAsync"
-    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdmin.cs#ReconcileTagIndexAsync"
+    api: "ILatticeTreeAdminOperations.StartTagIndexReconcileAsync"
+    source: "src/lattice.api.abstractions/TreeAdmin/ILatticeTreeAdminOperations.cs#StartTagIndexReconcileAsync"
   grpc:
-    api: "/orleans.lattice.api.treeadmin/ReconcileTagIndex"
-    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#ReconcileTagIndexMethodName"
+    api: "/orleans.lattice.api.treeadmin/StartTagIndexReconcile"
+    source: "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcMethods.cs#StartTagIndexReconcileMethodName"
   mcp_tool:
-    api: "lattice_treeadmin_tag_index_reconcile"
+    api: "lattice_treeadmin_tag_index_reconcile_start"
     source: "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
 preconditions:
   - id: surface-available
-    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tag_index_reconcile, lattice_treeadmin_tag_index_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
+    check: "Every surface this procedure uses is registered on the host: read the availability of api/treeadmin.json and, for each MCP tool used (lattice_treeadmin_tag_index_reconcile_start), its availability in api/mcp.json. An MCP tool must also be listed in the session's tools/list."
     source: "docs/agents/api/treeadmin.json"
   - id: backing-tree-admin
     check: "Caller has Admin authority over the derived backing membership tree."

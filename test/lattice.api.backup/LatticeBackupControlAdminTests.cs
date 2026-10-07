@@ -1,10 +1,7 @@
 using System.Text;
 using Orleans.Lattice;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Backup;
-
-// These tests exercise the deprecated blocking backup verbs (LATTICE0002) on purpose:
-// they prove the start-then-wait wrappers still behave exactly as before.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Backup.Tests;
 
@@ -44,12 +41,12 @@ public sealed class LatticeBackupControlAdminTests
         await source.SetAsync("k1", Bytes("v1"));
         await source.SetAsync("k2", Bytes("v2"));
 
-        var full = await _fixture.Control.CreateBackupAsync(
+        var full = await CaptureBackupIdAsync(
             new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
         await source.SetAsync("k3", Bytes("v3"));
-        await _fixture.Control.CreateIncrementalBackupAsync(
+        await CaptureBackupIdAsync(
             new LatticeBackupIncrementalCaptureRequest(
-                "incr", BackupScopeSelector.WholeTree(Source), full.BackupId));
+                "incr", BackupScopeSelector.WholeTree(Source), full));
 
         var report = await _fixture.Control.GetInventoryAsync();
 
@@ -73,8 +70,7 @@ public sealed class LatticeBackupControlAdminTests
         await _fixture.InitializeAsync();
         var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
         await source.SetAsync("k1", Bytes("v1"));
-        await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
+        await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
 
         var denying = _fixture.CreateControlWith(
             new BackupAccessAuthorizer(new DenyingAccessGate("no read grant"), membership: null));
@@ -88,144 +84,6 @@ public sealed class LatticeBackupControlAdminTests
             Assert.That(report.OldestBackupUtc, Is.Null);
             Assert.That(report.NewestBackupUtc, Is.Null);
         });
-    }
-
-    // ---- Catalog rebuild from sink --------------------------------------
-
-    [Test]
-    public async Task RebuildCatalogFromSinkAsync_repopulates_the_catalog_from_the_sink()
-    {
-        await _fixture.InitializeAsync();
-        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
-        await source.SetAsync("k1", Bytes("v1"));
-
-        var captured = await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
-
-        // Drift: drop the catalog row while the sink still holds the manifest, as
-        // a non-clean restart would. The backup lists nothing yet is intact in the
-        // sink.
-        await _fixture.Catalog.RemoveAsync(captured.BackupId);
-        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Null);
-
-        var report = await _fixture.Control.RebuildCatalogFromSinkAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.ScannedCount, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.RegisteredCount, Is.GreaterThanOrEqualTo(1));
-        });
-        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null);
-    }
-
-    [Test]
-    public async Task RebuildCatalogFromSinkAsync_is_idempotent_on_re_run()
-    {
-        await _fixture.InitializeAsync();
-        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
-        await source.SetAsync("k1", Bytes("v1"));
-        await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
-
-        await _fixture.Control.RebuildCatalogFromSinkAsync();
-        var second = await _fixture.Control.RebuildCatalogFromSinkAsync();
-
-        // Everything the sink holds is already catalogued, so the second pass adds
-        // nothing new and reconciles the existing rows in place.
-        Assert.Multiple(() =>
-        {
-            Assert.That(second.RegisteredCount, Is.Zero);
-            Assert.That(second.ReconciledCount, Is.EqualTo(second.ScannedCount));
-        });
-    }
-
-    [Test]
-    public async Task RebuildCatalogFromSinkAsync_denied_permission_fails_closed()
-    {
-        await _fixture.InitializeAsync();
-
-        var denying = _fixture.CreateControlWith(
-            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
-
-        Assert.That(
-            async () => await denying.RebuildCatalogFromSinkAsync(),
-            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
-    }
-
-    // ---- Catalog scrub against sink -------------------------------------
-
-    [Test]
-    public async Task ScrubCatalogAgainstSinkAsync_flags_orphan_but_default_is_non_destructive()
-    {
-        await _fixture.InitializeAsync();
-        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
-        await source.SetAsync("k1", Bytes("v1"));
-
-        var captured = await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
-
-        // Drift: drop the sink manifest while the catalog row survives, as store
-        // divergence would. The catalog still lists the backup, yet the sink can
-        // no longer resolve it - an orphan.
-        Assert.That(await _fixture.Sink.DeleteManifestAsync(captured.BackupId), Is.True);
-
-        var report = await _fixture.Control.ScrubCatalogAgainstSinkAsync();
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(report.ScannedCount, Is.GreaterThanOrEqualTo(1));
-            Assert.That(report.OrphanCount, Is.EqualTo(1));
-            Assert.That(report.RemovedCount, Is.Zero);
-            Assert.That(report.Pruned, Is.False);
-            Assert.That(report.OrphanBackupIds, Does.Contain(captured.BackupId));
-        });
-        // Non-destructive default leaves the orphan catalog row in place.
-        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Not.Null);
-    }
-
-    [Test]
-    public async Task ScrubCatalogAgainstSinkAsync_with_prune_removes_orphan_and_is_idempotent()
-    {
-        await _fixture.InitializeAsync();
-        var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
-        await source.SetAsync("k1", Bytes("v1"));
-
-        var captured = await _fixture.Control.CreateBackupAsync(
-            new LatticeBackupCaptureRequest("full", BackupScopeSelector.WholeTree(Source)));
-        Assert.That(await _fixture.Sink.DeleteManifestAsync(captured.BackupId), Is.True);
-
-        var pruned = await _fixture.Control.ScrubCatalogAgainstSinkAsync(pruneOrphans: true);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(pruned.OrphanCount, Is.EqualTo(1));
-            Assert.That(pruned.RemovedCount, Is.EqualTo(1));
-            Assert.That(pruned.Pruned, Is.True);
-            Assert.That(pruned.OrphanBackupIds, Does.Contain(captured.BackupId));
-        });
-        Assert.That(await _fixture.Catalog.GetAsync(captured.BackupId), Is.Null);
-
-        // The orphan is gone, so a second pass finds and removes nothing.
-        var second = await _fixture.Control.ScrubCatalogAgainstSinkAsync(pruneOrphans: true);
-        Assert.Multiple(() =>
-        {
-            Assert.That(second.OrphanCount, Is.Zero);
-            Assert.That(second.RemovedCount, Is.Zero);
-            Assert.That(second.OrphanBackupIds, Is.Empty);
-        });
-    }
-
-    [Test]
-    public async Task ScrubCatalogAgainstSinkAsync_denied_permission_fails_closed()
-    {
-        await _fixture.InitializeAsync();
-
-        var denying = _fixture.CreateControlWith(
-            new BackupAccessAuthorizer(new DenyingAccessGate("no restore grant"), membership: null));
-
-        Assert.That(
-            async () => await denying.ScrubCatalogAgainstSinkAsync(),
-            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
     }
 
     // ---- Scope status ---------------------------------------------------
@@ -296,7 +154,7 @@ public sealed class LatticeBackupControlAdminTests
         var scope = BackupScopeSelector.WholeTree(Source);
         var source = _fixture.GrainFactory.GetGrain<ILattice>(Source);
         await source.SetAsync("k1", Bytes("v1"));
-        await _fixture.Control.CreateBackupAsync(new LatticeBackupCaptureRequest("full", scope));
+        await CaptureBackupIdAsync(new LatticeBackupCaptureRequest("full", scope));
 
         var denying = _fixture.CreateControlWith(
             new BackupAccessAuthorizer(new DenyingAccessGate("no read grant"), membership: null));
@@ -318,6 +176,31 @@ public sealed class LatticeBackupControlAdminTests
     }
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
+
+    private ILatticeBackupOperations Operations => (ILatticeBackupOperations)_fixture.Control;
+
+    private static async Task<LatticeOperationStatus> UntilTerminalAsync(ILatticeBackupOperations operations, string operationId)
+    {
+        LatticeOperationStatus? status = null;
+        await Orleans.Lattice.Testing.TestPoll.UntilAsync(
+            async () => (status = await operations.GetOperationStatusAsync(operationId)) is { IsTerminal: true },
+            $"operation {operationId} to finish");
+        return status!;
+    }
+
+    private async Task<string> CaptureBackupIdAsync(LatticeBackupCaptureRequest request)
+    {
+        var handle = await Operations.StartBackupAsync(request);
+        var status = await UntilTerminalAsync(Operations, handle.OperationId);
+        return status.ResultReference!;
+    }
+
+    private async Task<string> CaptureBackupIdAsync(LatticeBackupIncrementalCaptureRequest request)
+    {
+        var handle = await Operations.StartIncrementalBackupAsync(request);
+        var status = await UntilTerminalAsync(Operations, handle.OperationId);
+        return status.ResultReference!;
+    }
 
     /// <summary>A minimal access gate that denies every request, driving the fail-closed path.</summary>
     private sealed class DenyingAccessGate(string reason) : ILatticeAccessGate

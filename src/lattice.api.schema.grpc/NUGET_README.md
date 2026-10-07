@@ -19,9 +19,8 @@ Compliance scans, remediation, and migration run as tracked operations:
 work. `GetComplianceScanStatusAsync` / `ListComplianceScansAsync` /
 `CancelComplianceScanAsync` follow scans, and `GetSchemaOperationStatusAsync` /
 `ListSchemaOperationsAsync` / `CancelSchemaOperationAsync` follow remediation and
-migration. The blocking `ScanComplianceAsync`, `RemediateAsync`,
-`MigrateToTargetVersionAsync` and `AdvanceAndMigrateAsync` calls (and their RPCs)
-raise warning `LATTICE0002` and **will be removed in the next major version**.
+migration. The blocking `LATTICE0002` calls and RPCs were removed in this
+major version; use the `Start*` operations and their status reads instead.
 
 Wiring is two calls on the co-hosting silo:
 

@@ -233,6 +233,7 @@ jobs:
       apps: ${{ steps.filter.outputs.apps }}
       benchmark_changed: ${{ steps.benchmark.outputs.changed }}
       version_only: ${{ steps.verbump.outputs.version_only }}
+      lightweight: ${{ steps.lightweight.outputs.only }}
       # Empty on a push (the classifier is pull-request-only, like every other
       # change-detection step). The zero-leg guard treats empty as "nothing to
       # judge" rather than as `false`, so a push lane is never failed on a
@@ -322,14 +323,21 @@ jobs:
           # is not the convention.
           prefixes='feat|fix|docs|test|tests|perf|chore|ci|refactor|build|deps|revert|release'
 
-          if ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
+          # Dependabot owns its generated namespace; package names may be
+          # mixed-case (for example NuGet). This is not a human branch prefix.
+          dependabot_branch=false
+          if [ "${AUTHOR}" = 'dependabot[bot]' ] && printf '%s' "${BRANCH}" | grep -Eq '^dependabot/[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*$'; then
+            dependabot_branch=true
+          fi
+
+          if [ "${dependabot_branch}" = false ] && ! printf '%s' "${BRANCH}" | grep -Eq "^(${prefixes})/[a-z0-9][a-z0-9._-]*(/[a-z0-9][a-z0-9._-]*)*$"; then
             echo "::error::Branch '${BRANCH}' does not follow the naming convention (see .github/copilot-instructions.md). Use '<type>/<kebab-case-description>' where <type> is one of: ${prefixes//|/, }. Push to a conforming name with an explicit refspec - 'git push <remote> HEAD:refs/heads/<type>/<description>' - which works regardless of what your local or harness-generated branch is called, then update this PR. Agents: prefer this over a rename tool, which may be single-shot and may re-apply a harness username prefix to the name you choose."
             failed=1
           fi
 
           # Never a username. Checked against the PR author's actual login
           # rather than a heuristic, so this cannot misfire on ordinary words.
-          if [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
+          if [ "${dependabot_branch}" = false ] && [ -n "${AUTHOR}" ] && [ "${#AUTHOR}" -ge 4 ]; then
             if printf '%s' "${BRANCH}" | grep -qiF "${AUTHOR}"; then
               echo "::error::Branch '${BRANCH}' contains the author's username ('${AUTHOR}'). Branch names describe the change, never who made it."
               failed=1
@@ -744,7 +752,8 @@ jobs:
       #                Deliberately NOT an exclusion-style filter: it is a
       #                positive signal, consumed by the "Decide whether to run
       #                tests" step to force a full fan-out on a workflow edit
-      #                that `code`/`nonSample` would otherwise skip. See #2351.
+      #                that `code`/`nonSample` would otherwise skip, except for
+      #                the explicit lightweight classification below. See #2351.
       #
       # *.txt is treated as documentation (the only tracked .txt files are the
       # root llms.txt index and a MAUI Raw resource that the ubuntu lane never
@@ -1208,13 +1217,12 @@ jobs:
       # 46-package run on every workflow edit", and it asked for that cost to
       # be measured rather than asserted. It has now been measured on identical
       # commits: 43.9 min serially against 8.9 min across this matrix. A full
-      # run on every workflow edit is affordable once it is not serialised onto
-      # a single runner, so the answer #2351 was waiting for is yes.
+      # run on mixed workflow/source edits remains the conservative fallback.
       #
-      # The predicate is "touches workflows AT ALL", not "touches only
-      # workflows". The hazard is a workflow change reaching main untested, and
-      # that hazard is present whether or not the same pull request also edits
-      # a README.
+      # PRs confined to videos, workflows, and copilot-instructions.md use a
+      # lightweight lane: guard self-tests and video order still run, while
+      # no .NET or formal sources are compiled or tested. Any other path keeps
+      # the conservative workflow fan-out. Pushes still evaluate the bucket.
       #
       # `version_only` still suppresses the matrix: a release version bump
       # changes no compiled behaviour, and that reasoning is unaffected by
@@ -1227,6 +1235,18 @@ jobs:
       # there was nothing to select, so the hole could not be read off the run's
       # own output. Every arm below now states something that is actually
       # checked.
+      - name: Classify lightweight changes
+        id: lightweight
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/lightweight-change.py --self-test
+          only="$(python3 .github/workflows/lightweight-change.py --base "$BASE_SHA" --head "$HEAD_SHA")"
+          echo "only=$only" >> "$GITHUB_OUTPUT"
+
       - name: Decide whether to run tests
         id: gate
         env:
@@ -1236,6 +1256,7 @@ jobs:
           WORKFLOWS: ${{ steps.filter.outputs.workflows }}
           VERSION_ONLY: ${{ steps.verbump.outputs.version_only }}
           SAMPLE_DEPENDENTS: ${{ steps.sampledeps.outputs.found }}
+          LIGHTWEIGHT: ${{ steps.lightweight.outputs.only }}
         run: |
           set -euo pipefail
 
@@ -1252,6 +1273,9 @@ jobs:
           if [ "$EVENT" = "push" ]; then
             run_tests=true
             reason="integration branch push (#2972): the bucket's combined state is evaluated in full, via an empty changed-path list and the selector's no-match fallback"
+          elif [ "$LIGHTWEIGHT" = "true" ]; then
+            run_tests=false
+            reason="videos/workflows/instructions-only PR: lightweight guards run; .NET and formal suites do not"
           elif [ "$VERSION_ONLY" = "true" ]; then
             run_tests=false
             reason="release version bump only"
@@ -2309,7 +2333,8 @@ jobs:
     # (`build-and-test` is suppressed by the same flag) and the member's own
     # pull request runs this job in full. `CiContentGateWiringTests` pins the
     # exact condition, the single dependency, and the classifier's push-only
-    # guard, so nothing else can be added here.
+    # guard. Lightweight PRs run video order here but skip the .NET fixtures
+    # at step level; the job must still succeed for the required verdict.
     needs: classify
     if: ${{ !cancelled() && needs.classify.outputs.push_is_member != 'true' }}
     runs-on: ubuntu-latest
@@ -2359,12 +2384,32 @@ jobs:
       - name: Video series order
         run: node videos/tools/series.js check
 
+      - name: Classify lightweight changes
+        id: lightweight
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 .github/workflows/lightweight-change.py --self-test
+          only="$(python3 .github/workflows/lightweight-change.py --base "$BASE_SHA" --head "$HEAD_SHA")"
+          echo "only=$only" >> "$GITHUB_OUTPUT"
+
+      - name: Report lightweight content checks
+        if: steps.lightweight.outputs.only == 'true'
+        run: |
+          echo "### Lightweight CI" >> "$GITHUB_STEP_SUMMARY"
+          echo "Videos/workflows/instructions-only PR: video order and guard self-tests run. The .NET/formal/content fixture suites do NOT run." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Setup .NET
+        if: steps.lightweight.outputs.only != 'true'
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Cache NuGet packages
+        if: steps.lightweight.outputs.only != 'true'
         uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
@@ -2372,15 +2417,18 @@ jobs:
           restore-keys: nuget-${{ runner.os }}-
 
       - name: Restore
+        if: steps.lightweight.outputs.only != 'true'
         run: dotnet restore
 
       # The docs snippet fixtures compile against the real public surface, so
       # they need the solution built. The other two families do not, but the
-      # build is a single shared cost.
+      # build is a single shared cost, except on explicitly lightweight PRs.
       - name: Build
+        if: steps.lightweight.outputs.only != 'true'
         run: dotnet build --no-restore --configuration Release
 
       - name: Run content gates
+        if: steps.lightweight.outputs.only != 'true'
         run: |
           set -euo pipefail
           python3 .github/workflows/run-text-gates.py \
@@ -2503,6 +2551,7 @@ jobs:
           LEG_COUNT: ${{ needs.plan.outputs.leg_count }}
           PACKAGE_SOURCE_CHANGED: ${{ needs.plan.outputs.package_source_changed }}
           VERSION_ONLY: ${{ needs.plan.outputs.version_only }}
+          LIGHTWEIGHT: ${{ needs.plan.outputs.lightweight }}
         run: |
           set -euo pipefail
 
@@ -2580,11 +2629,16 @@ jobs:
             {
               echo "### Test selection: 0 packages"
               echo ""
-              echo "No test legs ran for this change (docs-only, samples-only,"
-              echo "or a release version bump). The \`content-gates\` job still"
-              echo "ran the formal, hygiene, and docs-snippet fixtures, so this"
-              echo "green means those gates passed - not that any package's own"
-              echo "test suite was executed."
+              if [ "$LIGHTWEIGHT" = "true" ]; then
+                echo "Videos/workflows/instructions-only PR: guard self-tests and video"
+                echo "order passed. No .NET, formal, or content fixture suites ran."
+              else
+                echo "No test legs ran for this change (docs-only, samples-only,"
+                echo "or a release version bump). The \`content-gates\` job still"
+                echo "ran the formal, hygiene, and docs-snippet fixtures, so this"
+                echo "green means those gates passed - not that any package's own"
+                echo "test suite was executed."
+              fi
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
