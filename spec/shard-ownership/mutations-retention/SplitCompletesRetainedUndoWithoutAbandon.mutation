@@ -1,0 +1,32 @@
+# Pairs with SplitCompletes. Production before #4264: a split whose copy an
+# alias move retargets has no way out. Since #4478 a split may run on the
+# resized copy while its resize can still be undone, so an undo that moves the
+# alias back to the old copy leaves the split with every coordinator step
+# disabled (each requires the tree to resolve to the split's copy).
+# TreeShardSplitGrain.AbandonRetargetedSplitAsync, the base's SplitAbandon, is
+# what lets it finish. A second edit lets the stranded split count as
+# quiescent, so the mutant cannot deadlock and the liveness property is the
+# only thing TLC can report.
+MODULE: SplitCompletesRetainedUndoWithoutAbandon
+TARGET: SplitCompletes
+CLASS: Temporal
+SUMMARY: a split of the resized copy an undo retargets is never abandoned, so it never completes
+PERTURBS: SplitAbandon
+
+--- FIND
+    /\ alias # spCopy
+    /\ sp' = "done"
+--- REPLACE
+\* MUTATION: a retargeted split is never abandoned.
+    /\ FALSE
+    /\ sp' = "done"
+--- END
+
+--- FIND
+    /\ sg \in {"idle", "done"}
+    /\ sp \in {"idle", "done"}
+--- REPLACE
+    /\ sg \in {"idle", "done"}
+\* MUTATION: a split the undo stranded counts as quiescent.
+    /\ sp \in {"idle", "done"} \/ alias # spCopy
+--- END

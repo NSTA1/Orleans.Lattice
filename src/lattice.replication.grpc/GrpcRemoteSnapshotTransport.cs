@@ -39,7 +39,7 @@ namespace Orleans.Lattice.Replication.Grpc;
 /// the receiver can abort the drain cleanly.
 /// </para>
 /// </remarks>
-internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, IDisposable
+internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotItemTransport, IDisposable
 {
     private readonly LatticeRemoteSnapshotGrpcMethods _methods;
     private readonly IOptionsMonitor<GrpcRemoteSnapshotTransportOptions> _options;
@@ -111,6 +111,24 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
         HybridLogicalClock fromAsOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        await foreach (var item in RequestSnapshotItemsAsync(treeName, sourceClusterId, fromAsOfHlc, cancellationToken)
+            .WithCancellation(cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (item.CloseGeneration is null)
+            {
+                yield return item.Entry;
+            }
+        }
+    }
+
+    /// <inheritdoc />
+    public async IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(
+        string treeName,
+        string sourceClusterId,
+        HybridLogicalClock fromAsOfHlc,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceClusterId);
         ObjectDisposedException.ThrowIf(_disposed != 0, this);
@@ -157,7 +175,7 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotTransport, ID
                 yield break;
             }
 
-            yield return call.ResponseStream.Current.Value.Entry;
+            yield return call.ResponseStream.Current.Value;
         }
     }
 

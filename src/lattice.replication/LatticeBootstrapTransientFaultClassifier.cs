@@ -137,7 +137,14 @@ public static class LatticeBootstrapTransientFaultClassifier
         if (exception is TimeoutException
             || exception is HttpRequestException
             || exception is SocketException
-            || exception is IOException)
+            || exception is IOException
+            // The source tree is itself being bootstrapped (issue #4526): its
+            // reads are refused until its own drain completes, so the export
+            // succeeds on a later attempt.
+            || exception is LatticeTreeBootstrappingException
+            // The source deferred the export until a cross-tree precondition
+            // holds (issue #4684).
+            || exception is LatticeSnapshotExportDeferredException)
         {
             return true;
         }

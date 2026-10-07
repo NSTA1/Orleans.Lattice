@@ -63,7 +63,8 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown if no resize exists to undo, if the persisted resize state is
-    /// incomplete, or if the old tree has already been purged.
+    /// incomplete, if the old tree has already been purged, or if the tree is
+    /// replicated and its alias has already swapped onto the resized copy.
     /// </exception>
     Task UndoResizeAsync();
 
@@ -111,6 +112,47 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<bool> IsIdleAsync();
+
+    /// <summary>
+    /// Reports whether this tree's resize still forbids the shard migrations that
+    /// move virtual slots between shards (adaptive split, online consolidation;
+    /// issue #4452): <see langword="true"/> while a resize is in flight, while an
+    /// undo is pending or running, and - once a resize completed - for as long as
+    /// any shard of the copy it replaced still mirrors into the resized copy,
+    /// which it does through the soft-delete window until the purge (or an undo)
+    /// clears its shadow-forward state. A migration on the resized copy in that
+    /// window would change a layout the replaced copy's index-addressed mirror,
+    /// and a saga bound to that copy, cannot follow.
+    /// <para>
+    /// Fails closed: an answer it cannot establish - a shard probe that throws or
+    /// times out, a state change not yet persisted - is <see langword="true"/>.
+    /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a
+    /// migration's check is not held behind a resize phase or snapshot slice.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HoldsShardMigrationsAsync();
+
+    /// <summary>
+    /// Reports whether this tree's resize forbids an adaptive split
+    /// (issue #4478): <see langword="true"/> while a resize is in flight and
+    /// while an undo is pending or running, and <see langword="false"/> once a
+    /// resize has completed - unlike <see cref="HoldsShardMigrationsAsync"/>,
+    /// which goes on holding while the copy the resize replaced still mirrors
+    /// into the resized copy. A split is allowed in that window because the
+    /// mirror follows each key to the shard of the resized copy that owns it
+    /// now, and a terminal of a saga bound to the replaced copy reaches every
+    /// shard of the resized copy a split moved that copy's slots to. Online
+    /// consolidations and reshards keep the longer hold.
+    /// <para>
+    /// Fails closed: a resize or undo state change not yet persisted is
+    /// <see langword="true"/>. Marked
+    /// <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a split's
+    /// check is not held behind a resize phase or snapshot slice. A pure read.
+    /// </para>
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HoldsShardSplitsAsync();
 
     /// <summary>
     /// Reports whether this tree's resize state still names

@@ -1,0 +1,17 @@
+# Pairs with ReconcileDeletesOnlyDeleted in ReplicationReBootstrap. The foreign reconcile is per
+# origin (#4549): a row of origin o is deleted only below the source's
+# watermark for o. Read against another origin's, it deletes a write the
+# source never applied and so never deleted.
+MODULE: ReconcileDeletesOnlyDeletedForeignRowReadsReceiversWatermark
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the reconcile reads a third origin's row against the receiver's own watermark, deleting a write the source never applied
+PERTURBS: EndExport
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+           okFor == foreign /\ stable /\ reg[r].h < ex.lwm0[reg[r].o]
+--- REPLACE
+\* MUTATION: every foreign row is read against the receiver's own watermark.
+           okFor == foreign /\ stable /\ reg[r].h < ex.lwm0[r]
+--- END

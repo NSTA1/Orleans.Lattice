@@ -100,6 +100,14 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // TryAdd, mirroring the IMutationObserver registration convention.
         builder.Services.AddSingleton<ITreeAliasObserver, ReplicationTreeAliasObserver>();
 
+        // Receiver tree frontier lineage (issue #4586 part 2b): the frontier
+        // settles against the tree registry's lineage, and the registry tells it
+        // before it persists any lineage change, so a replacement of a tree's
+        // contents always forces a gap first. Registered additively, like the
+        // alias observer.
+        builder.Services.TryAddSingleton<ITreeLineageSource, RegistryTreeLineageSource>();
+        builder.Services.AddSingleton<ITreeLineageObserver, ReplicationTreeLineageObserver>();
+
         builder.Services.TryAddSingleton<ISnapshotProvider, LatticeSnapshotProvider>();
         // Receiver-side bootstrap source. The bootstrap state machine
         // drains from this seam; the seam is split from
@@ -129,8 +137,12 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // delegate their inbound metadata/stream RPCs to the local
         // ISnapshotProvider without duplicating the contract-level
         // argument validation or the cut-point semantics.
-        builder.Services.TryAddSingleton<LatticeRemoteSnapshotService>();
+        builder.Services.TryAddSingleton<CrossTreeExportGate>();
+        builder.Services.TryAddSingleton(LatticeRemoteSnapshotService.Create);
         builder.Services.TryAddSingleton<ILatticeBootstrapCoordinator, LatticeBootstrapCoordinator>();
+        // The receiver bootstrap read fence the coordinator arms around every
+        // snapshot drain (issue #4526).
+        builder.Services.TryAddSingleton<IBootstrapReadFence, GrainBootstrapReadFence>();
         builder.Services.TryAddSingleton<ILatticeWalIntrospection, LatticeWalIntrospection>();
         builder.Services.TryAddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
         builder.Services.TryAddSingleton<ILatticeReplicationAdmin, LatticeReplicationAdmin>();
@@ -152,7 +164,9 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeReplicationDeadLetters>(sp =>
             new LatticeReplicationDeadLetters(
                 sp.GetRequiredService<IGrainFactory>(),
-                sp.GetRequiredService<ReplicationApplier>()));
+                sp.GetRequiredService<ReplicationApplier>(),
+                sp.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>(),
+                sp.GetRequiredService<ILogger<LatticeReplicationDeadLetters>>()));
 
         // The core AddLattice registers DefaultLatticeMergeModeResolver (returns
         // null for every tree). Swap that out for the per-tree resolver so
@@ -336,6 +350,30 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // can replace the registration by pre-registering their own
         // IReplicationTopology singleton before AddLatticeReplication.
         builder.Services.TryAddSingleton<IReplicationTopology, OptionsReplicationTopology>();
+
+        // Issue #4615: a replicated tree reaps a tombstone only below the
+        // replication frontier, so a late older write cannot resurrect its key.
+        // Replaces the core's ungated default.
+        builder.Services.AddSingleton<ITombstoneReapGate, ReplicationTombstoneReapGate>();
+
+        // Issue #4684: the origin keeps a cross-tree sub-saga's decision until
+        // every peer of every participant tree acknowledged past its terminal.
+        builder.Services.AddSingleton<ICrossTreeDecisionHold, ReplicationCrossTreeDecisionHold>();
+
+        // ... and stamps each cross-tree decision with the participants' export
+        // epochs, so a receiver can tell an export opened after it (#4684).
+        // Ships with the hold, under the same capability check.
+        builder.Services.AddSingleton<ICrossTreeDecisionStamper, ReplicationCrossTreeDecisionStamper>();
+
+        // Issue #4684 (decommission verb): removes a peer for good from every
+        // *registered* tree's durable enrolment - not only the trees currently
+        // replicated, because enrolment outlives a tree leaving the replicated
+        // set - which is what lets the cross-tree decision hold's live
+        // AllPeersPastAsync check stop waiting on it. Resolves the tree
+        // registry through the core library's own singleton grain factory
+        // extension, so it is safe to construct regardless of whether runtime
+        // config is enabled.
+        builder.Services.TryAddSingleton<ILatticeReplicationPeerDecommissioner, LatticeReplicationPeerDecommissioner>();
 
         // Producer-side seeder used by operator tooling after an
         // intra-cluster snapshot/restore to walk the restored values'

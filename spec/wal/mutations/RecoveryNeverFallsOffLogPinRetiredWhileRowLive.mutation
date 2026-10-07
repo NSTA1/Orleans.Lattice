@@ -1,0 +1,18 @@
+# Pairs with RecoveryNeverFallsOffLog. The GC retires the pin of a leaf that still
+# has its row (a drive that misreports the tree id of a bound leaf), so it trims
+# past the leaf's durable checkpoint and the leaf latches stale on its next
+# activation. The base retires only a rowless leaf's pin, which never activates again
+# without a create intent.
+MODULE: RecoveryNeverFallsOffLogPinRetiredWhileRowLive
+TARGET: RecoveryNeverFallsOffLog
+CLASS: Invariant
+SUMMARY: the GC retires a live leaf's pin and trims past its checkpoint
+PERTURBS: PinRetire
+
+--- FIND
+    /\ ~row[l]
+    /\ pinHlc[l] # "gone"
+--- REPLACE
+\* MUTATION: the pin of a leaf with a row is retired too.
+    /\ pinHlc[l] # "gone"
+--- END

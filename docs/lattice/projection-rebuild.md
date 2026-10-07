@@ -1002,14 +1002,20 @@ projection-state slots** that the materialiser owns:
 - In-memory pending-saga, pending-tx-offset, recently-terminal, and
   backstopped-terminal dedup buffers are dropped, together with the
   destination-side shadow markers.
+- The leaf's sidecar record of the keys each saga's terminal settled on
+  it without a prepare stamp is kept: it is a durable fact about the
+  leaf, not activation memory, and it lets the leaf recognise a shadow
+  marker that arrives after its terminal (see [Shard Splitting](shard-splitting.md#convergence-guarantees)).
 - The leaf grain is deactivated. The next activation re-materialises
   the projection through the standard activation-time path, which
   under every `ProjectionRebuildPolicy` value first attempts to
   rehydrate from the leaf's captured snapshot. The rebuild neither
-  clears nor bypasses that snapshot: when the leaf has a usable one,
-  its cache is reloaded from it, and each partition the snapshot
+  clears nor bypasses a readable snapshot: when the leaf has a usable
+  one, its cache is reloaded from it, and each partition the snapshot
   covers replays only the WAL entries after the snapshot's captured
-  offset.
+  offset. A snapshot that is present but proven unreadable is cleared
+  first, accepting the loss - see
+  [An unreadable leaf snapshot](#an-unreadable-leaf-snapshot).
 
 **Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
 leaf's key range, and the sibling pointers stay intact. The rebuild
@@ -1041,6 +1047,136 @@ Error surface:
 | Tree id starts with the reserved system prefix `_lattice_` | `LatticeReservedTreeNamespaceException` (an `InvalidOperationException` subclass) |
 | `cancellationToken` was already cancelled | `OperationCanceledException` |
 | An access gate is configured and does not authorise the caller for whole-tree admin | `LatticeAuthorizationDeniedException` |
+| A leaf's snapshot load throws, so the rebuild cannot tell an unreachable snapshot from an unreadable one | `InvalidOperationException` (retry once the store answers) |
+
+### An unreadable leaf snapshot
+
+When a leaf's snapshot cannot be loaded - the store faults, the row
+payload is unreadable, or a segment is missing or unreadable - the
+leaf's replay **fails closed** (issue #4450). Data operations on the
+leaf fail with an internal `LeafSnapshotUnavailableException`, which
+implements `ILatticeLeafUnavailable`, and nothing is replayed. Under
+coverage-gated WAL trimming the WAL GC removes a checkpointed prefix
+precisely because a snapshot covers it, so the snapshot may be the
+only durable copy of acknowledged writes. Rebuilding the leaf from the
+WAL alone would bring it up without them and raise no fault.
+
+The condition is transient by design. The replay is retried on the
+next data operation or WAL GC touch, and succeeds once the snapshot
+loads. Whether the WAL tail still starts at offset `0` is not
+consulted: the leaf's durable WAL pin was resolved against the failed
+snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a rebuild would be running.
+
+If the snapshot is **permanently** unreadable, the prefix it covered
+is lost. Restore the tree from a backup, or call
+`ILattice.RebuildLeafProjectionAsync` for the leaf's shard to accept
+the loss. The rebuild loads each leaf's snapshot first. A snapshot that
+is present but proven unreadable (an unreadable row payload, or a
+missing or unreadable segment) is cleared, with a `Warning` naming the
+leaf and the accepted loss, so the next activation finds no snapshot
+and rebuilds from the WAL that survives. A readable or absent snapshot
+is left alone. A snapshot load that **throws** fails the rebuild
+instead: an unreachable store cannot be told apart from an unreadable
+snapshot, and discarding a snapshot that was merely unreachable would
+destroy writes the operator did not need to lose. Retry once the store
+answers. A snapshot row the storage provider cannot read at all - so
+its storage grain cannot activate - is beyond the rebuild's reach;
+restore the tree from a backup.
+
+### A vanished leaf snapshot
+
+A snapshot that is **absent** is not, on its own, proof that the leaf
+never had one (issue #4634). When a leaf's snapshot store keeps a
+snapshot, the leaf records that fact - one flag per WAL partition the
+snapshot covers - in its own durable state row, and that record is
+written before the leaf publishes any WAL pin resolved against the
+snapshot's coverage. So the WAL GC can never trim behind a snapshot
+whose existence is not durably on record, and because the record sits
+in the same row as the leaf's projection checkpoint, no storage loss
+can keep one and drop the other. The record only ever turns on, so it
+costs at most one extra state write per partition per leaf.
+
+If the snapshot later vanishes - lost storage, or a row deleted
+outside the lattice - the leaf's next cold start finds no snapshot,
+and finds the record set. The snapshot may have been the only durable
+copy of the prefix it covered, so the replay **fails closed** exactly
+as for an unreadable snapshot: data operations fail with
+`LeafSnapshotUnavailableException` and nothing is replayed. Whether the
+WAL tail still starts at offset `0` is not consulted, for the same
+reason as above: the leaf's durable WAL pin was resolved against the
+vanished snapshot's coverage and cannot be lowered, so the WAL GC stays
+entitled to trim that prefix while a cold rebuild would be running. A
+leaf that never kept a snapshot is not affected.
+
+The remedy is the same: restore the snapshot or the tree from a
+backup, or call `ILattice.RebuildLeafProjectionAsync` for the leaf's
+shard to accept the loss. The rebuild drops the record along with the
+snapshot it describes, so the next activation rebuilds from the WAL
+that survives. Clearing a leaf (tree deletion, a merge) drops the
+record with the rest of its row.
+
+### A lost leaf state row
+
+A leaf's own state row holds its tree binding, key range, projection
+checkpoint and kept-snapshot record. If that row is lost - lost
+storage, or a row deleted outside the lattice - while routing still
+names the leaf, the leaf has nothing to replay from and cannot load its
+snapshot. It used to come up empty and report every key it held as
+absent (issue #4654).
+
+A leaf with no state row is either one being created or one whose row
+was lost, and nothing on the leaf can always tell the two apart. So
+the leaf does not guess: it serves data, and writes a first row, only
+when the call that reaches it carries a create intent naming it. The
+paths that create leaves carry one: a shard creating its root leaf, a
+leaf split creating its sibling, and a bulk load or append creating its
+leaves. The intent is a reserved request-context key, so an external
+client cannot assert it. Any other call to a leaf with no row - a read,
+a write, the write-path re-bind of an unbound leaf - fails **closed**
+with `LeafStateRowLostException`, which implements
+`ILatticeLeafUnavailable`.
+
+As defence in depth a leaf also keeps a small row record, in a separate
+row keyed by the leaf. It is made durable before the leaf's first state
+write (and before the next write of a leaf whose row predates it), and
+deleted after the leaf's row is deliberately cleared by a retirement, an
+empty-leaf reclaim or an orphan repair. A create intent for a leaf whose
+row record, or snapshot, survives is refused: that is a creator about to
+replace a lost row with an empty one.
+
+**Recovering a tree whose purge was interrupted** re-creates, empty,
+exactly the leaves the purge cleared (issue #4700). A purge clears a
+leaf by first marking that leaf's row record as cleared by the purge,
+durably, then clearing the leaf; the marked record is kept. Recovery
+visits every leaf the shard still routes to: a leaf with a row is
+re-bound, a rowless leaf whose record carries the purge's mark is
+re-created empty (anything its interrupted clear left behind, such as
+its snapshot, is deleted first), and any other rowless leaf - one the
+purge never reached, whose row may have been lost - is not re-created
+and fails closed. The purge retires a leaf's write-ahead-log pins only
+after the leaf's row, snapshot and witness are gone, so a leaf whose
+purge was interrupted before its row was cleared still holds the log
+recovery needs to hand its data back. The work is paged, so no leaf is skipped however
+large the shard. A recovery that cannot read a leaf's record fails and
+can be retried. Once a shard is fully purged, the purge deletes the
+records it marked.
+
+**Upgrading across issue #4700.** A purge that was begun and
+interrupted on a silo built before per-leaf purge marks left its
+cleared leaves with no mark. Recovering that tree on a current silo
+fails closed on those leaves (they read as unavailable, never as
+empty), while the leaves that purge never reached keep their data.
+Finish the deletion instead (delete and purge the tree again, which
+marks and clears every leaf), or restore the tree from a backup.
+
+The write-path re-bind of issue #1744 still repairs a leaf that keeps
+its row but lost its tree id. A leaf deliberately cleared while routing
+still names it, outside a purge, fails closed like a lost one.
+
+The condition does not clear by itself, and a projection rebuild cannot
+repair it, because the rebuild needs the binding and key range the row
+held. Restore the leaf's row, or the tree, from a backup.
 
 ### Observe materialiser lag
 

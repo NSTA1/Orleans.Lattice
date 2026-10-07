@@ -1,0 +1,21 @@
+# Pairs with AckedWriteDurable. An abandoned append is acknowledged rather than
+# faulted, so a call that then settles without landing leaves an acknowledged
+# write nothing durable holds. The base faults the acknowledgement of every
+# abandoned append (an unknown outcome to its caller).
+MODULE: AckedWriteDurableAbandonAcknowledges
+TARGET: AckedWriteDurable
+CLASS: Invariant
+SUMMARY: an abandoned append is acknowledged, then settles as a hole
+PERTURBS: Abandon
+
+--- FIND
+    /\ orphans' = orphans \cup {o}
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<next, durable, tail, acked>>
+--- REPLACE
+\* MUTATION: the abandoned append is acknowledged.
+    /\ orphans' = orphans \cup {o}
+    /\ faults' = faults + 1
+    /\ acked' = acked \cup {o}
+    /\ UNCHANGED <<next, durable, tail>>
+--- END

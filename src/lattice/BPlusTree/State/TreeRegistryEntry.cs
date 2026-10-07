@@ -300,4 +300,24 @@ internal sealed record TreeRegistryEntry
     /// </para>
     /// </summary>
     [Id(19)] public string? AliasCutoverTarget { get; init; }
+
+    /// <summary>
+    /// Stable content-lineage token for the logical tree. It changes when an
+    /// operation swaps in content that was not derived key-for-key from the
+    /// previous content, and is preserved across topology-only moves such as
+    /// resize, reshard, shard split, and leaf split. <see langword="null"/> on
+    /// legacy rows is unknown.
+    /// </summary>
+    [Id(20)] public Guid? Lineage { get; init; }
+
+    /// <summary>
+    /// The highest bootstrap drop-floor epoch installed for this physical tree
+    /// (issue #4549), or <c>0</c> when none has been. Every shard root of the
+    /// tree refuses a replicated write admitted under an older epoch, and a shard
+    /// root that activates later - a split or reshard target included - reads it
+    /// here before admitting its first replicated write. Raised only through
+    /// <see cref="ILatticeRegistry.RaiseReplicationFloorEpochAsync(string, long)"/>;
+    /// never lowered.
+    /// </summary>
+    [Id(21)] public long ReplicationFloorEpoch { get; init; }
 }

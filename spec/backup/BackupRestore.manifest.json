@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-restore",
+  "refinement": "RefinementRestore.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 1,
+    "actions": 16,
+    "mutations": 20,
+    "behaviourRows": 20,
+    "distinctStates": 22700
+  }
+}

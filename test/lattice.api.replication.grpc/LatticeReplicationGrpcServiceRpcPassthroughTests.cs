@@ -43,9 +43,12 @@ public sealed class LatticeReplicationGrpcServiceRpcPassthroughTests
         var authSchemeSource = Substitute.For<ILatticeReplicationApiAuthSchemeSource>();
         authSchemeSource.GetAdvertisement().Returns(new AuthSchemeAdvertisement());
 
+        var peerAdmin = Substitute.For<ILatticeReplicationPeerAdmin>();
+
         var service = new LatticeReplicationGrpcService(
             _methods,
             control,
+            peerAdmin,
             bridge,
             authSchemeSource,
             Options.Create(new LatticeReplicationApiGrpcOptions()),

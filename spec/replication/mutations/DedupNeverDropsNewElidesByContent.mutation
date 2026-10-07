@@ -1,0 +1,19 @@
+# Pairs with DedupNeverDropsNew. Reproduces production before #4602 (#4585): the receiver
+# reports a key as held when its content index has the same bytes for it, recorded
+# even for a merge that lost, and never compares versions. With a write's bytes
+# standing for its origin, any earlier write of the key from the same origin
+# matches, so a newer write is elided and never applied.
+MODULE: DedupNeverDropsNewElidesByContent
+TARGET: DedupNeverDropsNew
+CLASS: Action
+SUMMARY: elision trusts a content hash of the key, so a newer write with the same bytes is never applied
+PERTURBS: Elide
+
+--- FIND
+       /\ Subsumed(x, w)
+       /\ cursor' = [cursor EXCEPT ![e] = i]
+--- REPLACE
+\* MUTATION: the receiver's index matches the key's bytes, not its version.
+       /\ \E v \in val[x][w.k] : v.o = w.o
+       /\ cursor' = [cursor EXCEPT ![e] = i]
+--- END

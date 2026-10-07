@@ -155,7 +155,28 @@ internal sealed class TreeShardSplitGrain(
         Logger.LogWarning(
             "Shard split {OperationId} of shard {SourceShardIndex} on tree {TreeId} abandoned in phase {Phase}: the tree no longer resolves to physical tree {PhysicalTreeId}, whose shards the split migrated.",
             state.State.OperationId, state.State.SourceShardIndex, TreeId, state.State.Phase, physicalTreeId);
+        await AbandonSplitAsync(sourceFrozen);
+    }
 
+    /// <summary>
+    /// Abandons a split resumed in <see cref="ShardSplitPhase.BeginShadowWrite"/>
+    /// while a resize of the tree holds shard migrations (issue #4452). The split's intent
+    /// was persisted before the resize read the shards' migration records, but
+    /// its source record was not yet open, so the resize started; the split backs
+    /// out instead. Nothing has been drained or committed, so the tree is
+    /// unchanged and a later split can be proposed afresh.
+    /// </summary>
+    private async Task AbandonSplitForResizeAsync()
+    {
+        Logger.LogWarning(
+            "Shard split {OperationId} of shard {SourceShardIndex} on tree {TreeId} abandoned before its drain: a resize of the tree holds shard migrations.",
+            state.State.OperationId, state.State.SourceShardIndex, TreeId);
+        await AbandonSplitAsync(sourceFrozen: false);
+    }
+
+    private async Task AbandonSplitAsync(bool sourceFrozen)
+    {
+        var physicalTreeId = await GetPhysicalTreeIdAsync();
         if (!sourceFrozen)
         {
             var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
@@ -225,6 +246,18 @@ internal sealed class TreeShardSplitGrain(
         // A new split binds to the physical tree the logical id resolves to now,
         // not to whichever one an earlier split on this coordinator used.
         _physicalTreeId = null;
+
+        // Refuse while a resize of the tree holds splits (issues #4452, #4478):
+        // the resize fixed the shards it copies and fences, and the map it
+        // carries at its flip, when it started, so a split may not run until it
+        // has completed and no undo is pending. Once it has, the copy it replaced
+        // keeps mirroring into the resized one, but that mirror follows a split's
+        // refusal to the shard that owns the slot now. Checked again once the
+        // source's record is open, which is what closes the race; this read only
+        // spares a refused split an allocated shard index and a persisted intent.
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(grainFactory, TreeId))
+            throw new InvalidOperationException(
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress or being undone.");
 
         // Serialise behind any migration already in flight on the source
         // shard. A shard carries a single migration record, and an online
@@ -359,6 +392,26 @@ internal sealed class TreeShardSplitGrain(
             throw;
         }
 
+        // The source's migration record is open; only now is a resize that
+        // started after the read in SplitAsync guaranteed to see it, so read the
+        // resize again and back out if one is in flight (issue #4452). The record
+        // is still reversible: nothing has been swept or drained yet.
+        if (await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(grainFactory, TreeId))
+        {
+            await source.AbortSplitAsync();
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.OperationId = prevOperationId;
+            state.State.Phase = prevPhase;
+            state.State.SourceShardIndex = prevSourceShardIndex;
+            state.State.TargetShardIndex = prevTargetShardIndex;
+            state.State.MovedSlots = prevMovedSlots;
+            state.State.OriginalShardMap = prevOriginalShardMap;
+            await state.WriteStateAsync();
+            throw new InvalidOperationException(
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while a resize of the tree is in progress or can still be undone.");
+        }
+
         // Retroactive shadow-forward of in-flight prepared
         // mutations. The shadow-forward window opened by BeginSplitAsync
         // mirrors new writes from this point on, but prepares that
@@ -418,6 +471,14 @@ internal sealed class TreeShardSplitGrain(
                 movedSlots,
                 virtualShardCount);
 
+            // A resize that started between this split persisting its intent and
+            // opening the source's record could not see the split (issue #4452).
+            if (await ShardMigrationResizeInterlock.ResizeHoldsShardSplitsAsync(grainFactory, TreeId))
+            {
+                await AbandonSplitForResizeAsync();
+                return;
+            }
+
             // Re-run the retroactive sweep on crash recovery.
             // LWW per (txid, key) on the destination's pending bucket
             // makes the re-run idempotent - a second snapshot for an
@@ -469,6 +530,27 @@ internal sealed class TreeShardSplitGrain(
     public Task<bool> IsIdleAsync() => Task.FromResult(!state.State.InProgress);
 
     /// <summary>
+    /// Trees whose split coordinators skip their timer-driven background drain
+    /// passes; see <see cref="HoldBackgroundDrainForTest"/>.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> BackgroundDrainHeldForTest =
+        new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Test seam (issue #4613): stops the split coordinator of
+    /// <paramref name="treeId"/> running a background
+    /// <see cref="ShardSplitPhase.Drain"/> pass from its phase timer until
+    /// <see cref="ReleaseBackgroundDrainForTest"/>, so a fixture can interleave
+    /// writes before the final drain without a background pass importing the
+    /// source's rows in between. An explicit <see cref="RunSplitPassAsync"/>
+    /// still drives the drain.
+    /// </summary>
+    internal static void HoldBackgroundDrainForTest(string treeId) => BackgroundDrainHeldForTest[treeId] = 0;
+
+    /// <summary>Lifts <see cref="HoldBackgroundDrainForTest"/> for <paramref name="treeId"/>.</summary>
+    internal static void ReleaseBackgroundDrainForTest(string treeId) => BackgroundDrainHeldForTest.TryRemove(treeId, out _);
+
+    /// <summary>
     /// Processes a single phase of the split. Exposed as <c>internal</c> via
     /// <c>protected</c> override for unit testing.
     /// </summary>
@@ -484,6 +566,8 @@ internal sealed class TreeShardSplitGrain(
                     await RunSplitPassAsync();
                     break;
                 case ShardSplitPhase.Drain:
+                    if (!BackgroundDrainHeldForTest.IsEmpty && BackgroundDrainHeldForTest.ContainsKey(TreeId))
+                        break;
                     if (await IsBoundTreeCurrentAsync())
                         await DrainAsync();
                     else
@@ -872,9 +956,6 @@ internal sealed class TreeShardSplitGrain(
         var physicalTreeId = await GetPhysicalTreeIdAsync();
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.SourceShardIndex}");
-        var walk = await BoundedLeafWalk.StartAsync(grainFactory, source, resumeFromInclusive, budget);
-        if (!walk.HasLeaf) return (true, null, 0);
-
         var movedSlotsArray = state.State.MovedSlots.ToArray();
         Array.Sort(movedSlotsArray);
         var virtualShardCount = state.State.OriginalShardMap!.Slots.Length;
@@ -882,38 +963,67 @@ internal sealed class TreeShardSplitGrain(
         if (batchSize <= 0) batchSize = LatticeOptions.DefaultSplitDrainBatchSize;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{state.State.TargetShardIndex}");
-        var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
         var emptyVector = new VersionVector();
 
-        while (walk.HasLeaf)
+        // Bounded retry: BoundedLeafWalk's cursor is always a key, so
+        // restarting from the pass's ORIGINAL resumeFromInclusive (never a
+        // partial cursor this attempt advanced to) re-descends the shard root
+        // fresh and routes around a leaf a concurrent fold retired mid-walk.
+        // A retired-then-reactivated leaf has no persisted row and no
+        // in-memory create-intent for this caller, so BPlusLeafGrain's
+        // row-loss guard cannot tell it apart from a genuinely lost row and
+        // fails closed with LeafStateRowLostException - correctly, since the
+        // guard has no way to recognise "legitimately retired" from here.
+        // Entries already flushed to target before the fault are idempotent
+        // re-merges under LWW on retry, so re-walking from the original
+        // resume key never double-applies or loses an entry. See the
+        // matching rationale on RetroactiveSweepPreparedMutationsAsync.
+        const int maxAttempts = 5;
+        for (var attempt = 1; ; attempt++)
         {
-            var leaf = walk.CurrentLeaf;
-            // Slot filtering is pushed into the leaf so only moved-slot
-            // entries are serialised on the response - saves bandwidth and
-            // coordinator-side allocations on hot shards where moved slots
-            // are a minority of the keyspace.
-            var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
-            foreach (var (key, lww) in delta.Entries)
+            var walk = await BoundedLeafWalk.StartAsync(grainFactory, source, resumeFromInclusive, budget);
+            if (!walk.HasLeaf) return (true, null, 0);
+
+            var batch = new Dictionary<string, LwwValue<byte[]>>(batchSize);
+
+            try
             {
-                batch[key] = lww;
-                if (batch.Count >= batchSize)
+                while (walk.HasLeaf)
                 {
-                    await target.MergeManyAsync(batch, isCrossShardMigration: true);
-                    batch.Clear();
+                    var leaf = walk.CurrentLeaf;
+                    // Slot filtering is pushed into the leaf so only
+                    // moved-slot entries are serialised on the response -
+                    // saves bandwidth and coordinator-side allocations on
+                    // hot shards where moved slots are a minority of the
+                    // keyspace.
+                    var delta = await leaf.GetDeltaSinceForSlotsAsync(emptyVector, movedSlotsArray, virtualShardCount);
+                    foreach (var (key, lww) in delta.Entries)
+                    {
+                        batch[key] = lww;
+                        if (batch.Count >= batchSize)
+                        {
+                            await target.MergeManyAsync(batch, isCrossShardMigration: true);
+                            batch.Clear();
+                        }
+                    }
+
+                    if (!await walk.MoveNextAsync()) break;
                 }
+
+                // Flush before returning, so the cursor this pass persists is
+                // never ahead of the entries the target has actually
+                // accepted. Persisting a cursor past an unflushed batch would
+                // drop those entries permanently: the next pass resumes
+                // beyond them and no later sweep re-reads them.
+                if (batch.Count > 0)
+                    await target.MergeManyAsync(batch, isCrossShardMigration: true);
+
+                return (walk.Completed, walk.ResumeFromInclusive, walk.LeavesVisited);
             }
-
-            if (!await walk.MoveNextAsync()) break;
+            catch (LeafStateRowLostException) when (attempt < maxAttempts)
+            {
+            }
         }
-
-        // Flush before returning, so the cursor this pass persists is never
-        // ahead of the entries the target has actually accepted. Persisting a
-        // cursor past an unflushed batch would drop those entries permanently:
-        // the next pass resumes beyond them and no later sweep re-reads them.
-        if (batch.Count > 0)
-            await target.MergeManyAsync(batch, isCrossShardMigration: true);
-
-        return (walk.Completed, walk.ResumeFromInclusive, walk.LeavesVisited);
     }
 
     /// <summary>
@@ -1033,12 +1143,11 @@ internal sealed class TreeShardSplitGrain(
         Array.Sort(sortedSlots);
 
         var source = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{sourceShardIndex}");
-        var leafId = await source.GetLeftmostLeafIdAsync();
-        if (leafId is null) return;
+        if (await source.GetLeftmostLeafIdAsync() is null) return;
 
         var target = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{targetShardIndex}");
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
-        long replayed = 0;
+        var progress = new PreparedBucketSweepProgress();
 
         // DELIBERATELY NOT WORK-BOUNDED (issues 1956, 1973). Do not route this
         // walk through BoundedLeafWalk, and do not give it a persisted cursor.
@@ -1073,163 +1182,53 @@ internal sealed class TreeShardSplitGrain(
         // attributable instead of bounded, so a long hold names itself.
         var atomicWalk = new AtomicLeafWalk(nameof(RetroactiveSweepPreparedMutationsAsync));
 
-        // Track per-txid snapshots so the post-sweep cleanup pass can
-        // build per-saga committedValues payloads without re-walking
-        // the source chain. Lazily allocated - the steady state is
-        // zero pending mutations across the moved slots.
-        Dictionary<Guid, List<PendingMutationSnapshot>>? perTxSnapshots = null;
-
         try
         {
-            while (leafId is not null)
+            // Bounded retry: the walk's own leftmost-leaf id can name a leaf a
+            // concurrent fold retires mid-sweep. A retired-then-reactivated
+            // leaf has no persisted row and no in-memory create-intent for
+            // this caller, so BPlusLeafGrain's row-loss guard cannot tell it
+            // apart from a genuinely lost row and fails closed with
+            // LeafStateRowLostException - correctly, since the guard has no
+            // way to recognise "legitimately retired" from here. Retirement
+            // itself is refused while any prepared/pending mutation remains
+            // on the leaf (see BPlusLeafGrain.Reclaim.HasReclaimBlockingState),
+            // so a leaf this sweep still needed to visit can never have been
+            // retired out from under it - the exception marks a stale chain
+            // read, never a dropped mutation. PreparedBucketSweep.RunAsync's
+            // own contract is "re-run the whole sweep" on any fault; re-
+            // resolving the leftmost leaf id on each attempt re-reads the
+            // sibling chain the retirement already repointed, routing the
+            // retry around the retired leaf.
+            const int maxAttempts = 5;
+            for (var attempt = 1; ; attempt++)
             {
-                var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(leafId.Value);
-                atomicWalk.RecordLeafVisited();
-                var snapshots = await leaf.GetPendingMutationsForSlotsAsync(sortedSlots, virtualShardCount);
-                foreach (var snapshot in snapshots)
+                var attemptLeafId = await source.GetLeftmostLeafIdAsync();
+                if (attemptLeafId is null) break;
+
+                progress.Replayed = 0;
+                progress.LeavesVisited = 0;
+
+                try
                 {
-                    // Per-snapshot pre-check: if the saga has already
-                    // terminalized at sweep-time, the saga's own
-                    // commit-phase broadcast has finished and the
-                    // destination cannot be reached via that path
-                    // (destination was not yet a participant when the
-                    // broadcast captured its participant set). Replaying
-                    // the prepare here would install an orphan in
-                    // destination's _pendingTx that no terminal will
-                    // ever drain. Instead, apply the terminal directly
-                    // with the snapshot value as the committedValues
-                    // backstop; the destination's leaf-side per-key
-                    // backstop path handles WAL durability and HLC
-                    // stamping. Aborted sagas drop the entry without
-                    // surfacing.
-                    // Read the decision under the LOGICAL tree, where the saga
-                    // records it; for a resized (aliased) tree the physical copy
-                    // has no registry rows, so a lookup keyed by physicalTreeId
-                    // reads InFlight for a committed saga and installs an orphan
-                    // (issue #4368). The post-sweep cleanup reads the same way.
-                    var preStatus = await TxRegistryRouting
-                        .GetRegistry(grainFactory, TreeId, snapshot.TransactionId)
-                        .GetStatusAsync(snapshot.TransactionId);
-                    if (preStatus == TxStatus.Committed)
-                    {
-                        Dictionary<string, byte[]>? committedValues = null;
-                        if (!snapshot.IsTombstone && snapshot.Value is not null)
-                            committedValues = new Dictionary<string, byte[]>(1) { [snapshot.Key] = snapshot.Value };
-                        await target.AppendTxTerminalAsync(snapshot.TransactionId, committed: true, committedValues);
-                        replayed++;
-                        continue;
-                    }
-                    if (preStatus == TxStatus.Aborted)
-                    {
-                        await target.AppendTxTerminalAsync(snapshot.TransactionId, committed: false);
-                        replayed++;
-                        continue;
-                    }
-
-                    // Saga still in flight: replay the prepare normally.
-                    // The replay's SetAsync also registers destination
-                    // as a participant via RecordAffectedLeafIfPreparedAsync,
-                    // so any saga broadcast that runs AFTER this point
-                    // will reach destination.
-                    await ReplayPreparedSnapshotAsync(target, snapshot, TreeId);
-                    replayed++;
-
-                    // Install the destination-side shadow marker for
-                    // this in-flight saga. The drain pass that runs
-                    // AFTER the retroactive sweep imports the source's
-                    // pre-saga value with IsMigrated=true into dest's
-                    // Entries; without this marker, a reader observing
-                    // the saga as Committed after MarkCommittedAsync
-                    // (but BEFORE the backstop terminal reaches dest)
-                    // would surface that migrated pre-saga value and
-                    // split observation against any sibling whose
-                    // backstop has landed. The marker is cleared
-                    // automatically by ApplyTxTerminalAsync when the
-                    // saga's terminal reaches dest.
-                    //
-                    // Per-snapshot single-key array allocation is
-                    // intentional and cold-path: bounded by the count
-                    // of in-flight sagas at split-begin x keys-per-
-                    // saga in moved slots (the chaos suite caps this
-                    // at ~10 entries). Batching across snapshots would
-                    // entangle ordering with the per-snapshot
-                    // ReplayPreparedSnapshotAsync above, which must
-                    // register dest as a participant BEFORE its
-                    // shadow marker lands so that a terminal arriving
-                    // mid-replay cannot install an un-clearable marker.
-                    await target.MarkSagaShadowAsync(snapshot.TransactionId, new[] { snapshot.Key });
-
-                    // Track for post-sweep cleanup. Lazy allocation - the
-                    // chaos-free path leaves the dictionary null.
-                    perTxSnapshots ??= new Dictionary<Guid, List<PendingMutationSnapshot>>();
-                    if (!perTxSnapshots.TryGetValue(snapshot.TransactionId, out var list))
-                    {
-                        list = new List<PendingMutationSnapshot>();
-                        perTxSnapshots[snapshot.TransactionId] = list;
-                    }
-                    list.Add(snapshot);
+                    await PreparedBucketSweep.RunAsync(
+                        grainFactory, TreeId, attemptLeafId.Value, target, sortedSlots, virtualShardCount,
+                        progress, carryOriginalStamps: true);
+                    break;
                 }
-                leafId = await leaf.GetNextSiblingAsync();
-            }
-
-            // Post-sweep cleanup: close the orphan window for sagas
-            // that were in-flight at per-snapshot pre-check time but
-            // have since terminalized. Such a saga's broadcast may have
-            // made its last participant fetch before the sweep registered
-            // destination, sent the terminal only to source, and called
-            // ForgetAsync - leaving the prepared entry on destination
-            // orphaned. The registry's GetStatusManyAsync returns
-            // Committed/Aborted while the decision is still reported -
-            // including for TxDecisionRetention after ForgetAsync
-            // tombstones it - then Indeterminate until the row is pruned,
-            // and InFlight (the default fallback) once it is gone. For
-            // Committed/Aborted we apply the terminal directly. For
-            // anything else we leave the entry pending - either the saga
-            // is genuinely still in flight (its eventual broadcast will
-            // reach destination, which is now registered as a
-            // participant) or its decision is no longer reported and the
-            // entry is a true orphan. The latter is shadowed by
-            // any later prepare for the same key via the highest-HLC
-            // tie-break in TryFindPendingForKey.
-            if (perTxSnapshots is { Count: > 0 })
-            {
-                var txids = new List<Guid>(perTxSnapshots.Keys);
-                var statuses = await TxRegistryFanOut.GetStatusManyAsync(
-                    grainFactory, TreeId, txids);
-                foreach (var (txid, status) in statuses)
+                catch (LeafStateRowLostException) when (attempt < maxAttempts)
                 {
-                    // Only a DECIDED status authorises acting. Anything else -
-                    // genuinely in flight, or a decision the registry currently
-                    // cannot determine - leaves the entry pending. Testing for
-                    // the decided cases rather than excluding InFlight matters:
-                    // the `committed` flag below is derived by elimination, so
-                    // an undecided status that slipped past this guard would be
-                    // silently treated as an abort and the prepared entry
-                    // discarded.
-                    if (status is not (TxStatus.Committed or TxStatus.Aborted)) continue;
-
-                    var committed = status == TxStatus.Committed;
-                    Dictionary<string, byte[]>? committedValues = null;
-                    if (committed)
-                    {
-                        committedValues = new Dictionary<string, byte[]>();
-                        foreach (var snap in perTxSnapshots[txid])
-                        {
-                            if (!snap.IsTombstone && snap.Value is not null)
-                                committedValues[snap.Key] = snap.Value;
-                        }
-                    }
-                    await target.AppendTxTerminalAsync(txid, committed, committedValues);
                 }
             }
         }
         finally
         {
+            atomicWalk.RecordLeavesVisited(progress.LeavesVisited);
             atomicWalk.ReportIfSlow(Logger, Context.GrainId);
 
-            if (replayed > 0)
+            if (progress.Replayed > 0)
             {
-                LatticeMetrics.SplitRetroactiveForwardEntries.Add(replayed,
+                LatticeMetrics.SplitRetroactiveForwardEntries.Add(progress.Replayed,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId)),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex),
                     LatticeTenantLabel.ForTree(TreeId));
@@ -1241,78 +1240,6 @@ internal sealed class TreeShardSplitGrain(
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, optionsResolver.GetMetricTreeId(TreeId)),
                 new KeyValuePair<string, object?>(LatticeMetrics.TagShard, sourceShardIndex),
                 LatticeTenantLabel.ForTree(TreeId));
-        }
-    }
-
-    /// <summary>
-    /// Replays a single <see cref="Orleans.Lattice.BPlusTree.PendingMutationSnapshot"/> through
-    /// the destination shard's standard write path. The four ambient
-    /// scopes - transaction id, prepared flag, origin cluster, vector
-    /// clock, HLC override - propagate via Orleans
-    /// <see cref="Orleans.Runtime.RequestContext"/> so the destination
-    /// leaf reads the same values at its HLC-tick site that the source
-    /// leaf observed at prepare time. The destination's
-    /// <c>BPlusLeafGrain.CommitSetAsync</c> then routes the mutation
-    /// into its own pending-tx map (because <c>LatticePreparedContext.Current</c>
-    /// is true) under the original <c>(txid, key)</c> identity.
-    /// <para>
-    /// Tombstones are replayed via <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.DeleteAsync"/>
-    /// rather than the TTL-aware <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.SetAsync(string, byte[], long)"/>
-    /// overload, so the destination's <c>CommitDeleteAsync</c> path
-    /// stamps the prepared tombstone correctly. Non-tombstone replays
-    /// use the TTL-aware Set overload so <c>ExpiresAtTicks</c> is
-    /// preserved verbatim.
-    /// </para>
-    /// </summary>
-    private static async Task ReplayPreparedSnapshotAsync(IShardRootGrain target, PendingMutationSnapshot snapshot, string registryTreeId)
-    {
-        var previousTxId = LatticeTransactionContext.Current;
-        LatticeTransactionContext.Set(snapshot.TransactionId);
-        try
-        {
-            using var preparedScope = LatticePreparedContext.BeginScope();
-            // A sweep replay can reach the destination after the saga decided
-            // (the saga may decide between the sweep's pre-check and this
-            // replay landing), so it is a forwarded prepare (#4445). Its
-            // decision is recorded under the logical tree, as the pre-check
-            // reads it (#4368).
-            using var forwardedScope = LatticeForwardedPrepareContext.BeginScope(registryTreeId);
-            using var originScope = LatticeOriginContext.With(snapshot.OriginClusterId);
-            using var vcScope = LatticeVectorClockContext.With(snapshot.VectorClock);
-            using var hlcScope = LatticeHlcOverrideContext.With(snapshot.Timestamp);
-            // Carry the typed CRDT delta so the destination leaf's prepared
-            // commit records it in its pending-tx delta side-map and folds it
-            // on the saga's terminal (the per-replica union) rather than
-            // installing the resharded LWW value verbatim. A plain LWW
-            // snapshot (Delta null / Mode LwwRegister) opens no scope and
-            // replays byte-for-byte as before.
-            using var deltaScope = snapshot.Mode != LatticeMergeMode.LwwRegister
-                    && snapshot.Delta is not null
-                ? LatticeDeltaContext.With(snapshot.Delta)
-                : null;
-
-            if (snapshot.IsTombstone)
-            {
-                await target.DeleteAsync(snapshot.Key);
-            }
-            else
-            {
-                // Empty byte[] is the conventional value-of-a-tombstone
-                // placeholder. Snapshots only carry a non-null
-                // Value when IsTombstone is false, but defensively
-                // substitute Array.Empty so the destination's
-                // SetAsync(byte[]) parameter contract is satisfied
-                // regardless of upstream shape.
-                var value = snapshot.Value ?? Array.Empty<byte>();
-                if (snapshot.ExpiresAtTicks > 0)
-                    await target.SetAsync(snapshot.Key, value, snapshot.ExpiresAtTicks);
-                else
-                    await target.SetAsync(snapshot.Key, value);
-            }
-        }
-        finally
-        {
-            LatticeTransactionContext.Set(previousTxId);
         }
     }
 }

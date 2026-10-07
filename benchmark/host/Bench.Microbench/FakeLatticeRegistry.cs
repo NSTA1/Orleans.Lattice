@@ -108,6 +108,8 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes) => Task.CompletedTask;
 
+    public Task RaiseReplicationFloorEpochAsync(string treeId, long epoch) => Task.CompletedTask;
+
     public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) => Task.CompletedTask;
 
     // ----- Not exercised: null WAL catalog + pinned ShardCount = 1 in the bench. -----
@@ -134,6 +136,17 @@ internal sealed class FakeLatticeRegistry : ILatticeRegistry
 
     public Task<WalPlacementPin> UpdateWalPlacementAsync(
         string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves) =>
+        throw NotUsed();
+
+    public Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew) =>
+        throw NotUsed();
+
+    public Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired) =>
+        throw NotUsed();
+
+    public Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId) =>
         throw NotUsed();
 
     private static NotSupportedException NotUsed() =>

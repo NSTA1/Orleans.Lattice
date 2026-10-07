@@ -163,7 +163,20 @@ public class ShardSplitTreeDeletionIntegrationTests
         var physical = await registry.ResolveAsync(treeId);
         Assert.That(physical, Is.Not.EqualTo(treeId), "Precondition: the resize must alias the tree to a new copy.");
 
+        // The retired copy mirrors into the resized one until the purge clears
+        // its shadow-forward state. That holds consolidations and reshards
+        // (issue #4452) but not a split, which the mirror follows (issue #4478).
         var split = _cluster.GrainFactory.GetGrain<ITreeShardSplitGrain>($"{treeId}/0");
+        Assert.That(await resize.HoldsShardMigrationsAsync(), Is.True,
+            "The resize must hold consolidations and reshards while the retired copy still mirrors into the resized one.");
+        Assert.That(await resize.HoldsShardSplitsAsync(), Is.False,
+            "A completed resize must not hold a split of the resized copy.");
+
+        // Clear that state as the purge would, without driving the purge itself
+        // through the deletion grain this test exercises, so the delete, recover
+        // and purge below see only the resized copy.
+        await ResizeMigrationHoldSeam.ReleaseAsync(_cluster.GrainFactory, treeId);
+
         await split.SplitAsync(sourceShardIndex: 0);
         await split.RunSplitPassAsync();
         Assert.That(await split.IsIdleAsync(), Is.True, "Split should be complete after RunSplitPassAsync.");

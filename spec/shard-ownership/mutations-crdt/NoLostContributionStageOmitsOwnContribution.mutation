@@ -1,0 +1,16 @@
+# Pairs with NoLostContribution. The staged state omits the mutation's own
+# contribution: a terminal that applies it by backstop (a bucket stranded by a
+# leaf split, or a location with no bucket) never adds it, while the saga
+# still acknowledges its caller.
+MODULE: NoLostContributionStageOmitsOwnContribution
+TARGET: NoLostContribution
+CLASS: Invariant
+SUMMARY: the staged state omits the saga's own contribution, which a backstop then never applies
+PERTURBS: Stage
+
+--- FIND
+    /\ staged' = row[owner] \cup {"a"}
+--- REPLACE
+\* MUTATION: the staged state is the snapshot alone.
+    /\ staged' = row[owner]
+--- END

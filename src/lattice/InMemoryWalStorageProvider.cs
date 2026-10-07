@@ -79,6 +79,16 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
             // Reject overlap with anything already persisted.
             var first = entries[0].Offset;
             var last = entries[^1].Offset;
+
+            // A trimmed offset counts as persisted (issue #4621): an entry landing
+            // at or below the trim watermark would be invisible to every read, so
+            // it is refused rather than acknowledged.
+            if (first <= shard.TrimmedThrough)
+            {
+                throw new InvalidOperationException(
+                    $"Append batch for '{treeId}/{shardIndex}' starts at offset {first}, at or below the trim "
+                    + $"watermark {shard.TrimmedThrough}. Offsets through the watermark were already trimmed.");
+            }
             if (shard.Entries.Count > 0)
             {
                 // Fast path: append at the tail (the common case under
@@ -234,7 +244,7 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
                 // flush failures can leave the log non-contiguous, so
                 // we cannot assume `startIndex = fromOffsetExclusive -
                 // headOffset + 1` (the dense-offsets shortcut).
-                var startIndex = LowerBound(entries, fromOffsetExclusive + 1);
+                var startIndex = LowerBound(entries, Math.Max(fromOffsetExclusive, shard.TrimmedThrough) + 1);
                 if (startIndex >= entries.Count)
                 {
                     snapshot = Array.Empty<WalEntry>();
@@ -300,7 +310,7 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         lock (shard.Gate)
         {
             var entries = shard.Entries;
-            var startIndex = LowerBound(entries, fromOffsetExclusive + 1);
+            var startIndex = LowerBound(entries, Math.Max(fromOffsetExclusive, shard.TrimmedThrough) + 1);
             var available = Math.Min(entries.Count - startIndex, maxEntries);
             if (available > 0)
             {
@@ -371,9 +381,11 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
 
         lock (shard.Gate)
         {
+            // The trim watermark keeps allocation above every trimmed offset.
+            var highest = Math.Max(shard.HighestAssignedOffset, shard.TrimmedThrough);
             return Task.FromResult(shard.Entries.Count == 0
-                ? shard.HighestAssignedOffset
-                : Math.Max(shard.Entries[^1].Offset, shard.HighestAssignedOffset));
+                ? highest
+                : Math.Max(shard.Entries[^1].Offset, highest));
         }
     }
 
@@ -398,7 +410,43 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
             // sorted insertion for out-of-order arrival, and prefix
             // trim leaves the surviving suffix sorted), so the lowest
             // live offset is at index 0 when the list is non-empty.
-            return Task.FromResult(shard.Entries.Count == 0 ? -1L : shard.Entries[0].Offset);
+            var first = LowerBound(shard.Entries, shard.TrimmedThrough + 1);
+            return Task.FromResult(first >= shard.Entries.Count ? -1L : shard.Entries[first].Offset);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<long?> GetTrimWatermarkAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (!_shards.TryGetValue(Key(treeId, shardIndex), out var shard))
+        {
+            return Task.FromResult<long?>(-1L);
+        }
+
+        lock (shard.Gate)
+        {
+            return Task.FromResult<long?>(shard.TrimmedThrough);
+        }
+    }
+
+    /// <summary>
+    /// Raises the trim watermark without deleting anything: the state a provider
+    /// that persists its watermark before deleting is left in by a crash between
+    /// the two (issue #4621). This provider does both under one lock, so only a
+    /// test can produce it.
+    /// </summary>
+    internal void RaiseTrimWatermarkForTesting(string treeId, int shardIndex, long throughOffsetInclusive)
+    {
+        var shard = _shards.GetOrAdd(Key(treeId, shardIndex), static _ => new ShardLog());
+        lock (shard.Gate)
+        {
+            shard.TrimmedThrough = Math.Max(shard.TrimmedThrough, throughOffsetInclusive);
         }
     }
 
@@ -412,6 +460,11 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         ArgumentNullException.ThrowIfNull(treeId);
         cancellationToken.ThrowIfCancellationRequested();
 
+        if (throughOffsetInclusive < 0L)
+        {
+            return Task.CompletedTask;
+        }
+
         if (!_shards.TryGetValue(Key(treeId, shardIndex), out var shard))
         {
             return Task.CompletedTask;
@@ -419,6 +472,12 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
 
         lock (shard.Gate)
         {
+            // The watermark is raised before anything is deleted (issue #4621). It
+            // covers only offsets that were ever written: a trim through an offset
+            // past the highest one (a tree discard, or long.MaxValue) deletes
+            // nothing above it, and a watermark there would refuse the next append.
+            shard.TrimmedThrough = Math.Max(shard.TrimmedThrough, Math.Min(throughOffsetInclusive, shard.HighestAssignedOffset));
+
             var entries = shard.Entries;
             var firstSurvivor = 0;
             while (firstSurvivor < entries.Count && entries[firstSurvivor].Offset <= throughOffsetInclusive)
@@ -484,5 +543,12 @@ public sealed class InMemoryWalStorageProvider : IWalStorageProvider
         /// already been consumed by shipping and materialisation cursors.
         /// </summary>
         public long HighestAssignedOffset { get; set; } = -1L;
+
+        /// <summary>
+        /// The trim watermark: the highest offset any trim has trimmed through,
+        /// <c>-1</c> when none has (issue #4621). Never lowered. Guarded by
+        /// <see cref="Gate"/>.
+        /// </summary>
+        public long TrimmedThrough { get; set; } = -1L;
     }
 }

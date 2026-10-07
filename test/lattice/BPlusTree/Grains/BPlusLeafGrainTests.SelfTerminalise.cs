@@ -63,7 +63,7 @@ public partial class BPlusLeafGrainTests
         long persistedCheckpoint = 0)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusAsync(txId).Returns(registryOutcome);
+        registry.GetStatusForTerminalAsync(txId).Returns(registryOutcome);
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint);
     }
 
@@ -79,7 +79,7 @@ public partial class BPlusLeafGrainTests
         long persistedCheckpoint = 0)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusAsync(txId)
+        registry.GetStatusForTerminalAsync(txId)
             .ThrowsAsync(new TimeoutException("registry unavailable during activation replay"));
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint);
     }
@@ -236,7 +236,7 @@ public partial class BPlusLeafGrainTests
     }
 
     // As BuildSelfTerminaliseLeaf, but the registry masks the saga's outcome
-    // behind its tombstone-retention window: GetStatusAsync answers
+    // behind its tombstone-retention window: GetStatusForTerminalAsync answers
     // Indeterminate ("a row exists, but I can no longer report it"), while
     // GetRecordedStatusAsync - the sweep-only bypass added for issue #2318 -
     // still returns the stored verdict.
@@ -246,7 +246,7 @@ public partial class BPlusLeafGrainTests
         out ILeafReplayCoordinatorGrain coordinator)
     {
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusAsync(txId).Returns(TxStatus.Indeterminate);
+        registry.GetStatusForTerminalAsync(txId).Returns(TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txId).Returns(recordedOutcome);
         return BuildSelfTerminaliseLeafCore(txId, registry, out coordinator, persistedCheckpoint: 0);
     }
@@ -255,7 +255,7 @@ public partial class BPlusLeafGrainTests
     public async Task Indeterminate_prepare_self_terminalises_from_the_recorded_committed_outcome()
     {
         // DISCRIMINATOR for issue #2318. The saga IS decided, but its tombstone
-        // aged past the retention window, so GetStatusAsync now answers
+        // aged past the retention window, so GetStatusForTerminalAsync now answers
         // Indeterminate rather than Committed. Before #2318 that read came back
         // as InFlight and the prepare pinned the ceiling forever - the exact
         // wedge #2190's heal exists to clear, reintroduced by the retention mask.
@@ -319,7 +319,7 @@ public partial class BPlusLeafGrainTests
         // guarantee the primary resolution path already provides.
         var txId = Guid.NewGuid();
         var registry = Substitute.For<ITxRegistryGrain>();
-        registry.GetStatusAsync(txId).Returns(TxStatus.Indeterminate);
+        registry.GetStatusForTerminalAsync(txId).Returns(TxStatus.Indeterminate);
         registry.GetRecordedStatusAsync(txId)
             .ThrowsAsync(new TimeoutException("registry unavailable during recorded-status probe"));
         var (grain, state) = BuildSelfTerminaliseLeafCore(txId, registry, out _, persistedCheckpoint: 0);

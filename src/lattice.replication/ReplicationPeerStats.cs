@@ -171,6 +171,75 @@ public partial class ReplicationPeerStats
     }
 
     /// <summary>
+    /// Records whether the local sender has taken the peer off the log after a
+    /// write-ahead-log trim lost records it never shipped (issue #4534), and
+    /// since when; <see langword="null"/> clears it. Surfaces on the peer-status
+    /// read path, where such a link reports as stalled until it is re-seeded.
+    /// </summary>
+    internal void RecordReseedRequired(string tree, string peer, DateTimeOffset? since)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var key = new PeerKey(tree, peer, ReplicationContactDirection.Outbound);
+        PeerState? entry;
+        if (since is null)
+        {
+            // Clearing never creates a row: a peer the sender has not touched
+            // otherwise must not appear in the status read path.
+            if (!state.TryGetValue(key, out entry))
+            {
+                return;
+            }
+        }
+        else
+        {
+            entry = state.GetOrAdd(key, static _ => new PeerState());
+        }
+
+        lock (entry)
+        {
+            entry.ReseedRequiredSince = since;
+        }
+    }
+
+    /// <summary>
+    /// Records whether the per-tree dead-letter queue refused to park an entry
+    /// of this link because it is full, and since when (#4603); <see langword="null"/>
+    /// clears it. A full queue no longer evicts: the entry is kept unacknowledged
+    /// (the sender does not advance past it, or the receiver defers it), so the
+    /// link makes no progress until an operator replays or discards parked
+    /// entries, and the peer-status read path reports it as stalled rather than
+    /// merely quiet. An outbound row is created on demand, like
+    /// <see cref="RecordReseedRequired"/>; an inbound row is only updated, never
+    /// created, because its tree and origin come from the peer (#4021).
+    /// </summary>
+    internal void RecordDeadLetterFull(string tree, string peer, ReplicationContactDirection direction, DateTimeOffset? since)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var key = new PeerKey(tree, peer, direction);
+        PeerState? entry;
+        if (since is null || direction == ReplicationContactDirection.Inbound)
+        {
+            if (!state.TryGetValue(key, out entry))
+            {
+                return;
+            }
+        }
+        else
+        {
+            entry = state.GetOrAdd(key, static _ => new PeerState());
+        }
+
+        lock (entry)
+        {
+            entry.DeadLetterFullSince = since is null ? null : entry.DeadLetterFullSince ?? since;
+        }
+    }
+
+    /// <summary>
     /// Records the current per-peer outbound in-flight pipelining depth -
     /// the number of shipped-but-unacknowledged batches the sender holds
     /// open against the named peer. Called by the sender each time the
@@ -458,6 +527,13 @@ public partial class ReplicationPeerStats
         public long EntriesBehind;
         public long BytesBehind;
         public long InFlight;
+        public DateTimeOffset? ReseedRequiredSince;
+
+        /// <summary>
+        /// When the per-tree dead-letter queue first refused an entry of this
+        /// link because it was full (#4603), or <see langword="null"/>.
+        /// </summary>
+        public DateTimeOffset? DeadLetterFullSince;
         public long ConsecutiveErrors;
         public DateTimeOffset? LastContactTimestamp;
     }

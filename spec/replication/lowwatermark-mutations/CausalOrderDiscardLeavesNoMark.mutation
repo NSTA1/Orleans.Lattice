@@ -1,0 +1,13 @@
+# Pairs with CausalOrder. Discards a dead-letter without a lost mark (#4603).
+MODULE: CausalOrderDiscardLeavesNoMark
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a discarded dead-letter leaves no lost mark, so its dependents are released
+PERTURBS: Discard
+
+--- FIND
+    /\ lost' = lost \cup {h}
+--- REPLACE
+    \* MUTATION: no lost mark.
+    /\ lost' = lost
+--- END

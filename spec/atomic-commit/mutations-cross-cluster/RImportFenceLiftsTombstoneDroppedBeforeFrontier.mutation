@@ -1,0 +1,22 @@
+# Pairs with RImportFenceLifts. The receiver drops a decided barrier's tombstone
+# while the origin can still ship the operation - its decision row is not yet
+# purged on every participant - and a later arrival reopens the barrier, which
+# waits for ever on a sibling acknowledged long ago. #4735 drops a tombstone only
+# once the origin's cross-tree purge frontier has passed the operation.
+MODULE: RImportFenceLiftsTombstoneDroppedBeforeFrontier
+TARGET: RImportFenceLifts
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a barrier's tombstone is dropped before the origin's purge frontier has passed its operation
+PERTURBS: TombstoneDrop
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0, BarrierTtl = 1, IndexFaults = 1
+
+--- FIND
+    /\ ~bdrop
+    /\ PurgeFrontierPassed
+
+--- REPLACE
+    /\ ~bdrop
+\* MUTATION: no purge frontier.
+
+--- END

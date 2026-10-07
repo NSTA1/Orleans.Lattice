@@ -60,7 +60,8 @@ internal sealed class TreeResizeGrain(
     [PersistentState("tree-resize", LatticeOptions.StorageProviderName)]
     IPersistentState<TreeResizeState> state,
     [PersistentState("tree-resize-undo", LatticeOptions.StorageProviderName)]
-    IPersistentState<TreeResizeUndoState> undoIntent)
+    IPersistentState<TreeResizeUndoState> undoIntent,
+    ILatticeReplicationContext? replicationContext = null)
     : CoordinatorGrain<TreeResizeGrain>(context, reminderRegistry, logger), ITreeResizeGrain
 {
     private string TreeId => Context.GrainId.Key.ToString()!;
@@ -79,7 +80,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private readonly record struct DurableResize(
         bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId,
-        ResizePhase Phase, int CopyShardCount)
+        ResizePhase Phase, int CopyShardCount, string? AliasReservationId)
     {
         public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
     }
@@ -109,7 +110,8 @@ internal sealed class TreeResizeGrain(
     private DurableResize CaptureResize() => new(
         state.State.InProgress, state.State.Complete, state.State.OperationId,
         state.State.OldPhysicalTreeId, state.State.SnapshotTreeId,
-        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount);
+        state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount,
+        state.State.AliasReservationId);
 
     private DurableIntent CaptureIntent() => new(
         undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
@@ -151,9 +153,21 @@ internal sealed class TreeResizeGrain(
     /// <inheritdoc />
     /// <remarks>
     /// A completed resize whose undo has been accepted still has work outstanding,
-    /// so the keepalive keeps the phase loop armed until the unwind lands.
+    /// so the keepalive keeps the phase loop armed until the unwind lands. So does
+    /// a completed resize that still holds the tree's alias reservation, which a
+    /// completion interrupted before its release leaves behind: the next phase
+    /// tick releases it (issue #4527).
     /// </remarks>
-    protected override bool InProgress => state.State.InProgress || UndoPending;
+    protected override bool InProgress =>
+        state.State.InProgress || UndoPending || HoldsReservationAfterCompletion;
+
+    /// <summary>
+    /// <see langword="true"/> when no resize is running or unwinding but the
+    /// persisted state still holds the tree's alias reservation - left by a
+    /// completion interrupted between persisting itself and releasing it.
+    /// </summary>
+    private bool HoldsReservationAfterCompletion =>
+        !state.State.InProgress && state.State.AliasReservationId is not null && _undoRunning == 0;
 
     /// <summary>
     /// <see langword="true"/> while an accepted undo still names the current
@@ -247,7 +261,8 @@ internal sealed class TreeResizeGrain(
             throw new InvalidOperationException(
                 $"A reshard is already in progress for tree '{TreeId}'; resize refused until reshard completes.");
 
-        if (state.State.Complete)
+        var priorComplete = state.State.Complete;
+        if (priorComplete)
         {
             state.State.Complete = false;
         }
@@ -279,7 +294,7 @@ internal sealed class TreeResizeGrain(
             return;
         }
 
-        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren);
+        await InitiateResizeStateAsync(newMaxLeafKeys, newMaxInternalChildren, priorComplete);
         await StartCoordinatorAsync();
     }
 
@@ -326,10 +341,13 @@ internal sealed class TreeResizeGrain(
 
     /// <summary>
     /// Persists the resize intent with <see cref="ResizePhase.Snapshot"/> phase,
-    /// then kicks off the offline snapshot to the new physical tree.
+    /// then kicks off the offline snapshot to the new physical tree. Refuses,
+    /// restoring the state it replaced, when a shard migration is in flight on
+    /// the tree (issue #4452); <paramref name="priorComplete"/> is whether that
+    /// state recorded a completed resize the caller already cleared in memory.
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren)
+    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren, bool priorComplete = false)
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
         var operationId = Guid.NewGuid().ToString("N");
@@ -397,6 +415,54 @@ internal sealed class TreeResizeGrain(
             state.State.OldRegistryEntry = prevOldRegistryEntry;
             state.State.ShardIndices = prevShardIndices;
             throw;
+        }
+
+        // Interlock with adaptive splits and online consolidations (issue
+        // #4452): the shard set and map above are fixed for the whole resize,
+        // so a migration in flight now would commit a map the resize never
+        // carries. The intent is persisted first, so a migration that opens its
+        // record after this read sees the resize and backs out itself (see
+        // ShardMigrationResizeInterlock). A receiver snapshot bootstrap's read
+        // fence is read the same way, after the intent is durable (issue #4526):
+        // the copy this resize builds would serve the bootstrap's partial import
+        // unfenced, and a bootstrap that arms its fence after this read sees the
+        // resize in flight and waits.
+        string? refusal;
+        try
+        {
+            refusal = await ShardMigrationResizeInterlock.FindMigratingShardAsync(grainFactory, currentPhysical, shardIndices)
+                is { } migrating
+                ? $"A shard split or consolidation is in progress on shard {migrating} of tree '{TreeId}'; resize refused until it completes."
+                : await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, currentPhysical, shardIndices) is { } fenced
+                    ? $"A snapshot bootstrap is draining into tree '{TreeId}' (shard {fenced} is read-fenced); resize refused until the bootstrap completes."
+                    : null;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Fail closed, restoring the state this call replaced: a resize that
+            // cannot establish the shards are free of migrations and bootstrap
+            // fences must not start.
+            refusal = $"Could not establish that no shard migration or snapshot bootstrap is in progress on tree '{TreeId}' ({ex.GetType().Name}); resize refused.";
+        }
+
+        if (refusal is not null)
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Phase = prevPhase;
+            state.State.NewMaxLeafKeys = prevNewMaxLeafKeys;
+            state.State.NewMaxInternalChildren = prevNewMaxInternalChildren;
+            state.State.OperationId = prevOperationId;
+            state.State.ShardCount = prevShardCount;
+            state.State.Complete = prevComplete || priorComplete;
+            state.State.SnapshotTreeId = prevSnapshotTreeId;
+            state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
+            state.State.OldRegistryEntry = prevOldRegistryEntry;
+            state.State.ShardIndices = prevShardIndices;
+
+            // Restoring a completed predecessor keeps it undoable for the rest of
+            // its soft-delete window.
+            await WriteResizeStateAsync();
+            throw new InvalidOperationException(refusal);
         }
 
         // Initiate the online snapshot from current physical tree to new tree.
@@ -538,6 +604,21 @@ internal sealed class TreeResizeGrain(
         return operationId;
     }
 
+    /// <summary>
+    /// The first shard of the copy the tree currently routes to whose receiver
+    /// snapshot bootstrap read fence is armed (issue #4526), or
+    /// <see langword="null"/> when none is.
+    /// </summary>
+    private async Task<int?> FindBootstrapFencedShardAsync()
+    {
+        var registry = grainFactory.GetLatticeRegistry();
+        var physical = await registry.ResolveAsync(TreeId);
+        var entry = await registry.GetEntryAsync(TreeId);
+        var shardCount = (await optionsResolver.ResolveAsync(physical)).ShardCount;
+        var shardIndices = RoutedShardIndices.Resolve(shardCount, entry?.ShardMap);
+        return await TreeBootstrapReadFence.FindFencedShardAsync(grainFactory, physical, shardIndices);
+    }
+
     /// <inheritdoc />
     public Task<ResizeUndoProgress> GetUndoProgressAsync()
     {
@@ -581,16 +662,102 @@ internal sealed class TreeResizeGrain(
         await CompleteCoordinatorAsync();
     }
 
-    private async Task ExecuteUndoAsync()
+    /// <summary>
+    /// Refuses the after-swap unwind of a replicated tree whose alias names the
+    /// resized copy, and otherwise records, before anything is armed, that this
+    /// operation's unwind has been cleared. A replicated tree cannot be moved back
+    /// once the resized copy has served it: the shipper has been tailing that
+    /// copy's log, so writes it took may already be on a peer, and cross-cluster
+    /// shipping is last-writer-wins and never retracts them, so the undo would
+    /// discard them here and leave them there (issue #4518). The refusal is an
+    /// <see cref="InvalidOperationException"/> raised before any compensation, so
+    /// the intent is withdrawn with the reason and the alias still names the
+    /// resized copy. The decision is taken once per operation and persisted: a
+    /// retried unwind that may already have armed the resized copy must finish
+    /// whatever the tree's replication says by then, or routed traffic would be
+    /// refused by a copy the alias still names. A swap the alias has not taken,
+    /// or one an earlier attempt already moved back, needs no decision.
+    /// </summary>
+    private async Task ClearUnwindForReplicationAsync(string operationId, TreeRegistryEntry logicalBefore, string snapshotTreeId)
     {
-        await ReserveAliasAsync();
+        if (!string.Equals(logicalBefore.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal)
+            || string.Equals(undoIntent.State.UnwindClearedOperationId, operationId, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (replicationContext?.ResolveMergeMode(TreeId) is not null)
+        {
+            throw new InvalidOperationException(
+                $"Cannot undo the resize of replicated tree '{TreeId}' after its alias swap: writes the resized copy "
+                + "took may already have been shipped to a peer, and the undo cannot retract them there. "
+                + $"Resize the tree again, back to its previous sizing (MaxLeafKeys {state.State.OldRegistryEntry?.MaxLeafKeys}, "
+                + $"MaxInternalChildren {state.State.OldRegistryEntry?.MaxInternalChildren}), instead.");
+        }
+
+        await _undoIntentGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await UndoResizeCoreAsync();
+            var previous = undoIntent.State.UnwindClearedOperationId;
+            undoIntent.State.UnwindClearedOperationId = operationId;
+            try
+            {
+                await WriteUndoIntentAsync();
+            }
+            catch
+            {
+                undoIntent.State.UnwindClearedOperationId = previous;
+                throw;
+            }
         }
         finally
         {
-            if (!state.State.InProgress) await ReleaseAliasAsync();
+            _undoIntentGate.Release();
+        }
+    }
+
+    private async Task ExecuteUndoAsync()
+    {
+        _undoRunning++;
+        try
+        {
+            // A receiver snapshot bootstrap draining into the copy the tree routes
+            // to has fenced its reads (issue #4526). An undo would route readers
+            // back to the previous copy, which the fence does not cover, while the
+            // drain's remaining entries land there too. The running-undo marker is
+            // published above before the fence is read, so a bootstrap that arms
+            // after this read sees the undo and waits; one that armed before it is
+            // seen here. Fails closed: a fence that cannot be read refuses the undo.
+            // Raised as InvalidOperationException, which a requested undo's phase
+            // loop treats as unrecoverable and withdraws with this reason.
+            int? fenced;
+            try
+            {
+                fenced = await FindBootstrapFencedShardAsync();
+            }
+            catch (Exception ex)
+            {
+                throw new InvalidOperationException(
+                    $"Could not establish whether a snapshot bootstrap is draining into tree '{TreeId}'; the resize cannot be undone until it can.", ex);
+            }
+
+            if (fenced is { } shard)
+                throw new InvalidOperationException(
+                    $"A snapshot bootstrap is draining into tree '{TreeId}' (shard {shard} is read-fenced); the resize cannot be undone until the bootstrap completes.");
+
+            await ReserveAliasAsync();
+            try
+            {
+                await UndoResizeCoreAsync();
+            }
+            finally
+            {
+                if (!state.State.InProgress) await ReleaseAliasAsync();
+            }
+        }
+        finally
+        {
+            _undoRunning--;
         }
     }
 
@@ -771,10 +938,10 @@ internal sealed class TreeResizeGrain(
         // runs rather than recreate it as a bare row with no structural pins
         // (issue #4270).
         var registry = grainFactory.GetLatticeRegistry();
-        if (await registry.GetEntryAsync(TreeId) is null)
-        {
-            throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
-        }
+        var logicalBefore = await registry.GetEntryAsync(TreeId)
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
+
+        await ClearUnwindForReplicationAsync(opId, logicalBefore, snapshotTreeId);
 
         // Defensively abort any snapshot activation that may have been
         // resurrected by crash recovery - a no-op when the snapshot has
@@ -802,15 +969,33 @@ internal sealed class TreeResizeGrain(
             await oldDeletion.RecoverPhysicalAsync();
         }
 
-        // 2. Clear shadow-forward on every old-tree shard so the tree becomes
-        //    writable again (lifts the Rejecting phase).
-        var undoTasks = new Task[shardIndices.Length];
-        for (int i = 0; i < shardIndices.Length; i++)
+        // Steps 2 to 4 mirror the forward swap's fence-before-flip order (#4362)
+        // so that no instant has both copies serving the logical tree (#4453):
+        // the copy the alias names is the only one that answers routed traffic,
+        // and the other refuses it with a stale-routing signal the routing tier
+        // retries on. Clearing the old copy's fence before the swap let a router
+        // that cached the old copy serve it while fresh routers used the resized
+        // copy; arming the resized copy after the swap let a router that cached
+        // the resized copy keep writing to a copy this undo discards.
+
+        // 2. Arm the resized copy's shards to redirect logical-alias traffic onto
+        //    the old tree before the alias moves back, exactly as a restore revert
+        //    arms the shadow it leaves (issue #4336). Until the swap lands, routed
+        //    callers retry against a copy that refuses them; the old copy is still
+        //    fenced, so neither copy serves them. Skipped on a resumed undo whose
+        //    swap had already landed: the copy was armed before it.
+        var undoRedirect = $"{opId}:undo";
+        if (string.Equals(logicalBefore.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
         {
-            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
-            undoTasks[i] = shard.ClearShadowForwardAsync(opId);
+            await AliasCutoverShardMaps.ArmRedirectsAsync(
+                grainFactory,
+                snapshotTreeId,
+                AliasCutoverShardMaps.EffectiveMap(logicalBefore),
+                oldPhysical,
+                TreeId,
+                undoRedirect,
+                CancellationToken.None);
         }
-        await Task.WhenAll(undoTasks);
 
         // 3. Move the logical tree back onto the old physical tree together with
         //    the map that addresses its shards, in one registry write (#4336).
@@ -823,18 +1008,22 @@ internal sealed class TreeResizeGrain(
             LatticeConstants.DefaultVirtualShardCount,
             (oldRow?.ShardCount ?? state.State.ShardCount) is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
         TreeRegistryEntry? swappedFrom;
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        try
         {
-            swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                swappedFrom = await registry.SwapAliasAsync(TreeId, oldPhysical, oldMap, oldRow?.NextShardIndex, expectedPhysicalTreeId: null);
+            }
+        }
+        catch
+        {
+            await ReleaseUndoRedirectUnlessSwappedAsync(registry, oldPhysical, snapshotTreeId, logicalBefore, undoRedirect);
+            throw;
         }
 
-        // Stateless routing activations that cached the resized copy keep
-        // addressing it, and nothing else tells them the alias moved back: their
-        // writes would land on a copy this undo discards, and their reads would
-        // serve it. Arm the copy's shards to redirect logical-alias traffic onto
-        // the old tree before it is discarded, exactly as a restore revert arms
-        // the shadow it leaves (issue #4336). Skipped on a resumed undo whose swap
-        // had already landed: the copy was armed then.
+        // The swap's own read of the row is authoritative: a split that committed
+        // onto the resized copy after the read above allocated a shard the arm
+        // did not reach. Re-arming is idempotent for every shard already armed.
         if (string.Equals(swappedFrom?.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal))
         {
             await AliasCutoverShardMaps.ArmRedirectsAsync(
@@ -843,16 +1032,27 @@ internal sealed class TreeResizeGrain(
                 AliasCutoverShardMaps.EffectiveMap(swappedFrom),
                 oldPhysical,
                 TreeId,
-                $"{opId}:undo",
+                undoRedirect,
                 CancellationToken.None);
         }
 
-        // 4. Discard the snapshot tree, releasing its WAL retention now
+        // 4. Only now clear shadow-forward on every old-tree shard so the tree
+        //    becomes writable again (lifts the Rejecting phase). Between the swap
+        //    and this step routed callers retry until the fence lifts.
+        var undoTasks = new Task[shardIndices.Length];
+        for (int i = 0; i < shardIndices.Length; i++)
+        {
+            var shard = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}");
+            undoTasks[i] = shard.ClearShadowForwardAsync(opId);
+        }
+        await Task.WhenAll(undoTasks);
+
+        // 5. Discard the snapshot tree, releasing its WAL retention now
         //    (issue #3930); see the drain-window branch above.
         var newDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(snapshotTreeId);
         await newDeletion.DiscardDerivedPhysicalTreeAsync();
 
-        // 5. Restore the original registry entry (or clear overrides if none
+        // 6. Restore the original registry entry (or clear overrides if none
         //    existed). The routing fields keep what step 3 wrote: the same alias
         //    and slots, under a map version that never runs backwards for a
         //    router or scan that compares it.
@@ -864,7 +1064,7 @@ internal sealed class TreeResizeGrain(
             NextShardIndex = swapped is null ? oldRow?.NextShardIndex : swapped.NextShardIndex,
         });
 
-        // 6. Clear resize state.
+        // 7. Clear resize state.
         // Snapshot every field ResetResizeState clears so a transient
         // WriteStateAsync failure does not leave in-memory state below
         // the UndoResizeAsync top guard (!InProgress && !Complete),
@@ -906,7 +1106,18 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     protected internal override async Task ProcessNextPhaseAsync()
     {
-        if (!state.State.InProgress && !UndoPending) return;
+        if (!state.State.InProgress && !UndoPending)
+        {
+            // A completion interrupted before it released the tree's alias
+            // reservation (issue #4527): release it, then retire the loop.
+            if (HoldsReservationAfterCompletion)
+            {
+                await ReleaseAliasAsync();
+                await CompleteCoordinatorAsync();
+            }
+
+            return;
+        }
 
         try
         {
@@ -1161,7 +1372,7 @@ internal sealed class TreeResizeGrain(
         try
         {
             var resolved = await registry.ResolveAsync(TreeId);
-            if (string.Equals(resolved, state.State.SnapshotTreeId, StringComparison.Ordinal))
+            if (!ResizeFence.LiftsFenceAfterFailedFlip(resolved, state.State.SnapshotTreeId))
                 return;
 
             var oldPhysical = state.State.OldPhysicalTreeId!;
@@ -1179,6 +1390,47 @@ internal sealed class TreeResizeGrain(
         {
             Logger.LogWarning(ex,
                 "Resize of tree {TreeId} could not lift the old copy's fence after a failed alias swap; it stays fenced until the swap is retried.",
+                TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Releases the redirect an after-swap undo armed on the resized copy when
+    /// the swap back onto the old copy then failed, unless the registry shows the
+    /// alias did move - then the redirect is exactly what must stay. Without it a
+    /// refused swap would leave the tree unavailable: the alias would still name
+    /// a copy that refuses routed traffic, and the old copy is still fenced.
+    /// Best-effort, like <see cref="LiftFenceUnlessSwappedAsync"/>: it never masks
+    /// the swap's own failure, and a retried undo arms the copy again.
+    /// </summary>
+    private async Task ReleaseUndoRedirectUnlessSwappedAsync(
+        ILatticeRegistry registry,
+        string oldPhysical,
+        string snapshotTreeId,
+        TreeRegistryEntry armedFrom,
+        string undoRedirect)
+    {
+        if (!string.Equals(armedFrom.PhysicalTreeId, snapshotTreeId, StringComparison.Ordinal)) return;
+
+        try
+        {
+            var resolved = await registry.ResolveAsync(TreeId);
+            if (string.Equals(resolved, oldPhysical, StringComparison.Ordinal)) return;
+
+            using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
+            var indices = AliasCutoverShardMaps.EffectiveMap(armedFrom).GetPhysicalShardIndices();
+            var tasks = new Task[indices.Count];
+            for (var i = 0; i < indices.Count; i++)
+            {
+                tasks[i] = grainFactory.GetGrain<IShardRootGrain>($"{snapshotTreeId}/{indices[i]}")
+                    .ClearRetainedRedirectAsync(undoRedirect);
+            }
+            await Task.WhenAll(tasks);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Undo of the resize of tree {TreeId} could not release the resized copy's redirect after a failed alias swap; it stays armed until the undo is retried.",
                 TreeId);
         }
     }
@@ -1282,8 +1534,13 @@ internal sealed class TreeResizeGrain(
 
         await PublishResizeCompletedAsync();
 
-        await CompleteCoordinatorAsync();
+        // Release the alias reservation before retiring the coordinator, so the
+        // keepalive reminder that CompleteCoordinatorAsync unregisters is still
+        // armed if the release is interrupted: InProgress stays true while a
+        // completed resize holds the reservation, and the next phase tick
+        // releases it (issue #4527).
         await ReleaseAliasAsync();
+        await CompleteCoordinatorAsync();
     }
 
     private async Task ReserveAliasAsync()
@@ -1322,10 +1579,129 @@ internal sealed class TreeResizeGrain(
     /// <remarks>
     /// Answers from the resize state as last persisted: this read is interleaved,
     /// and a completion a phase has applied in memory but not yet durably written
-    /// may still be reverted, which would make completion non-monotonic.
+    /// may still be reverted, which would make completion non-monotonic. A
+    /// completed resize is not idle while its persisted state still holds the
+    /// tree's alias reservation (issue #4527): completion is persisted before the
+    /// reservation is released, and reporting idle in between let a caller's
+    /// delete or alias change be refused as "alias operation in progress" by a
+    /// resize that had already reported itself complete. The reservation is
+    /// persisted before it is taken and cleared only after it is released, so
+    /// once this answers idle the completion's reservation is gone. The
+    /// reservation an undo of a completed resize takes is not counted, so such an
+    /// undo leaves the resize reading complete, as documented.
     /// </remarks>
-    public Task<bool> IsIdleAsync() =>
-        Task.FromResult(!DurableResizeState.InProgress);
+    public Task<bool> IsIdleAsync()
+    {
+        var durable = DurableResizeState;
+        var completionHoldsReservation = durable is { Complete: true, AliasReservationId: not null }
+            && !DurableUndoPending
+            && _undoRunning == 0;
+        return Task.FromResult(!durable.InProgress && !completionHoldsReservation);
+    }
+
+    /// <summary>
+    /// How long <see cref="HoldsShardMigrationsAsync"/> waits for one old-copy
+    /// shard to say whether it still mirrors before counting it as mirroring.
+    /// </summary>
+    internal static readonly TimeSpan MirrorProbeTimeout = TimeSpan.FromSeconds(5);
+
+    // Turns that are running an undo. The undo moves the alias, clears the old
+    // copy's fence and rewrites the logical registry row before it resets the
+    // resize state, so the persisted state alone cannot show it is under way.
+    private int _undoRunning;
+
+    /// <summary>
+    /// Whether a resize is in flight, an undo is pending or running, or the
+    /// running turn holds resize state it has not yet persisted - every state in
+    /// which <see cref="HoldsShardMigrationsAsync"/> and
+    /// <see cref="HoldsShardSplitsAsync"/> hold without probing anything. A
+    /// resize turn sets the in-memory state before it persists it, so a turn
+    /// that has started, completed or begun to unwind a resize shows as a
+    /// difference between the two until it has settled.
+    /// </summary>
+    private bool ResizeUnsettled()
+    {
+        var durable = DurableResizeState;
+        var live = state.State;
+        if (durable.InProgress || live.InProgress || UndoPending || DurableUndoPending || _undoRunning > 0)
+        {
+            return true;
+        }
+
+        return durable.Complete != live.Complete
+            || !string.Equals(durable.OperationId, live.OperationId, StringComparison.Ordinal)
+            || !string.Equals(durable.OldPhysicalTreeId, live.OldPhysicalTreeId, StringComparison.Ordinal)
+            || !string.Equals(durable.SnapshotTreeId, live.SnapshotTreeId, StringComparison.Ordinal);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Interleaving is safe for the reason given on
+    /// <see cref="HoldsShardMigrationsAsync"/>: only a resize whose persisted and
+    /// in-memory state agree, with no undo pending or running, is answered
+    /// <see langword="false"/>.
+    /// </remarks>
+    public Task<bool> HoldsShardSplitsAsync() => Task.FromResult(ResizeUnsettled());
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Interleaving is safe because every answer that is not established from
+    /// state already persisted, and consistent with the state the running turn
+    /// holds, is <see langword="true"/>: a resize turn sets the in-memory state
+    /// before it persists it, so a turn that has started a resize, completed one
+    /// or begun to unwind one shows as a difference between the two (or as a
+    /// running undo) and is answered <see langword="true"/> until it has settled.
+    /// Only a completed resize whose persisted and in-memory state agree, with no
+    /// undo pending or running, reaches the shard probes, and only shards that
+    /// all report they mirror nowhere - or elsewhere - can make it
+    /// <see langword="false"/>.
+    /// </remarks>
+    public async Task<bool> HoldsShardMigrationsAsync()
+    {
+        if (ResizeUnsettled()) return true;
+
+        var durable = DurableResizeState;
+        if (!durable.Complete) return false;
+
+        // A completed resize that names no copies never mirrored. Shadow-
+        // forwarding starts only in the snapshot InitiateResizeStateAsync launches
+        // after it persisted both ids in the same write as InProgress, and both
+        // are cleared together only by ResetResizeState, after an undo has
+        // cleared the mirror. The state is reached by the empty-tree fast path,
+        // which re-pins the registry in place and records Complete with no copy;
+        // holding there would block every split of a tree sized that way for good.
+        if (!durable.HasUndoTargets) return false;
+
+        var oldPhysical = durable.OldPhysicalTreeId!;
+        var resized = durable.SnapshotTreeId!;
+        var shardIndices = OldShardIndices;
+        var probes = new Task<string?>[shardIndices.Length];
+        for (var i = 0; i < shardIndices.Length; i++)
+        {
+            probes[i] = grainFactory.GetGrain<IShardRootGrain>($"{oldPhysical}/{shardIndices[i]}")
+                .GetMirrorDestinationAsync()
+                .WaitAsync(MirrorProbeTimeout);
+        }
+
+        try
+        {
+            await Task.WhenAll(probes);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex,
+                "Could not establish whether the copy tree {TreeId}'s resize replaced still mirrors into {Resized}; shard migrations stay held.",
+                TreeId, resized);
+            return true;
+        }
+
+        foreach (var probe in probes)
+        {
+            if (string.Equals(probe.Result, resized, StringComparison.Ordinal)) return true;
+        }
+
+        return false;
+    }
 
     /// <inheritdoc />
     /// <remarks>

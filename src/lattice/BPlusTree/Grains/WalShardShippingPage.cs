@@ -32,6 +32,23 @@ internal readonly record struct WalShardShippingPage
     /// </summary>
     [Id(1)] public long NextSequence { get; init; }
 
+    /// <summary>
+    /// The partition's published clock floor (issue #4586), or
+    /// <see cref="HybridLogicalClock.Zero"/> when it has none. Paired with
+    /// <see cref="ClockFloorOffset"/>: every freshly authored local write at an
+    /// offset at or above <see cref="ClockFloorOffset"/> carries a stamp at or
+    /// above this floor. So once a shipper's acknowledged cursor reaches
+    /// <see cref="ClockFloorOffset"/>, every fresh local write of this partition
+    /// stamped below the floor has been acknowledged by the peer.
+    /// </summary>
+    [Id(2)] public HybridLogicalClock ClockFloor { get; init; }
+
+    /// <summary>
+    /// The partition's next offset when <see cref="ClockFloor"/> was in force;
+    /// see <see cref="ClockFloor"/>. Zero when no floor is published.
+    /// </summary>
+    [Id(3)] public long ClockFloorOffset { get; init; }
+
     /// <summary>An empty page positioned at <paramref name="atSequence"/>.</summary>
     public static WalShardShippingPage Empty(long atSequence) => new()
     {

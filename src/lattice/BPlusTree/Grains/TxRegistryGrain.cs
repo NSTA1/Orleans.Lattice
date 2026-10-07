@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -61,6 +62,7 @@ internal sealed partial class TxRegistryGrain(
 
     async Task IGrainBase.OnActivateAsync(CancellationToken cancellationToken)
     {
+        ResolveWalPurgeGuardServices();
         if (context.ActivationServices?.GetService<LatticeOptionsResolver>() is { } resolver)
             _metricTreeId = await resolver.ResolveMetricTreeIdAsync(TreeId);
     }
@@ -157,6 +159,11 @@ internal sealed partial class TxRegistryGrain(
                     $"Cannot mark saga {txid:N} as committed: it was previously recorded as aborted.");
         }
 
+        // Issue #4485: past the guard this call records a NEW decision (a repeat
+        // of an existing one returned above). A capture holding the decision
+        // gate refuses it; the caller retries once the gate is released.
+        ThrowIfDecisionGated();
+
         // A tombstoned decision is treated as absent for the CONFLICTING-outcome
         // case: the saga has already completed its post-fan-out cleanup, so a
         // fresh Mark carrying a different verdict is a new authoritative outcome
@@ -230,6 +237,9 @@ internal sealed partial class TxRegistryGrain(
                     $"Cannot mark saga {txid:N} as aborted: it was previously recorded as committed.");
         }
 
+        // Issue #4485: see MarkCommittedAsync.
+        ThrowIfDecisionGated();
+
         var now = TimeProvider.GetUtcNow();
         var tombstoneClear = ClearTombstone(txid, now, Retention);
 
@@ -270,7 +280,8 @@ internal sealed partial class TxRegistryGrain(
         DateTimeOffset PreviousForgottenAt,
         bool ClearedDecision,
         TxStatus PreviousDecision,
-        bool RetiredExpired);
+        bool RetiredExpired,
+        long? PreviousWalGeneration);
 
     /// <summary>
     /// Undo token for the cross-tree delegation drop the <c>Mark*</c> paths run
@@ -314,7 +325,8 @@ internal sealed partial class TxRegistryGrain(
         }
 
         var clearedDecision = state.State.Decisions.Remove(txid, out var previousDecision);
-        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision, wasExpired);
+        long? previousWalGeneration = state.State.ForgetWalGenerations.Remove(txid, out var walGeneration) ? walGeneration : null;
+        return new TombstoneClear(true, forgottenAt, clearedDecision, previousDecision, wasExpired, previousWalGeneration);
     }
 
     /// <summary>
@@ -331,6 +343,10 @@ internal sealed partial class TxRegistryGrain(
         }
 
         state.State.ForgottenAt[txid] = clear.PreviousForgottenAt;
+        if (clear.PreviousWalGeneration is { } walGeneration)
+        {
+            state.State.ForgetWalGenerations[txid] = walGeneration;
+        }
         InvalidateExpiryMemo();
         if (clear.RetiredExpired)
         {
@@ -452,6 +468,8 @@ internal sealed partial class TxRegistryGrain(
             return;
         }
 
+        ThrowIfRegistrationFenced();
+
         ThrowIfWouldCoexist(
             txid,
             state.State.ReceiverDecisionAuthorities,
@@ -474,6 +492,128 @@ internal sealed partial class TxRegistryGrain(
             else state.State.ExternalAuthorities.Remove(txid);
             state.State.CrossTreeRegistrationEpoch = prevEpoch;
         });
+    }
+
+    /// <inheritdoc />
+    public async Task RecordCrossTreeMembershipAsync(Guid txid, string operationId, IReadOnlyList<string> participants)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        ArgumentNullException.ThrowIfNull(participants);
+        if (txid == Guid.Empty)
+        {
+            throw new ArgumentException("A cross-tree membership needs a non-empty transaction id.", nameof(txid));
+        }
+
+        if (state.State.CrossTreeMemberships.ContainsKey(txid))
+        {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RecordCrossTreeMembershipAsync(txid, operationId, participants);
+            }
+
+            return;
+        }
+
+        state.State.CrossTreeMemberships[txid] = new CrossTreeMembership
+        {
+            OperationId = operationId,
+            Participants = [.. CanonicalStringSet.SortedDistinct(participants)],
+        };
+        await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships.Remove(txid));
+    }
+
+    /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(
+        Guid txid, IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        if (!state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
+        {
+            return;
+        }
+
+        if (membership.DecisionStamps is not null && (sequences is null || membership.DecisionSequences is not null))
+        {
+            if (!await WhenDurableAsync(txid))
+            {
+                await RecordCrossTreeDecisionStampsAsync(txid, stamps, sequences);
+            }
+
+            return;
+        }
+
+        state.State.CrossTreeMemberships[txid] = membership with
+        {
+            DecisionStamps = membership.DecisionStamps ?? stamps.ToImmutableDictionary(StringComparer.Ordinal),
+            DecisionSequences = membership.DecisionSequences ?? sequences?.ToImmutableDictionary(StringComparer.Ordinal),
+        };
+        await CommitAsync(PendingGroup(txid), () => state.State.CrossTreeMemberships[txid] = membership);
+    }
+
+    /// <inheritdoc />
+    public Task<long?> GetCrossTreeSequenceFloorAsync()
+    {
+        long? floor = null;
+        foreach (var (txid, membership) in state.State.CrossTreeMemberships)
+        {
+            if (!state.State.Decisions.ContainsKey(txid))
+            {
+                continue;
+            }
+
+            var sequence = membership.DecisionSequences is { } sequences && sequences.TryGetValue(TreeId, out var own) ? own : 0L;
+            if (floor is not { } current || sequence < current)
+            {
+                floor = sequence;
+            }
+        }
+
+        return Task.FromResult(floor);
+    }
+
+    /// <inheritdoc />
+    public Task<Dictionary<Guid, CrossTreeMembership>> GetCrossTreeMembershipsAsync(IReadOnlyList<Guid> txids)
+    {
+        ArgumentNullException.ThrowIfNull(txids);
+        var found = new Dictionary<Guid, CrossTreeMembership>();
+        foreach (var txid in txids)
+        {
+            if (state.State.CrossTreeMemberships.TryGetValue(txid, out var membership))
+            {
+                found[txid] = membership;
+            }
+        }
+
+        return Task.FromResult(found);
+    }
+
+    /// <summary>
+    /// Drops the cross-tree membership of every saga whose decision and
+    /// delegation are both gone (issue #4683): the saga was purged, so no export
+    /// can ship its decision row. In memory only; the caller's write persists
+    /// it, and losing it to a failed write keeps a few stale rows a later pass
+    /// drops.
+    /// </summary>
+    private void DropPurgedCrossTreeMemberships()
+    {
+        if (state.State.CrossTreeMemberships.Count == 0)
+        {
+            return;
+        }
+
+        List<Guid>? purged = null;
+        foreach (var txid in state.State.CrossTreeMemberships.Keys)
+        {
+            if (!state.State.Decisions.ContainsKey(txid) && !state.State.ExternalAuthorities.ContainsKey(txid))
+            {
+                (purged ??= []).Add(txid);
+            }
+        }
+
+        foreach (var txid in purged ?? [])
+        {
+            state.State.CrossTreeMemberships.Remove(txid);
+        }
     }
 
     /// <inheritdoc />
@@ -504,6 +644,8 @@ internal sealed partial class TxRegistryGrain(
             }
             return;
         }
+
+        ThrowIfRegistrationFenced();
 
         ThrowIfWouldCoexist(
             txid,
@@ -538,9 +680,22 @@ internal sealed partial class TxRegistryGrain(
     /// once resolved. A failed coordinator dial surfaces as
     /// <see cref="TxStatus.Indeterminate"/>, which hides the saga's prepared
     /// keys rather than disclosing their pre-saga values.
+    /// <para>
+    /// Issue #4485. With <paramref name="terminalIntent"/> the caller is about to
+    /// apply a terminal on the answer, so a verdict is returned only once it is
+    /// durably cached here (a failed cache write reads
+    /// <see cref="TxStatus.InFlight"/>), and nothing is dialled while a capture
+    /// holds the decision gate. Without it (a reader), a gated registry still
+    /// returns the coordinator's verdict but does not cache it.
+    /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey)
+    private async Task<TxStatus> ResolveReceiverDelegatedAsync(Guid txid, string receiverCoordinatorKey, bool terminalIntent = false)
     {
+        if (terminalIntent && IsDecisionGated(out _))
+        {
+            return TxStatus.InFlight;
+        }
+
         TxStatus verdict;
         try
         {
@@ -579,6 +734,13 @@ internal sealed partial class TxRegistryGrain(
 
         if (!state.State.Decisions.ContainsKey(txid))
         {
+            // Issue #4485: a capture holding the decision gate admits no new
+            // local decision, and a cached verdict is one.
+            if (IsDecisionGated(out _))
+            {
+                return terminalIntent ? TxStatus.InFlight : verdict;
+            }
+
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
             var removed = state.State.ReceiverDecisionAuthorities.Remove(txid);
@@ -595,7 +757,13 @@ internal sealed partial class TxRegistryGrain(
             catch
             {
                 // The group commit already rolled the cache back; the verdict
-                // itself is durable at the coordinator, so it is still served.
+                // itself is durable at the coordinator, so it is still served
+                // to a reader. A terminal-applying caller must not act on a
+                // verdict that is not recorded here (issue #4485).
+                if (terminalIntent)
+                {
+                    return TxStatus.InFlight;
+                }
             }
         }
         return verdict;
@@ -618,15 +786,15 @@ internal sealed partial class TxRegistryGrain(
     /// divergence.
     /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid)
+    private async Task<TxStatus> ResolveAnyDelegatedAsync(Guid txid, bool terminalIntent = false)
     {
         if (state.State.ExternalAuthorities.TryGetValue(txid, out var coordinatorKey))
         {
-            return await ResolveDelegatedAsync(txid, coordinatorKey);
+            return await ResolveDelegatedAsync(txid, coordinatorKey, terminalIntent);
         }
         if (state.State.ReceiverDecisionAuthorities.TryGetValue(txid, out var receiverKey))
         {
-            return await ResolveReceiverDelegatedAsync(txid, receiverKey);
+            return await ResolveReceiverDelegatedAsync(txid, receiverKey, terminalIntent);
         }
         return TxStatus.InFlight;
     }
@@ -641,9 +809,18 @@ internal sealed partial class TxRegistryGrain(
     /// coordinator dial surfaces as <see cref="TxStatus.Indeterminate"/>, which
     /// keeps the cross-tree batch hidden on this tree until it can be resolved
     /// rather than disclosing the participating keys' pre-saga values.
+    /// <para>
+    /// Issue #4485: <paramref name="terminalIntent"/> and the decision gate act
+    /// exactly as on <see cref="ResolveReceiverDelegatedAsync"/>.
+    /// </para>
     /// </summary>
-    private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey)
+    private async Task<TxStatus> ResolveDelegatedAsync(Guid txid, string coordinatorKey, bool terminalIntent = false)
     {
+        if (terminalIntent && IsDecisionGated(out _))
+        {
+            return TxStatus.InFlight;
+        }
+
         TxStatus verdict;
         try
         {
@@ -675,6 +852,13 @@ internal sealed partial class TxRegistryGrain(
         // and future reads need no further coordinator round-trips.
         if (!state.State.Decisions.ContainsKey(txid))
         {
+            // Issue #4485: a capture holding the decision gate admits no new
+            // local decision, and a cached verdict is one.
+            if (IsDecisionGated(out _))
+            {
+                return terminalIntent ? TxStatus.InFlight : verdict;
+            }
+
             var core = DecisionCore();
             var mutation = core.Apply(txid, verdict);
             var removed = state.State.ExternalAuthorities.Remove(txid);
@@ -692,7 +876,13 @@ internal sealed partial class TxRegistryGrain(
             {
                 // Surface the resolved verdict for this read even though the
                 // cache write failed (the group commit already rolled the cache
-                // back); the next read re-dials and re-attempts.
+                // back); the next read re-dials and re-attempts. A
+                // terminal-applying caller must not act on a verdict that is not
+                // recorded here (issue #4485).
+                if (terminalIntent)
+                {
+                    return TxStatus.InFlight;
+                }
             }
         }
         return verdict;
@@ -705,22 +895,31 @@ internal sealed partial class TxRegistryGrain(
     /// from a tree-wide snapshot (which would read as a partial cross-tree
     /// view). In-flight delegations are left in place to be retried on the next
     /// snapshot.
+    /// <para>
+    /// While a capture holds the decision gate (issue #4485) a terminal verdict
+    /// is not cached; it is returned in <c>Uncached</c> instead, so a reader's
+    /// snapshot still reflects the coordinator's decision without recording a
+    /// new local decision.
+    /// </para>
     /// </summary>
     /// <returns>
     /// The number of delegations whose coordinator could not be reached, so a
     /// caller can tell "still preparing" apart from "could not find out". Every
     /// such delegation is also still counted among the remaining entries, which
     /// is the correct conservative accounting; this figure names the subset of
-    /// that count which is unreachable rather than pending.
+    /// that count which is unreachable rather than pending. Also returns the
+    /// terminal verdicts the gate kept from being cached, or
+    /// <see langword="null"/> when there are none.
     /// </returns>
     /// <param name="unresolvable">
     /// When supplied, receives the txid of every delegation whose coordinator
     /// could not be reached, so a snapshot can report it as
     /// <see cref="TxStatus.Indeterminate"/> rather than omit it (issue #4448).
     /// </param>
-    private async Task<int> ResolveAllDelegatedAsync(List<Guid>? unresolvable = null)
+    private async Task<(int Unresolvable, Dictionary<Guid, TxStatus>? Uncached)> ResolveAllDelegatedAsync(List<Guid>? unresolvable = null)
     {
         var unresolvableCount = 0;
+        Dictionary<Guid, TxStatus>? uncached = null;
         if (state.State.ExternalAuthorities.Count > 0)
         {
             // Snapshot the pending delegations: ResolveDelegatedAsync mutates the
@@ -729,10 +928,15 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, coordinatorKey) in pending)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                if (await ResolveDelegatedAsync(txid, coordinatorKey) == TxStatus.Indeterminate)
+                var verdict = await ResolveDelegatedAsync(txid, coordinatorKey);
+                if (verdict == TxStatus.Indeterminate)
                 {
                     unresolvableCount++;
                     unresolvable?.Add(txid);
+                }
+                else if (verdict is (TxStatus.Committed or TxStatus.Aborted) && !state.State.Decisions.ContainsKey(txid))
+                {
+                    (uncached ??= new Dictionary<Guid, TxStatus>())[txid] = verdict;
                 }
             }
         }
@@ -745,14 +949,19 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, receiverKey) in pendingReceiver)
             {
                 if (state.State.Decisions.ContainsKey(txid)) continue;
-                if (await ResolveReceiverDelegatedAsync(txid, receiverKey) == TxStatus.Indeterminate)
+                var verdict = await ResolveReceiverDelegatedAsync(txid, receiverKey);
+                if (verdict == TxStatus.Indeterminate)
                 {
                     unresolvableCount++;
                     unresolvable?.Add(txid);
                 }
+                else if (verdict is (TxStatus.Committed or TxStatus.Aborted) && !state.State.Decisions.ContainsKey(txid))
+                {
+                    (uncached ??= new Dictionary<Guid, TxStatus>())[txid] = verdict;
+                }
             }
         }
-        return unresolvableCount;
+        return (unresolvableCount, uncached);
     }
 
     /// <summary>
@@ -828,7 +1037,7 @@ internal sealed partial class TxRegistryGrain(
         // pipelining. UnresolvableCount below reports the unreachable subset
         // separately so a fence reading this observation can distinguish
         // "sagas are still running" from "I could not find out".
-        var unresolvable = await ResolveAllDelegatedAsync();
+        var (unresolvable, _) = await ResolveAllDelegatedAsync();
 
         var inFlight = state.State.ExternalAuthorities.Count
             + state.State.ReceiverDecisionAuthorities.Count;
@@ -984,7 +1193,7 @@ internal sealed partial class TxRegistryGrain(
         // A delegation whose coordinator could not be reached is collected
         // and carried as Indeterminate below, as the point path reports it.
         var unresolvable = HasDelegations ? new List<Guid>() : null;
-        await ResolveAllDelegatedAsync(unresolvable);
+        var (_, uncachedVerdicts) = await ResolveAllDelegatedAsync(unresolvable);
 
         // Return a defensive copy so callers cannot mutate the
         // registry's persisted state through the returned reference.
@@ -1014,6 +1223,7 @@ internal sealed partial class TxRegistryGrain(
                 : status;
         }
         MaskUnresolvableDelegations(result, unresolvable);
+        MergeUncachedVerdicts(result, uncachedVerdicts);
         return result;
     }
 
@@ -1043,7 +1253,7 @@ internal sealed partial class TxRegistryGrain(
         // (including any verdicts just cached by the resolution pass).
         // Unreachable delegations are carried as Indeterminate (#4448).
         var unresolvable = HasDelegations ? new List<Guid>() : null;
-        await ResolveAllDelegatedAsync(unresolvable);
+        var (_, uncachedVerdicts) = await ResolveAllDelegatedAsync(unresolvable);
 
         // The revision captured inside the same synchronous block. Both
         // fields therefore reflect the exact same persisted state - no
@@ -1068,6 +1278,7 @@ internal sealed partial class TxRegistryGrain(
                 : status;
         }
         MaskUnresolvableDelegations(dict, unresolvable);
+        MergeUncachedVerdicts(dict, uncachedVerdicts);
         return new TxRegistrySnapshot
         {
             Decisions = dict,
@@ -1127,6 +1338,12 @@ internal sealed partial class TxRegistryGrain(
     /// <inheritdoc />
     public async Task ForgetAsync(Guid txid)
     {
+        // Advance the decision-purge guard before this call mutates anything,
+        // so the prune below sees its latest cleared generation (#4508).
+        await RefreshWalPurgeGuardAsync();
+        await RefreshWalPurgeHoldAsync();
+        await RefreshCrossTreeHoldAsync();
+
         var now = TimeProvider.GetUtcNow();
         var retention = Retention;
 
@@ -1141,12 +1358,16 @@ internal sealed partial class TxRegistryGrain(
 
         var droppedDecision = false;
         var addedForgottenAt = false;
+        var hadWalStamp = state.State.ForgetWalGenerations.TryGetValue(txid, out var prevWalStamp);
+        var stampedWal = false;
         if (hadDecision)
         {
-            if (retention == TimeSpan.Zero)
+            if (retention == TimeSpan.Zero && !WalPurgeGuardApplies)
             {
                 // Legacy semantic: tombstoning disabled, drop the
-                // decision immediately. Equivalent to the original
+                // decision immediately. A tree the decision-purge guard
+                // covers tombstones anyway (#4508): dropping here would purge
+                // a decision while the WAL can still retain its prepares. Equivalent to the original
                 // ForgetAsync behaviour before the tombstone feature.
                 state.State.Decisions.Remove(txid);
                 droppedDecision = true;
@@ -1162,6 +1383,11 @@ internal sealed partial class TxRegistryGrain(
                 state.State.ForgottenAt[txid] = now;
                 addedForgottenAt = true;
                 InvalidateExpiryMemo();
+                if (CurrentWalStamp() is { } walStamp)
+                {
+                    state.State.ForgetWalGenerations[txid] = walStamp;
+                    stampedWal = true;
+                }
             }
         }
 
@@ -1275,6 +1501,11 @@ internal sealed partial class TxRegistryGrain(
                     state.State.ForgottenAt.Remove(txid);
                     InvalidateExpiryMemo();
                 }
+                if (stampedWal)
+                {
+                    if (hadWalStamp) state.State.ForgetWalGenerations[txid] = prevWalStamp;
+                    else state.State.ForgetWalGenerations.Remove(txid);
+                }
                 if (droppedParticipants && prevParticipants is not null)
                 {
                     state.State.Participants[txid] = prevParticipants;
@@ -1309,6 +1540,8 @@ internal sealed partial class TxRegistryGrain(
                         if (entry.HadDecision)
                             state.State.Decisions[entry.Txid] = entry.Decision;
                         state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
+                        if (entry.WalGeneration is { } walGeneration)
+                            state.State.ForgetWalGenerations[entry.Txid] = walGeneration;
                     }
 
                     // The rows are back in the live-expired population, so the
@@ -1341,12 +1574,42 @@ internal sealed partial class TxRegistryGrain(
         }
     }
 
+    /// <summary>
+    /// Whether the participant registration being served is a forwarded prepare's
+    /// (<see cref="LatticeForwardedPrepareContext"/>) for a saga this cluster
+    /// authored (no <see cref="LatticeOriginContext"/>) whose decision this
+    /// registry records. Such a registration joins an existing row but never
+    /// creates one (issue #4632): the saga's coordinator holds the row from
+    /// before its first prepare until <see cref="ForgetAsync"/>, so an absent row
+    /// means the saga was forgotten, and a late forward that recreated it would
+    /// make the forgotten saga read as live to the destination leaf's refusal.
+    /// A replicated prepare's saga is never forgotten here, and its row may be
+    /// held by another registry, so its registration is unchanged.
+    /// </summary>
+    private bool JoinsOnly() =>
+        LatticeOriginContext.Current is null
+        && LatticeForwardedPrepareContext.RegistryTreeId is { } registryTreeId
+        && string.Equals(registryTreeId, TreeId, StringComparison.Ordinal);
+
     /// <inheritdoc />
     public async Task RegisterParticipantAsync(Guid txid, int shardIndex)
     {
         var createdSet = false;
         if (!state.State.Participants.TryGetValue(txid, out var set))
         {
+            if (JoinsOnly())
+            {
+                // A forwarded prepare of a locally authored saga only joins the
+                // row its coordinator holds from before its first prepare until
+                // ForgetAsync. With no row the saga is forgotten, and recreating
+                // the row would make it read as live again (issue #4632).
+                if (!await WhenDurableAsync(txid))
+                {
+                    await RegisterParticipantAsync(txid, shardIndex);
+                }
+                return;
+            }
+
             set = [];
             state.State.Participants[txid] = set;
             createdSet = true;
@@ -1483,7 +1746,7 @@ internal sealed partial class TxRegistryGrain(
         // accumulate tally state in this branch - there is no
         // expected total to compare against, so the dedup set would
         // grow unbounded if cross-cluster delivery retries piled up.
-        if (expectedShardCount <= 0)
+        if (TerminalArrivalTally.IsUngated(expectedShardCount))
         {
             return new TerminalTallyResult
             {
@@ -2140,6 +2403,10 @@ internal sealed partial class TxRegistryGrain(
     /// </summary>
     private PruneResult PruneExpired(DateTimeOffset now, TimeSpan retention)
     {
+        // Memberships of sagas an earlier pass purged (#4683); persisted by
+        // the caller's write with whatever this pass removes.
+        DropPurgedCrossTreeMemberships();
+
         // First sweep: drop expired pins. Their txids fall out of the
         // pin union and become candidates for the tombstone sweep
         // below. The dropped-pin list is folded into the parent caller's
@@ -2180,13 +2447,15 @@ internal sealed partial class TxRegistryGrain(
             foreach (var (txid, ts) in state.State.ForgottenAt)
             {
                 if (pinned is not null && pinned.Contains(txid)) continue;
+                if (!IsWalPurgeCleared(txid)) continue;
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
-                flushed.Add(new PrunedEntry(txid, hadDecision, decision, ts));
+                flushed.Add(new PrunedEntry(txid, hadDecision, decision, ts, WalGenerationOf(txid)));
             }
             foreach (var entry in flushed)
             {
                 state.State.Decisions.Remove(entry.Txid);
                 state.State.ForgottenAt.Remove(entry.Txid);
+                state.State.ForgetWalGenerations.Remove(entry.Txid);
             }
             if (flushed.Count > 0) InvalidateExpiryMemo();
             return new PruneResult(flushed.Count == 0 ? null : flushed, expiredPins);
@@ -2196,10 +2465,12 @@ internal sealed partial class TxRegistryGrain(
         foreach (var (txid, ts) in state.State.ForgottenAt)
         {
             if (pinned is not null && pinned.Contains(txid)) continue;
-            if (now - ts > retention)
+            // Held past its retention while the WAL may still retain a prepare
+            // of the saga (#4508). It stays masked from readers meanwhile.
+            if (now - ts > retention && IsWalPurgeCleared(txid))
             {
                 var hadDecision = state.State.Decisions.TryGetValue(txid, out var decision);
-                (expired ??= new List<PrunedEntry>()).Add(new PrunedEntry(txid, hadDecision, decision, ts));
+                (expired ??= new List<PrunedEntry>()).Add(new PrunedEntry(txid, hadDecision, decision, ts, WalGenerationOf(txid)));
             }
         }
         if (expired is null)
@@ -2210,6 +2481,7 @@ internal sealed partial class TxRegistryGrain(
         {
             state.State.Decisions.Remove(entry.Txid);
             state.State.ForgottenAt.Remove(entry.Txid);
+            state.State.ForgetWalGenerations.Remove(entry.Txid);
         }
         InvalidateExpiryMemo();
         return new PruneResult(expired, expiredPins);
@@ -2240,7 +2512,11 @@ internal sealed partial class TxRegistryGrain(
         Guid Txid,
         bool HadDecision,
         TxStatus Decision,
-        DateTimeOffset ForgottenAt);
+        DateTimeOffset ForgottenAt,
+        long? WalGeneration);
+
+    private long? WalGenerationOf(Guid txid) =>
+        state.State.ForgetWalGenerations.TryGetValue(txid, out var g) ? g : null;
 
     /// <summary>
     /// Aggregated outcome of one <see cref="PruneExpired"/> pass:

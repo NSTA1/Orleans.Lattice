@@ -417,6 +417,8 @@ internal sealed class LatticeCrossTreeTxGrain(
         var commit = state.State.Phase == CrossTreeTxPhase.Committed;
         var participants = state.State.Participants;
 
+        await StampDecisionAsync();
+
         var finalizeTasks = new List<Task>(participants.Count);
         foreach (var p in participants)
         {
@@ -439,6 +441,66 @@ internal sealed class LatticeCrossTreeTxGrain(
         await UnregisterKeepaliveAsync();
         await SlideTtlAsync();
         _terminalRetentionEnsured = true;
+    }
+
+    /// <summary>
+    /// Stamps the durable decision (issue #4684) and records the stamps on every
+    /// prepared participant's cross-tree membership, before any participant
+    /// finalizes: so before any terminal of the operation is appended and before
+    /// any of its decisions can be purged. The stamps are read once, after the
+    /// decision is durable, and persisted, so a re-driven finalize re-records the
+    /// same ones. A failure propagates and the keepalive retries the phase.
+    /// </summary>
+    private async Task StampDecisionAsync()
+    {
+        if (context.ActivationServices?.GetService<ICrossTreeDecisionStamper>() is not { } stamper)
+        {
+            return;
+        }
+
+        var participants = state.State.Participants;
+        var trees = CanonicalStringSet.SortedDistinctArray(participants.Select(p => p.TreeId));
+        if (state.State.DecisionStamps is null || state.State.DecisionSequences is null)
+        {
+            var stamps = state.State.DecisionStamps ?? new Dictionary<string, long>(
+                await stamper.StampAsync(OperationId, trees), StringComparer.Ordinal);
+
+            // Issued pending (#4733): each tree's purge frontier stays below the
+            // sequence until it is recorded below, so a frontier read in between
+            // never passes the operation. Idempotent while pending.
+            var sequences = state.State.DecisionSequences ?? new Dictionary<string, long>(
+                await stamper.IssueSequencesAsync(OperationId, trees), StringComparer.Ordinal);
+            var (previousStamps, previousSequences) = (state.State.DecisionStamps, state.State.DecisionSequences);
+            state.State.DecisionStamps = stamps;
+            state.State.DecisionSequences = sequences;
+            try
+            {
+                await WriteCoordinatorStateAsync("decision-stamps");
+            }
+            catch
+            {
+                state.State.DecisionStamps = previousStamps;
+                state.State.DecisionSequences = previousSequences;
+                throw;
+            }
+        }
+
+        var recorded = state.State.DecisionStamps;
+        var recordedSequences = state.State.DecisionSequences;
+        var tasks = new List<Task>(participants.Count);
+        foreach (var p in participants)
+        {
+            if (p.Vote != CrossTreePrepareVote.Prepared) continue;
+            tasks.Add(grainFactory.GetGrain<IAtomicWriteGrain>($"{p.TreeId}/{OperationId}")
+                .RecordCrossTreeDecisionStampsAsync(recorded, recordedSequences));
+        }
+
+        await Task.WhenAll(tasks);
+
+        // Every prepared participant's registry now stores the sequences, so the
+        // frontier reads them there; a participant that did not prepare stores
+        // no decision of the operation to purge.
+        await stamper.ConfirmSequencesAsync(OperationId, trees);
     }
 
     /// <summary>

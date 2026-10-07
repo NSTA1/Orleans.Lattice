@@ -105,4 +105,34 @@ internal readonly record struct PendingMutationSnapshot
     /// fold.
     /// </summary>
     [Id(10)] public LatticeMergeMode Mode { get; init; }
+
+    /// <summary>
+    /// The atomic batch size the prepared mutation was written under
+    /// (<see cref="WalRecord.AtomicBatchSize"/>), or <c>0</c> when it carried
+    /// no batch membership. A sweep replays it so the swept copy lands in the
+    /// destination's write-ahead log with the same membership the saga's own
+    /// dispatch stamped (issue #4499): a replicating peer then tallies the
+    /// copy and exempts it from the causal-apply gate exactly as it does a
+    /// dispatched prepare. Wire-compatibility: a snapshot from a sender that
+    /// predates the slot decodes to <c>0</c>, the previous behaviour.
+    /// </summary>
+    [Id(11)] public int AtomicBatchSize { get; init; }
+
+    /// <summary>
+    /// The prepared mutation's index within its atomic batch
+    /// (<see cref="WalRecord.AtomicBatchIndex"/>); meaningful only when
+    /// <see cref="AtomicBatchSize"/> is positive.
+    /// </summary>
+    [Id(12)] public int AtomicBatchIndex { get; init; }
+
+    /// <summary>
+    /// Whether <see cref="Timestamp"/> is the prepare's original stamp (the
+    /// source leaf's prepare was marked, issue #4522). The retroactive sweep
+    /// carries the stamp to the destination only when this is
+    /// <see langword="true"/>, so the destination buckets the prepare AT it and
+    /// marks it. Legacy snapshots, and those from an older silo, decode to
+    /// <see langword="false"/>: the destination keeps the pre-#4522 unmarked
+    /// drain.
+    /// </summary>
+    [Id(13)] public bool StampIsOriginal { get; init; }
 }

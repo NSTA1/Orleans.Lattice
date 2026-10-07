@@ -24,9 +24,12 @@ public readonly record struct WalMoveOptions
 
     /// <summary>
     /// How long the source partition stays fenced while the move copies its
-    /// tail and flips the placement pin. If the move coordinator fails, the
-    /// fence self-heals after this lease so the partition resumes service.
-    /// Defaults to <see cref="DefaultQuiesceLease"/> when unset (zero).
+    /// tail and flips the placement pin. The fence is held durably in the
+    /// placement pin and renewed before every convergence re-quiesce, so it
+    /// survives the loss of the fenced WAL grain. If the move coordinator fails,
+    /// the next activation of the source releases the fence once this lease has
+    /// passed, so the partition resumes service, and the abandoned move can no
+    /// longer flip. Defaults to <see cref="DefaultQuiesceLease"/> when unset (zero).
     /// </summary>
     [Id(0)] public TimeSpan QuiesceLease { get; init; }
 

@@ -1,0 +1,17 @@
+# Pairs with RNoStrandedPrepare. The records the shipper withheld while the peer
+# was off the log are gone by the rewind, so the terminals of a saga the export
+# carried as prepared rows never arrive. ReplicationShipperState.ReseedRetainFrom
+# keeps them retained.
+MODULE: RNoStrandedPrepareWithheldRecordsNotRetained
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the records a peer off the log withheld are not retained for its rewind
+PERTURBS: ReseedRewind
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ outbox' = outbox \cup Retained
+--- REPLACE
+\* MUTATION: the withheld records are not retained.
+    /\ outbox' = Retained \ outbox
+--- END

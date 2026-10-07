@@ -1,0 +1,26 @@
+# Pairs with EventualConvergence. Reproduces production before #4544 (#4504): the
+# snapshot export skips every key whose value is a tombstone, and the drain
+# does not clear the receiver's copy. When the source deletes a key the target
+# already holds and then trims its log past the target's cursor, the bootstrap
+# carries no row for the key and the stream resumes after the delete, so the
+# target keeps the old value forever.
+MODULE: EventualConvergenceSnapshotDropsDeletes
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the snapshot omits tombstoned rows, so a delete behind the trim point never reaches a re-bootstrapped receiver
+PERTURBS: Bootstrap
+
+--- FIND
+    /\ val' = [val EXCEPT ![BootTarget] = [k \in Keys |-> @[k] \cup val[BootSource][k]]]
+--- REPLACE
+\* MUTATION: a key whose value is a tombstone ships no row.
+    /\ val' = [val EXCEPT ![BootTarget] = [k \in Keys |-> @[k] \cup
+                  (IF Mode(k) = "lww" /\ ValueAt(BootSource, k, val[BootSource][k]).del THEN {} ELSE val[BootSource][k])]]
+--- END
+--- FIND
+                    @ \cup {<<BootSource, k, Ver(BootSource, k)>> : k \in {j \in Keys : val[BootSource][j] # {}}}]
+--- REPLACE
+\* MUTATION: and seeds no identity for it.
+                    @ \cup {<<BootSource, k, Ver(BootSource, k)>> : k \in {j \in Keys : val[BootSource][j] # {}
+                                                                        /\ ~(Mode(j) = "lww" /\ ValueAt(BootSource, j, val[BootSource][j]).del)}}]
+--- END

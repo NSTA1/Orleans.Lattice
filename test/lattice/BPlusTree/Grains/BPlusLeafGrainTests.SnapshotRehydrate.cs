@@ -246,7 +246,7 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task Activation_snapshot_load_failure_falls_through_to_WAL_replay()
+    public async Task Activation_snapshot_load_failure_fails_the_replay_closed_instead_of_falling_through_to_WAL_replay()
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
@@ -286,14 +286,18 @@ public partial class BPlusLeafGrainTests
             TestMutationObservers.NoObservers(),
             TestOriginClusterIdResolver.Default());
 
-        // Must not throw - snapshot load failures are best-effort and
-        // the leaf falls through to the WAL tail-replay path. The
-        // activation coherence override drives the replay from -1
-        // locally without mutating the persisted checkpoint slot.
-        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        // SUPERSEDED BY ISSUE #4450. This pinned the opposite: that a failed
+        // load fell through to the cold WAL replay. Under coverage-gated trim
+        // the snapshot may be the only durable copy of the prefix it covers, so
+        // the replay now fails closed, touches neither the checkpoint nor the
+        // WAL, and is retried by the barrier re-arm.
+        Assert.ThrowsAsync<LeafSnapshotUnavailableException>(
+            async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
 
         Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(5L));
-        await coord.Received().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
+        Assert.That(grain.EntriesForTest, Is.Empty);
+        await coord.DidNotReceive().ReadSliceAsync(
+            Arg.Any<long>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -320,6 +324,12 @@ public partial class BPlusLeafGrainTests
     /// (i.e. fromExclusive=-1, covering offsets [0, head]), not
     /// from the stale persisted checkpoint of 42.
     /// </para>
+    /// <para>
+    /// EVERY partition is checkpointed at 42. With only the scalar slot set,
+    /// partitions 1 to 7 start at the -1 sentinel anyway and the -1 slice
+    /// request arrives whether or not the override fires, so the test passed
+    /// with the override removed (issue #4433).
+    /// </para>
     /// </summary>
     [Test]
     public async Task Activation_replays_from_minus_one_when_cache_starts_empty_and_no_snapshot_rehydrated()
@@ -331,6 +341,9 @@ public partial class BPlusLeafGrainTests
             preloadedSnapshot: null,
             persistedCheckpoint: 42,
             walHead: 42);
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+        state.State.ProjectionCheckpointOffsetsByPartition =
+            Enumerable.Repeat(42L, LatticeOptions.DefaultWalPartitions).ToArray();
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
@@ -344,8 +357,8 @@ public partial class BPlusLeafGrainTests
         // starting from the -1 sentinel, covering the full (-1, 42]
         // window. If activation had trusted the persisted checkpoint
         // of 42, the slice request would have been (42, 42] = empty
-        // and dropped silently.
-        await coord.Received().ReadSliceAsync(
+        // and dropped silently. Every partition is asked for it.
+        await coord.Received(LatticeOptions.DefaultWalPartitions).ReadSliceAsync(
             -1L,
             Arg.Any<long>(),
             Arg.Any<int>(),

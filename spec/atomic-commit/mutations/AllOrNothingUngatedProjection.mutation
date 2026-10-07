@@ -1,0 +1,23 @@
+# Pairs with AllOrNothing. Removing the visibility gate lets a reader resolve
+# each key of one saga against that key's own broadcast progress instead of
+# against the single registry decision, which is the split-view read the
+# all-or-nothing property exists to forbid.
+MODULE: AllOrNothingUngatedProjection
+TARGET: AllOrNothing
+CLASS: Invariant
+SUMMARY: drops the visibility gate so a reader sees each key at its own broadcast progress
+
+--- FIND
+Observed(t, k) ==
+    IF pend[t][k] = "pending"
+    THEN IF AlreadyTerminal(t, k) THEN Projected(t, k)
+         ELSE IF RegistryView(t) = "indeterminate" THEN "hidden"
+         ELSE IF SurfaceViaGate(t, k) THEN "post"
+         ELSE Projected(t, k)
+    ELSE Projected(t, k)
+--- REPLACE
+\* MUTATION: reads go straight to the leaf's own materialised projection with
+\* no gate. Mid-broadcast, one participant has applied its terminal and another
+\* has not, so a snapshot read of the same saga returns a split view.
+Observed(t, k) == Projected(t, k)
+--- END

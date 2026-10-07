@@ -412,13 +412,15 @@ public sealed class LatticeWalGcPartitionedPinBlockTests
     }
 
     [Test]
-    public async Task RunOnceAsync_a_present_consumers_durable_pin_is_still_skipped()
+    public async Task RunOnceAsync_a_present_consumers_durable_block_pin_holds_its_partition_but_is_not_reported()
     {
-        // Steady-state regression guard. A consumer present in the in-memory
-        // registry has a fresher cursor already folded into the floor, so its
-        // durable pin - Zero or otherwise - must not block anything. Decomposing
-        // the block must not change which pins are considered, only which
-        // partitions a considered pin reaches.
+        // A consumer present in the in-memory registry is not reported as
+        // blocking: its fresher in-memory cursor says it is live. But a Zero
+        // durable pin the offset floor does not cover means it has made none of
+        // what that cursor claims durable, so its partition is held against every
+        // trim arm (issue #4622): a crash before it checkpoints replays from the
+        // "nothing applied" sentinel and could not see a trimmed prefix. The pin
+        // names the quiet partition, so it holds that partition alone.
         var provider = await SeededProviderAsync();
         var registry = new InMemoryWalCursorRegistry();
         await registry.ReportCursorAsync(Tree, QuietLeafConsumer, Hlc(30));
@@ -435,13 +437,12 @@ public sealed class LatticeWalGcPartitionedPinBlockTests
 
         Assert.Multiple(() =>
         {
-            for (var partition = 0; partition < Partitions; partition++)
-            {
-                Assert.That(survivors[partition], Is.Empty,
-                    $"partition {partition} must reclaim: the leaf is live and its in-memory "
-                    + "cursor governs.");
-            }
-
+            Assert.That(survivors[QuietPartition], Is.EqualTo(new[] { 0L, 1L, 2L }),
+                "the pinned partition must be held: the leaf's in-memory cursor is not durable "
+                + "evidence while its durable pin is the block pin.");
+            Assert.That(survivors[0], Is.Empty, "a partition the pin does not name still reclaims.");
+            Assert.That(survivors[1], Is.Empty);
+            Assert.That(survivors[3], Is.Empty);
             Assert.That(report.CursorFloorState, Is.EqualTo(WalGcCursorFloorState.Available));
             Assert.That(report.BlockingConsumerId, Is.Null);
         });

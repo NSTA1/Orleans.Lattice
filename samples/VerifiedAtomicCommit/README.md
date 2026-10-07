@@ -13,7 +13,7 @@ guarded batch to show the abort path leaves no partial state either.
 
 The same `AllOrNothing` / `VisibilityMatchesDecision` property this sample
 observes is proven by the cores in `src/lattice/BPlusTree/`, the Coyote models in
-`test/lattice/BPlusTree/Coyote/`, and the TLA+ spec in `spec/AtomicCommit.tla`.
+`test/lattice/BPlusTree/Coyote/`, and the TLA+ spec in `spec/atomic-commit/AtomicCommit.tla`.
 
 ## Run it
 
@@ -48,7 +48,7 @@ Seeded 4 keys at their PRE value as one atomic batch.
 This all-or-nothing visibility is machine-checked, not just observed here:
   * cores    : src/lattice/BPlusTree/ (AtomicVisibilityGate, SagaCoordinatorCore, ...)
   * Coyote   : test/lattice/BPlusTree/Coyote/  (dotnet test --filter Category=Coyote)
-  * TLA+     : spec/AtomicCommit.tla
+  * TLA+     : spec/atomic-commit/AtomicCommit.tla
   * docs     : docs/lattice/verified-atomic-commit.md
 
 Done.

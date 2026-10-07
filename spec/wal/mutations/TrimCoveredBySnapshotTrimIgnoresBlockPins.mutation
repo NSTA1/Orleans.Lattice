@@ -1,0 +1,15 @@
+# Pairs with TrimCoveredBySnapshot. The GC trims to the offset floor while a
+# leaf still holds a block pin, so the prefix whose only durable copy is the WAL
+# - the blocked leaf has no snapshot covering it - is trimmed.
+MODULE: TrimCoveredBySnapshotTrimIgnoresBlockPins
+TARGET: TrimCoveredBySnapshot
+CLASS: Invariant
+SUMMARY: the GC ignores block pins and trims to the floor of the leaves that published offsets
+PERTURBS: GcTrim
+
+--- FIND
+    /\ \A l \in Leaves : ~Blocking(l)
+--- REPLACE
+\* MUTATION: block pins no longer stop the trim.
+    /\ TRUE
+--- END

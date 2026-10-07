@@ -1,0 +1,16 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. An import that closes unstable
+# reflects nothing it can vouch for, so #4549 clears its floor and the deferred
+# deliveries apply when re-shipped. Kept, the floor turns final and drops them.
+MODULE: EventualConvergenceUnstableImportKeepsFloor
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: an import that closes unstable keeps its drop floor, so the deliveries it deferred are dropped when re-shipped
+PERTURBS: EndExport
+BOUNDS: Third = TRUE, MaxWrites = 2, Reattach = FALSE
+
+--- FIND
+                  /\ fl' = IF stable THEN fl ELSE [o \in Thirds |-> 0]
+--- REPLACE
+\* MUTATION: an unstable import's floor is kept.
+                  /\ fl' = fl
+--- END

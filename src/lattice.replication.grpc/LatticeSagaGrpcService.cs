@@ -27,6 +27,9 @@ internal abstract class LatticeSagaGrpcServiceBase
     /// <summary>Handles the unary <c>GetStatus</c> RPC.</summary>
     public abstract Task<SagaControlResponseBox> GetStatus(SagaControlRequestBox request, ServerCallContext context);
 
+    /// <summary>Handles the unary <c>GetDecision</c> RPC (issue #4637).</summary>
+    public abstract Task<SagaControlResponseBox> GetDecision(SagaControlRequestBox request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once
     /// at startup with <paramref name="serviceImpl"/> set to
@@ -51,6 +54,7 @@ internal abstract class LatticeSagaGrpcServiceBase
             binder.AddMethod(methods.Commit, (UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>?)null);
             binder.AddMethod(methods.Abort, (UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>?)null);
             binder.AddMethod(methods.GetStatus, (UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>?)null);
+            binder.AddMethod(methods.GetDecision, (UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>?)null);
             return;
         }
 
@@ -62,6 +66,8 @@ internal abstract class LatticeSagaGrpcServiceBase
             new UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>(serviceImpl.Abort));
         binder.AddMethod(methods.GetStatus,
             new UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>(serviceImpl.GetStatus));
+        binder.AddMethod(methods.GetDecision,
+            new UnaryServerMethod<SagaControlRequestBox, SagaControlResponseBox>(serviceImpl.GetDecision));
     }
 }
 
@@ -104,6 +110,7 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
     private readonly Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> _commit;
     private readonly Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> _abort;
     private readonly Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> _getStatus;
+    private readonly Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> _getDecision;
 
     /// <summary>
     /// Initialises the service with its dependencies. The
@@ -137,6 +144,7 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         _commit = _handler.CommitAsync;
         _abort = _handler.AbortAsync;
         _getStatus = _handler.GetStatusAsync;
+        _getDecision = _handler.GetDecisionAsync;
     }
 
     /// <inheritdoc />
@@ -155,11 +163,25 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
     public override Task<SagaControlResponseBox> GetStatus(SagaControlRequestBox request, ServerCallContext context)
         => HandleAsync(LatticeSagaGrpcMethods.GetStatusMethodName, request, context, _getStatus);
 
+    /// <inheritdoc />
+    /// <remarks>
+    /// The caller is a participant asking the saga's coordinator, not a
+    /// coordinator driving a participant, so the body's coordinator cluster is
+    /// this cluster rather than the caller. The authorization input is still
+    /// only the transport-stamped origin: it must be an authorized peer, and it
+    /// overwrites <see cref="SagaControlRequest.RequesterClusterId"/>, which the
+    /// coordinator checks against the saga's recorded participants. The answer
+    /// is read-only.
+    /// </remarks>
+    public override Task<SagaControlResponseBox> GetDecision(SagaControlRequestBox request, ServerCallContext context)
+        => HandleAsync(LatticeSagaGrpcMethods.GetDecisionMethodName, request, context, _getDecision, requesterQuery: true);
+
     private async Task<SagaControlResponseBox> HandleAsync(
         string operation,
         SagaControlRequestBox requestBox,
         ServerCallContext context,
-        Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> handle)
+        Func<SagaControlRequest, CancellationToken, Task<SagaControlResponse>> handle,
+        bool requesterQuery = false)
     {
         ArgumentNullException.ThrowIfNull(requestBox);
         ArgumentNullException.ThrowIfNull(context);
@@ -212,10 +234,19 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
                 + "The coordinator cluster id declared in the request body is not an authorization input."));
         }
 
+        // A participant's decision query names the coordinator it is asking - this
+        // cluster - in the body, never itself, so the coordinator-attribution
+        // check below does not apply to it. Its requester is the stamped origin,
+        // never a body value (a caller-supplied one is overwritten).
+        if (requesterQuery)
+        {
+            request = request with { RequesterClusterId = origin };
+        }
+
         // A present body origin must agree with the stamped one, so a caller
         // cannot act on its own credential while attributing the saga to a
         // third cluster. The body value remains the handler's attribution.
-        if (!string.IsNullOrWhiteSpace(request.CoordinatorClusterId)
+        else if (!string.IsNullOrWhiteSpace(request.CoordinatorClusterId)
             && !string.Equals(origin, request.CoordinatorClusterId, StringComparison.Ordinal))
         {
             _logger.LogWarning(

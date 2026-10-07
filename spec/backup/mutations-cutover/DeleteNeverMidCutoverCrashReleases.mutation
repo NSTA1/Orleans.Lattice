@@ -1,0 +1,18 @@
+# Pairs with DeleteNeverMidCutover. A restore that fails part-way releases
+# its reservation, so the tree can be deleted while its copies are half
+# moved and the retry has nothing left to resume.
+MODULE: DeleteNeverMidCutoverCrashReleases
+TARGET: DeleteNeverMidCutover
+CLASS: Invariant
+SUMMARY: a failed restore releases the alias reservation
+PERTURBS: Crash
+
+--- FIND
+    /\ rp' = IF rp \in {"built", "swapped"} THEN "failed" ELSE "revertFailed"
+    /\ UNCHANGED <<alias, map, route, redir, reserved, deleted>>
+--- REPLACE
+    /\ rp' = IF rp \in {"built", "swapped"} THEN "failed" ELSE "revertFailed"
+    \* MUTATION: the reservation is released on failure.
+    /\ reserved' = FALSE
+    /\ UNCHANGED <<alias, map, route, redir, deleted>>
+--- END

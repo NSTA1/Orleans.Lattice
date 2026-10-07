@@ -21,7 +21,9 @@ internal sealed partial class TxRegistryGrain
     // TxRegistryGrainTests.AdmissionBound pins every weight against a real
     // serialisation, so a change to the state shape that outgrows a weight fails
     // a test instead of silently weakening the bound.
-    internal const long AdmissionEstimateBaseBytes = 2 * 1024;
+    // The empty row measured 2,125 JSON bytes once the cross-tree membership
+    // map was added (#4683), so the base carries headroom above that.
+    internal const long AdmissionEstimateBaseBytes = 5 * 512;
     internal const long AdmissionEstimateDecisionBytes = 48;
     internal const long AdmissionEstimateForgottenAtBytes = 80;
     internal const long AdmissionEstimateParticipantsBytes = 256;
@@ -30,6 +32,8 @@ internal sealed partial class TxRegistryGrain
     internal const long AdmissionEstimateAuthorityBytes = 192;
     internal const long AdmissionEstimateSnapshotPinBytes = 384;
     internal const long AdmissionEstimatePinnedTxidBytes = 48;
+    internal const long AdmissionEstimateWalGenerationBytes = 64;
+    internal const long AdmissionEstimateCrossTreeMembershipBytes = 1280;
 
     /// <summary>
     /// Count-weighted estimate of the registry's persisted row size. Reads
@@ -54,11 +58,13 @@ internal sealed partial class TxRegistryGrain
         return AdmissionEstimateBaseBytes
             + (s.Decisions.Count * AdmissionEstimateDecisionBytes)
             + (s.ForgottenAt.Count * AdmissionEstimateForgottenAtBytes)
+            + (s.ForgetWalGenerations.Count * AdmissionEstimateWalGenerationBytes)
             + (s.Participants.Count * AdmissionEstimateParticipantsBytes)
             + (s.TerminalArrivals.Count * AdmissionEstimateTerminalArrivalsBytes)
             + (s.ExpectedTerminals.Count * AdmissionEstimateExpectedTerminalsBytes)
             + ((s.ExternalAuthorities.Count + s.ReceiverDecisionAuthorities.Count) * AdmissionEstimateAuthorityBytes)
             + (s.SnapshotPins.Count * AdmissionEstimateSnapshotPinBytes)
+            + (s.CrossTreeMemberships.Count * AdmissionEstimateCrossTreeMembershipBytes)
             + (pinnedTxids * AdmissionEstimatePinnedTxidBytes);
     }
 
@@ -107,6 +113,9 @@ internal sealed partial class TxRegistryGrain
     /// </summary>
     private async Task PruneExpiredForAdmissionAsync()
     {
+        await RefreshWalPurgeGuardAsync();
+        await RefreshWalPurgeHoldAsync();
+        await RefreshCrossTreeHoldAsync();
         var pruned = PruneExpired(TimeProvider.GetUtcNow(), Retention);
         if (!pruned.Any)
         {
@@ -147,6 +156,8 @@ internal sealed partial class TxRegistryGrain
                     if (entry.HadDecision)
                         state.State.Decisions[entry.Txid] = entry.Decision;
                     state.State.ForgottenAt[entry.Txid] = entry.ForgottenAt;
+                    if (entry.WalGeneration is { } walGeneration)
+                        state.State.ForgetWalGenerations[entry.Txid] = walGeneration;
                 }
 
                 state.State.TombstoneRetirementEpoch -= retired;

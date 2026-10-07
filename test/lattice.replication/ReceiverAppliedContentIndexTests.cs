@@ -10,6 +10,42 @@ namespace Orleans.Lattice.Replication.Tests;
 [TestFixture]
 public sealed class ReceiverAppliedContentIndexTests
 {
+    private const string Origin = "site-a";
+    private static readonly HybridLogicalClock At = new() { WallClockTicks = 5, Counter = 1 };
+
+    [Test]
+    public void RecordSet_records_the_writes_source_identity_with_its_hash()
+    {
+        // #4585: the exchange elides only the exact write recorded, so the
+        // origin and source HLC travel with the digest.
+        var index = new ReceiverAppliedContentIndex();
+        index.RecordSet("tree", "k", 42UL, "site-b", At, 64);
+
+        Assert.That(index.TryGetContent("tree", "k", out var held), Is.True);
+        Assert.That(held, Is.EqualTo(new ReceiverHeldContent(42UL, "site-b", At)));
+    }
+
+    [Test]
+    public void RecordSet_of_a_later_write_replaces_the_recorded_identity()
+    {
+        var index = new ReceiverAppliedContentIndex();
+        var later = new HybridLogicalClock { WallClockTicks = 9, Counter = 0 };
+        index.RecordSet("tree", "k", 42UL, "site-b", At, 64);
+        index.RecordSet("tree", "k", 42UL, Origin, later, 64);
+
+        Assert.That(index.TryGetContent("tree", "k", out var held), Is.True);
+        Assert.That(held, Is.EqualTo(new ReceiverHeldContent(42UL, Origin, later)));
+    }
+
+    [Test]
+    public void TryGetContent_returns_false_and_default_for_a_cold_key()
+    {
+        var index = new ReceiverAppliedContentIndex();
+
+        Assert.That(index.TryGetContent("tree", "missing", out var held), Is.False);
+        Assert.That(held, Is.EqualTo(default(ReceiverHeldContent)));
+    }
+
     [Test]
     public void TryGetContentHash_returns_false_for_cold_key()
     {
@@ -28,7 +64,7 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordSet_then_TryGetContentHash_returns_recorded_hash()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "a", 42UL, 64);
+        index.RecordSet("tree", "a", 42UL, Origin, At, 64);
 
         var held = index.TryGetContentHash("tree", "a", out var hash);
 
@@ -43,8 +79,8 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordSet_overwrites_existing_hash_for_same_key()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "a", 1UL, 64);
-        index.RecordSet("tree", "a", 2UL, 64);
+        index.RecordSet("tree", "a", 1UL, Origin, At, 64);
+        index.RecordSet("tree", "a", 2UL, Origin, At, 64);
 
         index.TryGetContentHash("tree", "a", out var hash);
 
@@ -59,7 +95,7 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordDelete_removes_recorded_key()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "a", 42UL, 64);
+        index.RecordSet("tree", "a", 42UL, Origin, At, 64);
 
         index.RecordDelete("tree", "a");
 
@@ -70,7 +106,7 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordDelete_is_noop_for_unknown_key()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "a", 42UL, 64);
+        index.RecordSet("tree", "a", 42UL, Origin, At, 64);
 
         index.RecordDelete("tree", "absent");
 
@@ -81,9 +117,9 @@ public sealed class ReceiverAppliedContentIndexTests
     public void InvalidateTree_clears_all_keys_for_that_tree_only()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree-a", "k1", 1UL, 64);
-        index.RecordSet("tree-a", "k2", 2UL, 64);
-        index.RecordSet("tree-b", "k1", 3UL, 64);
+        index.RecordSet("tree-a", "k1", 1UL, Origin, At, 64);
+        index.RecordSet("tree-a", "k2", 2UL, Origin, At, 64);
+        index.RecordSet("tree-b", "k1", 3UL, Origin, At, 64);
 
         index.InvalidateTree("tree-a");
 
@@ -100,8 +136,8 @@ public sealed class ReceiverAppliedContentIndexTests
     public void Partitions_are_isolated_per_tree()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree-a", "shared", 1UL, 64);
-        index.RecordSet("tree-b", "shared", 2UL, 64);
+        index.RecordSet("tree-a", "shared", 1UL, Origin, At, 64);
+        index.RecordSet("tree-b", "shared", 2UL, Origin, At, 64);
 
         index.TryGetContentHash("tree-a", "shared", out var aHash);
         index.TryGetContentHash("tree-b", "shared", out var bHash);
@@ -117,9 +153,9 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordSet_evicts_least_recently_used_key_at_capacity()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "k1", 1UL, 2);
-        index.RecordSet("tree", "k2", 2UL, 2);
-        index.RecordSet("tree", "k3", 3UL, 2);
+        index.RecordSet("tree", "k1", 1UL, Origin, At, 2);
+        index.RecordSet("tree", "k2", 2UL, Origin, At, 2);
+        index.RecordSet("tree", "k3", 3UL, Origin, At, 2);
 
         Assert.Multiple(() =>
         {
@@ -134,12 +170,12 @@ public sealed class ReceiverAppliedContentIndexTests
     public void TryGetContentHash_promotes_key_so_it_survives_eviction()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "k1", 1UL, 2);
-        index.RecordSet("tree", "k2", 2UL, 2);
+        index.RecordSet("tree", "k1", 1UL, Origin, At, 2);
+        index.RecordSet("tree", "k2", 2UL, Origin, At, 2);
 
         // Touch k1 so k2 becomes the least-recently-used entry.
         index.TryGetContentHash("tree", "k1", out _);
-        index.RecordSet("tree", "k3", 3UL, 2);
+        index.RecordSet("tree", "k3", 3UL, Origin, At, 2);
 
         Assert.Multiple(() =>
         {
@@ -153,8 +189,8 @@ public sealed class ReceiverAppliedContentIndexTests
     public void RecordSet_floors_capacity_at_one()
     {
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "k1", 1UL, 0);
-        index.RecordSet("tree", "k2", 2UL, 0);
+        index.RecordSet("tree", "k1", 1UL, Origin, At, 0);
+        index.RecordSet("tree", "k2", 2UL, Origin, At, 0);
 
         Assert.Multiple(() =>
         {
@@ -171,9 +207,9 @@ public sealed class ReceiverAppliedContentIndexTests
         // reuses the evicted key's linked-list node, so a mis-ordered update
         // would leave the new key carrying the evicted key's digest.
         var index = new ReceiverAppliedContentIndex();
-        index.RecordSet("tree", "k1", 111UL, 2);
-        index.RecordSet("tree", "k2", 222UL, 2);
-        index.RecordSet("tree", "k3", 333UL, 2);
+        index.RecordSet("tree", "k1", 111UL, Origin, At, 2);
+        index.RecordSet("tree", "k2", 222UL, Origin, At, 2);
+        index.RecordSet("tree", "k3", 333UL, Origin, At, 2);
 
         Assert.Multiple(() =>
         {
@@ -196,7 +232,7 @@ public sealed class ReceiverAppliedContentIndexTests
         var index = new ReceiverAppliedContentIndex();
         for (var i = 0; i < keys; i++)
         {
-            index.RecordSet("tree", "k" + i, (ulong)(1000 + i), capacity);
+            index.RecordSet("tree", "k" + i, (ulong)(1000 + i), Origin, At, capacity);
         }
 
         Assert.Multiple(() =>
@@ -225,10 +261,10 @@ public sealed class ReceiverAppliedContentIndexTests
         var index = new ReceiverAppliedContentIndex();
         for (var i = 0; i < 8; i++)
         {
-            index.RecordSet("tree", "k" + i, (ulong)i, 8);
+            index.RecordSet("tree", "k" + i, (ulong)i, Origin, At, 8);
         }
 
-        index.RecordSet("tree", "k8", 8UL, 3);
+        index.RecordSet("tree", "k8", 8UL, Origin, At, 3);
 
         Assert.Multiple(() =>
         {
@@ -256,8 +292,8 @@ public sealed class ReceiverAppliedContentIndexTests
 
         Assert.Multiple(() =>
         {
-            Assert.Throws<ArgumentNullException>(() => index.RecordSet(null!, "k", 1UL, 64));
-            Assert.Throws<ArgumentNullException>(() => index.RecordSet("tree", null!, 1UL, 64));
+            Assert.Throws<ArgumentNullException>(() => index.RecordSet(null!, "k", 1UL, Origin, At, 64));
+            Assert.Throws<ArgumentNullException>(() => index.RecordSet("tree", null!, 1UL, Origin, At, 64));
         });
     }
 
@@ -280,8 +316,8 @@ public sealed class ReceiverAppliedContentIndexTests
 
         Assert.Multiple(() =>
         {
-            Assert.Throws<ArgumentNullException>(() => index.TryGetContentHash(null!, "k", out _));
-            Assert.Throws<ArgumentNullException>(() => index.TryGetContentHash("tree", null!, out _));
+            Assert.Throws<ArgumentNullException>(() => index.TryGetContent(null!, "k", out _));
+            Assert.Throws<ArgumentNullException>(() => index.TryGetContent("tree", null!, out _));
             Assert.Throws<ArgumentNullException>(() => index.InvalidateTree(null!));
         });
     }

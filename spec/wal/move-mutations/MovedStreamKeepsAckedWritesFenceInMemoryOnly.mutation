@@ -1,0 +1,29 @@
+# Pairs with MovedStreamKeepsAckedWrites, and reproduces production's move fence
+# as it stood before issue #4525 was fixed (#4557): the fence lives only in the source
+# activation's memory, so an activation that crashes after the copy comes back
+# unfenced, takes and acknowledges a write on the source, and the flip - which
+# re-checks nothing about the source - switches the stream to a copy without it.
+# The base keeps a durable fence that every new activation re-derives, and the
+# flip requires it still held.
+MODULE: MovedStreamKeepsAckedWritesFenceInMemoryOnly
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: the fence is in-memory only and the flip is unguarded, so a re-activated source acknowledges a write the flip discards
+PERTURBS: ShardCrash, MoveSwitch
+
+--- FIND
+    /\ afence' = (dfence # NoMove /\ ~lapsed)
+--- REPLACE
+\* MUTATION: the new activation does not know about any fence.
+    /\ afence' = FALSE
+--- END
+
+--- FIND
+    /\ move[m] = "copied"
+    /\ dfence = m
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
+--- REPLACE
+\* MUTATION: the flip's compare-and-swap checks only the placement version.
+    /\ move[m] = "copied"
+    /\ durable' = {o \in moveCopy[m] : o >= tail}
+--- END

@@ -256,6 +256,8 @@ internal sealed class CatalogGrainSurface
 
         public Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes) => throw NotDriven();
 
+        public Task RaiseReplicationFloorEpochAsync(string treeId, long epoch) => throw NotDriven();
+
         public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) => throw NotDriven();
 
         public Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap) => throw NotDriven();
@@ -267,6 +269,17 @@ internal sealed class CatalogGrainSurface
 
         public Task<WalPlacementPin> UpdateWalPlacementAsync(
             string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves) =>
+            throw NotDriven();
+
+        public Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+            string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew) =>
+            throw NotDriven();
+
+        public Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired) =>
+            throw NotDriven();
+
+        public Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+            string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId) =>
             throw NotDriven();
 
         private static NotSupportedException NotDriven() =>
@@ -290,6 +303,7 @@ internal sealed class CatalogGrainSurface
         public Task DeleteDerivedPhysicalTreeAsync() => throw new NotSupportedException();
         public Task DiscardDerivedPhysicalTreeAsync() => throw new NotSupportedException();
         public Task<PhysicalTreeRetention> GetPhysicalRetentionAsync() => throw new NotSupportedException();
+        public Task<bool> IsDiscardedAsync() => throw new NotSupportedException();
         public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
         public Task<bool> HoldsCompletedPurgeAsync() => Task.FromResult(false);
 

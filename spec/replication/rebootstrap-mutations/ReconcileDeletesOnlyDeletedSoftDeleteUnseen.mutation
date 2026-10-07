@@ -1,0 +1,17 @@
+# Pairs with ReconcileDeletesOnlyDeleted. An export of a soft-deleted tree carries no
+# row, so every pre-captured key looks deleted. Recovery brings them back, and the
+# fabricated tombstones at t then win the ties against them for ever.
+MODULE: ReconcileDeletesOnlyDeletedSoftDeleteUnseen
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the reconcile ignores a soft-deleted source tree, whose export carries nothing
+PERTURBS: EndExport
+
+--- FIND
+                     /\ ~ex.del0
+                     /\ ~deleted
+                     /\ delDone = ex.dep0
+--- REPLACE
+\* MUTATION: the soft-delete state is not consulted.
+                     /\ TRUE
+--- END

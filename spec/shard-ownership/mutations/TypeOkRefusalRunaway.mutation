@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A refused flip adds to the environment's refusal budget
+# instead of spending it, leaving the declared domain 0..1.
+MODULE: TypeOkRefusalRunaway
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a refused flip grows the refusal budget past its declared domain
+PERTURBS: ResizeFlipRefused
+
+--- FIND
+    /\ refusals' = refusals - 1
+--- REPLACE
+\* MUTATION: the budget grows instead of shrinking.
+    /\ refusals' = refusals + 1
+--- END

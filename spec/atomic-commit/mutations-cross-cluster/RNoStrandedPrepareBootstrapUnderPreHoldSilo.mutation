@@ -1,0 +1,20 @@
+# Pairs with RNoStrandedPrepare. A fresh receiver bootstraps while a silo still
+# predates the purge hold: that silo's registry purges a saga the export carried
+# as prepared rows, and the replay filter withholds it whole. #4533 defers the
+# replay until every silo honours the hold (PurgeHoldSupport.AllSilosHonour).
+MODULE: RNoStrandedPrepareBootstrapUnderPreHoldSilo
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: a bootstrap's replay starts while a silo predates the purge hold
+PERTURBS: Bootstrap
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ ~decom
+    /\ ~preguard
+
+--- REPLACE
+    /\ ~decom
+\* MUTATION: no deferral for a silo that predates the hold.
+
+--- END

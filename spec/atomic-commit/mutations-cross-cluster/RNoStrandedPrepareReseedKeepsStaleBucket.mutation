@@ -1,0 +1,18 @@
+# Pairs with RNoStrandedPrepare. The re-seed drain keeps a leftover bucket of a
+# saga the source has decided and purged: the export names it in no row, and the
+# replay filter withholds its records whole, so nothing ever drains the bucket.
+# #4631's StalePendingClearer discards it.
+MODULE: RNoStrandedPrepareReseedKeepsStaleBucket
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the re-seed drain leaves a leftover bucket of a saga the export names in no row
+PERTURBS: ReseedDrain
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+                        ELSE IF snap = "inflight" /\ ~ACarried(snap) THEN "none"
+
+--- REPLACE
+\* MUTATION: no stale clear.
+
+--- END

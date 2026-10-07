@@ -1,0 +1,18 @@
+# Pairs with RestoreConverges, under the fairness Spec asserts. With no
+# backstop re-resolve, a shipper whose alias-change push was lost never
+# rebinds, never ships again, and a post-restore write never reaches the peer.
+MODULE: RestoreConvergesNoBackstop
+TARGET: RestoreConverges
+CLASS: Temporal
+SUMMARY: the shipper never re-resolves a source whose push was lost
+PERTURBS: Rebind
+
+--- FIND
+    /\ bound[c] # alias[c]
+    /\ bound' = [bound EXCEPT ![c] = alias[c]]
+--- REPLACE
+    /\ bound[c] # alias[c]
+    \* MUTATION: the re-resolve never finds the new copy.
+    /\ FALSE
+    /\ bound' = [bound EXCEPT ![c] = alias[c]]
+--- END

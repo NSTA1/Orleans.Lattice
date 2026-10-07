@@ -314,13 +314,18 @@ public class ReplicationShipApplyTrimBenchmarks
     /// The shell is reproduced here because the partition type is private to
     /// the production index.
     /// </summary>
+    // Both arms record the same (hash, origin, source HLC) shape the
+    // production index stores since #4585, so the A/B still isolates the
+    // node-recycling change.
+    private const string LruOrigin = "site-a";
+
     [Benchmark]
     public int ReceiverLru_Baseline_NodePerMiss()
     {
         var index = new BaselineReceiverAppliedContentIndex();
         for (var i = 0; i < _lruKeys.Length; i++)
         {
-            index.RecordSet("orders", _lruKeys[i], (ulong)i, LruCapacity);
+            index.RecordSet("orders", _lruKeys[i], (ulong)i, LruOrigin, new HybridLogicalClock { WallClockTicks = i }, LruCapacity);
         }
 
         return index.CountForTree("orders");
@@ -337,7 +342,7 @@ public class ReplicationShipApplyTrimBenchmarks
         var index = new ReceiverAppliedContentIndex();
         for (var i = 0; i < _lruKeys.Length; i++)
         {
-            index.RecordSet("orders", _lruKeys[i], (ulong)i, LruCapacity);
+            index.RecordSet("orders", _lruKeys[i], (ulong)i, LruOrigin, new HybridLogicalClock { WallClockTicks = i }, LruCapacity);
         }
 
         return index.CountForTree("orders");
@@ -354,7 +359,7 @@ public class ReplicationShipApplyTrimBenchmarks
         private readonly object _gate = new();
         private readonly Dictionary<string, BaselineTreePartition> _trees = new(StringComparer.Ordinal);
 
-        public void RecordSet(string treeId, string key, ulong contentHash, int capacity)
+        public void RecordSet(string treeId, string key, ulong contentHash, string? originClusterId, HybridLogicalClock hlc, int capacity)
         {
             ArgumentNullException.ThrowIfNull(treeId);
             ArgumentNullException.ThrowIfNull(key);
@@ -367,7 +372,7 @@ public class ReplicationShipApplyTrimBenchmarks
                     partition = new BaselineTreePartition();
                     _trees[treeId] = partition;
                 }
-                partition.Set(key, contentHash, bounded);
+                partition.Set(key, new ReceiverHeldContent(contentHash, originClusterId, hlc), bounded);
             }
         }
 
@@ -387,17 +392,17 @@ public class ReplicationShipApplyTrimBenchmarks
 
             public int Count => _order.Count;
 
-            public void Set(string key, ulong contentHash, int capacity)
+            public void Set(string key, ReceiverHeldContent content, int capacity)
             {
                 if (_index.TryGetValue(key, out var existing))
                 {
-                    existing.Value = new KeyHash(key, contentHash);
+                    existing.Value = new KeyHash(key, content);
                     _order.Remove(existing);
                     _order.AddLast(existing);
                 }
                 else
                 {
-                    _index[key] = _order.AddLast(new KeyHash(key, contentHash));
+                    _index[key] = _order.AddLast(new KeyHash(key, content));
                 }
 
                 while (_order.Count > capacity)
@@ -408,7 +413,7 @@ public class ReplicationShipApplyTrimBenchmarks
                 }
             }
 
-            private readonly record struct KeyHash(string Key, ulong Hash);
+            private readonly record struct KeyHash(string Key, ReceiverHeldContent Content);
         }
     }
 }

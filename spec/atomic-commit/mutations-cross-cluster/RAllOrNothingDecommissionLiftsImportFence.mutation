@@ -1,0 +1,19 @@
+# Pairs with RAllOrNothing. An imported tree is read-fenced while the operation's
+# barrier waits for its sibling. The decommission abandons the barrier, which
+# the fence reads as nothing left to wait for, and the tree is served post-saga
+# while the sibling's bucket is discarded. An abandon is not a decision: while
+# the origin is decommissioned the fence stays until a re-add.
+MODULE: RAllOrNothingDecommissionLiftsImportFence
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a decommission's abandon of a barrier lifts the fence of a tree imported with the operation's verdict
+PERTURBS: FenceLift
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ ~decom
+    /\ Passed(Other(tr))
+--- REPLACE
+\* MUTATION: the decommission releases the fence.
+    /\ Passed(Other(tr))
+--- END

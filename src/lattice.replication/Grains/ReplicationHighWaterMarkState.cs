@@ -28,38 +28,57 @@ internal sealed class ReplicationHighWaterMarkState
     /// an empty vector on first activation; the per-origin diagonal
     /// entries are advanced monotonically by
     /// <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/> and
-    /// replaced unconditionally by
-    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>.
+    /// replaced unconditionally by the restore re-seed's
+    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>, and raised
+    /// pointwise (never lowered) by the bootstrap handoff's
+    /// <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>.
     /// </summary>
     [Id(0)] public VersionVector Vector { get; set; } = new();
 
     /// <summary>
-    /// The receiver's <em>snapshot-pinned causal floor</em> for this
-    /// tree: the per-origin frontier established by the most recent
-    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
-    /// (bootstrap-snapshot handoff or operator rollback re-pin).
+    /// The legacy <em>snapshot-pinned floor</em>. Earlier builds wrote the
+    /// bootstrap frontier here and dropped every point write at or below it
+    /// as already contained in the snapshot. That invariant does not hold
+    /// (#4463): the source coordinate is sealed at the maximum HLC anywhere in
+    /// the snapshot and a third origin's coordinate is the source's maximum
+    /// applied HLC, and neither is downward-closed over what the snapshot
+    /// holds, so the floor silently discarded writes the snapshot never
+    /// contained - the snapshot-handoff form of #1060.
     /// <para>
-    /// Unlike <see cref="Vector"/> - which is also advanced
-    /// incrementally by
-    /// <see cref="IReplicationHighWaterMarkGrain.TryAdvanceAsync"/> as
-    /// steady-state entries apply - this floor is written
-    /// <em>only</em> by a snapshot pin and therefore represents a true
-    /// causal cut: every entry from an origin whose source HLC is at or
-    /// below this floor is provably contained in the pinned snapshot.
-    /// The receiver uses it (and only it) as the drop criterion for
-    /// point writes. The incremental diagonal in <see cref="Vector"/>
-    /// must not be used as a drop criterion because the per-origin HLC
-    /// is non-monotonic in WAL-append order (per-leaf clocks
-    /// interleaved by key-hash partition), so a below-diagonal entry to
-    /// a distinct key is routinely a genuinely-new write rather than a
-    /// duplicate - dropping it silently strands data (#1060).
-    /// </para>
-    /// <para>
-    /// Empty on first activation (no snapshot pinned): the floor is
-    /// <see cref="HybridLogicalClock.Zero"/> for every origin, so
-    /// nothing is dropped and at-most-once is upheld by the leaf-level
-    /// per-key LWW guard plus the shadow-forward identity cache.
+    /// This build never reads the floor as a drop threshold, and
+    /// <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/> clears
+    /// it. The slot is kept because it is persisted state (its
+    /// <c>[Id]</c> is part of the stored shape) and so a silo still on an
+    /// earlier build reads an empty floor, and drops nothing, once a pin by
+    /// this build has landed. Duplicate deliveries are absorbed by the
+    /// shadow-forward identity cache and the leaf-level per-key merge.
     /// </para>
     /// </summary>
     [Id(1)] public VersionVector PinnedFloor { get; set; } = new();
+
+    /// <summary>
+    /// Writes of each origin that this tree acknowledged without applying and
+    /// then lost for good (#4603): an operator discarded the dead-lettered
+    /// entry. A write in this set can never become visible here, so an entry
+    /// that depends on one is never released - it is dead-lettered with
+    /// reason <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/>.
+    /// Bounded by operator discards; never pruned.
+    /// </summary>
+    [Id(2)] public Dictionary<string, HashSet<HybridLogicalClock>> Lost { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The bootstrap drop floor the tree holds (issue #4549), or
+    /// <see langword="null"/> when it holds none. Installed from a full
+    /// bootstrap's export, cleared with the tree's applied identities on every
+    /// replacement of its contents. Legacy state decodes to
+    /// <see langword="null"/>, which drops nothing.
+    /// </summary>
+    [Id(3)] public ReplicationBootstrapFloor? BootstrapFloor { get; set; }
+
+    /// <summary>
+    /// The highest bootstrap drop-floor epoch installed on this tree (issue
+    /// #4549). Bumped by every install and never lowered, so a write admitted
+    /// before an install carries an older epoch than every shard enforces after it.
+    /// </summary>
+    [Id(4)] public long FloorEpoch { get; set; }
 }

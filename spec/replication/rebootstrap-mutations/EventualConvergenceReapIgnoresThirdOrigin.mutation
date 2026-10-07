@@ -1,0 +1,17 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. The reap's frontier D is the minimum over
+# every origin (#4615): waiting only for the receiver's writes, the source reaps
+# a tombstone a third origin's older write, still on its way to the source,
+# then resurrects at the source.
+MODULE: EventualConvergenceReapIgnoresThirdOrigin
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the reap waits only for the receiver's writes, so a third origin's write still on its way to the source outlives the delete
+PERTURBS: Reap
+BOUNDS: Third = TRUE, Reattach = FALSE, MaxHlc = 2
+
+--- FIND
+    /\ \A o \in Others : \A i \in (cursor[<<o, s>>] + 1)..Len(wal[o]) : wal[o][i].h > reg[s].h
+--- REPLACE
+\* MUTATION: D covers the receiver's writes only.
+    /\ \A i \in (cursor[<<r, s>>] + 1)..Len(wal[r]) : wal[r][i].h > reg[s].h
+--- END

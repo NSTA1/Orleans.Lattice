@@ -1,0 +1,15 @@
+# Pairs with SplitCompletes. The retroactive sweep runs but never advances the
+# split's phase, so a split that opened its window never completes. Its step
+# stays weakly fair and keeps being taken.
+MODULE: SplitCompletesSweepStalls
+TARGET: SplitCompletes
+CLASS: Temporal
+SUMMARY: the sweep never advances the split's phase, so the split never completes
+PERTURBS: SplitSweep
+
+--- FIND
+    /\ sp' = "swept"
+--- REPLACE
+\* MUTATION: the phase does not advance.
+    /\ sp' = "shadow"
+--- END

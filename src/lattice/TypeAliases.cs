@@ -86,6 +86,7 @@ internal static class TypeAliases
     internal const string ChildEntry = "ol.ce";
     internal const string InternalNodeState = "ol.ins";
     internal const string LeafNodeState = "ol.lns";
+    internal const string DiscardedSagaPrepare = "ol.dsp";
     internal const string LeafSnapshotBlob = "ol.lsb";
     internal const string LeafSnapshotRow = "ol.lsr";
     internal const string LeafSnapshotSegment = "ol.lss";
@@ -244,6 +245,12 @@ internal static class TypeAliases
     // lifts (terminal saga decision or the bounded cutover deadline).
     internal const string LatticeWriteFenced = "ol.wfx";
 
+    // Receiver bootstrap read fence (issue #4526). Thrown by a shard root's read
+    // surface while a snapshot bootstrap drains into the tree, so no reader can
+    // observe a partial import. Retryable: the fence lifts once the drain has
+    // applied every snapshot entry.
+    internal const string LatticeTreeBootstrapping = "ol.tbf";
+
     // Single-shape-per-replicated-tree guard. Thrown by the public ILattice
     // write surface when a write would violate the declared replication mode
     // for a tree (a CRDT accessor whose mode differs from the declared mode,
@@ -260,6 +267,9 @@ internal static class TypeAliases
     internal const string ShadowForwardPhase = "ol.sfp";
     internal const string StaleTreeRouting = "ol.str";
 
+    /// <summary>Alias for the refusal a purged physical copy gives an unrouted call (issue #4503).</summary>
+    internal const string LatticeTreePurged = "ol.ltp";
+
     // Restore shadow-cutover - retained-previous-tree redirect primitive
     internal const string RetainedRedirectState = "ol.rrs";
 
@@ -267,6 +277,9 @@ internal static class TypeAliases
     internal const string RangeDeleteResult = "ol.rdr";
     internal const string LeafDeleteResult = "ol.ldr";
     internal const string ShardRangeDeletePage = "ol.srd";
+
+    /// <summary>Alias for one bounded batch of a shard's range clock probe (issue #4530).</summary>
+    internal const string ShardRangeClockPage = "ol.src";
 
     // Work-bounded shard count batch (issue 1971).
     // Note "ol.scp" is NOT free - Orleans.Lattice.Scaling.ComputePressure owns
@@ -337,6 +350,10 @@ internal static class TypeAliases
     internal const string TxRegistryState = "ol.txr";
     internal const string TxRegistryHighWaterState = "ol.txh";
     internal const string TxRegistryWriteFailed = "ol.txf";
+    internal const string TxDecisionGateRefused = "ol.dgx";
+    internal const string TxDecisionGateRefusal = "ol.dgk";
+    internal const string TxRegistryCaptureGateMode = "ol.dgm";
+    internal const string SnapshotDecisionGate = "ol.dgs";
     internal const string LatticeStateWriteFailed = "ol.swf";
     internal const string TxStatus = "ol.txo";
     internal const string TerminalTallyResult = "ol.ttr";
@@ -358,9 +375,16 @@ internal static class TypeAliases
     internal const string CrossTreeReceiverState = "ol.crs";
     internal const string CrossTreeReceiverTerminal = "ol.crt";
     internal const string CrossTreeReceiverDecision = "ol.crd";
+    internal const string ICrossTreeBarrierIndexGrain = "ol.cbi";
+    internal const string CrossTreeBarrierIndexState = "ol.cbs";
+    internal const string CrossTreeReceiverStatus = "ol.crq";
+    internal const string CrossTreeImportRecord = "ol.cir";
+    internal const string ICrossTreePurgeFrontierGrain = "ol.cpf";
+    internal const string CrossTreePurgeFrontierState = "ol.cps";
     internal const string CrossTreeReceiverTreeFinalize = "ol.crf";
     // Ambient producer-side cross-tree terminal metadata (RequestContext value).
     internal const string CrossTreeTerminalInfo = "ol.cti";
+    internal const string CrossTreeMembership = "ol.ctm";
 
     // Distributed lock / lease (#1608)
     internal const string LockToken = "ol.lkt";
@@ -588,6 +612,13 @@ internal static class TypeAliases
     // rather than a bare OutOfMemoryException.
     internal const string LeafSnapshotUnaffordable = "ol.lsu";
 
+    // Raised when a leaf's snapshot could not be loaded, so its WAL replay
+    // fails closed instead of rebuilding from a log whose prefix may survive
+    // only in that snapshot (issue 4450). Fails the replay barrier, which
+    // re-arms on the next touch, and crosses the grain boundary to the data
+    // operation that awaited it.
+    internal const string LeafSnapshotUnavailable = "ol.lsv";
+
     // What a starvation drive achieved on one leaf, returned to the WAL GC
     // blocked-leaf sweep (issue 2692 Half B). Crosses the IBPlusLeafGrain
     // boundary. An enum rather than a bool because "drove and lifted the pin",
@@ -645,6 +676,8 @@ internal static class TypeAliases
     internal const string WalMoveOptions = "ol.wmo";
     internal const string WalMoveOutcome = "ol.wmc";
     internal const string WalMoveQuiesceResult = "ol.wqr";
+    // Durable WAL move fence held in the placement pin (issue #4525).
+    internal const string WalMoveFence = "ol.wmf";
     internal const string LatticeWalProviderMissing = "ol.wpm";
     internal const string LatticeWalQuiescing = "ol.wqx";
 
@@ -655,6 +688,13 @@ internal static class TypeAliases
     internal const string IWalMaterialiserPinGrain = "ol.wpi";
     internal const string WalMaterialiserPinState = "ol.wps";
     internal const string WalMaterialiserPinReport = "ol.wpr";
+
+    // Decision-purge hold (#4533, #4534): a per-tree record of replication
+    // consumers that need every saga decision kept, which suspends the
+    // transaction registry's decision purges until each removes its hold.
+    internal const string IWalPurgeHoldGrain = "ol.wph";
+    internal const string WalPurgeHoldState = "ol.whs";
+    internal const string WalPurgeHold = "ol.whh";
 
     // Materialised views (Phase 1): the projected-write value type and its
     // effect-kind enum are the core serializable surface; the view
@@ -736,6 +776,26 @@ internal static class TypeAliases
     /// </summary>
     internal const string UnresolvedReplayWorkEntry = "ol.urw";
 
+    /// <summary>
+    /// Alias for one leaf's durable record of the keys a saga's terminal settled
+    /// on it (issue #4545).
+    /// </summary>
+    internal const string AppliedTerminalWitness = "ol.atw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar grain interface (issue #4545).</summary>
+    internal const string ILeafTerminalWitnessGrain = "ol.gtw";
+
+    /// <summary>Alias for a leaf's applied-terminal witness sidecar state (issue #4545).</summary>
+    internal const string LeafTerminalWitnessState = "ol.ltw";
+
+    /// <summary>Alias for a leaf's row-record sidecar grain interface (issue #4654).</summary>
+    internal const string ILeafRowRecordGrain = "ol.grr";
+
+    /// <summary>Alias for a leaf's row-record sidecar state (issue #4654).</summary>
+    internal const string LeafRowRecordState = "ol.lrr";
+
+    /// <summary>Alias for the fault a leaf whose state row was lost fails closed with (issue #4654).</summary>
+    internal const string LeafStateRowLost = "ol.lsl";
     /// <summary>Alias for the coordinated-operation grain interface.</summary>
     internal const string ILatticeOperationGrain = "ol.opg";
 
@@ -777,5 +837,54 @@ internal static class TypeAliases
 
     // Grain-storage fencing probe
     internal const string GrainStorageFencingProbeState = "ol.gfp";
-}
 
+    // Offset-reading WAL consumers (issue #4579)
+
+    /// <summary>Alias for the offset-reading WAL consumer grain interface.</summary>
+    internal const string IWalOffsetConsumer = "ol.wci";
+
+    /// <summary>Alias for the per-tree offset-reading WAL consumer registry grain interface.</summary>
+    internal const string IWalOffsetConsumerRegistryGrain = "ol.wcg";
+
+    /// <summary>Alias for the offset-reading WAL consumer registry state.</summary>
+    internal const string WalOffsetConsumerRegistryState = "ol.wcs";
+
+    /// <summary>
+    /// Alias for the WAL trim watermark capability marker grain interface, which a
+    /// silo hosts when its WAL providers persist the trim watermark (issue #4621).
+    /// </summary>
+    internal const string IWalTrimWatermarkSupportGrain = "ol.wtw";
+
+    // Producer clock floor (issue #4586). A replicated tree's WAL partition
+    // refuses a fresh local write stamped below its durable, published floor,
+    // so a shipper's low watermark is downward-closed.
+
+    /// <summary>Alias for the public idempotency-key-expired refusal.</summary>
+    internal const string LatticeIdempotencyKeyExpired = "ol.ike";
+
+    /// <summary>Alias for the WAL partition's below-floor refusal.</summary>
+    internal const string WalStampBelowFloorException = "ol.wsf";
+
+    /// <summary>Alias for a WAL partition's durable clock-floor state.</summary>
+    internal const string WalShardFloorState = "ol.wfs";
+
+    /// <summary>Alias for the clock-floor capability marker grain interface.</summary>
+    internal const string IWalClockFloorCapable = "ol.wfc";
+
+    // Restored-copy receive fence (issue #4593)
+
+    /// <summary>Alias for the per-physical-copy receive fence grain interface.</summary>
+    internal const string ICopyReceiveFenceGrain = "ol.qfg";
+
+    /// <summary>Alias for the per-physical-copy receive fence state.</summary>
+    internal const string CopyReceiveFenceState = "ol.qfs";
+
+    /// <summary>Alias for the closed-copy replication apply refusal.</summary>
+    internal const string CopyReceiveFenced = "ol.qfx";
+
+    /// <summary>Alias for the stale replication floor-admission refusal (issue #4549).</summary>
+    internal const string ReplicationFloorAdmissionStale = "ol.rae";
+
+    /// <summary>Alias for the per-physical-copy receive fence status.</summary>
+    internal const string CopyReceiveFenceStatus = "ol.qft";
+}

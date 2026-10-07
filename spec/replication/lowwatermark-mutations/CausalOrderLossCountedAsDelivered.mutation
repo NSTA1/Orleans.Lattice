@@ -1,0 +1,21 @@
+# Pairs with CausalOrder. A lost in-flight batch moves the acknowledged cursor past it instead of
+# rewinding the drain, so the watermark vouches for entries the receiver never saw.
+MODULE: CausalOrderLossCountedAsDelivered
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a transport loss is acknowledged as delivered, so S passes the lost entries
+PERTURBS: LoseA
+BOUNDS: NParts = 1, MaxLoss = 1
+
+--- FIND
+    /\ adr' = [adr EXCEPT ![p] = aack[p]]
+--- REPLACE
+    \* MUTATION: the loss is acknowledged.
+    /\ aack' = [aack EXCEPT ![p] = adr[p]]
+--- END
+
+--- FIND
+    /\ UNCHANGED Origin /\ UNCHANGED <<aack, bdeps, back>> /\ UNCHANGED Rcv
+--- REPLACE
+    /\ UNCHANGED Origin /\ UNCHANGED <<adr, bdeps, back>> /\ UNCHANGED Rcv
+--- END

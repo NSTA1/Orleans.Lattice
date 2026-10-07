@@ -1,0 +1,19 @@
+# Pairs with SagaSettles. The discard is routed through the logical alias, so the
+# retained redirect on the copy the saga left refuses it for as long as the
+# restore is not reverted, and the saga can never decide.
+MODULE: SagaSettlesDiscardRouted
+TARGET: SagaSettles
+CLASS: Temporal
+SUMMARY: the discard is refused by the redirect of the copy it targets
+PERTURBS: Discard
+DEADLOCK: off
+
+--- FIND
+    /\ c \in left \ disc
+    /\ pend' = [pend EXCEPT ![c] = [k \in Keys |-> FALSE]]
+--- REPLACE
+    /\ c \in left \ disc
+    \* MUTATION: a routed discard, refused by a retained redirect.
+    /\ RoutedAdmits(c)
+    /\ pend' = [pend EXCEPT ![c] = [k \in Keys |-> FALSE]]
+--- END

@@ -439,6 +439,74 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Builds the coverage claim for an un-overridden capture taken while this
+    /// activation's cache is unanchored (issue #4451): per partition, the highest
+    /// offset the cache provably holds, never a checkpoint the cache has not been
+    /// rebuilt to hold.
+    /// <para>
+    /// The partition's current checkpoint (<c>max(persisted, pending)</c>) is
+    /// honest when the checkpoint the cold rebuild started over - recorded at the
+    /// replay's start decision, or the persisted one before any decision - claims
+    /// nothing (<c>&lt; 0</c>), or when the checkpoint has since passed it: only
+    /// this activation's replay advances it, and a cold rebuild re-reads from the
+    /// WAL start, so a checkpoint above the starting one has been re-read through.
+    /// Otherwise the claim falls back to the cold rebuild's re-read frontier, or
+    /// <c>-1</c> when it has re-read nothing. This is the WAL durability model's
+    /// intended claim - the read position - from below.
+    /// </para>
+    /// </summary>
+    private long[] BuildUnanchoredCoverage(int partitionCount)
+    {
+        var offsets = new long[ResolveCoveragePartitionCount(partitionCount)];
+        var entry = _coldRebuildEntryCheckpoints;
+        for (var p = 0; p < offsets.Length; p++)
+        {
+            var current = GetCurrentCheckpointForPartition(p);
+            var held = entry is null
+                ? GetPersistedCheckpointForPartition(p)
+                : p < entry.Length ? entry[p] : -1L;
+            offsets[p] = held < 0 || current > held
+                ? current
+                : ColdReplayFrontierForPartition(p);
+        }
+
+        return offsets;
+    }
+
+    /// <summary>
+    /// Copies every partition's persisted checkpoint, for
+    /// <see cref="_coldRebuildEntryCheckpoints"/>. Partitions beyond the copy have
+    /// no persisted checkpoint and read as <c>-1</c>.
+    /// </summary>
+    private long[] SnapshotPersistedCheckpoints()
+    {
+        var checkpoints = new long[ResolveCoveragePartitionCount(1)];
+        for (var p = 0; p < checkpoints.Length; p++)
+            checkpoints[p] = GetPersistedCheckpointForPartition(p);
+        return checkpoints;
+    }
+
+    /// <summary>
+    /// Whether an unanchored coverage claim is worth writing: it claims at least
+    /// one partition, and claims no partition below coverage a durable snapshot
+    /// already holds. A regressing claim would push the store off its monotone
+    /// fast path and be declined there, discarding the capture anyway.
+    /// </summary>
+    private bool UnanchoredCoverageIsCapturable(long[] claim)
+    {
+        var claimsAny = false;
+        for (var p = 0; p < claim.Length; p++)
+        {
+            if (claim[p] < DurableSnapshotCoverageForPartition(p))
+                return false;
+            if (claim[p] >= 0)
+                claimsAny = true;
+        }
+
+        return claimsAny;
+    }
+
+    /// <summary>
     /// Banks the progress of an IN-FLIGHT cold rebuild as a durable snapshot
     /// whose coverage claim is the re-read frontier rather than the checkpoint,
     /// so that a cold activation torn down before it converges leaves an anchor
@@ -1287,6 +1355,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var current = _durableSnapshotOffsetsByPartition;
+        RaiseKeptSnapshotCoverageMarker(perPartition);
         if (current is null || current.Length < perPartition.Length)
         {
             var grown = new long[perPartition.Length];
@@ -1308,7 +1377,11 @@ internal sealed partial class BPlusLeafGrain
     /// <b>Deliberately does NOT await the replay barrier (issue #2871).</b> Capture
     /// persists whatever the projection currently holds and claims coverage only
     /// for offsets actually applied, so it is correct at any point during a replay
-    /// - and running during one is the point. Banking partial progress mid-replay
+    /// - and running during one is the point. That claim is enforced rather than
+    /// assumed (issue #4451): until the replay anchors the cache, the checkpoint
+    /// says nothing about what the cache holds, so the capture is routed through
+    /// cold-progress banking and stamps the re-read frontier instead, or declines.
+    /// Banking partial progress mid-replay
     /// is the whole remedy of issue #2280: a replay cancelled before it reaches the
     /// WAL head must leave its prefix durable, or the next activation re-reads the
     /// same window and reproduces the cancellation. Waiting for the replay to
@@ -1374,6 +1447,23 @@ internal sealed partial class BPlusLeafGrain
         // partition has absorbed at least one entry.
         var resolved = await GetOptionsAsync();
         var partitionCount = Math.Max(1, resolved.WalPartitions);
+
+        // An un-overridden capture claims the checkpoint, which is honest only
+        // for a partition whose cache provably holds every row through it
+        // (issue #4451). Until the activation's replay anchors the cache - before
+        // its start decision, throughout a cold rebuild, after one faults - a
+        // partition whose PERSISTED checkpoint the rebuild has not yet re-read
+        // past can claim only what the rebuild has actually re-read (see
+        // BuildUnanchoredCoverage). A claim that covers nothing, or that would
+        // regress coverage a durable snapshot already holds, is the
+        // no_coverage_claim decline. Overridden captures carry a caller-proven
+        // claim and are unaffected.
+        if (coverageOverride is null && _cacheUnanchored
+            && !UnanchoredCoverageIsCapturable(BuildUnanchoredCoverage(partitionCount)))
+        {
+            ObserveSnapshotCaptureDecline(LatticeMetrics.SnapshotDeclineNoCoverageClaim);
+            return;
+        }
 
         // Partition 0's coverage claim is read through the per-partition
         // accessor rather than from the raw scalar, because BuildCheckpointCoverage
@@ -1665,6 +1755,15 @@ internal sealed partial class BPlusLeafGrain
             // hand an ordered span to the encoder, so it must not outlive the
             // capture. Draining the cache before reading Count keeps the two
             // consistent (EnumerateRows materialises any deferred rows first).
+            // The coverage claim is formed in the SAME turn as the row copy below,
+            // with no await between them, so it can never claim an offset applied
+            // after the rows were copied (issue #4451): the replay runs
+            // concurrently with capture since #2871, and the staged-segment
+            // writes further down await.
+            var perPartitionOffsets = coverageOverride
+                ?? (_cacheUnanchored
+                    ? BuildUnanchoredCoverage(partitionCount)
+                    : BuildCheckpointCoverage(partitionCount, checkpoint));
             var cacheRows = Cache.EnumerateRows();
             var rowCount = Cache.Count;
             var buffer = ArrayPool<LeafSnapshotRow>.Shared.Rent(rowCount);
@@ -1808,8 +1907,9 @@ internal sealed partial class BPlusLeafGrain
             // is NOT honest mid-COLD-rebuild, where the checkpoint still sits
             // at its persisted value while the cache holds only what has been
             // re-read so far - which is why the cold-progress banking path
-            // supplies the re-read frontier here instead (issue #2280).
-            var perPartitionOffsets = coverageOverride ?? BuildCheckpointCoverage(partitionCount, checkpoint);
+            // supplies the re-read frontier here instead (issue #2280), and why
+            // an un-overridden capture taken while the cache is unanchored stamps
+            // BuildUnanchoredCoverage rather than the checkpoint (issue #4451).
             var scalarOffset = perPartitionOffsets.Length > 0 ? perPartitionOffsets[0] : checkpoint;
 
             var blob = new LeafSnapshotBlob
@@ -3539,6 +3639,8 @@ internal sealed partial class BPlusLeafGrain
     {
         if (_warmRescueInFlight)
             throw new InvalidOperationException("Cannot replace a leaf cache while its warm stale-cache rescue is persisting.");
+        _snapshotLoadFailedThisAttempt = false;
+        _snapshotLoadFaultThisAttempt = null;
         _warmCacheHydrations++;
         if (state.State.TreeId is null)
         {
@@ -3580,7 +3682,10 @@ internal sealed partial class BPlusLeafGrain
         if (lease is null)
         {
             // Cancelled while queued. Identical to the cancellation arm around
-            // the load below, and swallowed for the same reason.
+            // the load below, and swallowed for the same reason. Whether a
+            // snapshot exists is unknown, so it is a failed load, not an absent
+            // one (issue #4450).
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
 
@@ -3596,18 +3701,26 @@ internal sealed partial class BPlusLeafGrain
             // the load. Swallowed without observation for the same reason the
             // capture path swallows it: thousands of leaves standing down
             // together would turn one signal into a flood.
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
         catch (Exception ex)
         {
-            // Snapshot load is best-effort: a transient storage failure
-            // must not block the leaf coming online. The activation
-            // path falls through to the existing WAL-tail replay,
-            // which can still recover the projection as long as the
-            // WAL has not trimmed past the checkpoint.
+            // A failed load is NOT "no snapshot" (issue #4450). This arm used to
+            // fall through to the cold WAL replay on the reasoning that the
+            // replay "can still recover the projection as long as the WAL has
+            // not trimmed past the checkpoint". Under coverage-gated trim the
+            // WAL GC removes a checkpointed prefix precisely BECAUSE a snapshot
+            // covers it, so the snapshot that just failed to load may be the
+            // only durable copy of that prefix - and the leaf's durable pin,
+            // resolved against that snapshot's coverage and unlowerable, keeps
+            // the GC entitled to trim for as long as a cold rebuild runs. So the
+            // failure is recorded here, and the activation replay fails closed
+            // and retries through the barrier re-arm (LeafReplayStartPolicy).
             //
-            // The DECISION is unchanged; what changes is that it is no longer
-            // silent (issue #2364). Returning false here is indistinguishable
+            // History, kept because it explains the observation below: before
+            // #4450 the decision was silent as well as unsafe (issue #2364).
+            // Returning false here was indistinguishable
             // at every call site from "this leaf has no snapshot": both decline
             // the rehydrate, and OnActivateAsync then sees
             // (!rehydratedFromSnapshot && Cache.Count == 0), takes the -1
@@ -3648,11 +3761,12 @@ internal sealed partial class BPlusLeafGrain
             // recorded and no state written at this point, so the retry sees
             // exactly what this attempt saw.
             //
-            // The two arms must stay distinct. An ordinary storage fault keeps
-            // the best-effort fall-through unchanged, because there is nothing
-            // self-defeating about replaying the WAL when the store is merely
-            // unreachable - the replay may well succeed. It is only the MEMORY
-            // arm where the remedy and the fault are the same resource.
+            // The two arms must stay distinct. An ordinary storage fault also
+            // fails the activation replay (issue #4450), but it is declined by
+            // the replay-start decision after this returns, as a retryable
+            // LeafSnapshotUnavailableException. The MEMORY arm throws here,
+            // because there the remedy and the fault are the same resource and
+            // the retry must be made under a tightened admission estimate.
             if (IsResourceExhaustion(ex))
             {
                 // ... but breaking the loop is not the same as escaping it, and
@@ -3689,11 +3803,25 @@ internal sealed partial class BPlusLeafGrain
                     ex);
             }
 
+            _snapshotLoadFailedThisAttempt = true;
+            _snapshotLoadFaultThisAttempt = ex;
             return false;
         }
 
         if (blob is null)
         {
+            // An absent snapshot is not proof that this leaf never had one (issue
+            // #4634). If its store once kept a snapshot whose coverage licensed the
+            // WAL GC to trim, a cold rebuild from the surviving suffix would come
+            // up without that prefix and report its keys absent. That is a lost
+            // snapshot, and it fails the replay closed exactly as a failed load
+            // does (issue #4450), whatever the WAL tail reads.
+            if (DetectLostKeptSnapshot() is { } lost)
+            {
+                _snapshotLoadFailedThisAttempt = true;
+                _snapshotLoadFaultThisAttempt = lost;
+            }
+
             return false;
         }
 
@@ -3723,10 +3851,14 @@ internal sealed partial class BPlusLeafGrain
         // RecordDurableSnapshotCoverage: reporting coverage for a prefix the
         // blob cannot actually reproduce is precisely what would authorise the
         // coverage-gated WAL GC to trim the last durable copy of that prefix.
-        // An unreadable blob is "no snapshot", so the activation falls through
-        // to the ordinary WAL replay with its own fall-off guards intact.
+        // An unreadable blob is NOT "no snapshot", though: a blob exists, and
+        // it may be the only durable copy of a prefix the WAL GC has already
+        // trimmed under its coverage. It is recorded as a failed load, and
+        // the activation replay fails closed rather than cold-replaying
+        // (issue #4450).
         if (!blob.ValidateRowPayload())
         {
+            _snapshotLoadFailedThisAttempt = true;
             return false;
         }
 
@@ -3884,12 +4016,15 @@ internal sealed partial class BPlusLeafGrain
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
                     return false;
                 }
                 catch (Exception error)
                 {
                     ObserveSnapshotSegmentLoadFailure(error);
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
+                    _snapshotLoadFaultThisAttempt = error;
                     return false;
                 }
 
@@ -3899,12 +4034,15 @@ internal sealed partial class BPlusLeafGrain
                 // would then outrun the rows actually held - which is the one
                 // shape that lets coverage-gated WAL GC trim the last durable
                 // copy of a prefix. Declining instead leaves OnActivateAsync
-                // with !rehydrated and an empty cache, so it takes the -1
-                // replay-start override and replays the whole readable WAL.
+                // with !rehydrated and an empty cache, recorded as a failed
+                // load, so the replay fails closed and retries rather than
+                // rebuilding from a WAL the snapshot's coverage may already
+                // have let the GC trim (issue #4450).
                 if (segmentFrame is not { Length: > 0 })
                 {
                     ObserveSnapshotSegmentMissing();
                     Cache.Clear();
+                    _snapshotLoadFailedThisAttempt = true;
                     return false;
                 }
 
@@ -4060,6 +4198,23 @@ internal sealed partial class BPlusLeafGrain
         }
         return true;
     }
+
+    /// <summary>
+    /// Set by the most recent <see cref="TryRehydrateFromSnapshotAsync"/> when it
+    /// declined because a snapshot could not be loaded - a storage fault, a
+    /// cancelled load, an unreadable payload, or a missing or unreadable segment -
+    /// as opposed to there being no snapshot at all (issue #4450). Read by the
+    /// activation replay's start decision (<see cref="LeafReplayStartPolicy"/>),
+    /// which fails the replay closed rather than cold-replaying, because the WAL
+    /// prefix the snapshot covered may survive only in the snapshot that failed.
+    /// </summary>
+    private bool _snapshotLoadFailedThisAttempt;
+
+    /// <summary>
+    /// The fault behind <see cref="_snapshotLoadFailedThisAttempt"/>, when there
+    /// was one, carried as the inner exception of a fail-closed replay.
+    /// </summary>
+    private Exception? _snapshotLoadFaultThisAttempt;
 
     /// <summary>
     /// Best-effort probe: has any WAL partition's oldest still-readable

@@ -51,7 +51,8 @@ public sealed class ReplicationCrossFacadeTreeIdTests
         var authorizer = new ReplicationAccessAuthorizer(gate, membership: null);
 
         return (
-            new LatticeReplicationControl(authority, authorizer, resolver),
+            new LatticeReplicationControl(
+                authority, authorizer, resolver, Substitute.For<ILatticeReplicationPeerDecommissioner>()),
             new LatticeReplicationStatus(reader, authorizer, resolver, replicationOptions, statusOptions));
     }
 

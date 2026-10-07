@@ -1,0 +1,20 @@
+# Pairs with EventualConvergence. Reproduces production before #4483 (#4464). The
+# dependency check and the buffer insert are separated by awaits; an apply on
+# another call that meets the dependency advances the HWM and runs its drain
+# in between, finds the buffer empty, and returns. The entry is then parked
+# with its dependency met and nothing left to wake it. Fairness is intact:
+# this is a protocol defect, not a starved action.
+MODULE: EventualConvergenceParkLostWakeup
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: parking does not re-check the buffer, so an entry whose dependency was met mid-park is stranded
+PERTURBS: Park
+DEADLOCK: off
+BOUNDS: MaxFaults = 0, MaxHlc = 1
+
+--- FIND
+    /\ wake' = [wake EXCEPT ![x] = TRUE]
+--- REPLACE
+\* MUTATION: parking schedules no drain.
+    /\ wake' = wake
+--- END

@@ -877,6 +877,30 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<List<PendingMutationSnapshot>> GetPendingMutationsForSlotsAsync(int[] sortedMovedSlots, int virtualShardCount);
 
     /// <summary>
+    /// Drops every in-memory pending mutation for <paramref name="transactionId"/>
+    /// on this leaf without recording a transaction-registry decision and
+    /// without surfacing prepared values. Used by receiver re-seed settlement,
+    /// after the drain, to clear the buckets of a poisoned saga the export showed
+    /// decided at, or gone from, the origin.
+    /// </summary>
+    Task DiscardPendingTransactionAsync(Guid transactionId);
+
+    /// <summary>
+    /// Every key this leaf holds a prepare for under
+    /// <paramref name="transactionId"/> (issue #4522), including keys a leaf
+    /// split left stranded here, mapped to its original prepare stamp when the
+    /// prepare is a marked last-writer-wins prepare, or to <see langword="null"/>
+    /// when it is not (an unmarked or CRDT-delta prepare, whose stamp is not one
+    /// a terminal may apply at). <see langword="null"/> when the leaf holds no
+    /// prepare for the saga. The buckets and their marks are replayed from the
+    /// write-ahead log, so the answer survives a reactivation. Read by the saga
+    /// coordinator after a prepare, so its committed-values backstop can be
+    /// applied at each key's own stamp.
+    /// </summary>
+    /// <param name="transactionId">The saga whose prepares to read.</param>
+    Task<Dictionary<string, HybridLogicalClock?>?> GetOriginalPrepareStampsAsync(Guid transactionId);
+
+    /// <summary>
     /// Returns a <see cref="StateDelta"/> containing only the entries whose
     /// virtual slot is in <paramref name="sortedMovedSlots"/> and whose
     /// timestamp is newer than what <paramref name="sinceVersion"/> has seen.
@@ -962,6 +986,17 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod);
 
     /// <summary>
+    /// <see cref="CompactTombstonesAsync"/> under a reap ceiling (issue #4615):
+    /// a tombstone, or a TTL-expired live entry, is reaped only when it is past
+    /// <paramref name="gracePeriod"/> and stamped strictly below
+    /// <paramref name="reapCeiling"/>. A replicated tree's ceiling is the point
+    /// below which no write the entry beats can still be delivered here, so a
+    /// reap never lets a late older write resurrect the key. An entry the
+    /// ceiling keeps is treated as still inside the grace window.
+    /// </summary>
+    Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling);
+
+    /// <summary>
     /// Returns all live (non-tombstoned) key-value pairs in this leaf.
     /// Used by the tree resize operation to drain entries before purging.
     /// </summary>
@@ -1042,6 +1077,29 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task ClearGrainStateAsync();
 
     /// <summary>
+    /// <see cref="ClearGrainStateAsync"/> for a purge of a deleted tree (issue
+    /// #4700). Before anything is cleared it marks the leaf's row record as cleared
+    /// by a purge, durably, and it keeps the record afterwards, so a recovery of
+    /// the tree can tell this deliberate clear apart from a lost row and re-create
+    /// the leaf empty. Idempotent and resumable, like the plain clear.
+    /// </summary>
+    Task ClearGrainStateForPurgeAsync();
+
+    /// <summary>
+    /// Re-asserts this leaf's binding to <paramref name="treeId"/> and
+    /// <paramref name="shardIndex"/> on recovery of a deleted tree (issue #4700).
+    /// A leaf with a state row is bound as by the birth seams. A leaf with no state
+    /// row is re-created empty only when its row record shows a purge cleared it:
+    /// the purge's leftover snapshot and witness are deleted first, and the mark is
+    /// reset once the new row is durable. Any other rowless leaf - one whose row may
+    /// have been lost - is refused with <c>LeafStateRowLostException</c>. A fault
+    /// reading the record propagates, so the recovery fails and can be retried.
+    /// </summary>
+    /// <param name="treeId">The physical tree the leaf belongs to.</param>
+    /// <param name="shardIndex">The shard the leaf belongs to.</param>
+    Task RecoverBindingAsync(string treeId, int shardIndex);
+
+    /// <summary>
     /// Returns a deterministic XxHash128 <see cref="LeafProjectionDigest"/>
     /// of this leaf's materialised projection. Two leaves that have
     /// applied the same prefix of the same per-shard WAL produce
@@ -1114,6 +1172,15 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// loss of the trimmed range is accepted; an over-budget replay against
     /// <see cref="LatticeOptions.MaxLeafReplayEntries"/> is advisory and needs
     /// no rebuild.
+    /// <para>
+    /// A snapshot that is present but proven unreadable - an unreadable row
+    /// payload, or a missing or unreadable segment - is cleared first, accepting
+    /// the loss of whatever only it held, so the next activation does not fail
+    /// its replay closed on it again (issue #4450). A readable or absent
+    /// snapshot is left alone, and a snapshot load that throws fails the
+    /// rebuild rather than discarding a snapshot that may merely have been
+    /// unreachable.
+    /// </para>
     /// <para>
     /// Asynchronous failure mode: a transient storage failure on the
     /// persist surfaces back to the caller with the durable row still in
@@ -1298,6 +1365,27 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenAsync(
         LeafBaselineFreeze freeze,
         long[] capturedHead,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="FoldTailOntoFrozenAsync"/> for a snapshot capture that holds a
+    /// saga decision gate (issue #4485). After the tail fold, every prepared
+    /// bucket still pending at <paramref name="capturedHead"/> is resolved
+    /// against the gate's decision snapshot (D0), exactly as a live multi-key
+    /// read resolves it: a saga Committed in D0 reads post-saga, an
+    /// Indeterminate one reads absent, and any other reads pre-saga. Every shard
+    /// of the capture resolves against the same D0, so no saga is split across
+    /// the capture. Throws <see cref="TxDecisionGateRefusedException"/> when the
+    /// gate is no longer held.
+    /// </summary>
+    /// <param name="freeze">This leaf's frozen projection from <see cref="FreezeProjectionAsync"/>.</param>
+    /// <param name="capturedHead">The uniform per-partition WAL head the shard captured.</param>
+    /// <param name="decisionGate">The capture's decision gate.</param>
+    /// <param name="cancellationToken">Cancellation token observed during the fold.</param>
+    Task<IReadOnlyList<LeafSnapshotRow>> FoldTailOntoFrozenGatedAsync(
+        LeafBaselineFreeze freeze,
+        long[] capturedHead,
+        SnapshotDecisionGate decisionGate,
         CancellationToken cancellationToken);
 
     /// <summary>

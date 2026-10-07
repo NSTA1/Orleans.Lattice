@@ -1,0 +1,42 @@
+namespace Orleans.Lattice.Replication.Grains;
+
+/// <summary>
+/// A read of a receiver tree's applied low watermarks (issue #4586 part 2b), for
+/// the snapshot export and the tombstone reap gate.
+/// </summary>
+[GenerateSerializer]
+[Immutable]
+[Alias(ReplicationTypeAliases.ReplicationTreeFrontierSnapshot)]
+internal sealed record ReplicationTreeFrontierSnapshot
+{
+    /// <summary>The frontier epoch, <see cref="Guid.Empty"/> in degraded mode.</summary>
+    [Id(0)] public Guid Epoch { get; init; }
+
+    /// <summary>The registry lineage the watermarks hold under, <see langword="null"/> when none is tracked.</summary>
+    [Id(1)] public Guid? RegistryLineage { get; init; }
+
+    /// <summary>
+    /// Per origin, the low watermark: every write of the origin to the tree
+    /// stamped strictly below it is applied here, unless held or lost. Only
+    /// origins with a valid watermark are listed; none in degraded mode.
+    /// </summary>
+    [Id(2)] public IReadOnlyDictionary<string, HybridLogicalClock> LowWatermarks { get; init; } =
+        new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Every origin that has pushed to the tree, with or without a valid
+    /// watermark (issue #4615): an origin listed here and missing from
+    /// <see cref="LowWatermarks"/> is pending or awaits a re-seed, so writes of
+    /// it may still be in flight. Empty in degraded mode, and from a silo that
+    /// predates the member.
+    /// </summary>
+    [Id(3)] public IReadOnlyCollection<string> KnownOrigins { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Per origin, the latest acknowledged read positions its shipper vouched in
+    /// the current epoch (issue #4684). Empty in degraded mode, and from a silo
+    /// that predates the member.
+    /// </summary>
+    [Id(4)] public IReadOnlyDictionary<string, ReplicationAckedPositions> AckedPositions { get; init; } =
+        new Dictionary<string, ReplicationAckedPositions>(StringComparer.Ordinal);
+}

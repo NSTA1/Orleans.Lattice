@@ -173,6 +173,12 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
         {
             throw;
         }
+        catch (LatticeSnapshotExportDeferredException ex)
+        {
+            // A transient refusal (issue #4684): Unavailable is the status the
+            // receiver's bootstrap classifies as transient and retries.
+            throw new RpcException(new Status(StatusCode.Unavailable, ex.Message));
+        }
         catch (UnauthorizedAccessException ex)
         {
             // Sender-side enrollment gate refusal. Surfaced as PermissionDenied
@@ -221,20 +227,26 @@ internal sealed class LatticeRemoteSnapshotGrpcService : LatticeRemoteSnapshotGr
 
         try
         {
-            await foreach (var entry in _service.RequestSnapshotAsync(
+            await foreach (var item in _service.RequestSnapshotItemsAsync(
                 request.TreeName,
                 request.SourceClusterId,
                 request.FromAsOfHlc,
                 context.CancellationToken).ConfigureAwait(false))
             {
                 await responseStream
-                    .WriteAsync(new RemoteSnapshotStreamItemBox { Value = new RemoteSnapshotStreamItem { Entry = entry } })
+                    .WriteAsync(new RemoteSnapshotStreamItemBox { Value = item })
                     .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (LatticeSnapshotExportDeferredException ex)
+        {
+            // A transient refusal (issue #4684): Unavailable is the status the
+            // receiver's bootstrap classifies as transient and retries.
+            throw new RpcException(new Status(StatusCode.Unavailable, ex.Message));
         }
         catch (UnauthorizedAccessException ex)
         {

@@ -1,0 +1,15 @@
+# Pairs with ReconcileDeletesOnlyDeleted. A range-scoped export (the anti-entropy
+# bootstrap fallback's) carries nothing outside its ranges; reconciling there
+# fabricates a delete of every source-origin key outside them, which s still holds.
+MODULE: ReconcileDeletesOnlyDeletedOutOfScope
+TARGET: ReconcileDeletesOnlyDeleted
+CLASS: Invariant
+SUMMARY: the reconcile ignores the export's scope, so a range-scoped export deletes keys it never covered
+PERTURBS: EndExport
+
+--- FIND
+           orphan == ex.scope /\ ex.precap.present /\ ~ex.carried
+--- REPLACE
+\* MUTATION: scope is not consulted.
+           orphan == ex.precap.present /\ ~ex.carried
+--- END

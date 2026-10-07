@@ -151,22 +151,21 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_dedups_entries_below_pinned_floor()
+    public async Task ApplyBatchAsync_applies_entries_below_hwm()
     {
         var (applier, _, apply, hwm) = CreateApplier();
-        // A snapshot floor is pinned at 25; the batch contains some
-        // entries at or below that (contained in the pinned snapshot ->
-        // dedup) and some above (genuinely new -> apply). The whole run
-        // reads the floor once.
+        // The HWM is at 25 (whether advanced incrementally or pinned by a
+        // bootstrap). Entries at or below it are genuinely new writes under
+        // non-monotonic per-origin HLC (#1060) and no snapshot-pinned floor
+        // drops them (#4463), so the whole run applies.
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(25));
 
         var entries = new[]
         {
-            SetEntry("a", Hlc(10)), // dedup (<= floor)
-            SetEntry("b", Hlc(20)), // dedup (<= floor)
-            SetEntry("c", Hlc(30)), // apply
-            SetEntry("d", Hlc(40)), // apply
+            SetEntry("a", Hlc(10)),
+            SetEntry("b", Hlc(20)),
+            SetEntry("c", Hlc(30)),
+            SetEntry("d", Hlc(40)),
         };
 
         var result = await applier.ApplyBatchAsync(entries);
@@ -177,20 +176,19 @@ public partial class ReplicationApplierTests
             Assert.That(result.HighWaterMark, Is.EqualTo(Hlc(40)));
         });
 
-        // Only the two apply-eligible entries hit the batched apply call;
-        // the deduped entries never reach pendingItems.
         await apply.Received(1).ApplyMergeManyAsync(
             Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
-                items.Count == 2
-                && items[0].Key == "c"
-                && items[1].Key == "d"));
+                items.Count == 4
+                && items[0].Key == "a"
+                && items[3].Key == "d"));
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
             default!, default!, default, default!, default, default);
 
-        // The collapse claim survives in-batch dedup: still one
-        // GetAsync + one TryAdvanceAsync for the whole run.
+        // The collapse claim: one GetAsync + one TryAdvanceAsync for the
+        // whole run, and no pinned-floor read.
         await hwm.Received(1).GetAsync(RemoteCluster, Arg.Any<CancellationToken>());
         await hwm.Received(1).TryAdvanceAsync(RemoteCluster, Hlc(40), Arg.Any<CancellationToken>());
+        await hwm.DidNotReceiveWithAnyArgs().GetPinnedFloorAsync(default!, default);
     }
 
     [Test]
@@ -198,7 +196,6 @@ public partial class ReplicationApplierTests
     {
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         var entries = new[]
         {
@@ -206,6 +203,12 @@ public partial class ReplicationApplierTests
             SetEntry("b", Hlc(20)),
             SetEntry("c", Hlc(30)),
         };
+
+        // The first delivery applies; an exact re-delivery of the whole run
+        // is suppressed by the shadow-forward identity cache.
+        await applier.ApplyBatchAsync(entries);
+        apply.ClearReceivedCalls();
+        hwm.ClearReceivedCalls();
 
         var result = await applier.ApplyBatchAsync(entries);
 
@@ -223,18 +226,16 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyBatchAsync_range_delete_in_run_bypasses_hwm_dedup()
+    public async Task ApplyBatchAsync_range_delete_in_run_applies_alongside_point_entries()
     {
         var (applier, _, apply, hwm) = CreateApplier();
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(100));
 
         var entries = new[]
         {
-            // Below floor - would normally dedup, but range-delete bypasses.
             RangeDeleteEntry("a", "m"),
-            SetEntry("a", Hlc(10)), // dedup
-            SetEntry("z", Hlc(200)), // apply
+            SetEntry("a", Hlc(10)), // below HWM: still a genuine write
+            SetEntry("z", Hlc(200)),
         };
 
         var result = await applier.ApplyBatchAsync(entries);
@@ -247,19 +248,19 @@ public partial class ReplicationApplierTests
 
         // Range-delete always applied unconditionally.
         await apply.Received(1).ApplyDeleteRangeAsync("a", "m", HybridLogicalClock.Zero, RemoteCluster, null);
-        // The single apply-eligible LWW entry "z" is flushed via the
-        // batched path with a 1-item list.
+        // Both point entries are flushed via the batched path after the
+        // range delete.
         await apply.Received(1).ApplyMergeManyAsync(
             Arg.Is<IReadOnlyList<ApplyMergeItem>>(items =>
-                items.Count == 1
-                && items[0].Key == "z"
-                && items[0].SourceHlc.Equals(Hlc(200))));
+                items.Count == 2
+                && items[0].Key == "a"
+                && items[1].Key == "z"
+                && items[1].SourceHlc.Equals(Hlc(200))));
         await apply.DidNotReceiveWithAnyArgs().ApplySetAsync(
             default!, default!, default, default!, default, default);
         // Single TryAdvance to highest applied point timestamp (not Zero from range-delete).
         await hwm.Received(1).TryAdvanceAsync(RemoteCluster, Hlc(200), Arg.Any<CancellationToken>());
     }
-
     [Test]
     public async Task ApplyBatchAsync_local_origin_run_classifies_all_as_dedup_without_grain_calls()
     {
@@ -533,7 +534,7 @@ public partial class ReplicationApplierTests
         foreach (var treeId in treeIds)
         {
             var apply = Substitute.For<IReplicationApplyGrain>();
-            var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+            var hwm = HighWaterMarkTestGrains.Substitute();
             factory.GetGrain<IReplicationApplyGrain>(treeId).Returns(apply);
             factory.GetGrain<IReplicationHighWaterMarkGrain>(treeId).Returns(hwm);
             hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);

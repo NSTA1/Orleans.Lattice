@@ -59,11 +59,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 // on this shard's chain (computed by fanning out GetClockAsync over
 // the affected-leaves subset and Tick-ing once over the max - for the
 // untouched leaves contribute no prepare for this saga, so their
-// clocks are irrelevant to the invariant). Receivers merge inbound
-// records by HLC across WAL partitions, so this invariant guarantees
-// every prepare on a shard is observed before the terminal that
-// resolves it - without which a Zero-stamped terminal would always
+// clocks are irrelevant to the invariant). Consumers that merge WAL
+// partitions by HLC rely on it to sort a terminal after the prepares it
+// resolves - without which a Zero-stamped terminal would always
 // sort ahead of non-Zero prepares and flush an empty pending bucket.
+// It is not by itself an ordering guarantee across partitions: leaf
+// clocks are independent, so an unrelated higher-HLC entry can sit ahead
+// of a prepare in its partition. The replication shipper therefore holds
+// each terminal until every prepare of its saga is acknowledged by the
+// peer (ReplicationShipperGrain.TerminalHold.cs, issue #4480).
 internal sealed partial class ShardRootGrain
 {
     private bool _commitLogWriterResolved;
@@ -270,6 +274,17 @@ internal sealed partial class ShardRootGrain
         var writer = ResolveCommitLogWriter();
         if (writer is not null)
         {
+            // A terminal stamped from an override (a replicated relay, a
+            // shadow-forward, the retroactive sweep) can sit below the frontier a
+            // touched leaf published by an empty release on the terminal's
+            // partition. Hold those leaves' consumers durably BEFORE the record
+            // can reach the WAL, inline or batched (issue #4641). A fresh
+            // terminal is ticked past every touched leaf's clock, so needs none.
+            if (LatticeHlcOverrideContext.Current is not null)
+            {
+                await RaiseTerminalOverrideHoldsAsync(hlcLeaves, cancellationToken);
+            }
+
             var walStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
@@ -376,10 +391,20 @@ internal sealed partial class ShardRootGrain
                 committedValues,
                 cancellationToken);
 
+            // The saga's original prepare stamps travel with the mirrored
+            // terminal (issue #4522): the resize mirror ships every write to the
+            // destination copy at this copy's own stamps and every prepare
+            // carrying its own, so the destination is on this copy's clock
+            // lineage and its backstop applies each key at its prepare stamp.
             var shadowForward = ForwardShadowAsync(
                 (transactionId, committed, committedValues, cancellationToken),
                 static (target, state) => (Task)target.AppendTxTerminalAsync(
-                    state.transactionId, state.committed, state.committedValues, state.cancellationToken));
+                    state.transactionId, state.committed, state.committedValues, state.cancellationToken),
+                // Once the resize has swapped, the terminal also reaches every
+                // shard of the resized copy a split of it has moved this shard's
+                // slots to, so a bucket mirrored there is resolved; those shards
+                // get no committed-values backstop (issue #4478).
+                closureState: static state => (state.transactionId, state.committed, null, state.cancellationToken));
 
             await Task.WhenAll(leafFanOut, shadowForward);
         }
@@ -465,6 +490,55 @@ internal sealed partial class ShardRootGrain
 
         walk.ReportIfSlow(logger, context.GrainId);
         return leaves;
+    }
+
+    /// <summary>
+    /// The consumers this activation has already held for a carried-stamp
+    /// terminal (issue #4641). A raise that landed protects its consumer for
+    /// good - the hold stands until the store drops it for a real offset, which
+    /// never goes back - so each is raised at most once per activation.
+    /// </summary>
+    private HashSet<string>? _terminalOverrideHolds;
+
+    /// <summary>
+    /// Durably raises an override hold for every leaf in <paramref name="leaves"/>
+    /// on this shard's terminal partition (issue #4641), the partition the
+    /// commit-log writer routes a terminal to (<c>ShardIndex % partitions</c>).
+    /// Throws when a hold could not be made durable, so the terminal is not
+    /// appended and the broadcast retries.
+    /// </summary>
+    private async Task RaiseTerminalOverrideHoldsAsync(
+        IReadOnlyList<IBPlusLeafGrain> leaves,
+        CancellationToken cancellationToken)
+    {
+        if (leaves.Count == 0
+            || context.ActivationServices?.GetService<ILeafCursorReporter>() is not { } reporter)
+        {
+            return;
+        }
+
+        var options = await GetOptionsAsync();
+        var partitionCount = Math.Max(1, options.WalPartitions);
+        var partition = ShardIndex % partitionCount;
+        var held = _terminalOverrideHolds ??= new HashSet<string>(StringComparer.Ordinal);
+        List<string>? needed = null;
+        for (var i = 0; i < leaves.Count; i++)
+        {
+            var consumerId = BPlusLeafGrain.MaterialiserConsumerIdFor(
+                TreeId, leaves[i].GetGrainId(), partition, partitionCount);
+            if (!held.Contains(consumerId))
+            {
+                (needed ??= new List<string>()).Add(consumerId);
+            }
+        }
+
+        if (needed is null)
+        {
+            return;
+        }
+
+        await reporter.RaiseOverrideHoldsAsync(TreeId, needed, cancellationToken);
+        held.UnionWith(needed);
     }
 
     /// <summary>

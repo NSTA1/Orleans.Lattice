@@ -1,0 +1,19 @@
+# Pairs with SagaBatchOnOneCopy. Reproduces production before #4454 was fixed (#4521): when
+# the routing tier refuses part of a dispatch because the tree moved,
+# TryRebindToResolvedCopyAsync re-binds even though the bound copy mirrors into
+# the new one, leaving the prepares already taken on T behind.
+MODULE: SagaBatchOnOneCopyRebindIgnoresMirror
+TARGET: SagaBatchOnOneCopy
+CLASS: Invariant
+SUMMARY: a mid-dispatch re-bind ignores the mirror check and strands partial prepares on the old copy
+PERTURBS: SagaRebindOnRefusal
+
+--- FIND
+SagaRebindOnRefusal ==
+    /\ sg = "exec"
+    /\ ~BoundMirrors
+--- REPLACE
+SagaRebindOnRefusal ==
+    /\ sg = "exec"
+\* MUTATION: re-bind whether or not the bound copy mirrors.
+--- END

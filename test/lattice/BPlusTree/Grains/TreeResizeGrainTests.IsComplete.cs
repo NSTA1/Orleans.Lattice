@@ -16,7 +16,8 @@ public class TreeResizeGrainIsCompleteTests
     private const int ShardCount = 2;
 
     private static TreeResizeGrain CreateGrainForIsComplete(
-        FakePersistentState<TreeResizeState>? existingState = null)
+        FakePersistentState<TreeResizeState>? existingState = null,
+        FakePersistentState<TreeResizeUndoState>? undoState = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("resize", TreeId));
@@ -44,7 +45,7 @@ public class TreeResizeGrainIsCompleteTests
         return new TreeResizeGrain(
             context, grainFactory, reminderRegistry, optionsMonitor, optionsResolver,
             new LoggerFactory().CreateLogger<TreeResizeGrain>(),
-            Substitute.For<ITagIndexReconcileTrigger>(), state, new FakePersistentState<TreeResizeUndoState>());
+            Substitute.For<ITagIndexReconcileTrigger>(), state, undoState ?? new FakePersistentState<TreeResizeUndoState>());
     }
 
     [Test]
@@ -75,5 +76,36 @@ public class TreeResizeGrainIsCompleteTests
         var grain = CreateGrainForIsComplete(existingState);
         var result = await grain.IsIdleAsync();
         Assert.That(result, Is.True);
+    }
+
+    [Test]
+    public async Task IsIdleAsync_returns_false_while_a_completed_resize_still_holds_its_alias_reservation()
+    {
+        // Issue #4527: completion is persisted before the reservation is
+        // released, so idle must wait for the release or a delete issued on it
+        // is refused as "alias operation in progress".
+        var existingState = new FakePersistentState<TreeResizeState>();
+        existingState.State.InProgress = false;
+        existingState.State.Complete = true;
+        existingState.State.AliasReservationId = "resize:held";
+        var grain = CreateGrainForIsComplete(existingState);
+        var result = await grain.IsIdleAsync();
+        Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public async Task IsIdleAsync_keeps_a_completed_resize_complete_while_an_accepted_undo_holds_the_reservation()
+    {
+        // The reservation an undo of a completed resize takes is the undo's, not
+        // the completion's: the documented contract is that such an undo leaves
+        // the resize reading complete.
+        var existingState = new FakePersistentState<TreeResizeState>();
+        existingState.State.Complete = true;
+        existingState.State.OperationId = "op-1";
+        existingState.State.AliasReservationId = "resize:undo";
+        var undoState = new FakePersistentState<TreeResizeUndoState>();
+        undoState.State.RequestedOperationId = "op-1";
+        var grain = CreateGrainForIsComplete(existingState, undoState);
+        Assert.That(await grain.IsIdleAsync(), Is.True);
     }
 }

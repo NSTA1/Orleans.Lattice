@@ -1,0 +1,16 @@
+# Pairs with TypeOK. The GC records a tail one past the entries it actually
+# removed, an off-by-one between the trim scan and the floor it publishes. At a
+# full stream the recorded tail leaves the offset domain, which only the
+# well-typedness check reports.
+MODULE: TypeOkTrimRecordsTailPastRemoved
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the trim records a tail one past the entries it removed
+PERTURBS: GcTrim
+
+--- FIND
+         /\ tail' = t
+--- REPLACE
+\* MUTATION: off-by-one tail.
+         /\ tail' = t + 1
+--- END

@@ -1,0 +1,20 @@
+# Pairs with BootstrapHandoffLosesNothing. Reproduces production before #4476 (#4463): the
+# handoff pins a drop floor equal to the frontier. The frontier's coordinate
+# for a third origin is the source's HWM for it, a maximum over an origin's
+# writes delivered in non-monotonic HLC order, so the source can hold a's
+# write at HLC 2 but not a's write at HLC 1, and the floor of 2 then drops the
+# HLC-1 write when a delivers it directly. The source's own coordinate is
+# sealed at the highest HLC anywhere in the snapshot, so a later write of the
+# source's on a slower leaf clock is dropped the same way.
+MODULE: BootstrapHandoffLosesNothingPinnedFloor
+TARGET: BootstrapHandoffLosesNothing
+CLASS: Invariant
+SUMMARY: the handoff pins a drop floor at the frontier, so writes the snapshot does not hold are dropped as duplicates
+PERTURBS: Bootstrap
+
+--- FIND
+          /\ pinned' = [pinned EXCEPT ![BootTarget] = [o \in Writers |-> 0]]
+--- REPLACE
+\* MUTATION: the frontier is pinned as a drop floor (PinSnapshotAsync).
+          /\ pinned' = [pinned EXCEPT ![BootTarget] = front]
+--- END

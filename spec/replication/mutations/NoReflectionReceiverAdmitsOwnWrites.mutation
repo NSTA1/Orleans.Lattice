@@ -1,0 +1,32 @@
+# Pairs with NoReflection. The receiver-side cycle-break is removed: an entry
+# whose origin is the receiving cluster falls through to the apply pipeline.
+# The base's send guard admits an echo of the destination's own write (a peer
+# on another build, or a hand-built pipeline), so the receiver guard is what
+# stands between an echo and a reflected apply.
+MODULE: NoReflectionReceiverAdmitsOwnWrites
+TARGET: NoReflection
+CLASS: Invariant
+SUMMARY: drops the receiver-side cycle-break, so an echoed own write enters the apply pipeline
+PERTURBS: Deliver
+BOUNDS: MaxWrites = 1, MaxFaults = 0, MaxHlc = 1
+
+--- FIND
+       /\ \/ /\ w.o = x
+             /\ cursor' = acked
+--- REPLACE
+\* MUTATION: no receiver-side cycle-break.
+       /\ \/ /\ FALSE
+             /\ cursor' = acked
+--- END
+
+--- FIND
+          \/ /\ w.o # x
+             /\ w.h > pinned[x][w.o]
+             /\ Ident(w) \notin cache[x]
+             /\ DepsOk(x, w)
+--- REPLACE
+          \/ /\ TRUE
+             /\ w.h > pinned[x][w.o]
+             /\ Ident(w) \notin cache[x]
+             /\ DepsOk(x, w)
+--- END

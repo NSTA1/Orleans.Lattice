@@ -57,8 +57,27 @@ public sealed class LatticeBackupSetCaptureIntegrationTests
                 new[] { BackupScopeSelector.WholeTree(treeA), BackupScopeSelector.WholeTree(treeB) },
                 crossTreeConsistent: true));
 
-            await Task.WhenAll(writer, capture);
             var result = await capture;
+
+            // The set's fence refuses a cross-tree write that tries to start on a
+            // member while the capture holds it (issue #4485): the write is rolled
+            // back on every tree and fails, which is what lets the set's drain
+            // terminate. Either way the batch must not be torn.
+            var refused = false;
+            try
+            {
+                await writer;
+            }
+            catch (InvalidOperationException)
+            {
+                refused = true;
+            }
+
+            if (refused)
+            {
+                Assert.That(Str(await a.GetAsync("k") ?? []), Is.EqualTo("old"), $"round {round}: a refused batch must be rolled back on tree A");
+                Assert.That(Str(await b.GetAsync("k") ?? []), Is.EqualTo("old"), $"round {round}: a refused batch must be rolled back on tree B");
+            }
 
             var valueA = await ValueOfAsync(result, treeA, "k");
             var valueB = await ValueOfAsync(result, treeB, "k");

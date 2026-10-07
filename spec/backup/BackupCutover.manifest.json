@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-cutover",
+  "refinement": "RefinementCutover.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 5,
+    "properties": 2,
+    "actions": 10,
+    "mutations": 12,
+    "behaviourRows": 16,
+    "distinctStates": 39
+  }
+}

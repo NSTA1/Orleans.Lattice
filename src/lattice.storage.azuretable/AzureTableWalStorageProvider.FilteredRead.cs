@@ -55,8 +55,8 @@ public sealed partial class AzureTableWalStorageProvider
         }
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
-        var firstWantedOffset = Math.Max(0L, fromOffsetExclusive + 1L);
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
+        var firstWantedOffset = ClampToTrimWatermark(manifestPartitionKey, Math.Max(0L, fromOffsetExclusive + 1L));
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
         var upperRowKey = BuildEntryRowKey(toOffsetInclusive);

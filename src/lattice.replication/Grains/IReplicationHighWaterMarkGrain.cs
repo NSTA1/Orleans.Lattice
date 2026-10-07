@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -23,11 +24,10 @@ namespace Orleans.Lattice.Replication.Grains;
 /// every concurrent append. <see cref="TryAdvanceAsync"/> is the only
 /// way to grow it during steady-state apply;
 /// <see cref="PinSnapshotAsync"/> sets the entire vector
-/// unconditionally and is intended for the bootstrap-snapshot handoff
-/// (where the snapshot's <c>asOfHlc</c> is by construction the highest
-/// HLC the receiver should consider applied for the originating
-/// cluster after restore, and the <c>frontier</c> is the snapshot's
-/// causal-stable frontier).
+/// unconditionally and is the intra-cluster restore re-seed, a deliberate
+/// rollback; <see cref="MergeBootstrapFrontierAsync"/> is the cross-cluster
+/// bootstrap handoff and only ever raises coordinates (pointwise maximum
+/// with the vector already held, #4464).
 /// </para>
 /// </summary>
 [Alias(ReplicationTypeAliases.IReplicationHighWaterMarkGrain)]
@@ -47,21 +47,20 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     Task<HybridLogicalClock> GetAsync(string originClusterId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the <em>snapshot-pinned causal floor</em> entry for the
+    /// Returns the legacy <em>snapshot-pinned floor</em> entry for the
     /// <c>(this tree, <paramref name="originClusterId"/>)</c> pair, or
-    /// <see cref="HybridLogicalClock.Zero"/> when no snapshot has been
-    /// pinned for that origin. This is the frontier established by the
-    /// most recent <see cref="PinSnapshotAsync"/> and is written
-    /// <em>only</em> by a snapshot pin - never advanced by steady-state
-    /// <see cref="TryAdvanceAsync"/>. The receiver treats an entry as a
-    /// duplicate (and drops it) only when its source HLC is at or below
-    /// this floor, because that is the sole per-origin threshold below
-    /// which every entry is provably contained in a pinned snapshot.
-    /// The incrementally-advanced diagonal from
-    /// <see cref="GetAsync(string, CancellationToken)"/> is NOT a valid
-    /// drop threshold: the per-origin HLC is non-monotonic in
-    /// WAL-append order, so a below-diagonal entry to a distinct key is
-    /// routinely a genuinely-new write (#1060).
+    /// <see cref="HybridLogicalClock.Zero"/> when none is stored.
+    /// <para>
+    /// The receiver no longer uses a pinned floor as a drop threshold
+    /// (#4463): no single HLC per origin is downward-closed over what a
+    /// snapshot holds, so dropping point writes at or below one silently
+    /// discarded writes the snapshot never contained. This build never
+    /// reads the floor, and <see cref="PinSnapshotAsync"/> clears any floor
+    /// an earlier build persisted. The method is retained so a silo still
+    /// on an earlier build can call it during a rolling upgrade; it reads
+    /// <see cref="HybridLogicalClock.Zero"/> (drop nothing) once a pin by
+    /// this build has landed.
+    /// </para>
     /// </summary>
     /// <param name="originClusterId">
     /// The origin cluster id whose pinned-floor entry to read. Must be
@@ -98,12 +97,16 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
 
     /// <summary>
     /// Replaces the local vector clock with
-    /// <paramref name="frontier"/> unconditionally. Intended for the
-    /// bootstrap-snapshot handoff: a newly-bootstrapped peer pins the
-    /// vector to the snapshot's causal-stable frontier, then resumes
-    /// incremental replication from that pinned frontier with
-    /// exactly-once apply guarantees across the snapshot / incremental
-    /// boundary. The <paramref name="asOfHlc"/> argument carries the
+    /// <paramref name="frontier"/> unconditionally, so it can move
+    /// backwards. This is the intra-cluster restore re-seed
+    /// (<see cref="LatticeReplicationLocalVcSeeder"/>): a restore is a
+    /// deliberate rollback, and the vector must follow the restored
+    /// values' frontier. The cross-cluster bootstrap handoff must NOT use
+    /// it - a receiver that already applied an origin's writes above the
+    /// source's frontier would move backwards and strand parked entries
+    /// (#4464) - and uses <see cref="MergeBootstrapFrontierAsync"/>
+    /// instead. Installs no drop floor and clears any floor an earlier
+    /// build persisted (see <see cref="GetPinnedFloorAsync"/>). The <paramref name="asOfHlc"/> argument carries the
     /// snapshot's authoring HLC (the <c>as-of</c> HLC the snapshot
     /// scan was produced at) for diagnostic and protocol purposes; it
     /// is preserved in the call shape so a future bootstrap protocol
@@ -124,4 +127,143 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// </param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task PinSnapshotAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs a bootstrap snapshot's frontier by taking the
+    /// <em>pointwise maximum</em> with the vector already held, and returns
+    /// whether any coordinate rose. Used by the cross-cluster bootstrap
+    /// handoff (<see cref="LatticeBootstrapCoordinatorGrain"/>): the receiver
+    /// may already have applied an origin's writes above the source's frontier
+    /// (it receives that origin directly), and replacing the vector would move
+    /// it backwards, stranding an entry parked on a dependency those writes
+    /// already met (#4464). Like <see cref="PinSnapshotAsync"/> it installs no
+    /// drop floor and clears any floor an earlier build persisted.
+    /// <para>
+    /// Contrast <see cref="PinSnapshotAsync"/>, which <em>replaces</em> the
+    /// vector and is the intra-cluster restore re-seed
+    /// (<see cref="LatticeReplicationLocalVcSeeder"/>): a restore is a
+    /// deliberate rollback, so the vector must be able to move backwards to
+    /// the restored values' frontier.
+    /// </para>
+    /// </summary>
+    /// <param name="asOfHlc">The snapshot's authoring HLC; reserved, not consulted.</param>
+    /// <param name="frontier">The snapshot frontier to merge. Must be non-null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<bool> MergeBootstrapFrontierAsync(HybridLogicalClock asOfHlc, VersionVector frontier, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Records that the writes of <paramref name="originClusterId"/> at each HLC
+    /// in <paramref name="applied"/> were merged into this tree, and - when
+    /// <paramref name="advanceHighWaterMark"/> is set - advances the origin's
+    /// high-water mark to <paramref name="highest"/> as <see cref="TryAdvanceAsync"/>
+    /// does, in one call (issue #4586). A recorded identity meets every
+    /// dependency that names it at once. The record is in memory only and
+    /// bounded by <see cref="LatticeReplicationOptions.CausalAppliedIdentityCapacity"/>
+    /// per origin; a forgotten identity is decided by the origin's frontier
+    /// instead. Call it only after the writes were merged at the leaf; never for a
+    /// saga prepare, which is not visible until its terminal.
+    /// </summary>
+    /// <param name="originClusterId">The origin of the applied writes. Must be non-null and non-empty.</param>
+    /// <param name="highest">The highest HLC applied, for the high-water-mark advance.</param>
+    /// <param name="applied">The applied writes' source HLCs. Must be non-null.</param>
+    /// <param name="advanceHighWaterMark">Whether to advance the high-water mark as well.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Whether the high-water mark moved.</returns>
+    Task<bool> AdvanceAppliedAsync(
+        string originClusterId,
+        HybridLogicalClock highest,
+        IReadOnlyList<HybridLogicalClock> applied,
+        bool advanceHighWaterMark,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Forgets every applied identity <see cref="AdvanceAppliedAsync"/> recorded
+    /// (issue #4586). Called on every lineage change of the tree - an alias swap
+    /// for a restore, revert, resize, remediation or operator rebind - because a
+    /// write recorded as applied before it may no longer be in the tree, and a
+    /// dependent released on that record would be visible without it. A forgotten
+    /// identity is decided by the origin's frontier instead, so this only delays.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The origin's high-water mark together with the tree's bootstrap drop
+    /// floor for it (issue #4549). The applier reads it once per entry, or once
+    /// per same-origin run of a batch, in place of <see cref="GetAsync"/>.
+    /// </summary>
+    /// <param name="originClusterId">The origin whose admission to read.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<ReplicationApplyAdmission> GetAdmissionAsync(string originClusterId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Installs, durably, the bootstrap drop floor a full bootstrap's export
+    /// carries (issue #4549), replacing any earlier one: per origin, the
+    /// source's applied low watermark at export open and the writes below it the
+    /// source held without applying. Installed before the drain applies anything,
+    /// so no delivery the export already reflects lands meanwhile. An empty or
+    /// out-of-bounds export installs no floor. The floor starts provisional - a
+    /// delivery below it is deferred - until <see cref="FinalizeBootstrapFloorAsync"/>.
+    /// Every install bumps the tree's floor epoch, which it returns.
+    /// </summary>
+    /// <param name="lowWatermarks">Per origin, the source's applied low watermark at export open.</param>
+    /// <param name="held">Per origin, the writes the source held without applying.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The tree's new floor epoch.</returns>
+    Task<long> SetBootstrapFloorAsync(
+        IReadOnlyDictionary<string, HybridLogicalClock> lowWatermarks,
+        IReadOnlyDictionary<string, HybridLogicalClock[]> held,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Makes the tree's provisional bootstrap drop floor final, durably (issue
+    /// #4549): its import closed against a stable source, so from now on a
+    /// delivery below it is dropped. A no-op when there is no provisional floor.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task FinalizeBootstrapFloorAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Removes the tree's bootstrap drop floor, durably (issue #4549).</summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task ClearBootstrapFloorAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the tree recorded <paramref name="originClusterId"/>'s write at
+    /// <paramref name="timestamp"/> as applied and still remembers it (issue
+    /// #4586 part 2b). Interleaves: the origin's frontier asks while this grain
+    /// may be waiting on it inside <see cref="CheckDependenciesAsync"/>.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> HasAppliedAsync(string originClusterId, HybridLogicalClock timestamp);
+
+    /// <summary>
+    /// Durably records that the write of <paramref name="originClusterId"/> at
+    /// <paramref name="timestamp"/> was acknowledged and then lost for good - an
+    /// operator discarded it from the dead-letter queue (#4603). The mark lives on
+    /// the origin's <see cref="IReplicationOriginFrontierGrain"/>, because a
+    /// dependency names an origin's write and not a tree (#4586); from then on
+    /// <see cref="CheckDependenciesAsync"/> on any tree reports a dependent of it
+    /// as <see cref="CausalDependencyVerdict.Lost"/>. Idempotent.
+    /// </summary>
+    /// <param name="originClusterId">The lost write's origin. Must be non-null and non-empty.</param>
+    /// <param name="timestamp">The lost write's source HLC.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RecordLostAsync(string originClusterId, HybridLogicalClock timestamp, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks each dependency vector in <paramref name="dependencies"/> (as
+    /// produced by <see cref="CausalApplyBuffer.RequiredDependencies"/>) and
+    /// returns one verdict per vector, in order (issue #4586). A dependency
+    /// <c>(o, t)</c> names exactly one write. It is met when this tree recorded
+    /// that write as applied (<see cref="AdvanceAppliedAsync"/>); otherwise the
+    /// origin's <see cref="IReplicationOriginFrontierGrain"/> decides it, by
+    /// <see cref="CausalFrontierCore.Decide"/>. The high-water mark is never
+    /// consulted: a per-origin maximum HLC is not downward-closed (#1060).
+    /// A vector is <see cref="CausalDependencyVerdict.Lost"/> when any dependency
+    /// is lost, otherwise <see cref="CausalDependencyVerdict.Unmet"/> when any is
+    /// unmet, otherwise <see cref="CausalDependencyVerdict.Met"/>.
+    /// </summary>
+    /// <param name="dependencies">The dependency vectors to check. Must be non-null.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<CausalDependencyVerdict[]> CheckDependenciesAsync(IReadOnlyList<VersionVector> dependencies, CancellationToken cancellationToken = default);
 }

@@ -432,6 +432,51 @@ internal sealed class LeafNodeState : ILatticeBinaryPersistedState
     [Id(21)] public List<UnresolvedReplayWorkEntry>? UnresolvedReplayWork { get; set; }
 
     /// <summary>
+    /// Receiver-side saga prepare txids deliberately discarded from this leaf.
+    /// <para>
+    /// A poisoned receiver saga is not aborted in the receiver transaction
+    /// registry: the next re-seed either ships the source's settled decision rows
+    /// or restages the still-in-flight saga whole. The local discard still has to
+    /// survive a leaf reactivation before its projection checkpoint has moved
+    /// beyond the prepared WAL rows. Entries here tell replay to treat matching
+    /// prepared records as already discarded instead of rebuilding
+    /// <c>_pendingTx</c>. Partition offsets are best-effort pruning evidence:
+    /// when every recorded partition checkpoint has advanced past its offset the
+    /// entry can be removed, while entries with no offset remain as the safe
+    /// durable backstop.
+    /// </para>
+    /// </summary>
+    [Id(25)] public List<DiscardedSagaPrepare>? DiscardedSagaPrepares { get; set; }
+
+    /// <summary>
+    /// One-way record, per WAL partition, that this leaf's snapshot store has
+    /// kept a snapshot covering that partition (issue #4634). <see langword="null"/>
+    /// or <see langword="false"/> means none ever has.
+    /// <para>
+    /// Under coverage-gated trim the WAL GC removes a prefix precisely because a
+    /// snapshot covers it, so an absent snapshot on a cold start is only proof
+    /// that the leaf never had one when this record says so. A partition's entry
+    /// is set the first time a snapshot covering it is kept or loaded, and is
+    /// made durable by the durable pin flush before it publishes any pin, so the
+    /// WAL GC is never licensed to trim behind a snapshot this record does not
+    /// name. It lives in the leaf's own row, not a sidecar, so losing it means
+    /// losing the checkpoint the cold-start check keys on too. It costs at most
+    /// one extra state write per partition per leaf lifetime, and is cleared
+    /// only by an operator rebuild that accepts the loss, or with the leaf.
+    /// </para>
+    /// </summary>
+    [Id(26)] public bool[]? SnapshotCoveredPartitions { get; set; }
+
+    /// <summary>
+    /// Whether this leaf's row record (<see cref="ILeafRowRecordGrain"/>, issue
+    /// #4654) is known to be durable, so <c>PersistAsync</c> writes it only
+    /// before the first state write that carries this flag rather than before
+    /// every one. A row written before the record existed has this
+    /// <see langword="false"/>, and its next write records it.
+    /// </summary>
+    [Id(27)] public bool RowRecorded { get; set; }
+
+    /// <summary>
     /// Bytes this leaf's persisted snapshot last occupied on the wire, recorded
     /// so the next activation can reserve hydration budget accurately from its
     /// very first moment instead of re-learning the size by overshooting

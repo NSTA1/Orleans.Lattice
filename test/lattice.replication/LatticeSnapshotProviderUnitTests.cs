@@ -26,7 +26,7 @@ public class LatticeSnapshotProviderUnitTests
         var factory = Substitute.For<IGrainFactory>();
         var cursors = Substitute.For<IWalCursorRegistry>();
         var lattice = Substitute.For<ILattice>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
 
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(lattice);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
@@ -48,11 +48,11 @@ public class LatticeSnapshotProviderUnitTests
     /// fresh <see cref="LatticeReplicationOptions"/> for the snapshot
     /// provider's options read.
     /// </summary>
-    internal static IOptionsMonitor<LatticeReplicationOptions> TestOptions()
+    internal static IOptionsMonitor<LatticeReplicationOptions> TestOptions(string clusterId = "site-test")
     {
         var options = new LatticeReplicationOptions
         {
-            ClusterId = "site-test",
+            ClusterId = clusterId,
         };
 
         var monitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();

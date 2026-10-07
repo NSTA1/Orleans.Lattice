@@ -163,7 +163,7 @@ public partial class ReplicationShipperGrainTests
     /// stash index so the test fixture does not need to spin up the
     /// real Orleans serializer for shipper-grain unit tests.
     /// </summary>
-    private sealed class StubWalRecordEncoder : IWalRecordEncoder
+    internal sealed class StubWalRecordEncoder : IWalRecordEncoder
     {
         private readonly List<WalRecord> _stash = new();
 
@@ -207,7 +207,7 @@ public partial class ReplicationShipperGrainTests
     /// tick.
     /// </para>
     /// </summary>
-    private sealed class StubReplogShardGrain(StubWalRecordEncoder? encoder = null) : IWalShardGrain
+    internal sealed class StubReplogShardGrain(StubWalRecordEncoder? encoder = null) : IWalShardGrain
     {
         private readonly StubWalRecordEncoder _encoder = encoder ?? new StubWalRecordEncoder();
         public List<WalRecord> Entries { get; } = new();
@@ -223,6 +223,37 @@ public partial class ReplicationShipperGrainTests
         /// reads out concurrently rather than serializing them.
         /// </summary>
         public Func<CancellationToken, Task>? OnReadShipping { get; set; }
+
+        /// <summary>
+        /// Models a WAL trim: entries with a sequence below this value are no
+        /// longer stored, so a shipping read from below it returns the first
+        /// retained entry onward (issue #4534).
+        /// </summary>
+        public long TrimmedThrough { get; set; }
+
+        /// <summary>
+        /// Models permanent holes: sequences that were allocated but never
+        /// written, such as a flush abandoned at its deadline that never landed
+        /// (issue #4621). A read skips them; they are not a trim.
+        /// </summary>
+        public HashSet<long> Holes { get; } = new();
+
+        /// <summary>
+        /// Whether the feed reports a trusted trim watermark (issue #4621). When
+        /// <see langword="false"/> it reports none, as a provider that keeps no
+        /// watermark or a mixed-version cluster does.
+        /// </summary>
+        public bool ReportsTrimWatermark { get; set; } = true;
+
+        public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ReportsTrimWatermark ? TrimmedThrough - 1 : (long?)null);
+
+        /// <summary>
+        /// Models the partition's published clock floor (issue #4586): every
+        /// shipping read returns it paired with the next offset, as the real
+        /// shard does once it has persisted the floor.
+        /// </summary>
+        public HybridLogicalClock ClockFloor { get; set; }
 
         public void Append(WalRecord entry) => Entries.Add(entry);
 
@@ -254,30 +285,44 @@ public partial class ReplicationShipperGrainTests
                 throw ThrowOnRead;
             }
             cancellationToken.ThrowIfCancellationRequested();
+            if (fromSequence < TrimmedThrough && TrimmedThrough < Entries.Count)
+            {
+                fromSequence = TrimmedThrough;
+            }
             if (fromSequence >= Entries.Count)
             {
                 return new WalShardShippingPage
                 {
                     Entries = Array.Empty<WalShardShippingEntry>(),
                     NextSequence = fromSequence,
+                    ClockFloor = ClockFloor,
+                    ClockFloorOffset = ClockFloor == HybridLogicalClock.Zero ? 0 : Entries.Count,
                 };
             }
-            var endExclusive = (int)Math.Min(Entries.Count, fromSequence + maxEntries);
-            var capacity = endExclusive - (int)fromSequence;
-            var entries = new WalShardShippingEntry[capacity];
-            for (var i = 0; i < capacity; i++)
+            // Like a provider read, a hole is skipped and the page still holds up
+            // to maxEntries stored entries.
+            var entries = new List<WalShardShippingEntry>(Math.Min(maxEntries, Entries.Count));
+            long endExclusive = fromSequence;
+            for (var seq = fromSequence; seq < Entries.Count && entries.Count < maxEntries; seq++)
             {
-                var seq = fromSequence + i;
-                entries[i] = new WalShardShippingEntry
+                endExclusive = seq + 1;
+                if (Holes.Contains(seq))
+                {
+                    continue;
+                }
+
+                entries.Add(new WalShardShippingEntry
                 {
                     Sequence = seq,
                     EncodedPayload = _encoder.EncodeToBytes(Entries[(int)seq]),
-                };
+                });
             }
             return new WalShardShippingPage
             {
                 Entries = entries,
                 NextSequence = endExclusive,
+                ClockFloor = ClockFloor,
+                ClockFloorOffset = ClockFloor == HybridLogicalClock.Zero ? 0 : Entries.Count,
             };
         }
 
@@ -332,8 +377,24 @@ public partial class ReplicationShipperGrainTests
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
+        public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
+            ValueTask.FromResult((long)Entries.Count);
+
         public Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken) =>
             Task.FromResult((long)Entries.Count);
+
+        public Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken)
+        {
+            for (var seq = TrimmedThrough; seq < Entries.Count; seq++)
+            {
+                if (!Holes.Contains(seq))
+                {
+                    return Task.FromResult(seq);
+                }
+            }
+
+            return Task.FromResult(-1L);
+        }
 
         public Task<long> GetRetainedByteSizeAsync(CancellationToken cancellationToken) =>
             Task.FromResult(-1L);
@@ -389,7 +450,8 @@ public partial class ReplicationShipperGrainTests
             IReplicationDigestProbeTransport? digestProbeTransport = null,
             CrdtShapeRegistry? crdtShapeRegistry = null,
             SharedDictionaryNegotiationState? dictionaryNegotiationState = null,
-            ILatticeCompressionDictionaryProvider? dictionaryProvider = null)
+            ILatticeCompressionDictionaryProvider? dictionaryProvider = null,
+            ReplicationPeerStats? peerStats = null)
     {
         var ctx = Substitute.For<IGrainContext>();
         ctx.GrainId.Returns(GrainId.Create("shipper", $"{treeName}/{peerClusterId}"));
@@ -411,7 +473,7 @@ public partial class ReplicationShipperGrainTests
         var grain = new ReplicationShipperGrain(
             ctx, reminders, NullLogger<ReplicationShipperGrain>.Instance,
             monitor, transport, encoder, walRecordEncoder, registry, factory, fakeState,
-            new ReplicationPeerStats(),
+            peerStats ?? new ReplicationPeerStats(),
             modeResolver ?? Substitute.For<ILatticeMergeModeResolver>(),
             new WireVersionNegotiationState(), digestProbeTransport ?? new NoOpReplicationDigestProbeTransport(),
             crdtShapeRegistry, dictionaryNegotiationState, dictionaryProvider);

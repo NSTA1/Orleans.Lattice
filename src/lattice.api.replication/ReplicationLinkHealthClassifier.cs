@@ -46,6 +46,21 @@ internal static class ReplicationLinkHealthClassifier
             worst,
             Tier(row.ConsecutiveErrors, options.LaggingConsecutiveErrors, options.StalledConsecutiveErrors));
 
+        // A peer the sender took off the log after a trim lost records it never
+        // shipped receives no saga records until it is re-seeded (#4534).
+        if (row.ReseedRequiredSeconds is not null)
+        {
+            return ReplicationLinkHealth.Stalled;
+        }
+
+        // A full dead-letter queue keeps the link's next unparkable entry
+        // unacknowledged, so the link makes no progress until an operator drains
+        // the queue (#4603).
+        if (row.DeadLetterFullSeconds is not null)
+        {
+            return ReplicationLinkHealth.Stalled;
+        }
+
         return worst == ReplicationLinkHealth.Healthy && !contacted
             ? ReplicationLinkHealth.Unknown
             : worst;

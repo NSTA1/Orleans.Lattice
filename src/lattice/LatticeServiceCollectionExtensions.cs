@@ -104,6 +104,7 @@ public static class LatticeServiceCollectionExtensions
         builder.Services.AddSingleton<BPlusTree.Grains.TxRegistryReadCoalescer>();
         builder.Services.AddSingleton<MutationObserverDispatcher>();
         builder.Services.AddSingleton<TreeAliasObserverDispatcher>();
+        builder.Services.AddSingleton<TreeLineageObserverDispatcher>();
         builder.Services.AddSingleton<ILatticeFallOffLogDetector, LatticeFallOffLogDetector>();
 
         // Storage-usage observable-gauge sink. Constructing the singleton
@@ -234,6 +235,12 @@ public static class LatticeServiceCollectionExtensions
         // IWalStorageProvider via AppendEncodedBatchAsync. Singleton-
         // scoped so the underlying codec stays hot.
         builder.Services.TryAddSingleton<IWalRecordEncoder, OrleansBinaryWalRecordEncoder>();
+        // Issue #4586: a replicated tree's WAL partitions advance their clock
+        // floor only while every active silo advertises the floor capability.
+        builder.Services.TryAddSingleton<IWalClockFloorGate, ClusterManifestWalClockFloorGate>();
+        // Issue #4615: a tree reaps tombstones on the grace period alone unless
+        // a replicating host bounds the reap on its replication frontier.
+        builder.Services.TryAddSingleton<ITombstoneReapGate, UngatedTombstoneReapGate>();
         builder.Services.TryAddSingleton<ILatticeMergeModeResolver, DefaultLatticeMergeModeResolver>();
         // Membership seam: default to the anonymous-resolving no-op so a
         // consumer of ILatticeMembershipContext (for example the later

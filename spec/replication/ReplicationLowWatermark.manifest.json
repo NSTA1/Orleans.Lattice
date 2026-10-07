@@ -1,0 +1,19 @@
+{
+  "mutations": "lowwatermark-mutations",
+  "refinement": "ReplicationLowWatermark.Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 2,
+    "properties": 1,
+    "actions": 18,
+    "mutations": 21,
+    "behaviourRows": 19,
+    "distinctStates": 330842
+  },
+  "variants": {
+    "Sagas": { "distinctStates": 181862 },
+    "Loss": { "distinctStates": 27522 },
+    "DeadLetters": { "distinctStates": 19449 },
+    "Bootstrap": { "distinctStates": 43757 }
+  }
+}

@@ -1,0 +1,19 @@
+# Pairs with ReclamationEventuallyAdvances, and reproduces issue #3608: the
+# coalescing persist runs only once the pending advance reaches a threshold, and
+# nothing re-asks the question for a residual advance below it, so a leaf's last
+# advance is never persisted, its pin stays below the head, and the WAL is never
+# fully reclaimed. The spec's fairness is intact.
+MODULE: ReclamationEventuallyAdvancesResidualAdvanceNeverPersisted
+TARGET: ReclamationEventuallyAdvances
+CLASS: Temporal
+SUMMARY: a residual pending advance below the coalescing threshold is never persisted
+PERTURBS: PersistCheckpoint
+
+--- FIND
+    /\ rp[l] > stCp[l]
+    /\ durCp' = [durCp EXCEPT ![l] = rp[l]]
+--- REPLACE
+\* MUTATION: persist only once two entries are pending.
+    /\ rp[l] >= stCp[l] + 2
+    /\ durCp' = [durCp EXCEPT ![l] = rp[l]]
+--- END

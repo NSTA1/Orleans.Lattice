@@ -39,7 +39,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="Timeout.InfiniteTimeSpan"/> to disable retention cleanup.
 /// </para>
 /// </summary>
-internal sealed class AtomicWriteGrain(
+internal sealed partial class AtomicWriteGrain(
     IGrainContext context,
     IGrainFactory grainFactory,
     IReminderRegistry reminderRegistry,
@@ -599,6 +599,25 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <inheritdoc />
+    public async Task RecordCrossTreeDecisionStampsAsync(
+        IReadOnlyDictionary<string, long> stamps, IReadOnlyDictionary<string, long>? sequences = null)
+    {
+        ArgumentNullException.ThrowIfNull(stamps);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            GrainContext.ActivationServices, state.State.TreeId ?? string.Empty, LatticeOperation.AtomicWrite);
+        var txid = state.State.TransactionId;
+        if (txid == Guid.Empty || string.IsNullOrEmpty(state.State.TreeId))
+        {
+            return;
+        }
+
+        var registry = RegistryFor(state.State.TreeId, txid);
+        await TxRegistryWriteRetry.RunAsync(
+            (registry, txid, stamps, sequences),
+            static s => s.registry.RecordCrossTreeDecisionStampsAsync(s.txid, s.stamps, s.sequences));
+    }
+
+    /// <inheritdoc />
     public async Task FinalizeAsync(bool commit)
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
@@ -647,6 +666,16 @@ internal sealed class AtomicWriteGrain(
             if (txid != Guid.Empty)
             {
                 var registry = RegistryFor(state.State.TreeId, txid);
+
+                // The membership precedes the delegation, and so every terminal
+                // of the saga, and lives as long as its decision (#4683).
+                if (state.State.CrossTreeParticipants is { Count: > 0 } participants)
+                {
+                    await TxRegistryWriteRetry.RunAsync(
+                        (registry, txid, coordinatorKey, participants),
+                        static s => s.registry.RecordCrossTreeMembershipAsync(s.txid, s.coordinatorKey, s.participants));
+                }
+
                 await TxRegistryWriteRetry.RunAsync(
                     (registry, txid, coordinatorKey),
                     static s => s.registry.RegisterExternalDecisionAuthorityAsync(s.txid, s.coordinatorKey));
@@ -663,6 +692,14 @@ internal sealed class AtomicWriteGrain(
                 state.State.Phase = prevPhase;
                 throw;
             }
+        }
+        catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+        {
+            // Issue #4485: a backup set's fence refused the delegation. Not a
+            // retryable park blip - RunSagaAsync rolls this sub-saga back so it
+            // votes Failed. Nothing was persisted (the registration precedes the
+            // paused-phase write), so there is nothing to revert.
+            throw;
         }
         catch (LatticeStateWriteFailedException conflict) when (conflict.Conflict)
         {
@@ -1111,6 +1148,7 @@ internal sealed class AtomicWriteGrain(
             {
                 var registry = RegistryFor(treeId, state.State.TransactionId);
                 await registry.RegisterParticipantsAsync(state.State.TransactionId, touchedSorted);
+                _participantRowShards = touchedSorted;
 #if LATTICE_DIAG
                 DiagSink.Write($"[DIAG saga-prepare-bulk-register-exit] op={OperationKey} tx={state.State.TransactionId} shards={touchedSorted.Count}");
 #endif
@@ -1183,6 +1221,49 @@ internal sealed class AtomicWriteGrain(
     /// </summary>
     private ITxRegistryGrain RegistryFor(string treeId, Guid txid) =>
         TxRegistryRouting.GetRegistry(grainFactory, treeId, txid);
+
+    /// <summary>
+    /// The shard set this activation last durably registered as the saga's
+    /// participant row, so <see cref="EnsureParticipantRowAsync"/> skips the
+    /// registry round trip in the common case where the prepare phase's bulk
+    /// registration already landed it.
+    /// </summary>
+    private IReadOnlyList<int>? _participantRowShards;
+
+    /// <summary>
+    /// Makes the saga's participant row in its own tree's registry a precondition
+    /// of every prepare dispatch (issue #4632). The row is what tells a
+    /// forwarded prepare of a live saga from one delivered after the saga was
+    /// forgotten and its decision pruned: only <see cref="ITxRegistryGrain.ForgetAsync"/>
+    /// removes it, and a forwarded registration never recreates it, so the
+    /// destination leaf refuses a forwarded prepare whose saga the registry
+    /// reports undecided and holds no row for. A live saga must therefore never
+    /// be without one, or its own forwarded prepares would be refused. The prepare
+    /// phase's bulk registration is best-effort, and a reminder-driven re-entry
+    /// resumes in the execute phase without it, so the execute phase re-asserts
+    /// the row before dispatching - a no-op write when every shard is already
+    /// recorded - and a registry fault fails the step.
+    /// </summary>
+    private async Task EnsureParticipantRowAsync()
+    {
+        var txid = state.State.TransactionId;
+        var shards = state.State.TouchedShards;
+        if (txid == Guid.Empty
+            || state.State.NextIndex >= state.State.Entries.Count
+            || ReferenceEquals(_participantRowShards, shards))
+        {
+            return;
+        }
+
+        // An empty touched set (a saga persisted before the set was recorded)
+        // still needs a row; shard 0 stands in, and a terminal routed to a
+        // shard that holds none of the batch's keys is a no-op there.
+        IReadOnlyList<int> row = shards.Count > 0 ? shards : [0];
+        await TxRegistryWriteRetry.RunAsync(
+            (registry: RegistryFor(state.State.TreeId, txid), txid, row),
+            static s => s.registry.RegisterParticipantsAsync(s.txid, s.row));
+        _participantRowShards = shards;
+    }
 
     /// <summary>
     /// Per-shard pre-saga capture helper used by <see cref="PrepareAsync"/>.
@@ -1412,6 +1493,12 @@ internal sealed class AtomicWriteGrain(
                 OperationKey);
             return;
         }
+
+        // Issue #4522: a saga whose execute phase ran on a silo that predates
+        // the read-back reaches its commit broadcast with no stamps recorded.
+        // Its buckets are still pending until this broadcast, so read them now.
+        if (committed && state.State.Entries.Count > 0 && state.State.OriginalPrepareStampsPhysicalTreeId is null)
+            await ReadBackBeforeBroadcastAsync().ConfigureAwait(true);
 
 #if LATTICE_DIAG
         DiagSink.Write($"[DIAG broadcast-entry] op={OperationKey} tx={transactionId} committed={committed} initialTouched=[{string.Join(",", state.State.TouchedShards)}] entriesCount={state.State.Entries.Count}");
@@ -2187,7 +2274,9 @@ internal sealed class AtomicWriteGrain(
         List<WalRecord>? buffer = null;
         for (var i = 0; i < records.Length; i++)
         {
-            if (records[i] is { } r)
+            // A copy a resize undo discarded has had its log released; a terminal
+            // it took before the discard is discarded with it (issue #4474).
+            if (records[i] is { } r && _discardedTerminalCopies?.Contains(r.TreeId) != true)
             {
                 buffer ??= new List<WalRecord>(records.Length);
                 buffer.Add(r);
@@ -2198,7 +2287,114 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
-    /// Per-shard terminal append with deadline-bounded routing-refresh
+    /// The physical copies this activation found discarded by a resize undo
+    /// while broadcasting terminals; see <see cref="TerminalCopyWasDiscardedAsync"/>.
+    /// </summary>
+    private HashSet<string>? _discardedTerminalCopies;
+
+    /// <summary>
+    /// Whether the physical copy that refused a saga terminal is the destination
+    /// of an undone resize, discarded by <see cref="ITreeDeletionGrain.DiscardDerivedPhysicalTreeAsync"/>.
+    /// The undo discards every write that copy took, so a terminal addressed to it
+    /// counts as delivered: the batch prepared on it is discarded with it, whole.
+    /// Following the refusal to the copy the tree resolves to now - the old copy
+    /// the undo restored, which lays keys out by the same map - would land the
+    /// terminal and its committed-values backstop on some of that copy's shards
+    /// only and tear the batch there, and refusing it outright would stall the
+    /// saga on every retry (issue #4474). A purge never marks a copy discarded,
+    /// so a resize's old copy is not answered here. Asked only on a refusal.
+    /// </summary>
+    private async Task<bool> TerminalCopyWasDiscardedAsync(string physicalTreeId)
+    {
+        if (_discardedTerminalCopies?.Contains(physicalTreeId) == true) return true;
+        if (!await grainFactory.GetGrain<ITreeDeletionGrain>(physicalTreeId).IsDiscardedAsync()) return false;
+        (_discardedTerminalCopies ??= new HashSet<string>(StringComparer.Ordinal)).Add(physicalTreeId);
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: terminal addressed to {PhysicalTreeId}, a copy a resize undo discarded, counts as delivered; its batch is discarded with the copy.",
+            OperationKey,
+            physicalTreeId);
+        return true;
+    }
+
+    /// <summary>
+    /// The routing to redeliver a refused terminal through when the physical copy
+    /// that refused it is a resize's old copy whose purge has completed, or
+    /// <see langword="null"/> when it is not (issue #4475). A purged copy refuses
+    /// every terminal as a deleted tree, so a saga still bound to it - one whose
+    /// broadcast outlived <c>SoftDeleteDuration</c> - would otherwise fail on
+    /// every retry and never complete. The redirect is the copy the tree resolves
+    /// to now; when that is still the refusing copy there is nothing to redeliver
+    /// to. Asked only on a refusal. The purge is recognised by the refusal's
+    /// type - a tombstoned shard refuses an unrouted terminal with
+    /// <see cref="LatticeTreePurgedException"/> (issue #4503) - or, for the purge
+    /// guard's plain refusal, by the copy's deletion record; never by message text.
+    /// </summary>
+    private async Task<RoutingInfo?> ResolvePurgedTerminalCopyRedirectAsync(string physicalTreeId, bool refusedAsPurged)
+    {
+        if (!refusedAsPurged && !await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, physicalTreeId)) return null;
+        var refreshed = await grainFactory.GetGrain<ILattice>(state.State.TreeId).GetRoutingAsync(forceRefresh: true);
+        return string.Equals(refreshed.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal) ? null : refreshed;
+    }
+
+    /// <summary>
+    /// Redelivers the terminal a purged copy's shard refused to the copy the tree
+    /// resolves to now (issue #4475): to its shard at the same index, which the
+    /// purged shard mirrored every prepared bucket into, to the shard that now owns
+    /// each key the terminal covers, and to every split-forward target of those, so
+    /// a bucket a migration has since moved on is reached too. The redelivered
+    /// terminal carries no committed-values backstop: a purged copy had mirrored
+    /// every bucket the saga prepared on it, so each target resolves the buckets it
+    /// holds and a shard holding none treats the terminal as a no-op. Re-adding the
+    /// backstop would only write the saga's values over later writes on shards the
+    /// keys have since moved to. The terminals are made durable here, before
+    /// returning, so the caller's batched flush has nothing further to append.
+    /// </summary>
+    private async Task<WalRecord?> RedeliverTerminalFromPurgedCopyAsync(
+        string purgedCopyId,
+        int shardIndex,
+        Guid transactionId,
+        bool committed,
+        IReadOnlyDictionary<string, byte[]>? committedValues,
+        ShardMap? passMap,
+        RoutingInfo redirect)
+    {
+        IEnumerable<string> keys;
+        if (committedValues is not null)
+        {
+            keys = committedValues.Keys;
+        }
+        else
+        {
+            var covered = new List<string>(state.State.Entries.Count);
+            foreach (var entry in state.State.Entries)
+            {
+                if (passMap is null || passMap.Resolve(entry.Key) == shardIndex)
+                    covered.Add(entry.Key);
+            }
+            keys = covered;
+        }
+
+        var seed = PurgedCopyTerminalTargets.Resolve(shardIndex, keys, redirect.Map);
+        var targets = await TerminalFanOutResolver.ResolveTransitiveAsync(
+            grainFactory, redirect.PhysicalTreeId, seed, CancellationToken.None);
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: terminal for shard {ShardIndex} of {PurgedCopyId}, a purged copy, redelivered to shards [{Targets}] of {PhysicalTreeId}.",
+            OperationKey,
+            shardIndex,
+            purgedCopyId,
+            string.Join(",", targets),
+            redirect.PhysicalTreeId);
+
+        var redelivered = new Task<WalRecord?>[targets.Count];
+        for (var i = 0; i < targets.Count; i++)
+        {
+            redelivered[i] = MarkOneShardAsync(
+                redirect.PhysicalTreeId, targets[i], transactionId, committed, committedValues: null, redirect.Map);
+        }
+        await FlushPendingTerminalsAsync(await Task.WhenAll(redelivered));
+        return null;
+    }
     /// retry. Encapsulates the stale-routing recovery so the
     /// <see cref="BroadcastTerminalsAsync(bool)"/> fan-out body stays
     /// linear. Catches both <see cref="StaleShardRoutingException"/>
@@ -2224,6 +2420,13 @@ internal sealed class AtomicWriteGrain(
     /// returning. The returned record is null when no WAL adapter is
     /// registered (single-node / unit-test path) or when the shard
     /// rejected the call before constructing one.
+    /// </para>
+    /// <para>
+    /// A refusal by a copy a resize undo discarded counts the terminal as
+    /// delivered and returns null, before any routing refresh: that copy's
+    /// batch is discarded with it, so the terminal is never re-sent to the
+    /// copy the tree resolves to now (issue #4474). See
+    /// <see cref="TerminalCopyWasDiscardedAsync"/>.
     /// </para>
     /// </summary>
     private async Task<WalRecord?> MarkOneShardAsync(
@@ -2277,9 +2480,17 @@ internal sealed class AtomicWriteGrain(
         var deadline = DateTime.UtcNow + StaleRoutingRetryBudget;
         while (true)
         {
+            RoutingInfo? purgedCopyRedirect = null;
             try
             {
                 var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shardIndex}");
+                // Issue #4522: carry each backstop key's original prepare stamp,
+                // only to a shard of the copy the stamps were minted on (see
+                // CarriedOriginalStamps). Set here, per delivery, so a re-resolve
+                // to another copy and #4475's purged-copy redelivery (which
+                // re-enters this method with that copy's id) carry none.
+                using var stampScope = LatticeOriginalPrepareStampContext.With(
+                    CarriedOriginalStamps(physicalTreeId, committed, committedValues));
                 return await shard.AppendTxTerminalAsync(
                     transactionId, committed, committedValues,
                     cancellationToken: CancellationToken.None,
@@ -2292,6 +2503,7 @@ internal sealed class AtomicWriteGrain(
                 // the new owner; AppendTxTerminalAsync is shard-keyed so
                 // the refreshed call may resolve to a different physical
                 // tree id under online resize.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
             }
             catch (StaleTreeRoutingException)
@@ -2299,7 +2511,24 @@ internal sealed class AtomicWriteGrain(
                 // Tree alias swapped mid-saga (online resize). Refresh
                 // routing under the same logical tree id and retry against
                 // the new physical tree.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
                 if (DateTime.UtcNow >= deadline) throw;
+            }
+            catch (InvalidOperationException refusal)
+            {
+                // A copy a resize undo discarded refuses as a deleted tree, and a
+                // resize's old copy refuses the same way once it is purged; any
+                // other refusal of this kind keeps surfacing as before.
+                if (await TerminalCopyWasDiscardedAsync(physicalTreeId)) return null;
+                purgedCopyRedirect = await ResolvePurgedTerminalCopyRedirectAsync(
+                    physicalTreeId, refusal is LatticeTreePurgedException);
+                if (purgedCopyRedirect is null) throw;
+            }
+
+            if (purgedCopyRedirect is not null)
+            {
+                return await RedeliverTerminalFromPurgedCopyAsync(
+                    physicalTreeId, shardIndex, transactionId, committed, committedValues, passMap, purgedCopyRedirect);
             }
 
             var lattice = grainFactory.GetGrain<ILattice>(state.State.TreeId);
@@ -2375,6 +2604,11 @@ internal sealed class AtomicWriteGrain(
 
             await RebindAcrossAliasSwapAsync();
 
+            // Issue #4689: before any decision - this saga's own or a cross-tree
+            // coordinator's - drop the prepares the saga left on every copy it
+            // re-bound away from.
+            await DiscardAbandonedCopiesAsync();
+
             // The commit decision is next: the last point at which a saga whose
             // caller has given up can still be rolled back instead.
             await RollBackUndecidedIfCallerGoneAsync();
@@ -2400,6 +2634,11 @@ internal sealed class AtomicWriteGrain(
             // resolves to the pre-saga value via the registry, so
             // readers never observe a partial rollback.
             var abortCommitted = DecideSagaCommit(everyParticipantPrepared: false);
+            // An aborted saga's prepares on a copy it re-bound away from are
+            // never surfaced, but they would otherwise stay stranded there, and
+            // once the decision ages out a read of their keys is refused rather
+            // than served (issue #4689). Best effort: the abort must proceed.
+            await TryDiscardAbandonedCopiesAsync();
             var decisionStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
@@ -2462,7 +2701,24 @@ internal sealed class AtomicWriteGrain(
             // partial cross-tree view is ever observable.
             if (state.State.ExternalAuthorityKey is { } authorityKey)
             {
-                await ParkPreparedAsync(authorityKey);
+                try
+                {
+                    await ParkPreparedAsync(authorityKey);
+                }
+                catch (TxDecisionGateRefusedException fenced) when (fenced.Refusal == TxDecisionGateRefusal.RegistrationFenced)
+                {
+                    // Issue #4485: a cross-tree-consistent backup set is fencing
+                    // this tree's registry, so this sub-saga cannot register.
+                    // Retrying the park would hold every sibling participant's
+                    // delegation open for the fence's whole life and starve the
+                    // set's drain. Roll this sub-saga back instead (the Compensate
+                    // path records the abort and drops the staged buckets, then
+                    // throws), so it votes Failed and its coordinator aborts.
+                    await EnterCompensateAsync(
+                        "a cross-tree-consistent backup set capture is fencing this tree's saga decision registry; retry the cross-tree atomic write once the capture completes.");
+                    await RunSagaAsync();
+                }
+
                 return;
             }
 
@@ -2634,6 +2890,37 @@ internal sealed class AtomicWriteGrain(
     }
 
     /// <summary>
+    /// Moves an executed-but-undecided saga to
+    /// <see cref="AtomicWritePhase.Compensate"/> with <paramref name="reason"/> as
+    /// its failure message and persists the move, restoring the prior phase if
+    /// the persist fails. The caller then drives the Compensate path.
+    /// </summary>
+    private async Task EnterCompensateAsync(string reason)
+    {
+        var prevPhase = state.State.Phase;
+        var prevFailureMessage = state.State.FailureMessage;
+        var prevRetriesOnCurrentStep = state.State.RetriesOnCurrentStep;
+        state.State.Phase = AtomicWritePhase.Compensate;
+        state.State.FailureMessage = reason;
+        state.State.RetriesOnCurrentStep = 0;
+        try
+        {
+            await WriteSagaStateAsync("park-fenced-to-compensate");
+        }
+        catch
+        {
+            state.State.Phase = prevPhase;
+            state.State.FailureMessage = prevFailureMessage;
+            state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+            throw;
+        }
+
+        Logger.LogInformation(
+            "Atomic-write saga {OperationKey}: rolled back because {Reason}",
+            OperationKey, reason);
+    }
+
+    /// <summary>
     /// Resolves the saga's terminal commit-vs-abort verdict through the proven
     /// <see cref="SagaCoordinatorCore"/>, so the decision that gates
     /// <see cref="RecordTerminalDecisionAsync"/> and
@@ -2722,7 +3009,8 @@ internal sealed class AtomicWriteGrain(
 
             var routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
                 .GetRoutingAsync(forceRefresh: true);
-            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
+            if (SagaCopyBinding.BeforeDecision(bound, routing.PhysicalTreeId, boundMirrorDestination: null)
+                == SagaCopyBindingVerdict.Commit)
             {
                 // The broadcast's drift correction reuses this resolve rather than
                 // paying a second one. A cross-tree sub-saga parks instead and
@@ -2735,7 +3023,10 @@ internal sealed class AtomicWriteGrain(
                 return;
             }
 
-            if (await BoundCopyMirrorsIntoAsync(bound, routing.PhysicalTreeId))
+            // The tree moved; only now ask the bound copy where it mirrors, since
+            // that is a call to one of its shards.
+            if (SagaCopyBinding.BeforeDecision(bound, routing.PhysicalTreeId, await BoundCopyMirrorDestinationAsync(bound))
+                == SagaCopyBindingVerdict.StayBound)
             {
                 // An online resize moved the tree off the bound copy, which still
                 // mirrors everything it takes into the copy the tree moved to.
@@ -2766,38 +3057,42 @@ internal sealed class AtomicWriteGrain(
     private const int MaxBindingMovesPerDispatch = 3;
 
     /// <summary>
-    /// Whether the bound copy mirrors every mutation it takes into
-    /// <paramref name="currentPhysicalTreeId"/> - the source of an online resize
-    /// whose destination the tree now resolves to (issue #4369). Asked of one
-    /// shard the batch touched; every shard of a resize source mirrors to the
-    /// same destination. A failed probe answers <see langword="false"/>, so the
-    /// saga re-binds as it would without one.
+    /// The copy the bound copy mirrors every mutation it takes into - the
+    /// destination of an online resize whose source it is (issue #4369) - or
+    /// <see langword="null"/> when it mirrors nowhere. Asked of one shard the
+    /// batch touched; every shard of a resize source mirrors to the same
+    /// destination. A failed probe answers <see langword="null"/>, so the saga
+    /// re-binds as it would without one.
     /// </summary>
-    private async Task<bool> BoundCopyMirrorsIntoAsync(string bound, string currentPhysicalTreeId)
+    private async Task<string?> BoundCopyMirrorDestinationAsync(string bound)
     {
         var shardIndex = state.State.TouchedShards is { Count: > 0 } touched ? touched[0] : 0;
         try
         {
-            var destination = await grainFactory.GetGrain<IShardRootGrain>($"{bound}/{shardIndex}")
+            return await grainFactory.GetGrain<IShardRootGrain>($"{bound}/{shardIndex}")
                 .GetMirrorDestinationAsync();
-            return string.Equals(destination, currentPhysicalTreeId, StringComparison.Ordinal);
         }
         catch (Exception ex) when (!GrainStateWriteFaults.IsTranslatedConflict(ex))
         {
             Logger.LogDebug(ex,
                 "Atomic-write saga {OperationKey}: could not ask bound copy {Bound} where it mirrors; re-binding instead.",
                 OperationKey, bound);
-            return false;
+            return null;
         }
     }
 
     /// <summary>
     /// Called when the routing tier refused the prepared batch because the
     /// logical tree no longer resolves to the bound copy (issue #4358). Resolves
-    /// the routing afresh and, when the tree has indeed moved, re-binds the saga
-    /// to the copy it resolves to now so the batch is re-dispatched there.
-    /// Returns <see langword="false"/> when the fresh routing still names the
-    /// bound copy, leaving the failure to the ordinary retry path.
+    /// the routing afresh and applies <see cref="SagaCopyBinding.AfterRefusal"/>:
+    /// when the tree has moved to a copy the bound copy mirrors into, the saga
+    /// stays bound and the dispatch is retried, which the routing tier then places
+    /// on the bound copy (issue #4454) - re-binding part way would leave the
+    /// prepares already taken on the bound copy for a resize undo to re-expose;
+    /// otherwise the saga re-binds to the copy the tree resolves to now so the
+    /// batch is re-dispatched there. Returns <see langword="false"/> when the
+    /// fresh routing still names the bound copy, leaving the failure to the
+    /// ordinary retry path.
     /// </summary>
     private async Task<bool> TryRebindToResolvedCopyAsync()
     {
@@ -2806,9 +3101,19 @@ internal sealed class AtomicWriteGrain(
         {
             routing = await grainFactory.GetGrain<ILattice>(state.State.TreeId)
                 .GetRoutingAsync(forceRefresh: true);
-            if (string.Equals(routing.PhysicalTreeId, state.State.BoundPhysicalTreeId, StringComparison.Ordinal))
+            var bound = state.State.BoundPhysicalTreeId!;
+            if (string.Equals(routing.PhysicalTreeId, bound, StringComparison.Ordinal))
             {
                 return false;
+            }
+
+            if (SagaCopyBinding.AfterRefusal(bound, routing.PhysicalTreeId, await BoundCopyMirrorDestinationAsync(bound))
+                == SagaCopyBindingVerdict.StayBound)
+            {
+                Logger.LogInformation(
+                    "Atomic-write saga {OperationKey}: tree {TreeId} moved from physical tree {Bound} to {Current}, which the bound copy mirrors into, while its batch was being dispatched; staying bound and dispatching the rest onto the bound copy.",
+                    OperationKey, state.State.TreeId, bound, routing.PhysicalTreeId);
+                return true;
             }
 
             var prevBound = state.State.BoundPhysicalTreeId;
@@ -2884,6 +3189,9 @@ internal sealed class AtomicWriteGrain(
         var prevNextIndex = state.State.NextIndex;
         var prevTouchedShards = state.State.TouchedShards;
         var prevRetries = state.State.RetriesOnCurrentStep;
+        var prevAbandoned = state.State.AbandonedCopyShards;
+        state.State.AbandonedCopyShards = SagaAbandonedCopies.Record(
+            prevAbandoned, prevBound, prevTouchedShards, routing.PhysicalTreeId);
         state.State.BoundPhysicalTreeId = routing.PhysicalTreeId;
         state.State.NextIndex = 0;
         state.State.TouchedShards = [.. touched];
@@ -2898,6 +3206,7 @@ internal sealed class AtomicWriteGrain(
             state.State.NextIndex = prevNextIndex;
             state.State.TouchedShards = prevTouchedShards;
             state.State.RetriesOnCurrentStep = prevRetries;
+            state.State.AbandonedCopyShards = prevAbandoned;
             throw;
         }
     }
@@ -2959,6 +3268,8 @@ internal sealed class AtomicWriteGrain(
         // (and re-box the WalPartitions int) on every saga.
         var (sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag) = GetSagaMetricTags();
         LatticeMetrics.SagaFanoutSize.Record(state.State.Entries.Count, sagaTreeTag, sagaWalPartitionsTag, sagaTenantTag);
+
+        await EnsureParticipantRowAsync();
 
         // Phase D1b (c2-ix memo): collapse the D1 per-key
         // Task.WhenAll-of-N-SetAsync fan-out into a single
@@ -3183,6 +3494,29 @@ internal sealed class AtomicWriteGrain(
                     }
                 }
 
+                // Issue #4522: read back each key's original prepare stamp
+                // while the buckets are still pending, and persist it with the
+                // checkpoint below, so the committed-values backstop can carry
+                // it. The read must account for every entry: one that faults or
+                // misses a key fails the batch, which is retried (re-preparing
+                // is idempotent) and, once the retries are spent, aborts, so the
+                // saga never commits without each key's stamp.
+                var prevOriginalStamps = state.State.OriginalPrepareStamps;
+                var prevOriginalStampsTree = state.State.OriginalPrepareStampsPhysicalTreeId;
+                if (batchFailure is null)
+                {
+                    try
+                    {
+                        await ReadBackOriginalPrepareStampsAsync().ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
+                        batchFailure = ex;
+                    }
+                }
+
                 if (batchFailure is null)
                 {
                     // Whole batch committed - single post-batch
@@ -3201,6 +3535,8 @@ internal sealed class AtomicWriteGrain(
                     {
                         state.State.NextIndex = prevNextIndex;
                         state.State.RetriesOnCurrentStep = prevRetriesOnCurrentStep;
+                        state.State.OriginalPrepareStamps = prevOriginalStamps;
+                        state.State.OriginalPrepareStampsPhysicalTreeId = prevOriginalStampsTree;
                         throw;
                     }
 #if LATTICE_DIAG
@@ -3216,8 +3552,7 @@ internal sealed class AtomicWriteGrain(
                 // batch did not fail, it was addressed to a copy that moved.
                 if (batchFailure is StaleTreeRoutingException moved
                     && bindingMoves < MaxBindingMovesPerDispatch
-                    && state.State.BoundPhysicalTreeId is { } boundCopy
-                    && string.Equals(moved.StalePhysicalTreeId, boundCopy, StringComparison.Ordinal)
+                    && SagaCopyBinding.RebindsAfterRefusal(state.State.BoundPhysicalTreeId, moved.StalePhysicalTreeId)
                     && await TryRebindToResolvedCopyAsync().ConfigureAwait(true))
                 {
                     bindingMoves++;

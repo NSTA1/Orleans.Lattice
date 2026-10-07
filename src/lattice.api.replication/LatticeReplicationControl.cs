@@ -20,11 +20,12 @@ namespace Orleans.Lattice.Api.Replication;
 /// The engine's precondition / mode-change exceptions surface unchanged so a
 /// transport can map them to the appropriate status.
 /// </remarks>
-internal sealed class LatticeReplicationControl : ILatticeReplicationControl
+internal sealed class LatticeReplicationControl : ILatticeReplicationControl, ILatticeReplicationPeerAdmin
 {
     private readonly ILatticeReplicationConfigAuthority _authority;
     private readonly ReplicationAccessAuthorizer _authorizer;
     private readonly ITenantContextResolver _tenantResolver;
+    private readonly ILatticeReplicationPeerDecommissioner? _decommissioner;
 
     /// <summary>Initializes a new <see cref="LatticeReplicationControl"/>.</summary>
     /// <param name="authority">The engine config-authoring seam. Must not be <c>null</c>.</param>
@@ -35,11 +36,21 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
     /// <c>null</c>. With no tenancy add-on registered the core no-op resolver
     /// returns the caller's name unchanged, so behaviour is unaffected.
     /// </param>
+    /// <param name="decommissioner">
+    /// The engine seam that permanently removes a peer's enrolment from every
+    /// replicated tree, or <c>null</c> when no replication engine is hosted in
+    /// this process (the facade can be registered on its own, e.g. a
+    /// tenant-admin-only host). When <c>null</c>, <see cref="DecommissionPeerAsync"/>
+    /// still authorizes the caller first, then fails closed with
+    /// <see cref="LatticeReplicationEngineNotHostedException"/> rather than
+    /// resolving a dependency that was never registered.
+    /// </param>
     /// <exception cref="ArgumentNullException">A required dependency is <c>null</c>.</exception>
     public LatticeReplicationControl(
         ILatticeReplicationConfigAuthority authority,
         ReplicationAccessAuthorizer authorizer,
-        ITenantContextResolver tenantResolver)
+        ITenantContextResolver tenantResolver,
+        ILatticeReplicationPeerDecommissioner? decommissioner = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -47,6 +58,7 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
         _authority = authority;
         _authorizer = authorizer;
         _tenantResolver = tenantResolver;
+        _decommissioner = decommissioner;
     }
 
     /// <inheritdoc />
@@ -124,6 +136,31 @@ internal sealed class LatticeReplicationControl : ILatticeReplicationControl
         }
 
         return new ReplicationConfigReport(entries);
+    }
+
+    /// <inheritdoc />
+    public async Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(
+        string peerClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
+
+        // Cluster-wide: decommissioning fans out across every replicated tree,
+        // so it is authorized against the cluster-wide capability rather than
+        // a single tree's grant, fail-closed before the engine is touched.
+        await _authorizer.AuthorizeClusterWideAsync(cancellationToken).ConfigureAwait(false);
+        if (_decommissioner is null)
+        {
+            throw new LatticeReplicationEngineNotHostedException();
+        }
+
+        var outcome = await _decommissioner
+            .DecommissionPeerAsync(peerClusterId, cancellationToken)
+            .ConfigureAwait(false);
+        return new ReplicationDecommissionPeerResult(
+            outcome.PeerClusterId,
+            outcome.TreeCount,
+            outcome.AlreadyDecommissioned);
     }
 
     /// <summary>

@@ -29,7 +29,7 @@ public class LatticeFallOffLogDetectorTests
         HybridLogicalClock localHwm,
         bool autoBootstrap = true)
     {
-        var grain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var grain = HighWaterMarkTestGrains.Substitute();
         grain.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(localHwm));
 
@@ -276,7 +276,7 @@ public class LatticeFallOffLogDetectorTests
     public void CheckAndTriggerAsync_propagates_high_water_mark_grain_exception_verbatim()
     {
         // Constructing a detector whose HWM grain throws on GetAsync.
-        var grain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var grain = HighWaterMarkTestGrains.Substitute();
         grain.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns<Task<HybridLogicalClock>>(_ => throw new TimeoutException("hwm down"));
 

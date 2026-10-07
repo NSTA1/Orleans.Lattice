@@ -1,0 +1,19 @@
+# Pairs with AtomicAcrossCutover. The pre-decision check passes before every
+# key's prepare is acknowledged, so the decision surfaces one key's bucket while
+# the other waits for the terminal's backstop.
+MODULE: AtomicAcrossCutoverCheckBeforeDispatched
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: the pre-decision check does not wait for the whole batch to be prepared
+PERTURBS: Check
+
+--- FIND
+Check ==
+    /\ sg = "dispatch"
+    /\ prepped = Keys
+--- REPLACE
+Check ==
+    /\ sg = "dispatch"
+    \* MUTATION: no wait for the whole batch.
+    /\ prepped # {}
+--- END

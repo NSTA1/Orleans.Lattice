@@ -1,0 +1,14 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. A coordinated restore converges only if
+# every cluster cuts over to the same point: the source-restore contract's remedy.
+MODULE: EventualConvergenceCoordinatedRestoreCutsOneCluster
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the coordinated restore cuts the source over but not its peer, so the clusters stay apart
+PERTURBS: CoordinatedRestore
+
+--- FIND
+          /\ reg' = [x \in Clusters |-> c]
+--- REPLACE
+\* MUTATION: only the source cuts over.
+          /\ reg' = [reg EXCEPT ![s] = c]
+--- END

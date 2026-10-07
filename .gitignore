@@ -271,6 +271,9 @@ Backup*/
 !/src/lattice.explorer/UI/Areas/Backups/
 !/src/lattice.explorer/UI/wwwroot/backups/
 !/test/lattice.explorer/UI/Areas/Backups/
+# The backup area's TLA+ specifications live in spec/backup/ (#4440); on a
+# case-insensitive checkout the pattern above would ignore them.
+!/spec/backup/
 # Real Backup/ source and test folders across the packages (for example the API
 # contract's Backup/ interfaces, #4122) are not upgrade-backup folders either.
 !/src/**/Backup/

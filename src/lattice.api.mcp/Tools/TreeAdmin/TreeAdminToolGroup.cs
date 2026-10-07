@@ -590,7 +590,10 @@ internal sealed class TreeAdminToolGroup : ILatticeApiMcpToolGroup
                 + "Rejected when no resize exists to undo (naming the most recent resize when it was already "
                 + "undone) or when the unwind cannot be applied because the pre-resize tree has already been "
                 + "purged, and for a "
-                + "reserved system tree id. Tree-lifecycle-gated and destructive."));
+                + "reserved system tree id. A replicated tree cannot be undone once its alias has swapped onto the "
+                + "resized copy, because writes that copy took may already be on a peer and replication never "
+                + "retracts them: to return it to its old shape, resize it again back to its previous sizing, which "
+                + "the refusal names. Tree-lifecycle-gated and destructive."));
             tools.Add(DestructiveTool(services, TreeAdminLifecycleToolHandlers.SnapshotTreeAsync, "lattice_treeadmin_tree_snapshot",
                 "Capture a point-in-time snapshot of a tree",
                 "Captures a point-in-time snapshot of a source tree into a fresh destination tree, copying every live "

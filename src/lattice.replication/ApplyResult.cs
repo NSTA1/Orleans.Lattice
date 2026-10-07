@@ -18,7 +18,7 @@ public readonly record struct ApplyResult
     /// <summary>
     /// <c>true</c> when the receiver merged the entry onto the local
     /// tree; <c>false</c> when the entry was filtered out as a
-    /// re-delivery by the pinned-floor gate or recent exact-identity cache, or
+    /// re-delivery by the recent exact-identity cache, or
     /// rejected as inapplicable (for example, an entry whose
     /// <see cref="WalRecord.OriginClusterId"/> matches the local
     /// cluster id and would therefore loop locally).
@@ -38,14 +38,19 @@ public readonly record struct ApplyResult
     [Id(1)] public HybridLogicalClock HighWaterMark { get; init; }
 
     /// <summary>
-    /// <c>true</c> only when the entry / run was deferred by the durable
-    /// inbound receive fence (issue #1173) because a cross-cluster restore
-    /// saga has paused inbound apply for this tree. A deferred result is
+    /// <c>true</c> when the entry / run was NOT applied and MUST be
+    /// re-shipped, because either (a) the durable inbound receive fence
+    /// (issue #1173) is engaged by a cross-cluster restore saga that has
+    /// paused inbound apply for this tree, or (b) the entry duplicates an
+    /// identity whose first delivery is still in flight on the receiver
+    /// (issue #4465): that first delivery can still be aborted, so the
+    /// duplicate must not let the sender move past the entry. A deferred
+    /// result is
     /// distinct from every other <see cref="Applied"/><c> == false</c>
     /// outcome (re-delivery dedup, local-origin rejection, tombstone
     /// filtering): those are terminal on the receiver and the sender must
     /// advance its cursor past them, whereas a deferred entry has NOT been
-    /// applied and MUST be re-shipped once the fence lifts. Receive paths
+    /// applied by this delivery and MUST be re-shipped. Receive paths
     /// translate a deferred result into a not-accepted, cursor-preserving
     /// ack so the sender keeps its per-peer cursor and retries the same
     /// batch after a backoff. Defaults to <c>false</c>, so every existing
@@ -53,4 +58,16 @@ public readonly record struct ApplyResult
     /// its cursor-advancing semantics unchanged.
     /// </summary>
     [Id(2)] public bool Deferred { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the entry / run was NOT applied because the sender
+    /// stamped it with a source lineage this tree no longer holds (issues #4673
+    /// and #4707): it was read before a source restore, purge and recreate, or
+    /// alias move, and arrived after this tree drained the new lineage. Unlike a
+    /// <see cref="Deferred"/> result it must not simply be re-shipped: the
+    /// receive path answers with a not-accepted ack that tells the sender to
+    /// re-resolve its source binding. A dead-letter replay that is refused this
+    /// way leaves the entry parked. Defaults to <c>false</c>.
+    /// </summary>
+    [Id(3)] public bool SourceLineageRefused { get; init; }
 }

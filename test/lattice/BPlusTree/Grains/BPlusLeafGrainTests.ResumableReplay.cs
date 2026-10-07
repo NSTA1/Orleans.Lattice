@@ -56,8 +56,9 @@ public partial class BPlusLeafGrainTests
         public int SaveCount { get; private set; }
         public List<long> SavedOffsets { get; } = new();
 
-        public InMemorySnapshotStore()
+        public InMemorySnapshotStore(LeafSnapshotBlob? seed = null)
         {
+            Latest = seed;
             Stub = Substitute.For<ILeafSnapshotStorageGrain>();
             Stub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
                 .Returns(call =>
@@ -210,7 +211,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 1);
 
@@ -349,7 +350,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0);
 
@@ -384,7 +385,7 @@ public partial class BPlusLeafGrainTests
         var state = NewResumableState();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var (grain, _) = BuildResumableLeaf(state, coord, store.Stub, reclassifyEveryN: 0,
             // Guards the NO-RECORD path (issue #2165). The comment above states

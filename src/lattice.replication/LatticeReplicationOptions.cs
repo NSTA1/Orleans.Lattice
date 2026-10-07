@@ -177,9 +177,34 @@ public class LatticeReplicationOptions
     public int MaxApplyRetries { get; set; } = DefaultMaxApplyRetries;
 
     /// <summary>
+    /// Wall-clock bound on how long the receiver defers a saga prepare that
+    /// exhausted <see cref="MaxApplyRetries"/> before it poisons the whole saga
+    /// on that receiver and parks the prepare with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonPoisonedSaga"/>. Defaults to
+    /// <see cref="DefaultSagaDeferralTimeout"/>. A silo restart restarts the
+    /// in-memory deferral clock, which can only defer longer; it never poisons a
+    /// record earlier than a continuously-running silo would have done. Must be
+    /// strictly greater than <see cref="TimeSpan.Zero"/>.
+    /// <para>
+    /// The bound applies only to prepares. A deferred
+    /// <see cref="MutationKind.TxCommit"/> or <see cref="MutationKind.TxAbort"/>
+    /// terminal is never poisoned by timeout, because a terminal may be the
+    /// record that completes the receiver-side tally after the registry decision
+    /// was already recorded; poisoning it would strand the saga's buckets under
+    /// a recorded commit. Fix the terminal's apply failure or re-bootstrap the
+    /// tree from the origin.
+    /// </para>
+    /// </summary>
+    public TimeSpan SagaDeferralTimeout { get; set; } = DefaultSagaDeferralTimeout;
+
+    /// <summary>
     /// Maximum number of <see cref="DeadLetterEntry"/> records the
     /// per-tree dead-letter queue retains. When the queue is full a new
-    /// enqueue evicts the oldest entry (FIFO). Defaults to
+    /// enqueue is refused rather than evicting a parked entry (issue #4603):
+    /// every parked entry was acknowledged without being applied, so the
+    /// caller keeps the refused entry unacknowledged and the affected
+    /// replication link is held back until an operator replays or discards
+    /// parked entries. Defaults to
     /// <see cref="DefaultDeadLetterQueueCapacity"/>. Must be at least
     /// <c>1</c>.
     /// </summary>
@@ -194,8 +219,34 @@ public class LatticeReplicationOptions
     /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>. Defaults
     /// to <see cref="DefaultCausalBufferMaxEntries"/>. Must be at
     /// least <c>1</c>.
+    /// <para>
+    /// The buffer is durable (#4464): a parked entry is persisted before it
+    /// is acknowledged to its sender, so eviction is a deliberate bound on
+    /// acknowledged entries, not a silent loss - the evicted entry is written
+    /// to the dead-letter queue before its removal is persisted, for operator
+    /// replay. Every park and drain rewrites the tree's buffer state, so a
+    /// larger cap also means a larger write per park.
+    /// </para>
     /// </summary>
     public int CausalBufferMaxEntries { get; set; } = DefaultCausalBufferMaxEntries;
+
+    /// <summary>
+    /// How many applied write identities <c>(origin, HLC)</c> the receiver
+    /// remembers per tree and origin, so an entry whose causal dependency names
+    /// one of them is released at once (issue #4586). Each identity costs a few
+    /// dozen bytes of memory on the tree's high-water-mark activation; the
+    /// record is not persisted. When an identity has been forgotten - evicted
+    /// past this capacity, or lost to a reactivation - a dependent waits for the
+    /// origin's shipped low watermark to pass it instead, which trails the
+    /// origin's wall clock by its <c>LatticeOptions.ReplicationClockFloorLag</c>.
+    /// So the capacity trades memory for latency only, never correctness.
+    /// Defaults to <see cref="DefaultCausalAppliedIdentityCapacity"/>; must be
+    /// between <c>1</c> and <c>1_048_576</c>.
+    /// </summary>
+    public int CausalAppliedIdentityCapacity { get; set; } = DefaultCausalAppliedIdentityCapacity;
+
+    /// <summary>Default value for <see cref="CausalAppliedIdentityCapacity"/> (16,384 per tree and origin).</summary>
+    public const int DefaultCausalAppliedIdentityCapacity = 16_384;
 
     /// <summary>
     /// Maximum estimated cumulative byte size of every entry parked
@@ -418,13 +469,16 @@ public class LatticeReplicationOptions
     /// per-origin FIFO and atomic-batch boundaries without reordering.
     /// </para>
     /// <para>
-    /// Correctness is preserved across the elision path: a manifest entry
-    /// whose content the receiver already holds but whose
-    /// <see cref="HybridLogicalClock"/> is newer (the idempotent re-set of
-    /// an identical value) advances the receiver's per-origin
-    /// high-water-mark via a metadata-only apply during the exchange, so
-    /// the high-water-mark still advances even though the payload is never
-    /// re-shipped. Range deletes, saga terminal marks, prepared
+    /// Correctness is preserved across the elision path (#4585): the
+    /// receiver elides an entry only when it already merged exactly that
+    /// write - the same content hash, origin and source
+    /// <see cref="HybridLogicalClock"/> - and its leaf still holds the key at
+    /// that version or a newer one. Equal bytes at another version or from
+    /// another origin always ship, because last-writer-wins orders writes by
+    /// version, not by content. An elided write above the receiver's
+    /// per-origin high-water-mark (one it merged without moving the mark,
+    /// such as a bootstrap row) advances the mark via a metadata-only update
+    /// during the exchange. Range deletes, saga terminal marks, prepared
     /// atomic-batch entries, and zero-HLC entries are never placed in the
     /// manifest and are always shipped verbatim. The per-elided-entry win
     /// is surfaced on the
@@ -635,8 +689,7 @@ public class LatticeReplicationOptions
     /// of a bounded re-ship window after a silo crash.
     /// <para>
     /// <strong>Crash safety.</strong> Receiver-side apply maintains a
-    /// per-origin high-water mark for status and pinned-snapshot
-    /// floors, drops entries at or below that pinned floor, and suppresses recent
+    /// per-origin high-water mark for status and causal dependencies, and suppresses recent
     /// exact duplicates by <c>(originClusterId, timestamp, key, op)</c>. Other
     /// replays inside the window are applied again and converge idempotently under
     /// the tree's merge semantics. No data is lost.
@@ -683,7 +736,6 @@ public class LatticeReplicationOptions
     /// crash-replay window beyond the
     /// <see cref="ShipCursorWriteInterval"/> &#xD7; <see cref="ShipBatchSize"/>
     /// bound the batch-count rule already guarantees. Receiver-side apply
-    /// drops entries at or below the receiver's snapshot-pinned floor and
     /// suppresses recent exact duplicates by <c>(originClusterId, timestamp, key,
     /// op)</c>. Other entries re-shipped inside the window re-apply idempotently
     /// under the tree's merge semantics, so no data is lost.
@@ -1590,6 +1642,14 @@ public class LatticeReplicationOptions
     /// transient faults without dragging an origin cursor for hours.
     /// </summary>
     public const int DefaultMaxApplyRetries = 5;
+
+    /// <summary>
+    /// Default value for <see cref="SagaDeferralTimeout"/>: fifteen minutes.
+    /// Long enough for ordinary transient receiver failures to clear and short
+    /// enough that a permanently-unappliable prepare raises an alarm and unblocks
+    /// the origin link within an operator-visible window.
+    /// </summary>
+    public static readonly TimeSpan DefaultSagaDeferralTimeout = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Default value for <see cref="DeadLetterQueueCapacity"/>: 1000

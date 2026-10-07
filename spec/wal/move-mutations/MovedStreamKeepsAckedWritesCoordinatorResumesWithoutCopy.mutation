@@ -1,0 +1,20 @@
+# Pairs with MovedStreamKeepsAckedWrites. A coordinator lost mid-move is recovered
+# with its phase but not with the copy it had taken, and resumes the flip: the
+# stream switches to a target that does not hold the acknowledged writes. The base
+# abandons the move with the coordinator.
+MODULE: MovedStreamKeepsAckedWritesCoordinatorResumesWithoutCopy
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: a recovered coordinator resumes the flip without the copy it had taken
+PERTURBS: CoordinatorCrash
+
+--- FIND
+    /\ move' = [move EXCEPT ![m] = "done"]
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
+    /\ coordCrashes' = coordCrashes + 1
+--- REPLACE
+\* MUTATION: the phase survives the crash; the copy does not.
+    /\ move' = move
+    /\ moveCopy' = [moveCopy EXCEPT ![m] = {}]
+    /\ coordCrashes' = coordCrashes + 1
+--- END

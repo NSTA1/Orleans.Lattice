@@ -337,6 +337,13 @@ internal static class ObservedLatticeRegistry
                 MethodTag(nameof(SetWalMaxRetainedBytesAsync)));
 
         /// <inheritdoc />
+        public Task RaiseReplicationFloorEpochAsync(string treeId, long epoch) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.RaiseReplicationFloorEpochAsync(treeId, epoch),
+                MethodTag(nameof(RaiseReplicationFloorEpochAsync)));
+
+        /// <inheritdoc />
         public Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId) =>
             Observe(
                 Stopwatch.GetTimestamp(),
@@ -363,5 +370,31 @@ internal static class ObservedLatticeRegistry
                 Stopwatch.GetTimestamp(),
                 Inner.UpdateWalPlacementAsync(treeId, expectedVersion, moves),
                 MethodTag(nameof(UpdateWalPlacementAsync)));
+
+        /// <inheritdoc />
+        public Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+            string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.RaiseWalMoveFencesAsync(treeId, expectedVersion, partitions, moveId, lease, renew),
+                MethodTag(nameof(RaiseWalMoveFencesAsync)));
+
+        /// <inheritdoc />
+        public Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.ReleaseWalMoveFenceAsync(treeId, partition, moveId, onlyIfExpired),
+                MethodTag(nameof(ReleaseWalMoveFenceAsync)));
+
+        /// <inheritdoc />
+        public Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+            string treeId,
+            long expectedVersion,
+            IReadOnlyCollection<(int Partition, string ProviderKey)> moves,
+            string moveId) =>
+            Observe(
+                Stopwatch.GetTimestamp(),
+                Inner.FlipFencedWalPlacementAsync(treeId, expectedVersion, moves, moveId),
+                MethodTag(nameof(FlipFencedWalPlacementAsync)));
     }
 }

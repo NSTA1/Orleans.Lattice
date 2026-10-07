@@ -25,7 +25,12 @@ public interface ILatticeReplicationDeadLetters
     /// Removes the parked entry with id <paramref name="entryId"/> from
     /// <paramref name="treeId"/>'s queue without attempting to apply
     /// it. Returns <c>true</c> when an entry was removed; <c>false</c>
-    /// when no entry with that id existed.
+    /// when no entry with that id existed. Discarding an entry authored by
+    /// another cluster first records that write as lost, so any later entry
+    /// that depends on it is dead-lettered with reason
+    /// <see cref="LatticeReplicationMetrics.ReasonDependencyLost"/> rather than
+    /// applied out of causal order; if that record cannot be written the entry
+    /// stays parked and the call throws.
     /// </summary>
     Task<bool> DiscardAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
 
@@ -42,8 +47,49 @@ public interface ILatticeReplicationDeadLetters
     /// retry or discard. A replay the durable receive fence of an
     /// in-flight restore saga defers (<see cref="ApplyResult.Deferred"/>
     /// is <see langword="true"/>) applied nothing, so the entry also stays
-    /// parked and can be replayed again once the fence lifts. Returns
+    /// parked and can be replayed again once the fence lifts. The replay
+    /// runs under the source lineage the entry's sender stamped
+    /// (<see cref="DeadLetterEntry.SourceLineage"/>); a replay refused
+    /// because that lineage is not the one the tree has drained since
+    /// (<see cref="ApplyResult.SourceLineageRefused"/> is
+    /// <see langword="true"/>) applied nothing either, and the entry stays
+    /// parked for the operator to discard. Returns
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator escape hatch for a permanently wedged receiver-side
+    /// saga. Records receiver poison for <paramref name="transactionId"/> on
+    /// <paramref name="treeId"/> from <paramref name="originClusterId"/>, then
+    /// starts (or records as owed) a full re-seed from that origin. The request
+    /// is refused and returns <see langword="false"/> when the receiver's own
+    /// transaction registry has already recorded a terminal decision for the
+    /// transaction, or when the bounded poison set is full. No receiver
+    /// registry decision is written.
+    /// </summary>
+    Task<bool> PoisonSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Host-trusted operator resolution of a quarantined receiver-side saga
+    /// (issue #4692): once the cause - a malformed record, a contradictory
+    /// decision, a misconfigured cluster id - is fixed, removes
+    /// <paramref name="transactionId"/> from <paramref name="originClusterId"/>
+    /// from <paramref name="treeId"/>'s durable quarantine set, so its records
+    /// are applied again instead of parked at once, and the bounded set regains
+    /// capacity. The saga stays recorded as retired by its re-seed, so a record
+    /// of it that keeps failing is quarantined again, never re-seeded. The
+    /// records already parked are not touched: inspect them with
+    /// <see cref="ListAsync"/> and remove them with <see cref="DiscardAsync"/>.
+    /// Returns <see langword="false"/> when the saga was not quarantined.
+    /// </summary>
+    Task<bool> ReleaseQuarantinedSagaAsync(
+        string treeId,
+        string originClusterId,
+        Guid transactionId,
+        CancellationToken cancellationToken = default);
 }

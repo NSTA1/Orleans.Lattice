@@ -1,4 +1,5 @@
 using Orleans.Lattice;
+using Orleans.Lattice.Auth;
 
 namespace Orleans.Lattice.Api.Replication;
 
@@ -75,6 +76,23 @@ internal sealed class ReplicationAccessAuthorizer
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         return LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
             _gate, _membership, treeId, LatticeOperation.Replication, cancellationToken);
+    }
+
+    /// <summary>
+    /// Authorizes a cluster-wide replication administration operation (one
+    /// that targets every tree rather than a single named one, such as
+    /// decommissioning a peer cluster) for the current caller, throwing
+    /// <see cref="LatticeAuthorizationDeniedException"/> when the
+    /// <see cref="LatticeOperation.Replication"/> capability is not granted
+    /// over the cluster-wide scope (<see cref="LatticeScope.ClusterWideTreeId"/>).
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>A task that completes when the operation is authorized.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized for cluster-wide replication administration.</exception>
+    public ValueTask AuthorizeClusterWideAsync(CancellationToken cancellationToken = default)
+    {
+        return LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+            _gate, _membership, LatticeScope.ClusterWideTreeId, LatticeOperation.Replication, cancellationToken);
     }
 
     /// <summary>

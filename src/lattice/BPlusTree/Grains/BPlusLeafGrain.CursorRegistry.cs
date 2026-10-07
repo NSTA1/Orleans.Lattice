@@ -207,7 +207,7 @@ internal sealed partial class BPlusLeafGrain
         }
         else
         {
-            var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+            var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
             var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
                 partitionCount, partitionsWithLiveData, treeId);
             for (var partition = 0; partition < partitionCount; partition++)
@@ -398,7 +398,12 @@ internal sealed partial class BPlusLeafGrain
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
-        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+
+        // Issue #4634: the record that a snapshot was kept must be durable before
+        // any pin that licenses the WAL GC to trim behind that snapshot.
+        await PersistKeptSnapshotCoverageMarkerAsync();
+
+        var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
         if (neverWritten && !HasNeverWrittenScannedThroughPartition(partitionCount, partitionsWithLiveData))
         {
             return 0;
@@ -423,7 +428,10 @@ internal sealed partial class BPlusLeafGrain
                 // drive's replay-based predicate cannot score a release whose
                 // leaf has no applied data. The #3103 arm is NOT counted for a
                 // never-written leaf: it resolves to (Zero, -1), the block pin.
-                if (IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
+                // Nor is a scanned-through partition with no durable snapshot
+                // coverage: it keeps the block until a capture covers it (issue
+                // #4523).
+                if (offset >= 0 && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
                 {
                     releases++;
                 }
@@ -445,6 +453,15 @@ internal sealed partial class BPlusLeafGrain
             {
                 releases++;
             }
+        }
+
+        // Issue #4523: a never-written leaf none of whose scanned-through
+        // partitions is snapshot-covered resolves every partition to the block
+        // pin the activation seed already published, so it publishes nothing -
+        // the same no-op as the #3453 early return above.
+        if (neverWritten && releases == 0)
+        {
+            return 0;
         }
 
         // Issue #3643: the frontier_pin barrier elides the pin-store call when
@@ -673,18 +690,15 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>
     /// Whether <paramref name="partition"/> of a never-written leaf
     /// (<c>Clock == Zero</c>) has a durable scanned-through checkpoint it may
-    /// publish as a <c>(Zero, X)</c> release (issue #3453): the partition holds
-    /// no live cache row and its <b>persisted</b> checkpoint is <c>&gt;= 0</c>.
+    /// publish as a <c>(Zero, X)</c> release (issue #3453), decided by
+    /// <see cref="LeafDurablePinCore.IsNeverWrittenScannedThrough"/> on the
+    /// <b>persisted</b> checkpoint, never the pending one
+    /// (<see cref="GetCurrentCheckpointForPartition"/>).
     /// </summary>
-    /// <remarks>
-    /// The persisted checkpoint, never the pending one
-    /// (<see cref="GetCurrentCheckpointForPartition"/>): published offsets merge
-    /// by monotonic maximum, so an over-report can never be lowered, and every
-    /// replay starts from the persisted offset (issue #3476).
-    /// </remarks>
     private bool IsNeverWrittenScannedThroughPartition(int partition, bool[] partitionsWithLiveData)
-        => !partitionsWithLiveData[partition]
-            && GetPersistedCheckpointForPartition(partition) >= 0;
+        => LeafDurablePinCore.IsNeverWrittenScannedThrough(
+            partitionsWithLiveData[partition],
+            GetPersistedCheckpointForPartition(partition));
 
     private bool HasNeverWrittenScannedThroughPartition(int partitionCount, bool[] partitionsWithLiveData)
     {
@@ -774,7 +788,7 @@ internal sealed partial class BPlusLeafGrain
         var clock = state.State.Clock;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
-        var partitionsWithLiveData = ComputePartitionsWithLiveData(partitionCount);
+        var partitionsWithLiveData = WithUnreplayedPartitionsLive(ComputePartitionsWithLiveData(partitionCount));
         var partitionsWithEmptyWal = await ComputeEmptyWalPartitionsAsync(
             partitionCount, partitionsWithLiveData, treeId);
         for (var partition = 0; partition < partitionCount; partition++)
@@ -917,16 +931,29 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task UnregisterMaterialiserPinsAsync()
     {
+        await RetireMaterialiserPinsAsync(await ResolveMaterialiserPinRetirementAsync());
+    }
+
+    /// <summary>
+    /// Names every materialiser pin this leaf could have registered, while its
+    /// tree id is still bound - the half of <see cref="UnregisterMaterialiserPinsAsync"/>
+    /// that must run before the state clear. A purge resolves here and retires
+    /// only after the row is gone (issue #4700), so a purge interrupted before
+    /// its row clear leaves a leaf whose data recovery hands back still pinned.
+    /// </summary>
+    /// <returns>The pins to retire, or <see langword="null"/> when there are none.</returns>
+    private async Task<MaterialiserPinRetirement?> ResolveMaterialiserPinRetirementAsync()
+    {
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
-            return;
+            return null;
         }
 
         var idBase = ResolveConsumerIdBase();
         if (idBase is null)
         {
-            return;
+            return null;
         }
 
         var treeId = state.State.TreeId!;
@@ -944,15 +971,35 @@ internal sealed partial class BPlusLeafGrain
                 "Leaf {Leaf} of tree '{TreeId}' could not resolve its WAL partition count while retiring its materialiser pins; the pins are left registered and the WAL GC's orphan sweep will retire them instead.",
                 context.GrainId,
                 treeId);
+            return null;
+        }
+
+        var consumerIds = new string[partitionCount];
+        for (var partition = 0; partition < partitionCount; partition++)
+        {
+            consumerIds[partition] = BuildConsumerId(idBase, partition, partitionCount);
+        }
+
+        return new MaterialiserPinRetirement(reporter, treeId, consumerIds);
+    }
+
+    /// <summary>Retires the pins <see cref="ResolveMaterialiserPinRetirementAsync"/> named.</summary>
+    /// <param name="retirement">The pins to retire; <see langword="null"/> when there are none.</param>
+    private async Task RetireMaterialiserPinsAsync(MaterialiserPinRetirement? retirement)
+    {
+        // Retiring the pins drops their override holds too (issue #4641), so
+        // nothing this activation raised may be assumed to stand afterwards.
+        _overrideHoldRaised = null;
+        if (retirement is null)
+        {
             return;
         }
 
-        for (var partition = 0; partition < partitionCount; partition++)
+        foreach (var consumerId in retirement.ConsumerIds)
         {
-            var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             try
             {
-                await reporter.UnregisterAsync(treeId, consumerId, CancellationToken.None);
+                await retirement.Reporter.UnregisterAsync(retirement.TreeId, consumerId, CancellationToken.None);
             }
             catch (Exception ex)
             {
@@ -960,11 +1007,17 @@ internal sealed partial class BPlusLeafGrain
                     ex,
                     "Leaf {Leaf} of tree '{TreeId}' failed to retire materialiser pin {Consumer}; the WAL prefix behind it stays retained until the WAL GC's orphan sweep retires it.",
                     context.GrainId,
-                    treeId,
+                    retirement.TreeId,
                     consumerId);
             }
         }
     }
+
+    /// <summary>The materialiser pins a leaf clear retires, named while its tree id was bound.</summary>
+    /// <param name="Reporter">The cursor reporter that registered them.</param>
+    /// <param name="TreeId">The tree id they were registered under.</param>
+    /// <param name="ConsumerIds">One consumer id per WAL partition.</param>
+    private sealed record MaterialiserPinRetirement(ILeafCursorReporter Reporter, string TreeId, string[] ConsumerIds);
 
     private ILeafCursorReporter? ResolveCursorReporter()
     {
@@ -999,6 +1052,35 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static string BuildConsumerId(string idBase, int partition, int partitionCount)
         => partitionCount == 1 ? idBase : $"{idBase}_{partition}";
+
+    /// <summary>
+    /// Whether this activation's WAL replay has latched: completed, retired, or
+    /// never required. Until then the cache does not show every row the leaf owns.
+    /// </summary>
+    private bool IsReplayLatched
+        => _replayBarrierSatisfied || _replayBarrierRetired || !_replayBarrierArmed;
+
+    /// <summary>
+    /// Treats every partition as holding live rows until this activation's replay
+    /// has latched (issue #4669). A cold
+    /// activation's cache is empty for a partition its replay has not read yet, so
+    /// a pin published meanwhile - by the checkpoint flush tail of a partition the
+    /// replay swept first - would resolve that partition as an empty release, a
+    /// real frontier with no offset, which licenses the WAL GC to trim writes the
+    /// leaf owns and has not replayed. Treated as live, the partition keeps its
+    /// block pin unless its WAL is proven empty, and is released by the first
+    /// publish after the replay latches.
+    /// </summary>
+    private bool[] WithUnreplayedPartitionsLive(bool[] partitionsWithLiveData)
+    {
+        if (IsReplayLatched)
+        {
+            return partitionsWithLiveData;
+        }
+
+        Array.Fill(partitionsWithLiveData, true);
+        return partitionsWithLiveData;
+    }
 
     /// <summary>
     /// Computes, in a single cache pass, which WAL partitions this leaf holds
@@ -1169,7 +1251,10 @@ internal sealed partial class BPlusLeafGrain
     /// clock is <see cref="HybridLogicalClock.Zero"/>, the partition holds no
     /// live row, and its <b>persisted</b> checkpoint <c>X &gt;= 0</c> records
     /// only entries the replay skipped as another leaf's work. Resolves to
-    /// <c>(Zero, X)</c>: for such a leaf every release above collapses to
+    /// <c>(Zero, min(X, covered))</c> when a durable snapshot covers the
+    /// partition, and to the block pin otherwise (issues #4456 and #4523): a
+    /// release is never published above durable snapshot coverage. For such a
+    /// leaf every release above collapses to
     /// <c>(Zero, -1)</c>, the block pin itself, so this is the only release its
     /// encoding can express. Only the flush paths opt in; the activation seed
     /// does not (see <see cref="SeedDurableMaterialiserFrontierAsync"/>).
@@ -1212,133 +1297,20 @@ internal sealed partial class BPlusLeafGrain
         bool[]? partitionsWithEmptyWal = null,
         bool releaseNeverWrittenScannedThrough = false)
     {
-        var checkpoint = GetCurrentCheckpointForPartition(partition);
+        // The decision is LeafDurablePinCore's, where the reasoning behind every
+        // arm now lives; this method gathers its inputs and maps the verdict onto
+        // the published frontier. The Zero frontier is reserved for the block pin
+        // and the never-written release, exactly as before the extraction.
+        var decision = LeafDurablePinCore.Resolve(
+            GetCurrentCheckpointForPartition(partition),
+            GetPersistedCheckpointForPartition(partition),
+            DurableSnapshotCoverageForPartition(partition),
+            partitionsWithLiveData[partition],
+            partitionsWithEmptyWal is not null
+                && partition < partitionsWithEmptyWal.Length
+                && partitionsWithEmptyWal[partition],
+            releaseNeverWrittenScannedThrough && clock <= HybridLogicalClock.Zero);
 
-        // Genuinely empty partition: it has applied NOTHING durably
-        // (checkpoint < 0) AND holds no live cache row, so there is no
-        // committed prefix to lose. Release any block and report the real
-        // frontier so the ubiquitous empty-partition pins keep WAL trim live
-        // (preserves #1490's empty-partition narrowness).
-        //
-        // The `checkpoint < 0` clause is load-bearing. Emptiness is decided
-        // from the transient per-activation in-memory cache
-        // (ComputePartitionsWithLiveData -> Cache.EnumerateRows), which does
-        // NOT reflect this leaf's durable data in the window between activation
-        // and cache hydration: a leaf can reactivate cold, find no snapshot to
-        // rehydrate from, and report/flush its durable pin while its cache is
-        // still empty even though the persisted projection checkpoint says the
-        // prefix [0, checkpoint] was durably applied (tombstone reaping and
-        // compaction can also empty the cache for a checkpointed partition
-        // while the WAL prefix still has to replay). Trusting that empty cache
-        // to RELEASE the block for a partition whose checkpoint is >= 0 is the
-        // "fall off the log" hole: it authorises the shared-shard WAL GC to
-        // trim a checkpointed, un-snapshotted prefix, after which the next cold
-        // rebuild replays from offset 0 over a WAL whose prefix is gone and the
-        // leaf comes up with its checkpoint below the WAL trim floor
-        // (LeafProjectionStaleException). A partition with a durable checkpoint
-        // must therefore be coverage-gated exactly like a cache-populated one,
-        // regardless of whether the cache momentarily shows it empty.
-        if (!partitionsWithLiveData[partition] && checkpoint < 0)
-        {
-            return (clock, checkpoint);
-        }
-
-        // Issue #3103: data-bearing, never checkpointed, and its WAL is EMPTY
-        // (head offset 0 - no entry was ever appended). This is the same
-        // "nothing to lose" case as the branch above, reached the other way
-        // round: the rows are real but the WAL behind them is not, because a
-        // WAL reset preserved the snapshot the leaf rehydrated them from.
-        // Blocking here is not conservative, it is terminal - an empty WAL has
-        // nothing to replay, so the starved-checkpoint drive returns NoAdvance
-        // for ever, the checkpoint never leaves -1, and the coverage repair's
-        // "checkpointed WITHOUT coverage" predicate stays permanently
-        // unreachable. Since a block pin is tree-wide, one such partition
-        // strands every leaf in the tree. Release it: an empty WAL holds no
-        // committed prefix, so the block protects nothing at all.
-        //
-        // Narrow by construction. This releases ONLY on a proven-empty WAL; a
-        // partition whose WAL holds unapplied entries keeps its block exactly
-        // as before, so neither the #1535 no-loss invariant nor the #945
-        // fall-off guard is weakened. The probe fails closed (see
-        // ComputeEmptyWalPartitionsAsync), so an unreadable head keeps the
-        // block too.
-        if (checkpoint < 0
-            && partitionsWithEmptyWal is not null
-            && partition < partitionsWithEmptyWal.Length
-            && partitionsWithEmptyWal[partition])
-        {
-            return (clock, checkpoint);
-        }
-
-        // Issue #3453: a never-written leaf (Clock == Zero) that has scanned
-        // this partition through a PERSISTED checkpoint X >= 0 over entries it
-        // skipped as another leaf's work, and holds no live row here. For such
-        // a leaf the release branches above resolve to (Zero, -1), which is
-        // byte-identical to the block pin, so no drive could ever lift it and
-        // the WAL GC scheduler looped on NoAdvance. (Zero, X) is the only
-        // release its encoding can express: an offset >= 0 puts the consumer in
-        // the GC's offset coverage set, which already exempts a Zero frontier
-        // from blocking (#3094), and the offset floor then retains everything
-        // above X - including any later write that routes to this leaf.
-        //
-        // X is the PERSISTED checkpoint, never `checkpoint` above (which is
-        // max(persisted, pending)). The pin store merges offsets by monotonic
-        // max, so an over-report can never be withdrawn, and every replay -
-        // including a cold rebuild - starts from the persisted offset (#3476).
-        //
-        // Opt-in, and only FlushDurableMaterialiserFrontierAsync opts in.
-        // SeedDurableMaterialiserFrontierAsync deliberately does not: its
-        // issue-2150 hazard is a Zero-clock leaf publishing a RAW checkpoint
-        // beyond durable coverage from the activation seed. This arm publishes
-        // the persisted checkpoint only, and only from the flush paths (the
-        // starvation drive, which persists before it publishes, and the
-        // deactivation barrier). A persisted scanned-through checkpoint is safe
-        // for a never-written leaf because it owns no row whose only durable
-        // copy is the WAL prefix at or below X: a cold activation with no
-        // snapshot and an empty cache replays under the -1 sentinel, which the
-        // fall-off detector exempts, and the #945 guard compares the WAL tail
-        // against this same persisted checkpoint.
-        if (releaseNeverWrittenScannedThrough
-            && clock <= HybridLogicalClock.Zero
-            && IsNeverWrittenScannedThroughPartition(partition, partitionsWithLiveData))
-        {
-            return (HybridLogicalClock.Zero, GetPersistedCheckpointForPartition(partition));
-        }
-
-        // Data-bearing partition (live cache rows) OR a durably-checkpointed
-        // partition whose in-memory cache is momentarily empty. Either way the
-        // checkpointed prefix's only durable copy - absent a snapshot - is the
-        // WAL, so authorise trimming only as far as a durable snapshot covers.
-        //
-        // Issue #3476: and never past the PERSISTED checkpoint. `checkpoint`
-        // above is max(persisted, pending), and the pending half is an advance
-        // held only in this activation's memory. Every replay this activation
-        // (or a crash-recovered successor that does not rehydrate a snapshot)
-        // runs starts from the persisted offset, and the #945 guard and the
-        // fall-off-log detector fault it when the WAL tail has passed
-        // persisted + 1. A pin above the persisted checkpoint licenses exactly
-        // that trim: the #3224 drive recheck restamps coverage up to the
-        // pending checkpoint, so both arms of min(checkpoint, covered) could
-        // sit above it, the GC trimmed to the pin, and the next replay latched
-        // the leaf. Because the pin store merges by monotonic max, an
-        // over-reported offset can never be taken back, so the clamp has to
-        // hold at publication. The pending advance reaches the pin as soon as
-        // it persists: FlushPendingCheckpointAsync republishes through
-        // ReportCursorIfActiveAsync, and the starvation drive persists before
-        // it republishes.
-        var covered = DurableSnapshotCoverageForPartition(partition);
-        var safeOffset = Math.Min(GetPersistedCheckpointForPartition(partition), covered);
-        if (safeOffset < 0)
-        {
-            // Never checkpointed (checkpoint < 0, #1490), checkpointed only in
-            // memory so far (a pending first checkpoint over a persisted -1,
-            // #3476), OR checkpointed but uncovered (covered < 0, the residual
-            // cold-restart prefix loss and the empty-cache misclassification):
-            // the whole WAL from offset 0 is the only durable copy - retain the
-            // Zero block pin.
-            return (HybridLogicalClock.Zero, -1L);
-        }
-
-        return (clock, safeOffset);
+        return (decision.HasZeroFrontier ? HybridLogicalClock.Zero : clock, decision.Offset);
     }
 }

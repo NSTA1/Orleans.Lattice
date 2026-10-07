@@ -1,0 +1,18 @@
+# Pairs with NoLiveBucketAfterForget. Reproduces production before #4619 was
+# fixed (#4638): a forwarded prepare that outlives its saga's terminal, the
+# saga's completion and the retirement of its registry row reaches a
+# destination leaf that has lost its memory of the terminal (a reactivation, or
+# a fresh sibling); the registry reports the forgotten saga InFlight and the
+# leaf buckets the prepare, which nothing will ever consume.
+MODULE: NoLiveBucketAfterForgetLateForwardBucketed
+TARGET: NoLiveBucketAfterForget
+CLASS: Invariant
+SUMMARY: a late forward of a forgotten saga is bucketed on a leaf that lost its memory of the terminal, stranded for good
+PERTURBS: DeliverLate
+
+--- FIND
+    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy) \/ GuardRefuses
+--- REPLACE
+\* MUTATION: no participant-row check; a forgotten saga reads as in flight.
+    /\ IF term[spCopy][s2] \/ RegistryView # "inflight" \/ Gone(spCopy)
+--- END

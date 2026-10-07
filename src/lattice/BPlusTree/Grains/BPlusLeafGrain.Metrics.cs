@@ -125,6 +125,11 @@ internal sealed partial class BPlusLeafGrain
                 $"Leaf {context.GrainId} was cleared; refusing the write from {caller}, which would re-create its row.");
         }
 
+        // Every change to the applied-terminal witness reaches its sidecar before
+        // this state write (issue #4545), so a projection checkpoint this write
+        // carries never passes a terminal whose witness is not durable.
+        await FlushTerminalWitnessAsync();
+
         if (_tracePersist)
         {
             var etag = state.Etag is null
@@ -187,6 +192,11 @@ internal sealed partial class BPlusLeafGrain
         // across the await is the benign first-create adopt inside
         // TopologySeedPersist, and by that helper's own contract the adopted row
         // carries an identical topology seed, so entry and exit agree.
+        // A first row is written only for a leaf being created, and its row record
+        // is durable before any write that could make the row the leaf's only
+        // durable trace (issue #4654), so a lost row is never re-created empty.
+        await AdmitAndRecordRowAsync();
+
         var treeIdTag = ResolveTreeIdTagForPersist();
         var startTicks = Stopwatch.GetTimestamp();
         try
@@ -206,6 +216,10 @@ internal sealed partial class BPlusLeafGrain
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeIdTag),
                 LatticeTenantLabel.ForTree(treeIdTag));
         }
+
+        // A leaf re-created from a purge's clear resets its record's purge mark
+        // only now that its first row is durable (issue #4700).
+        await CompleteOwedPurgeMarkResetAsync();
 
         // Best-effort byte-footprint publish to the owning shard root so the
         // shard-level storage-usage rollup stays current without ever
@@ -440,7 +454,10 @@ internal sealed partial class BPlusLeafGrain
             return _commitLogWriter;
 
         _commitLogWriterResolved = true;
-        _commitLogWriter = context.ActivationServices?.GetService<ICommitLogWriter>();
+        var inner = context.ActivationServices?.GetService<ICommitLogWriter>();
+        // Every leaf append raises the override holds its records need first
+        // (issue #4641); see BPlusLeafGrain.OverrideHold.cs.
+        _commitLogWriter = inner is null ? null : new OverrideHoldCommitLogWriter(this, inner);
         return _commitLogWriter;
     }
 

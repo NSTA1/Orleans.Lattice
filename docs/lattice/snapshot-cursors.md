@@ -31,7 +31,19 @@ returning the cursor ID:
    registry (not taken from a cached copy) and its version pinned on the
    coordinate - with the full map as well when the tree has more than one
    physical shard - so all paging fan-outs target the same shard layout.
-2. **Per-shard frozen-baseline capture.** Every shard root walks its
+2. **Saga decision gate.** The open acquires a lease-fenced decision
+   gate on every key of the tree's saga decision registry (issue #4485).
+   While the gate is held no NEW commit or abort decision can be recorded
+   on the tree - writes and saga prepares are never blocked, only the
+   decision step of a saga that reaches it during the capture waits - and
+   each registry key snapshots the decisions it has recorded locally (the
+   capture's decision snapshot). The gate is renewed while the capture
+   runs and released when it ends; the capture is accepted only if the
+   gate was held without a lapse throughout, otherwise it is retried with
+   a fresh gate and, after three attempts, the open fails with the
+   retriable `LatticeTransactionOutcomeUnavailableException`. A gate whose
+   capture crashed lapses with its lease, so it never wedges sagas.
+3. **Per-shard frozen-baseline capture.** Every shard root walks its
    leaf chain through the shard-root baseline-capture path,
    freezing each leaf's committed projection and folding its
    own `(leaf_frontier, capturedHead]` WAL tail exactly once (CRDT folds
@@ -63,14 +75,33 @@ returning the cursor ID:
    so a shard root can never be held indefinitely by an unresponsive
    leaf: the capture is abandoned instead, which is safe because it
    performs no observable writes until the baseline is seeded.
-3. **Saga-decision snapshot.** The tree's transaction registry is read, as
+
+   Every saga prepare still pending at a shard's captured head is
+   resolved, during that shard's fold, against the gate's decision
+   snapshot: a batch Committed in the snapshot reads post-saga, and any
+   other reads pre-saga. The snapshot holds each decision the registry
+   records, including one whose retention window has elapsed - which a
+   live read reports as Indeterminate and hides - because a capture is
+   permanent and the sweeps settle such a bucket from the same recorded
+   decision ([#4619](https://github.com/NSTA1/Orleans.Lattice/issues/4619)). Every shard resolves against the same decisions, so an
+   atomic batch is on one side of the snapshot on every shard it touched,
+   even though each shard captures at its own moment and a batch's commit
+   terminal reaches each shard separately. That holds because, under the
+   gate, every commit terminal a baseline can contain belongs to a batch
+   whose decision was recorded before the gate, and such a batch had every
+   prepare acknowledged before its decision.
+
+   A cross-tree atomic write that this tree has not yet finalized locally
+   when the gate is acquired reads pre-saga in a single-tree snapshot, even
+   if its cross-tree coordinator decides during the capture. Cross-tree
+   consistency is promised only by a cross-tree-consistent backup set,
+   which holds one gate across every member tree.
+4. **Saga-decision snapshot.** The tree's transaction registry is read, as
    for a point-in-time cursor, but its decisions are not carried into the
    cursor: the coordinate records only a diagnostic registry clock, which
    is currently always zero, and a transport failure of that read does not
-   fail the open (any other registry fault does). Saga
-   visibility is fixed by the frozen baseline itself - a batch whose commit
-   terminal lands after the captured head stays pending, and so invisible,
-   on every leaf it touched.
+   fail the open (any other registry fault does). Saga visibility is fixed
+   by the gated baseline capture above.
 
 The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and

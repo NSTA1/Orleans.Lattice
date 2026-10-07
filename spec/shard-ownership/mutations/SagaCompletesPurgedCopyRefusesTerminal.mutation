@@ -1,0 +1,35 @@
+# Pairs with SagaCompletes. Reproduces production before #4475 was fixed (#4531,
+# #4581): a saga bound to the
+# old copy keeps sending its terminals there, and once the purge has cleared
+# that copy and unregistered it, AppendTxTerminalAsync (a non-write that does
+# not answer a purged tree as empty) refuses with InvalidOperationException.
+# MarkOneShardAsync follows only stale-routing refusals, so the broadcast fails
+# on every retry and the saga never completes; the resized copy's mirrored
+# buckets stay unresolved behind it.
+#
+# A second edit lets the stalled saga count as quiescent, so the mutant cannot
+# deadlock and the temporal property is the only thing TLC can report.
+MODULE: SagaCompletesPurgedCopyRefusesTerminal
+TARGET: SagaCompletes
+CLASS: Temporal
+SUMMARY: a saga bound to a purged old copy can never deliver its terminals
+PERTURBS: SagaTerminal
+
+--- FIND
+    /\ s \in TermTargets \ told
+    /\ told' = told \cup {s}
+--- REPLACE
+    /\ s \in TermTargets \ told
+\* MUTATION: the purged old copy refuses the terminal outright.
+    /\ ~Gone(bound)
+    /\ told' = told \cup {s}
+--- END
+
+--- FIND
+Quiescent ==
+    /\ sg \in {"idle", "done"}
+--- REPLACE
+Quiescent ==
+\* MUTATION: a saga stalled on a purged copy is not in flight.
+    /\ sg \in {"idle", "done"} \/ Gone(bound)
+--- END

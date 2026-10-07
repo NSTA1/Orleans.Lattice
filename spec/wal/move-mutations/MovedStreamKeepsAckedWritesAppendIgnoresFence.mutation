@@ -1,0 +1,17 @@
+# Pairs with MovedStreamKeepsAckedWrites. The allocator assigns an offset
+# without checking the move fence (WalMoveFenceCore.IsAppendAdmitted is
+# skipped), so a write appended after the copy is acknowledged on the old home
+# and lost at the switch.
+MODULE: MovedStreamKeepsAckedWritesAppendIgnoresFence
+TARGET: MovedStreamKeepsAckedWrites
+CLASS: Invariant
+SUMMARY: an append is admitted while a move has fenced the stream and is lost at the switch
+PERTURBS: Append
+
+--- FIND
+    /\ ~afence
+    /\ next < MaxOff
+--- REPLACE
+\* MUTATION: the fence check is dropped from the append.
+    /\ next < MaxOff
+--- END

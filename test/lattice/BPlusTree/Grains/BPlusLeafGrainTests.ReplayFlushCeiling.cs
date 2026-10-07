@@ -212,9 +212,10 @@ public partial class BPlusLeafGrainTests
         int attempts,
         int maxDurableUnresolvedReplayWork = LatticeOptions.DefaultMaxDurableUnresolvedReplayWork,
         int maxLeafReplayEntries = LatticeOptions.DefaultMaxLeafReplayEntries,
-        bool recordUnresolvedPreparesBeyondCap = true)
+        bool recordUnresolvedPreparesBeyondCap = true,
+        LeafSnapshotBlob? initialSnapshot = null)
     {
-        var store = new InMemorySnapshotStore();
+        var store = new InMemorySnapshotStore(initialSnapshot);
         var observed = new List<long>();
 
         for (var attempt = 0; attempt < attempts; attempt++)
@@ -432,7 +433,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
@@ -470,7 +471,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         var grain = BuildFlushCeilingLeaf(state, [coord], store.Stub);
 
@@ -799,7 +800,7 @@ public partial class BPlusLeafGrainTests
         var store = new InMemorySnapshotStore();
 
         var persistedOffsets = new List<long>();
-        state.OnWriteState = s => persistedOffsets.Add(s.ProjectionCheckpointOffset);
+        state.OnWriteState = CheckpointAdvancingWrites(persistedOffsets);
 
         // Guards the NO-RECORD path (issue #2165). This test's own comment
         // states the rationale precisely - "a resumed replay has to re-read
@@ -1235,6 +1236,23 @@ public partial class BPlusLeafGrainTests
         // faithful shape, not a convenience.
         state.State.ProjectionCheckpointOffsetsByPartition = [0L, 0L];
 
+        // ...and both must be COVERED by a snapshot, for the same reason. A leaf
+        // with real checkpoints and no snapshot activates cold, and a capture
+        // taken part-way through a cold rebuild may claim only what the rebuild
+        // has re-read (issue #4451): partition 1, never reached, is claimed at
+        // the -1 sentinel, the next activation's rehydrate resets it there, and
+        // the sentinel-first sweep order then hands partition 0 the drain slot
+        // this scenario exists to deny it. Seeding an empty snapshot covering
+        // both checkpoints makes every activation warm, as a production leaf
+        // with real checkpoints is.
+        var coveringBothCheckpoints = new LeafSnapshotBlob
+        {
+            SnapshotOffset = 0L,
+            Rows = [],
+            CapturedAtTicks = 1L,
+            SnapshotOffsetsByPartition = [0L, 0L],
+        };
+
         return await RunInterruptedReplaysAsync(
             state,
             cts =>
@@ -1269,7 +1287,8 @@ public partial class BPlusLeafGrainTests
                     [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
             ],
             attempts: 12,
-            maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork);
+            maxDurableUnresolvedReplayWork: maxDurableUnresolvedReplayWork,
+            initialSnapshot: coveringBothCheckpoints);
     }
 
     [Test]
@@ -1348,11 +1367,15 @@ public partial class BPlusLeafGrainTests
         var txId = Guid.NewGuid();
         var state = NewFlushCeilingState();
 
+        // One snapshot store across both attempts: a snapshot attempt 1 keeps is
+        // still there for attempt 2, as in production. A fresh store would model
+        // a vanished snapshot over a trimmed WAL, which fails closed (issue #4634).
+        var store = new InMemorySnapshotStore();
+
         // Attempt 1: absorb the prepare (offset 2) and the terminal (offset 3)
         // on a non-drain-eligible partition, then tear down.
         using (var cts = new CancellationTokenSource())
         {
-            var store = new InMemorySnapshotStore();
             var grain = BuildFlushCeilingLeaf(
                 state,
                 [
@@ -1388,7 +1411,6 @@ public partial class BPlusLeafGrainTests
         // Attempt 2: run to completion. The recorded prepare and terminal are
         // reconstructed from state (they are BELOW the checkpoint, so the WAL
         // is never re-read for them) and the saga's write must still commit.
-        var finalStore = new InMemorySnapshotStore();
         var resumed = BuildFlushCeilingLeaf(
             state,
             [
@@ -1401,7 +1423,7 @@ public partial class BPlusLeafGrainTests
                     head: 21, sliceSize: 20, tail: 0, onRead: null,
                     [.. Enumerable.Range(1, 20).Select(i => FlushSet(i, $"p1-{i:D2}"))]),
             ],
-            finalStore.Stub,
+            store.Stub,
             reclassifyEveryN: 1,
             maxDurableUnresolvedReplayWork: 1024);
 

@@ -144,6 +144,36 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync();
 
     /// <summary>
+    /// Raises an <b>override hold</b> for every consumer in
+    /// <paramref name="consumerIds"/> and <b>awaits</b> its durable write
+    /// (issue #4641). A leaf calls this before it appends a write stamped below
+    /// its own clock, which can sit below the frontier the leaf last published by
+    /// an empty release; the WAL GC treats a held consumer whose durable offset is
+    /// still <c>-1</c> as a <see cref="HybridLogicalClock.Zero"/> block pin, so no
+    /// arm - cursor, offset admission or retention - can trim that write before
+    /// the leaf has made it durable.
+    /// <para>
+    /// A consumer whose durable offset is already a real offset (<c>&gt;= 0</c>)
+    /// needs no hold, because the GC's offset-floor stop protects every entry
+    /// above it, and is skipped without a write. A consumer with no pin gets a
+    /// <see cref="HybridLogicalClock.Zero"/> block pin alongside its hold, so the
+    /// GC census sees it. The store drops a hold itself the moment the consumer's
+    /// durable offset becomes real; the leaf never clears one. Throws when the
+    /// hold could not be made durable, so the caller does not append.
+    /// </para>
+    /// </summary>
+    /// <param name="consumerIds">The consumers to hold. Each must not be <see langword="null"/> or whitespace.</param>
+    Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds);
+
+    /// <summary>
+    /// Returns the consumers currently holding an override hold (issue #4641).
+    /// The WAL GC reads this <b>before</b> it reads <see cref="GetPinOffsetsAsync"/>,
+    /// so a hold the store dropped because the consumer's offset became real is
+    /// always followed by a census that sees that offset.
+    /// </summary>
+    Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync();
+
+    /// <summary>
     /// Removes <paramref name="consumerId"/>'s durable pin. Idempotent: a
     /// no-op when the consumer has no pin. Reserved for terminal lifecycle
     /// events (leaf eviction during a purge) so a deleted leaf does not pin

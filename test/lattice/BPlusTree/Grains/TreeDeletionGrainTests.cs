@@ -46,7 +46,7 @@ public partial class TreeDeletionGrainTests
             shardRoot.MarkDeletedAsync().Returns(Task.CompletedTask);
             shardRoot.IsDeletedAsync().Returns(Task.FromResult(false));
             shardRoot.PurgeAsync().Returns(Task.CompletedTask);
-            shardRoot.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
+            shardRoot.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromResult(-1));
         }
 
         // Set up compaction grain mock.
@@ -381,7 +381,7 @@ public partial class TreeDeletionGrainTests
         for (int i = 0; i < ShardCount; i++)
         {
             var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
-            await shard.Received(1).ReseedNodeBindingsAsync();
+            await shard.Received(1).ReseedNodeBindingsAsync(0);
         }
     }
 
@@ -392,7 +392,7 @@ public partial class TreeDeletionGrainTests
         await grain.DeleteTreeAsync();
 
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0");
-        shard.ReseedNodeBindingsAsync().Returns(Task.FromException(new Exception("Shard root unavailable")));
+        shard.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromException<int>(new Exception("Shard root unavailable")));
 
         var ex = Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
         Assert.That(ex!.Message, Is.EqualTo("Shard root unavailable"));
@@ -405,7 +405,7 @@ public partial class TreeDeletionGrainTests
         await grain.DeleteTreeAsync();
 
         var shard = grainFactory.GetGrain<IShardRootGrain>($"{TreeId}/0");
-        shard.ReseedNodeBindingsAsync().Returns(Task.FromException(new Exception("Shard root unavailable")));
+        shard.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromException<int>(new Exception("Shard root unavailable")));
 
         Assert.ThrowsAsync<Exception>(() => grain.RecoverAsync());
 
@@ -415,7 +415,7 @@ public partial class TreeDeletionGrainTests
         Assert.That(state.State.IsDeleted, Is.True);
         Assert.That(state.State.DeletedAtUtc, Is.Not.Null);
 
-        shard.ReseedNodeBindingsAsync().Returns(Task.CompletedTask);
+        shard.ReseedNodeBindingsAsync(Arg.Any<int>()).Returns(Task.FromResult(-1));
         await grain.RecoverAsync();
         Assert.That(state.State.IsDeleted, Is.False);
     }

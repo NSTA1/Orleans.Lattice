@@ -5,7 +5,7 @@ using Orleans.Lattice.Replication.Tests.Fakes;
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
 [TestFixture]
-public class ReplicationHighWaterMarkGrainTests
+public partial class ReplicationHighWaterMarkGrainTests
 {
     private const string OriginA = "site-a";
     private const string OriginB = "site-b";
@@ -14,7 +14,7 @@ public class ReplicationHighWaterMarkGrainTests
         FakePersistentState<ReplicationHighWaterMarkState>? state = null)
     {
         state ??= new FakePersistentState<ReplicationHighWaterMarkState>();
-        return new ReplicationHighWaterMarkGrain(state);
+        return HighWaterMarkTestGrains.Real(state);
     }
 
     private static HybridLogicalClock Hlc(long ticks, int counter = 0) =>

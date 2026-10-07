@@ -249,6 +249,7 @@ public sealed class ObservedLatticeRegistryTests
         if (type == typeof(ShardMap)) return ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, 2);
         if (type == typeof(IReadOnlyList<string>)) return new[] { $"arg-{index}" };
         if (type == typeof(IReadOnlyCollection<(int Partition, string ProviderKey)>)) return new[] { (index, $"arg-{index}") };
+        if (type == typeof(IReadOnlyCollection<int>)) return new[] { index, index + 1 };
         throw new InvalidOperationException(
             $"No sample value for registry parameter '{parameter.Name}' of type {parameter.ParameterType}; add one here.");
     }

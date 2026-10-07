@@ -1,0 +1,14 @@
+# Pairs with SagaSettles. The revert's fix-up does not clear the previous copy's
+# redirect, so the copy the alias is back on refuses its bound saga forever.
+MODULE: SagaSettlesRevertKeepsRedirect
+TARGET: SagaSettles
+CLASS: Temporal
+SUMMARY: the revert leaves the previous copy redirecting
+PERTURBS: RevertArm
+
+--- FIND
+    /\ redir' = [redir EXCEPT ![P] = None, ![S] = P]
+--- REPLACE
+    \* MUTATION: the previous copy keeps its redirect.
+    /\ redir' = [redir EXCEPT ![S] = P]
+--- END

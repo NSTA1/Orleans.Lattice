@@ -126,4 +126,170 @@ internal sealed class ReplicationShipperState
     /// </remarks>
     [Id(4)]
     public string? AdminPauseSagaId { get; set; }
+
+    /// <summary>
+    /// Legacy: sagas an earlier build poisoned for this peer after parking a
+    /// prepare it could not encode (#4494). Nothing adds to it any more: an
+    /// encode failure takes the peer off the log instead (#4614). A shipper that
+    /// activates with entries here takes the peer off the log, so a re-seed
+    /// delivers each such saga whole, and then empties it. Kept so persisted
+    /// state, and the <see cref="PoisonedSaga"/> wire alias, still decode.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state without an
+    /// <c>[Id(5)]</c> slot decodes to an empty map. Never reuse the slot.
+    /// </remarks>
+    [Id(5)]
+    public Dictionary<Guid, PoisonedSaga> PoisonedSagas { get; set; } = new();
+
+    /// <summary>
+    /// The tree's snapshot export epoch at the moment this shipper found a
+    /// forced gap - a write-ahead-log trim past its unacknowledged cursor that
+    /// lost records the peer never received (issue #4534) - or <c>null</c> when
+    /// no re-seed is outstanding. While set, the shipper withholds every saga
+    /// record (prepares and terminals) from the peer, because a saga that lost
+    /// a record in the gap would otherwise be delivered torn, and keeps shipping
+    /// plain writes. It is cleared once the peer acknowledges a full bootstrap
+    /// whose export epoch is greater (<see cref="ReplicationAck.BootstrapEpoch"/>),
+    /// after which every partition is re-shipped from its lowest retained entry.
+    /// </summary>
+    /// <remarks>
+    /// <strong>Wire-compat additive.</strong> Legacy persisted state decodes to
+    /// <see langword="null"/>, the steady state.
+    /// </remarks>
+    [Id(6)]
+    public long? ReseedRequiredEpoch { get; set; }
+
+    /// <summary>
+    /// When <see cref="ReseedRequiredEpoch"/> was set, in UTC ticks, for the
+    /// re-seed age alarm; <c>0</c> when no re-seed is outstanding.
+    /// </summary>
+    [Id(7)]
+    public long ReseedRequiredSinceUtcTicks { get; set; }
+
+    /// <summary>
+    /// Set while this shipper replays its log non-contiguously (issue #4533):
+    /// after a re-seed rewinds it to the lowest retained entry, or after a
+    /// source-identity rebind restarts it on a new log. Per partition, the next
+    /// sequence when the replay began, raised whenever the shipper withholds a
+    /// saga the origin proves forgotten and purged. While set, every saga
+    /// record is checked; cleared once every partition's cursor has passed it.
+    /// A contiguous stream never sets it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(8)]
+    public long[]? ReplayFilterHorizon { get; set; }
+
+    /// <summary>
+    /// The physical log whose <c>IWalPurgeHoldGrain</c> carries this shipper's
+    /// replay hold (issue #4533), or <see langword="null"/> when it holds none.
+    /// Taken before the peer is taken off the log (or a rebind replay begins)
+    /// and released once the replay filter clears with no re-seed outstanding,
+    /// so no saga in flight at the re-seed's export loses its decision while
+    /// the replay may still need it. Legacy state decodes to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(9)]
+    public string? ReplayHoldLog { get; set; }
+
+    /// <summary>
+    /// While a re-seed is outstanding, per partition the lowest sequence this
+    /// shipper keeps retained for the rewind (issue #4533): its durable cursor
+    /// when it took the peer off the log, or the partition's lowest retained
+    /// entry when a trim had passed the cursor. Saga records it withholds
+    /// meanwhile sit at or above it, and its published read positions never
+    /// pass it, so the WAL GC keeps them for the rewind to re-ship. A trim the
+    /// retention ceiling forces past it is detected at the rewind, which then
+    /// takes the peer off the log again instead. <see langword="null"/> when no
+    /// re-seed is outstanding; legacy state decodes to <see langword="null"/>.
+    /// </summary>
+    [Id(10)]
+    public long[]? ReseedRetainFrom { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> once the peer was removed from the replication
+    /// topology (issue #4534): the shipper no longer holds the write-ahead log
+    /// for it - it has withdrawn from the log's offset consumers and released
+    /// its decision-purge holds - and, being off the log, ships only plain
+    /// writes until the peer returns and is re-seeded. Cleared when the peer
+    /// is added back. A state written before this slot decodes to
+    /// <see langword="false"/>.
+    /// </summary>
+    [Id(11)]
+    public bool DetachedFromLog { get; set; }
+
+    /// <summary>
+    /// Per partition, the first sequence of the encode-failure quarantine (issue
+    /// #4614): the merged hull of every batch this shipper could not encode since
+    /// the quarantine was last empty. Every record in it was appended before the
+    /// re-seed marker the failure set, so the snapshot export that clears the
+    /// marker carries its effects, and the rewind consumes it without shipping.
+    /// Empty when nothing is quarantined; legacy state decodes to an empty map.
+    /// </summary>
+    [Id(12)]
+    public Dictionary<int, long> EncodeQuarantineFrom { get; set; } = new();
+
+    /// <summary>
+    /// Per partition, the last sequence of the encode-failure quarantine (issue
+    /// #4614); see <see cref="EncodeQuarantineFrom"/>. Cleared once no re-seed is
+    /// outstanding and every partition's cursor has passed it, and on a rebind
+    /// to a new source log. Legacy state decodes to an empty map.
+    /// </summary>
+    [Id(13)]
+    public Dictionary<int, long> EncodeQuarantineThrough { get; set; } = new();
+
+    /// <summary>
+    /// What the shipper needs to vouch for the peer's applied low watermark
+    /// (issue #4586 part 2b): the receiver lineage it last saw, the shipped
+    /// prepares whose terminals the peer has not acknowledged yet, and the
+    /// records it passed without delivering. Legacy state decodes to an empty
+    /// value, under which the shipper vouches for nothing until it has seen
+    /// the receiver's lineage. Slots 14 to 19 are reserved for other work.
+    /// </summary>
+    [Id(20)]
+    public SourceFrontierShipperState Frontier { get; set; } = new();
+
+    /// <summary>
+    /// <see langword="true"/> once a silo that predates the decision-purge hold
+    /// was seen while the re-seed marker was set (issue #4664). The first tick
+    /// that sees every silo honour the hold raises the marker to the tree's
+    /// current export epoch and clears this, so an export drained while an older
+    /// registry could purge a decision never settles the re-seed. A state
+    /// written before this slot decodes to <see langword="false"/>.
+    /// </summary>
+    [Id(21)]
+    public bool ReseedSpansPreHoldSilo { get; set; }
+
+    /// <summary>
+    /// The source tree lineage the shipper's binding was resolved under (issue
+    /// #4673), stamped on every push: the last non-null lineage a resolve read,
+    /// kept while the registry reports none (a tree unregistered for a
+    /// recreate), so a recreate is compared against it. <see langword="null"/>
+    /// while no resolve has read a lineage. Meaningful only while
+    /// <see cref="BoundSourceLineageKnown"/>.
+    /// </summary>
+    [Id(22)]
+    public Guid? BoundSourceLineage { get; set; }
+
+    /// <summary>
+    /// Whether <see cref="BoundSourceLineage"/> describes the current binding
+    /// (issue #4673). While it does not, pushes are stamped
+    /// <see cref="Guid.Empty"/>, which a receiver that drained the source
+    /// refuses. A state written before this slot decodes to
+    /// <see langword="false"/>, so the first resolve records the lineage without
+    /// treating it as a change.
+    /// </summary>
+    [Id(23)]
+    public bool BoundSourceLineageKnown { get; set; }
+
+    /// <summary>
+    /// Per partition, the bound log's next sequence when the binding's lineage
+    /// last changed (issue #4673). Every record below it was appended before the
+    /// re-seed marker that change set, so the settling export carries it, and
+    /// it is consumed without shipping for as long as the binding holds. Empty
+    /// when no lineage change is in force; cleared on a rebind to another log.
+    /// A state written before this slot decodes to an empty map.
+    /// </summary>
+    [Id(24)]
+    public Dictionary<int, long> SourceLineageBoundary { get; set; } = new();
 }

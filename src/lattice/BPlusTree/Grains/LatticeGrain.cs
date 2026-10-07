@@ -529,11 +529,19 @@ internal sealed partial class LatticeGrain(
     // shard-cache hit path. Combined: no async state-machine box and no
     // RoutingInfo allocation on the steady-state read/write fast path.
     private RoutingInfo? _cachedRouting;
+    // Physical copies this activation has read as receive-open, with each one's
+    // minimum admission epoch (issue #4593). A restored copy only moves from
+    // closed to open and its epoch is fixed once open, so an open copy's status
+    // is cached and a closed one is always re-read. Consulted only under
+    // ReplicationApplyScope.
+    private Dictionary<string, long>? _receiveOpenCopies;
     private readonly PublishEventsGate _eventsGate = new();
 
     /// <summary>
-    /// Wall-clock budget for every stale-routing retry loop on the public
-    /// <see cref="ILattice"/> surface (reads, writes, and replication apply).
+    /// Wall-clock budget for the stale-routing retry loops on the public
+    /// <see cref="ILattice"/> write surface and replication apply, and the
+    /// ceiling on the read paths' shorter budget
+    /// (<see cref="StaleRoutingReadRetryBudget"/>).
     /// A single <see cref="StaleShardRoutingException"/> /
     /// <see cref="StaleTreeRoutingException"/> retry is insufficient because
     /// (a) under cascading mid-saga topology changes (e.g. a 4-to-8 reshard
@@ -552,6 +560,38 @@ internal sealed partial class LatticeGrain(
     /// topology never quiesces within the budget.
     /// </summary>
     private static readonly TimeSpan StaleRoutingWriteRetryBudget = TimeSpan.FromSeconds(60);
+
+    private TimeSpan? _staleRoutingReadRetryBudget;
+
+    /// <summary>
+    /// Wall-clock budget for the stale-routing retry loops on the point and
+    /// multi-key read paths (<see cref="GetAsync"/>, <c>GetWithVersionAsync</c>,
+    /// <see cref="ExistsAsync"/>, <see cref="GetManyAsync"/>): five sixths of
+    /// this silo's response timeout, capped at
+    /// <see cref="StaleRoutingWriteRetryBudget"/>, so a read that cannot make
+    /// progress surfaces the typed stale-routing fault before its caller's
+    /// request times out (issue #4545). See <see cref="StaleRoutingReadRetry"/>.
+    /// Resolved once per activation.
+    /// </summary>
+    private TimeSpan StaleRoutingReadRetryBudget =>
+        _staleRoutingReadRetryBudget ??= StaleRoutingReadRetry.Budget(
+            services.GetService<IOptions<SiloMessagingOptions>>()?.Value.ResponseTimeout
+                ?? new SiloMessagingOptions().ResponseTimeout,
+            StaleRoutingWriteRetryBudget);
+
+    /// <summary>
+    /// Paces stale-routing retry number <paramref name="retry"/> of one read
+    /// (issue #4545): no wait for the first few, then a doubling wait capped at
+    /// <see cref="StaleRoutingReadRetry.MaxBackoff"/>, so a signal that persists
+    /// is not retried in a tight loop of registry and shard calls.
+    /// </summary>
+    private static ValueTask PaceStaleRoutingReadRetryAsync(int retry, CancellationToken cancellationToken)
+    {
+        var delay = StaleRoutingReadRetry.Backoff(retry);
+        return delay == TimeSpan.Zero
+            ? ValueTask.CompletedTask
+            : new ValueTask(Task.Delay(delay, cancellationToken));
+    }
 
     /// <summary>
     /// Rejects any public <see cref="ILattice"/> call targeting a reserved
@@ -1029,7 +1069,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1080,11 +1121,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1169,7 +1212,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1193,11 +1237,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1285,7 +1331,8 @@ internal sealed partial class LatticeGrain(
         var envelopeStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1299,11 +1346,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (ShardActivationTimeoutException)
                 {
@@ -1415,7 +1464,8 @@ internal sealed partial class LatticeGrain(
             // handling preserves tree-deletion semantics (single retry
             // only, so a deleted tree surfaces in <2s rather than after
             // 60s).
-            var deadline = DateTime.UtcNow + StaleRoutingWriteRetryBudget;
+            var deadline = DateTime.UtcNow + StaleRoutingReadRetryBudget;
+            var staleRetry = 0;
             var invalidOpRetried = false;
             while (true)
             {
@@ -1441,11 +1491,13 @@ internal sealed partial class LatticeGrain(
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     InvalidateShardMap();
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (StaleTreeRoutingException)
                 {
                     if (DateTime.UtcNow >= deadline) throw;
                     if (!TryInvalidateStaleAlias()) throw;
+                    await PaceStaleRoutingReadRetryAsync(staleRetry++, cancellationToken);
                 }
                 catch (InvalidOperationException ex)
                 {
@@ -2531,6 +2583,32 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    /// <summary>
+    /// The copy <paramref name="boundPhysicalTreeId"/> mirrors every mutation it
+    /// takes into - the destination of an online resize whose source it is - or
+    /// <see langword="null"/> when it mirrors nowhere. Asked of the shard the
+    /// batch's first key routes to; every shard of a resize source mirrors to the
+    /// same destination. A failed probe answers <see langword="null"/>, so the
+    /// dispatch is refused as it would be without one. Reached only when a bound
+    /// saga's tree has moved off its bound copy.
+    /// </summary>
+    private async Task<string?> BoundCopyMirrorDestinationAsync(
+        string boundPhysicalTreeId, ShardMap shardMap, List<KeyValuePair<string, byte[]>> entries)
+    {
+        var shardIndex = entries.Count > 0 ? shardMap.Resolve(entries[0].Key) : 0;
+        try
+        {
+            return await GetShardGrainByIndex(boundPhysicalTreeId, shardIndex).GetMirrorDestinationAsync();
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex,
+                "Could not ask bound copy {Bound} of tree {TreeId} where it mirrors; refusing the bound dispatch.",
+                boundPhysicalTreeId, TreeId);
+            return null;
+        }
+    }
+
     private async Task<string?> SetManyAsyncCore(
         List<KeyValuePair<string, byte[]>> entries,
         KeyValuePair<string, object?> stageTagTree,
@@ -2543,8 +2621,7 @@ internal sealed partial class LatticeGrain(
         try
         {
             (physicalTreeId, shardMap) = await GetRoutingAsync();
-            if (boundPhysicalTreeId is not null
-                && !string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+            if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
             {
                 // This activation's cached pair addresses another copy than the
                 // one the saga's prepared writes are bound to - typically a pair
@@ -2553,9 +2630,26 @@ internal sealed partial class LatticeGrain(
                 // write the batch onto a copy the saga will not commit on
                 // (issue #4358).
                 (physicalTreeId, shardMap) = await GetRoutingAsync(forceRefresh: true);
-                if (!string.Equals(physicalTreeId, boundPhysicalTreeId, StringComparison.Ordinal))
+                if (!SagaCopyBinding.AdmitsDispatch(boundPhysicalTreeId, physicalTreeId))
                 {
-                    return physicalTreeId;
+                    // The tree really has moved. The batch still belongs on the
+                    // bound copy when that copy mirrors into the one the tree
+                    // moved to - an online resize's source after its flip - since
+                    // its fence admits the saga and it mirrors every prepare, so
+                    // the batch lands whole on both copies (issue #4454). The map
+                    // addresses the bound copy's shards too: a resize copies its
+                    // source's map index for index, and holds every migration
+                    // while the source mirrors (#4452).
+                    var dispatchCopy = SagaCopyBinding.DispatchCopy(
+                        boundPhysicalTreeId,
+                        physicalTreeId,
+                        await BoundCopyMirrorDestinationAsync(boundPhysicalTreeId!, shardMap, entries));
+                    if (dispatchCopy is null)
+                    {
+                        return physicalTreeId;
+                    }
+
+                    physicalTreeId = dispatchCopy;
                 }
             }
         }
@@ -3453,13 +3547,103 @@ internal sealed partial class LatticeGrain(
         // resolution at the receiver agrees with the producer for every
         // key in the range.
         //
+        // A locally authored delete's stamp is ticked past the highest clock
+        // of every leaf it covers, not just this silo's wall time (issue
+        // #4530): a leaf clock pushed ahead by a future-dated merged or
+        // replicated row, or by clock skew between silos, would otherwise
+        // out-rank it, and the acknowledged delete would sort below a row or a
+        // decided saga's prepare already on the leaf - invisible at once and
+        // lost to the saga's terminal. The same rule stamps a saga terminal
+        // (ComputeTerminalHlcAsync).
+        //
         // Nested DeleteRange (a user-level DeleteRange invoked from
         // inside a saga or split coordinator that already pinned an
         // override) keeps the outer override - the producer's authoring
-        // frontier dominates and the inner walk inherits it.
+        // frontier dominates and the inner walk inherits it. So does a
+        // replicated or idempotency-keyed delete, whose stamp is the
+        // source's or the caller's contract.
+        //
+        // A replicated tree's WAL partition refuses a fresh stamp below its
+        // clock floor (issue #4586). A long fan-out can outlive the floor lag,
+        // so a refusal re-issues a fresh dominating stamp for the remainder: the
+        // keys already tombstoned keep theirs, and the walk re-runs under the new
+        // stamp, which skips them. The delete then lands as one stamp per
+        // uninterrupted run. A nested delete keeps the outer stamp, which is its
+        // owner's contract, so a refusal propagates to that owner.
         var existingOverride = LatticeHlcOverrideContext.Current;
-        var issueHlc = existingOverride ?? HybridLogicalClock.Tick(default);
-        using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
+        if (existingOverride is { } outer)
+        {
+            using var outerScope = LatticeHlcOverrideContext.With(outer);
+            var (nestedDeleted, nestedRefusal) = await DeleteRangeFanOutAsync(
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+            if (nestedRefusal is not null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(nestedRefusal);
+            }
+
+            return nestedDeleted;
+        }
+
+        var total = 0;
+        for (var attempt = 0; ; attempt++)
+        {
+            var issueHlc = await IssueDominatingRangeDeleteHlcAsync(physicalTreeId, physicalShards, startInclusive, endExclusive, cancellationToken);
+            using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
+            using var freshScope = LatticeFreshStampContext.Begin();
+            var (deleted, refusal) = await DeleteRangeFanOutAsync(
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+            total += deleted;
+            if (refusal is null)
+            {
+                return total;
+            }
+
+            if (attempt >= MaxRangeDeleteReissues)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(refusal);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How many times a range delete re-issues its stamp after a WAL partition
+    /// refuses it below the clock floor before reporting the refusal (issue
+    /// #4586). Each re-issue mints a stamp past every covered leaf's clock, so a
+    /// second refusal needs the fan-out to outlive another whole floor lag.
+    /// </summary>
+    private const int MaxRangeDeleteReissues = 3;
+
+    /// <summary>
+    /// A clock-floor refusal of one shard's range-delete walk, carrying how many
+    /// keys the walk had already deleted (issue #4586). Raised and caught inside
+    /// this grain only, so it never crosses a grain boundary.
+    /// </summary>
+    private sealed class RangeDeleteRefusedException(int deleted, WalStampBelowFloorException refusal)
+        : Exception(refusal.Message, refusal)
+    {
+        /// <summary>Keys the shard's walk deleted before the refusal.</summary>
+        public int Deleted { get; } = deleted;
+
+        /// <summary>The partition's refusal.</summary>
+        public WalStampBelowFloorException Refusal { get; } = refusal;
+    }
+
+    /// <summary>
+    /// Fans one range delete out to every physical shard under the HLC override
+    /// in scope and returns the total deleted. A clock-floor refusal from any
+    /// shard is returned, not thrown, once every shard has finished, with the
+    /// count of what the other shards and the refused shard's earlier batches
+    /// deleted, so the caller can re-issue for the remainder. Any other failure
+    /// is thrown.
+    /// </summary>
+    private async Task<(int Deleted, WalStampBelowFloorException? Refusal)> DeleteRangeFanOutAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        CancellationToken cancellationToken)
+    {
 
         // Fan out to all physical shards in parallel - any may contain keys in the range.
         // Per-shard ShardActivationRetry wrap: a single shard's cold-start
@@ -3478,13 +3662,40 @@ internal sealed partial class LatticeGrain(
             tasks[i] = DrainShardRangeDeleteAsync(shard, startInclusive, endExclusive, predicate, cancellationToken);
         }
 
-        await Task.WhenAll(tasks);
+        try
+        {
+            await Task.WhenAll(tasks);
+        }
+        catch
+        {
+            // Inspected per task below.
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
 
         var total = 0;
+        WalStampBelowFloorException? refusal = null;
         for (int i = 0; i < tasks.Length; i++)
-            total += tasks[i].Result;
-        return total;
+        {
+            var task = tasks[i];
+            if (task.IsCompletedSuccessfully)
+            {
+                total += task.Result;
+                continue;
+            }
+
+            var fault = task.Exception?.InnerException;
+            if (fault is RangeDeleteRefusedException refused)
+            {
+                total += refused.Deleted;
+                refusal ??= refused.Refusal;
+                continue;
+            }
+
+            await task;
+        }
+
+        return (total, refusal);
     }
 
     /// <summary>
@@ -3506,8 +3717,19 @@ internal sealed partial class LatticeGrain(
         {
             cancellationToken.ThrowIfCancellationRequested();
             var cursor = from;
-            var page = await ShardActivationRetry.RunAsync(
-                () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            ShardRangeDeletePage page;
+            try
+            {
+                page = await ShardActivationRetry.RunAsync(
+                    () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            }
+            catch (WalStampBelowFloorException refusal)
+            {
+                // Issue #4586: carry what this shard already deleted, so the
+                // re-issued walk's count adds only the remainder.
+                throw new RangeDeleteRefusedException(total, refusal);
+            }
+
             total += page.Deleted;
 
             if (page.ResumeFromInclusive is not { } next)
@@ -3518,6 +3740,67 @@ internal sealed partial class LatticeGrain(
             // against a shard from a build with a different notion of progress.
             if (string.CompareOrdinal(next, from) <= 0)
                 return total;
+
+            from = next;
+        }
+    }
+
+    /// <summary>
+    /// Issues a locally authored range delete's stamp: a tick past the highest
+    /// clock of every leaf the delete covers on every shard the map routes to,
+    /// probed in parallel (issue #4530). A leaf's clock has merged the stamp of
+    /// every row and prepared bucket it holds, so the delete sorts above
+    /// everything already written in its range - including a decided saga's
+    /// prepares - wherever the leaf's clock stands against this silo's wall time.
+    /// A write that lands on a covered leaf after its probe is concurrent with
+    /// the delete, so either order is a valid linearisation.
+    /// </summary>
+    private async Task<HybridLogicalClock> IssueDominatingRangeDeleteHlcAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken)
+    {
+        var probes = new Task<HybridLogicalClock>[physicalShards.Count];
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
+            probes[i] = DrainShardRangeClockAsync(shard, startInclusive, endExclusive, cancellationToken);
+        }
+
+        await Task.WhenAll(probes);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var max = HybridLogicalClock.Zero;
+        for (var i = 0; i < probes.Length; i++)
+        {
+            if (probes[i].Result > max) max = probes[i].Result;
+        }
+
+        return HybridLogicalClock.Tick(max);
+    }
+
+    private static async Task<HybridLogicalClock> DrainShardRangeClockAsync(
+        IShardRootGrain shard,
+        string startInclusive,
+        string endExclusive,
+        CancellationToken cancellationToken)
+    {
+        var max = HybridLogicalClock.Zero;
+        var from = startInclusive;
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var cursor = from;
+            var page = await ShardActivationRetry.RunAsync(
+                () => shard.GetRangeClockBoundedAsync(cursor, endExclusive));
+            if (page.MaxClock > max) max = page.MaxClock;
+
+            // As for the delete: stop on completion, or on a resume key that does
+            // not advance.
+            if (page.ResumeFromInclusive is not { } next || string.CompareOrdinal(next, from) <= 0)
+                return max;
 
             from = next;
         }
@@ -4557,12 +4840,49 @@ internal sealed partial class LatticeGrain(
         }
     }
 
+    private string?[]? _preparedRouteKeys;
+    private string? _preparedRouteKeysTreeId;
+
+    /// <summary>
+    /// Names the shard a saga prepare-phase write is dispatched to (issue
+    /// #4522), so a leaf of that shard knows the stamp it mints is the
+    /// prepare's original stamp. A forward to another shard inherits this
+    /// route and so never matches there. Does nothing outside a prepare. The
+    /// <c>{physicalTreeId}/{shardIndex}</c> strings are cached per index, so a
+    /// steady-state prepare pays only the request-context write.
+    /// </summary>
+    private void StampPreparedRouteIfPrepared(string physicalTreeId, int shardIndex)
+    {
+        if (!LatticePreparedContext.Current)
+            return;
+
+        if (!string.Equals(_preparedRouteKeysTreeId, physicalTreeId, StringComparison.Ordinal))
+        {
+            _preparedRouteKeys = null;
+            _preparedRouteKeysTreeId = physicalTreeId;
+        }
+
+        var keys = _preparedRouteKeys;
+        if (keys is null || (uint)shardIndex >= (uint)keys.Length)
+        {
+            var grown = new string?[Math.Max(shardIndex + 1, keys?.Length ?? 0)];
+            if (keys is not null)
+                Array.Copy(keys, grown, keys.Length);
+            keys = grown;
+            _preparedRouteKeys = keys;
+        }
+
+        var routeKey = keys[shardIndex] ??= $"{physicalTreeId}/{shardIndex}";
+        LatticeOriginalPrepareStampContext.StampPreparedRoute(routeKey);
+    }
+
     private IShardRootGrain GetShardGrain(string key, RoutingInfo routing)
     {
         // Call synchronously AFTER the caller awaits routing: RequestContext
         // changes inside an async resolver would not flow back to its caller.
         StampRoutedIdentity(routing.PhysicalTreeId);
         var shardIndex = routing.Map.Resolve(key);
+        StampPreparedRouteIfPrepared(routing.PhysicalTreeId, shardIndex);
         var cache = _cachedShards;
         if (cache is not null
             && ReferenceEquals(_cachedShardsTreeId, routing.PhysicalTreeId)
@@ -4655,6 +4975,7 @@ internal sealed partial class LatticeGrain(
         // fan-out shard resolution too, so scans and multi-shard writes carry
         // the same self-heal signal to a retained shard.
         StampRoutedIdentity(physicalTreeId);
+        StampPreparedRouteIfPrepared(physicalTreeId, shardIndex);
 
         var cache = _cachedShards;
         if (cache is not null
@@ -4681,7 +5002,14 @@ internal sealed partial class LatticeGrain(
         // data; the shard grains enforce the real boundary on reads/writes.
         cancellationToken.ThrowIfCancellationRequested();
         var cached = _cachedRouting;
-        if (cached is not null) return new ValueTask<RoutingInfo>(cached);
+        if (cached is not null)
+        {
+            // Issue #4593: a replication apply must re-check a copy it has not
+            // yet seen open, even on the cached fast path.
+            if (ReplicationApplyScope.IsActive)
+                return CheckCopyReceive(cached);
+            return new ValueTask<RoutingInfo>(cached);
+        }
         return GetRoutingSlowAsync(cancellationToken);
     }
 
@@ -4772,7 +5100,7 @@ internal sealed partial class LatticeGrain(
         // previous one, so a lower version is an older registry row. The caller
         // still gets the pair it read, which is self-consistent either way.
         var published = _cachedRouting;
-        if (epoch == _routingEpoch && (published is null || published.Map.Version <= shardMap.Version))
+        if (RoutingPairPublishGate.ShouldPublish(epoch, _routingEpoch, published?.Map.Version, shardMap.Version))
         {
             if (published is not null
                 && !string.Equals(published.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
@@ -4784,6 +5112,11 @@ internal sealed partial class LatticeGrain(
             _physicalTreeId = physicalTreeId;
             _shardMap = shardMap;
             _cachedRouting = routing;
+        }
+
+        if (ReplicationApplyScope.IsActive)
+        {
+            return await CheckCopyReceive(routing);
         }
 
         return routing;
@@ -4886,9 +5219,14 @@ internal sealed partial class LatticeGrain(
     /// that catch a domain exception <i>by its own type</i> are unaffected and
     /// remain the correct way to handle one deliberately.
     /// </para>
+    /// <para>
+    /// <see cref="LatticeTreePurgedException"/> is the one domain fault these
+    /// clauses still absorb: it means a call reached a purged physical copy, and
+    /// refreshing the cached alias is exactly the remedy (issue #4503).
+    /// </para>
     /// </summary>
     private bool TryInvalidateStaleAlias(Exception fault) =>
-        fault is not ILatticeDomainFault && TryInvalidateStaleAlias();
+        (fault is not ILatticeDomainFault || fault is LatticeTreePurgedException) && TryInvalidateStaleAlias();
 
     /// <summary>
     /// Invalidates the cached <see cref="ShardMap"/> so the next routing call

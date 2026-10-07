@@ -56,4 +56,28 @@ internal sealed class CrossTreeReceiverState
 
     /// <summary>Wall-clock UTC tick stamped when the first terminal arrives; drives diagnostics.</summary>
     [Id(6)] public long StartedAtTicks { get; set; }
+
+    /// <summary>
+    /// The operation's decision stamps (issue #4684), or <see langword="null"/>
+    /// while none has been recorded: an operation decided by a silo that
+    /// predates stamping, whose decision precedes every export its origin
+    /// serves.
+    /// </summary>
+    [Id(7)] public Dictionary<string, long>? DecisionStamps { get; set; }
+
+    /// <summary>
+    /// Every tree the cross-tree write touched (issue #4733), as its terminals
+    /// and decision rows name them - not only the trees replicated here. A
+    /// decided tombstone is dropped only once the origin's purge frontier has
+    /// passed the operation on every one of them. Empty for a barrier that
+    /// recorded none (an older build), whose tombstone is kept.
+    /// </summary>
+    [Id(8)] public List<string> Participants { get; set; } = [];
+
+    /// <summary>
+    /// The operation's decision sequences (issue #4733), or <see langword="null"/>
+    /// for an operation decided before sequencing, which counts as sequence
+    /// <c>0</c> on every participant.
+    /// </summary>
+    [Id(9)] public Dictionary<string, long>? DecisionSequences { get; set; }
 }

@@ -1,0 +1,19 @@
+# Pairs with RAllOrNothing. A peer is removed from the topology and its
+# shipper detaches from the log without taking the peer off it: the WAL GC may
+# trim a prepare the shipper has not shipped while its terminal still ships.
+# #4534-B's detach marks the peer re-seed-required in the same write.
+MODULE: RAllOrNothingDetachStaysOnLog
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a removed peer's shipper leaves the offset consumers but keeps shipping the saga
+PERTURBS: Detach
+BOUNDS: LossPath = 2, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ detached' = TRUE
+    /\ rs' = "marked"
+--- REPLACE
+    /\ detached' = TRUE
+\* MUTATION: the detach does not take the peer off the log.
+    /\ rs' = rs
+--- END

@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces production
+# before #4678 (#4615): the reap waited only for the wall-clock grace period, so a
+# late write the tombstone beats resurrects the key at s, while r holds the delete.
+MODULE: EventualConvergenceReapInsideGrace
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: a tombstone is reaped while a write it beats is still on its way, which then resurrects the key
+PERTURBS: Reap
+
+--- FIND
+    /\ \A o \in Others : \A i \in (cursor[<<o, s>>] + 1)..Len(wal[o]) : wal[o][i].h > reg[s].h
+--- REPLACE
+\* MUTATION: no grace period.
+    /\ TRUE
+--- END

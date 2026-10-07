@@ -1,0 +1,32 @@
+# Pairs with RNoStrandedPrepare. The ordering a terminal waits for is taken
+# over every prepare the saga wrote rather than over the prepares still
+# outstanding, and one participant's prepare is never shipped - trimmed from the
+# origin's WAL before it was read, or filtered out. The terminal then waits
+# forever for a prepare that will never arrive, and every bucket the receiver
+# did stage is stranded behind it. This is the wedge a shipper-side terminal
+# hold (the #4480 remedy) must not have: it may wait only on records that exist.
+# The base's guard is stated over outstanding records, which is why it cannot
+# wedge.
+#
+# DEADLOCK: off is required: the wedged terminals are the only records left
+# and none is deliverable, so the mutant always reaches a state with no enabled
+# action, and with the check on TLC reports that first.
+MODULE: RNoStrandedPrepareHoldWaitsOnUnshippedPrepare
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: a terminal waits on every prepare the saga wrote, including one never shipped, so it is never released
+PERTURBS: OriginPrepare, DeliverTerminal
+
+--- FIND
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys}
+--- REPLACE
+\* MUTATION: k2's prepare is never shipped (trimmed or filtered).
+    /\ outbox' = outbox \cup {Prep(k) : k \in RKeys \ {k2}}
+--- END
+--- FIND
+    /\ \A p \in outbox : (p.type = "prep" /\ p.key = m.key) => p \in dlv
+--- REPLACE
+\* MUTATION: the terminal waits on every prepare of the saga, shipped or not.
+    /\ \A k \in XKeys : Prep(k) \in dlv
+--- END

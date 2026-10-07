@@ -1,0 +1,24 @@
+# Pairs with RAllOrNothing. The cross-tree receiver barrier decides as soon as
+# ANY wait-set tree has arrived instead of every one, and takes its verdict
+# over the trees that have arrived, so the first tree to report finalises both
+# trees while the other tree's prepare may still be in flight: one tree serves
+# the saga post-saga, the other pre-saga. Waiting for the whole wait set is the
+# barrier's entire job.
+MODULE: RAllOrNothingBarrierDecidesOnFirstTree
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the cross-tree receiver barrier decides on its first arrival rather than on the whole wait set
+PERTURBS: ReceiverNotify
+
+--- FIND
+           complete == live # {} /\ \A w \in live : eff[w] # "none"
+--- REPLACE
+\* MUTATION: one arrival completes the barrier.
+           complete == live # {} /\ \E w \in live : eff[w] # "none"
+--- END
+--- FIND
+             THEN /\ cdec' = IF \A w \in live : eff[w] = "committed" THEN "committed" ELSE "aborted"
+--- REPLACE
+\* MUTATION: the verdict is taken over the trees that have arrived.
+             THEN /\ cdec' = IF \A w \in live : eff[w] \in {"none", "committed"} THEN "committed" ELSE "aborted"
+--- END

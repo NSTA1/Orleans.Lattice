@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Configuration;
@@ -209,6 +210,8 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
             var siloHandle = (InProcessSiloHandle)cluster.Silos.First();
             _registry.RegisterEncoder(localClusterId,
                 siloHandle.SiloHost.Services.GetRequiredService<IWalRecordEncoder>());
+            _registry.RegisterSnapshotService(localClusterId,
+                siloHandle.SiloHost.Services.GetRequiredService<LatticeRemoteSnapshotService>());
         }
 
         await WaitForStartupBackoffToClearAsync();
@@ -355,6 +358,19 @@ internal sealed class ProductionShipperFixture : IAsyncDisposable
                     fixture.InnerRegistry.RegisterTransport(localClusterId, transport);
                     return transport;
                 });
+
+                // A receiver's bootstrap - a re-seed after a source lineage
+                // change included - pulls its export from the source site's
+                // own snapshot service over the same partitionable edge.
+                // Without a transport the bootstrap falls back to the local
+                // ISnapshotProvider and re-seeds a peer from its own copy.
+                services.AddSingleton<IRemoteSnapshotTransport>(sp =>
+                {
+                    var localClusterId = sp.GetRequiredService<IOptions<ClusterOptions>>().Value.ClusterId;
+                    var fixture = FixtureRegistry.GetByCluster(localClusterId)
+                        ?? throw new InvalidOperationException($"No fixture registered for cluster {localClusterId}.");
+                    return new LoopbackSnapshotTransport(fixture.InnerRegistry, localClusterId);
+                });
             });
         }
     }
@@ -432,11 +448,13 @@ internal sealed class LoopbackTransportRegistry : IDisposable
     private readonly ConcurrentDictionary<string, LoopbackReplicationTransport> _transports = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IReplicationApplier> _appliers = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, IWalRecordEncoder> _encoders = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, IRemoteSnapshotItemTransport> _snapshotServices = new(StringComparer.Ordinal);
 
     public void RegisterCluster(string clusterId, IClusterClient client) => _clusters[clusterId] = client;
     public void RegisterTransport(string clusterId, LoopbackReplicationTransport transport) => _transports[clusterId] = transport;
     public void RegisterApplier(string clusterId, IReplicationApplier applier) => _appliers[clusterId] = applier;
     public void RegisterEncoder(string clusterId, IWalRecordEncoder encoder) => _encoders[clusterId] = encoder;
+    public void RegisterSnapshotService(string clusterId, IRemoteSnapshotItemTransport service) => _snapshotServices[clusterId] = service;
 
     public IClusterClient? GetCluster(string clusterId) =>
         _clusters.TryGetValue(clusterId, out var c) ? c : null;
@@ -446,6 +464,13 @@ internal sealed class LoopbackTransportRegistry : IDisposable
 
     public IWalRecordEncoder? GetEncoder(string clusterId) =>
         _encoders.TryGetValue(clusterId, out var e) ? e : null;
+
+    /// <summary>
+    /// The sender-side snapshot service of <paramref name="clusterId"/>'s silo,
+    /// which answers a peer's bootstrap export requests.
+    /// </summary>
+    public IRemoteSnapshotItemTransport? GetSnapshotService(string clusterId) =>
+        _snapshotServices.TryGetValue(clusterId, out var s) ? s : null;
 
     public LoopbackReplicationTransport Get(string clusterId) =>
         _transports.TryGetValue(clusterId, out var t)
@@ -458,6 +483,7 @@ internal sealed class LoopbackTransportRegistry : IDisposable
         _transports.Clear();
         _appliers.Clear();
         _encoders.Clear();
+        _snapshotServices.Clear();
     }
 }
 
@@ -492,6 +518,7 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
     private readonly string _localClusterId;
     private readonly ConcurrentDictionary<string, byte> _isolated = new(StringComparer.Ordinal);
     private readonly ConcurrentDictionary<string, byte> _pendingFaults = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, long> _partitionGenerations = new(StringComparer.Ordinal);
     private long _batchesShipped;
     private long _batchesAccepted;
 
@@ -514,9 +541,25 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
     /// </summary>
     public Action<IReadOnlyList<WalRecord>>? OnBatchObserved { get; set; }
 
-    public void IsolateSite(string peerClusterId) => _isolated[peerClusterId] = 0;
+    public void IsolateSite(string peerClusterId)
+    {
+        _partitionGenerations.AddOrUpdate(peerClusterId, 1, static (_, generation) => generation + 1);
+        _isolated[peerClusterId] = 0;
+    }
+
     public void HealSite(string peerClusterId) => _isolated.TryRemove(peerClusterId, out _);
     public void FaultOutboundOnce(string peerClusterId) => _pendingFaults[peerClusterId] = 0;
+
+    /// <summary>Whether the edge from this site to <paramref name="peerClusterId"/> is partitioned now.</summary>
+    public bool IsIsolatedFrom(string peerClusterId) => _isolated.ContainsKey(peerClusterId);
+
+    /// <summary>
+    /// How many times the edge to <paramref name="peerClusterId"/> has been
+    /// partitioned. A stream that sees it change was cut by a partition, even
+    /// when the edge has healed again since.
+    /// </summary>
+    public long PartitionGenerationOf(string peerClusterId) =>
+        _partitionGenerations.TryGetValue(peerClusterId, out var generation) ? generation : 0;
 
     public async Task<ReplicationAck> SendAsync(ReplicationBatch batch, CancellationToken cancellationToken)
     {
@@ -535,9 +578,28 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
 
         var peerApplier = _registry.GetApplier(batch.TargetClusterId);
         var peerEncoder = _registry.GetEncoder(batch.TargetClusterId);
-        if (peerApplier is null || peerEncoder is null)
+        var peerClient = _registry.GetCluster(batch.TargetClusterId);
+        if (peerApplier is null || peerEncoder is null || peerClient is null)
         {
             return new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero };
+        }
+
+        // The receive path mirrors LatticeReplicationGrpcService.Push: a sender
+        // that asks this receiver to re-seed is answered (and the receiver's
+        // bootstrap started) before the batch, a saga straggler from a sender
+        // being re-seeded is refused, and the batch applies inside the source
+        // lineage scope its stamp declares, so a batch read under a lineage
+        // this receiver has drained past is refused (#4673, #4707).
+        long? bootstrapEpoch = null;
+        if (batch.ReseedAfterEpoch is { } reseedAfter)
+        {
+            bootstrapEpoch = await ReplicationReseedResponder.RespondAsync(
+                peerClient,
+                batch.TreeName,
+                batch.OriginClusterId,
+                reseedAfter,
+                autoBootstrap: true,
+                NullLogger.Instance).ConfigureAwait(false);
         }
 
         // Decode every entry in the framing-only encoded envelope.
@@ -552,12 +614,43 @@ internal sealed class LoopbackReplicationTransport : IReplicationTransport
         }
 
         OnBatchObserved?.Invoke(decoded);
-        var result = await peerApplier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
+
+        if (await ReplicationReseedResponder.RefusesStragglerAsync(
+                peerClient, batch.TreeName, batch.OriginClusterId, decoded, NullLogger.Instance).ConfigureAwait(false))
+        {
+            return new ReplicationAck
+            {
+                Accepted = false,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                BootstrapEpoch = bootstrapEpoch,
+            };
+        }
+
+        ApplyResult result;
+        using (batch.SourceLineage is null
+            ? null
+            : ReplicationSourceLineageScope.Enter(batch.OriginClusterId, batch.SourceLineage))
+        {
+            result = await peerApplier.ApplyBatchAsync(decoded, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (result.SourceLineageRefused)
+        {
+            return new ReplicationAck
+            {
+                Accepted = false,
+                HighestAppliedHlc = HybridLogicalClock.Zero,
+                BootstrapEpoch = bootstrapEpoch,
+                SourceLineageRefused = true,
+            };
+        }
+
         Interlocked.Increment(ref _batchesAccepted);
         return new ReplicationAck
         {
             Accepted = true,
             HighestAppliedHlc = result.HighWaterMark,
+            BootstrapEpoch = bootstrapEpoch,
         };
     }
 }

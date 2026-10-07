@@ -30,6 +30,10 @@ public class DeltaExtractionTests
     public async Task GetDeltaSinceAsync_returns_all_entries_for_empty_version()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        // A leaf used directly, outside any tree, is created by the test itself, so
+        // its calls carry a create intent naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(leaf.GetGrainId());
         await leaf.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         await leaf.SetAsync("b", Encoding.UTF8.GetBytes("2"));
 
@@ -45,6 +49,10 @@ public class DeltaExtractionTests
     public async Task GetDeltaSinceAsync_returns_empty_when_up_to_date()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        // A leaf used directly, outside any tree, is created by the test itself, so
+        // its calls carry a create intent naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(leaf.GetGrainId());
         await leaf.SetAsync("x", Encoding.UTF8.GetBytes("val"));
 
         // First delta: get everything.
@@ -60,6 +68,10 @@ public class DeltaExtractionTests
     public async Task GetDeltaSinceAsync_returns_only_new_entries()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        // A leaf used directly, outside any tree, is created by the test itself, so
+        // its calls carry a create intent naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(leaf.GetGrainId());
         await leaf.SetAsync("first", Encoding.UTF8.GetBytes("1"));
 
         var delta1 = await leaf.GetDeltaSinceAsync(new VersionVector());
@@ -76,6 +88,10 @@ public class DeltaExtractionTests
     public async Task GetDeltaSinceAsync_includes_tombstones()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        // A leaf used directly, outside any tree, is created by the test itself, so
+        // its calls carry a create intent naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(leaf.GetGrainId());
         await leaf.SetAsync("k", Encoding.UTF8.GetBytes("v"));
 
         var delta1 = await leaf.GetDeltaSinceAsync(new VersionVector());
@@ -91,6 +107,10 @@ public class DeltaExtractionTests
     public async Task Delta_version_advances_monotonically()
     {
         var leaf = _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(Guid.NewGuid());
+
+        // A leaf used directly, outside any tree, is created by the test itself, so
+        // its calls carry a create intent naming it (issue #4654).
+        using var createIntent = LatticeNewLeafIntentContext.BeginScope(leaf.GetGrainId());
 
         await leaf.SetAsync("a", Encoding.UTF8.GetBytes("1"));
         var v1 = (await leaf.GetDeltaSinceAsync(new VersionVector())).Version;
