@@ -344,6 +344,14 @@ public partial class LtComboBox : IAsyncDisposable
             _text = Value ?? string.Empty;
             _matchError = null;
             _flag = null;
+            _note = null;
+            _status = null;
+            _items = [];
+            _active = -1;
+            _open = false;
+            _answer = null;
+            _answerText = null;
+            _pump.Cancel();
         }
 
         if (!ReferenceEquals(Source, _source))

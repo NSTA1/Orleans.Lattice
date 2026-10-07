@@ -278,10 +278,17 @@ public sealed partial class LtComboBoxTests : ShellDesignTestContext
     public void A_new_value_from_the_page_replaces_the_text()
     {
         var cut = RenderBox(new FakeSuggestionSource(Trees), p => p.Add(x => x.Value, "crm/orders"));
+        cut.Find("input").Input("crm/");
+        Assert.That(cut.FindAll("[role=option]"), Has.Count.EqualTo(3));
 
         cut.Render(p => p.Add(x => x.Value, string.Empty));
 
-        Assert.That(cut.Find("input").GetAttribute("value"), Is.Empty);
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.Find("input").GetAttribute("value"), Is.Empty);
+            Assert.That(cut.FindAll("[role=listbox]"), Is.Empty, "suggestions are cleared when their filter is reset externally");
+            Assert.That(Status(cut), Is.Empty, "the live announcement no longer describes the previous filter");
+        });
     }
 
     [Test]

@@ -95,9 +95,52 @@ public partial class SchemaOperationStatus : IDisposable
         }
     }
 
-    private LatticeSchemaRemediationReport? Report => _report ?? (_local?.Report is { } terminal && !_local.IsActive ? terminal : null);
+    private LatticeSchemaRemediationReport? Report
+    {
+        get
+        {
+            if (_local is { } local)
+            {
+                if (local.OperationId is { } operationId
+                    && _report is { } current
+                    && string.Equals(current.OperationId, operationId, StringComparison.Ordinal))
+                {
+                    return current;
+                }
 
-    private LatticeOperationStatus? Status => _follower?.Status ?? _local?.Status;
+                if (!local.IsActive
+                    && local.Report is { } terminal
+                    && (local.OperationId is null || string.Equals(terminal.OperationId, local.OperationId, StringComparison.Ordinal)))
+                {
+                    return terminal;
+                }
+
+                return null;
+            }
+
+            if (_follower?.Status is { } status
+                && _report is { } report
+                && !string.Equals(report.OperationId, status.OperationId, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return _report;
+        }
+    }
+
+    private LatticeOperationStatus? Status
+    {
+        get
+        {
+            var status = _follower?.Status ?? _local?.Status;
+            return status is { IsTerminal: true, Kind: SchemaOperationKinds.Remediation }
+                && Report is { } report
+                && string.Equals(report.OperationId, status.OperationId, StringComparison.Ordinal)
+                    ? status with { CompletedUnits = report.ScannedCount }
+                    : status;
+        }
+    }
 
     private IEnumerable<StageItem> Steps => Status is { } status && status.PhaseCount is > 0
         ? OperationSteps(status)
@@ -160,7 +203,9 @@ public partial class SchemaOperationStatus : IDisposable
         }
     }
 
-    private string CurrentOperationId => _local?.OperationId ?? _report?.OperationId ?? string.Empty;
+    private string CurrentOperationId => _local is { } local
+        ? local.OperationId ?? string.Empty
+        : _report?.OperationId ?? string.Empty;
 
     private int StepPosition(StageItem step)
     {
@@ -330,7 +375,17 @@ public partial class SchemaOperationStatus : IDisposable
                 return;
             }
 
-            _local = Operations.Find(treeId);
+            var latest = Operations.Find(treeId);
+            if (latest is { IsActive: true }
+                && (_local is null || !_local.IsActive || _local.StartedAt != latest.StartedAt))
+            {
+                _report = null;
+                _statusError = null;
+                _terminalRefreshDone = false;
+                DetachFollower();
+            }
+
+            _local = latest;
             await FollowKnownOperationAsync();
             if (_local is { IsActive: false } && !_terminalRefreshDone)
             {

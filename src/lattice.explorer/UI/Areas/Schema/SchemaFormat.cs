@@ -51,7 +51,7 @@ internal static class SchemaFormat
             LatticeSchemaRuleKind.Regex => string.IsNullOrEmpty(rule.MemberPath)
                 ? $"The value matches {rule.RegexPattern}"
                 : $"Member {rule.MemberPath} matches {rule.RegexPattern}",
-            LatticeSchemaRuleKind.Structured => "A structured predicate over the value's members. It is shown and kept here, but not edited.",
+            LatticeSchemaRuleKind.Structured => StructuredRuleDetail(rule),
             _ => rule.EncodingKind switch
             {
                 LatticeSchemaEncodingKind.Utf8 => "The value is well-formed UTF-8",
@@ -62,6 +62,14 @@ internal static class SchemaFormat
         };
 
         return string.IsNullOrWhiteSpace(rule.Description) ? detail : $"{detail} - {rule.Description}";
+    }
+
+    private static string StructuredRuleDetail(LatticeSchemaRule rule)
+    {
+        var card = SchemaCardDecompiler.Decompile(rule);
+        return card.Kind == SchemaCardKind.Custom
+            ? "A structured predicate over the value's members. It is shown and kept here, but not edited."
+            : SchemaCardText.Plain(card);
     }
 
     /// <summary>A version config in one line, such as "family 7 at version 3, strict ingest".</summary>
