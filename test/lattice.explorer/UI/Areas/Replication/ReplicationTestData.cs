@@ -15,8 +15,12 @@ internal static class ReplicationTestData
         long errors = 0,
         TimeSpan? contact = null,
         long inFlight = 0,
-        bool neverContacted = false) =>
-        new(tree, peer, direction, entries, bytes, errors, neverContacted ? null : contact ?? TimeSpan.FromSeconds(2), inFlight, health);
+        bool neverContacted = false,
+        ReplicationLinkStallReason? stallReason = null) =>
+        new(tree, peer, direction, entries, bytes, errors, neverContacted ? null : contact ?? TimeSpan.FromSeconds(2), inFlight, health)
+        {
+            StallReason = stallReason,
+        };
 
     public static ReplicationTreeConfigEntry Tree(
         string tree,
@@ -34,7 +38,7 @@ internal static class ReplicationTestData
     [
         Link("orders", "us-east", ReplicationLinkHealth.Healthy),
         Link("orders", "us-east", ReplicationLinkHealth.Healthy, ReplicationLinkDirection.Inbound),
-        Link("a/crm/contacts", "ap-south", ReplicationLinkHealth.Stalled, entries: 1204, bytes: 3_355_443, errors: 7, contact: TimeSpan.FromMinutes(14)),
+        Link("a/crm/contacts", "ap-south", ReplicationLinkHealth.Stalled, entries: 1204, bytes: 3_355_443, errors: 7, contact: TimeSpan.FromMinutes(14), stallReason: ReplicationLinkStallReason.ReseedRequired),
         Link("a/crm/contacts", "ap-south", ReplicationLinkHealth.Lagging, ReplicationLinkDirection.Inbound, entries: 40, bytes: 2048),
         Link("a/billing/invoices", "ap-south", ReplicationLinkHealth.Healthy),
         Link("a/billing/invoices", "sa-east", ReplicationLinkHealth.Unknown, neverContacted: true),
