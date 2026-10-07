@@ -152,7 +152,8 @@ public partial class SharedMetricsSamplerTests
     /// receives while keeping the subscription attached, so multiple identities
     /// can be held live concurrently to assert loop isolation.
     /// </summary>
-    private sealed class SubscriptionProbe(SharedMetricsSampler sampler, TreeMetricsRequest request, string token)
+    private sealed class SubscriptionProbe(
+        SharedMetricsSampler sampler, TreeMetricsRequest request, string token, TenantId? tenant = null)
         : IAsyncDisposable
     {
         private readonly string _token = token;
@@ -163,11 +164,10 @@ public partial class SharedMetricsSamplerTests
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-            // The credential must be ambient for the first MoveNextAsync: the
-            // sampler resolves the subject and captures the credential for the
-            // loop synchronously before the first real await, so this is the
-            // window that pins the subscription to an identity-keyed signature.
+            // Keep both scopes alive across subject resolution and first attach,
+            // including membership providers that resolve asynchronously.
             using (LatticeCredentialContext.Use(_token))
+            using (LatticeActiveTenantContext.With(tenant))
             {
                 var moved = await _enumerator.MoveNextAsync().AsTask().WaitAsync(timeout.Token);
                 Assert.That(moved, Is.True, "the sampler produced a first map");
@@ -209,11 +209,13 @@ public partial class SharedMetricsSamplerTests
     /// tree, the user sees only the shared tree. This reproduces the identity
     /// filtering the real <c>LatticeStateQuery</c> applies inside the loop.
     /// </summary>
-    private sealed class IdentityScopedStateQuery : ILatticeStateQuery
+    private sealed class IdentityScopedStateQuery(bool tenantScoped = false) : ILatticeStateQuery
     {
         public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
         {
-            var trees = LatticeCredentialContext.Current?.Token switch
+            var trees = tenantScoped
+                ? new[] { $"{LatticeActiveTenantContext.Current?.Value ?? "unscoped"}-tree" }
+                : LatticeCredentialContext.Current?.Token switch
             {
                 "admin" => new[] { AdminTree, SharedTree },
                 "user" => new[] { SharedTree },
