@@ -80,7 +80,7 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private readonly record struct DurableResize(
         bool InProgress, bool Complete, string? OperationId, string? OldPhysicalTreeId, string? SnapshotTreeId,
-        ResizePhase Phase, int CopyShardCount, string? AliasReservationId)
+        ResizePhase Phase, int CopyShardCount, string? AliasReservationId, bool HoldForBootstrap)
     {
         public bool HasUndoTargets => OldPhysicalTreeId is not null && SnapshotTreeId is not null;
     }
@@ -111,7 +111,7 @@ internal sealed class TreeResizeGrain(
         state.State.InProgress, state.State.Complete, state.State.OperationId,
         state.State.OldPhysicalTreeId, state.State.SnapshotTreeId,
         state.State.Phase, state.State.ShardIndices?.Length ?? state.State.ShardCount,
-        state.State.AliasReservationId);
+        state.State.AliasReservationId, state.State.HoldForBootstrap);
 
     private DurableIntent CaptureIntent() => new(
         undoIntent.State.RequestedOperationId, undoIntent.State.FailedOperationId,
@@ -203,6 +203,179 @@ internal sealed class TreeResizeGrain(
     /// </summary>
     private int[] OldShardIndices =>
         RoutedShardIndices.OrContiguous(state.State.ShardIndices, state.State.ShardCount);
+
+    /// <inheritdoc />
+    public async Task<string> BeginBootstrapCopyAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
+        if (state.State.InProgress)
+        {
+            if (state.State.HoldForBootstrap
+                && string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+            {
+                return state.State.SnapshotTreeId!;
+            }
+
+            throw new InvalidOperationException(
+                $"A resize or bootstrap copy is already in progress for tree '{TreeId}'.");
+        }
+
+        if (state.State.Complete
+            && string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal)
+            && state.State.SnapshotTreeId is { } completedTreeId)
+        {
+            return completedTreeId;
+        }
+
+        if (UndoPending)
+            throw new InvalidOperationException(
+                $"An undo of the resize of tree '{TreeId}' (operation '{state.State.OperationId}') is still unwinding.");
+
+        await ReserveAliasAsync();
+        try
+        {
+            var resolved = await optionsResolver.ResolveAsync(TreeId);
+            await InitiateResizeStateAsync(
+                resolved.MaxLeafKeys,
+                resolved.MaxInternalChildren,
+                state.State.Complete,
+                holdForBootstrap: true,
+                operationIdOverride: operationId);
+            try
+            {
+                await StartCoordinatorAsync();
+            }
+            catch (Exception startException)
+            {
+                try
+                {
+                    await UndoResizeCoreAsync();
+                }
+                catch (Exception unwindException)
+                {
+                    logger.LogError(unwindException,
+                        "Failed to discard bootstrap copy '{OperationId}' after its coordinator could not start",
+                        operationId);
+                    throw new AggregateException(
+                        $"Could not start or discard bootstrap copy '{operationId}' for tree '{TreeId}'.",
+                        startException,
+                        unwindException);
+                }
+
+                throw;
+            }
+            return state.State.SnapshotTreeId!;
+        }
+        finally
+        {
+            if (!state.State.InProgress) await ReleaseAliasAsync();
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsBootstrapCopyReadyAsync(string operationId)
+    {
+        var durable = DurableResizeState;
+        return Task.FromResult(
+            durable.InProgress
+            && durable.HoldForBootstrap
+            && durable.Phase == ResizePhase.BootstrapHold
+            && string.Equals(durable.OperationId, operationId, StringComparison.Ordinal));
+    }
+
+    /// <inheritdoc />
+    public Task<string?> GetBootstrapCopyTreeIdAsync()
+    {
+        var durable = DurableResizeState;
+        return Task.FromResult(
+            durable.InProgress
+                && durable.HoldForBootstrap
+                && durable.Phase == ResizePhase.BootstrapHold
+                ? durable.SnapshotTreeId
+                : null);
+    }
+
+    /// <inheritdoc />
+    public async Task CompleteBootstrapCopyAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
+        if (!string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' does not match the current resize operation for tree '{TreeId}'.");
+
+        if (!state.State.InProgress)
+        {
+            if (state.State.Complete)
+            {
+                await ReleaseAliasAsync();
+                await CompleteCoordinatorAsync();
+                return;
+            }
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' is no longer in progress for tree '{TreeId}'.");
+        }
+
+        if (state.State.HoldForBootstrap && state.State.Phase != ResizePhase.BootstrapHold)
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' is not ready for alias cutover on tree '{TreeId}'.");
+
+        if (state.State.HoldForBootstrap)
+        {
+            var prevHold = state.State.HoldForBootstrap;
+            var prevPhase = state.State.Phase;
+            var prevBootstrapCopyCutover = state.State.BootstrapCopyCutover;
+            state.State.HoldForBootstrap = false;
+            state.State.Phase = ResizePhase.Swap;
+            state.State.BootstrapCopyCutover = true;
+            try
+            {
+                await WriteResizeStateAsync();
+            }
+            catch
+            {
+                state.State.HoldForBootstrap = prevHold;
+                state.State.Phase = prevPhase;
+                state.State.BootstrapCopyCutover = prevBootstrapCopyCutover;
+                throw;
+            }
+        }
+
+        await RunResizePassAsync();
+    }
+
+    /// <inheritdoc />
+    public async Task AbortBootstrapCopyAsync(string operationId)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
+        LatticeInternalOriginContext.EnsureInternalGrainOrigin(
+            Context.ActivationServices, TreeId, LatticeOperation.Admin);
+
+        if (!string.Equals(state.State.OperationId, operationId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' does not match the current resize operation for tree '{TreeId}'.");
+
+        if (!state.State.InProgress)
+        {
+            if (!state.State.Complete && state.State.SnapshotTreeId is null) return;
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' has already been cut over or completed for tree '{TreeId}'.");
+        }
+
+        var registry = grainFactory.GetLatticeRegistry();
+        var snapshotTreeId = state.State.SnapshotTreeId
+            ?? throw new InvalidOperationException($"Bootstrap copy state for tree '{TreeId}' is incomplete.");
+        if (string.Equals(await registry.ResolveAsync(TreeId), snapshotTreeId, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' has already become authoritative and cannot be discarded.");
+
+        await UndoResizeCoreAsync();
+    }
 
     public async Task ResizeAsync(int newMaxLeafKeys, int newMaxInternalChildren)
     {
@@ -347,10 +520,16 @@ internal sealed class TreeResizeGrain(
     /// state recorded a completed resize the caller already cleared in memory.
     /// Exposed as <c>internal</c> for unit testing.
     /// </summary>
-    internal async Task InitiateResizeStateAsync(int newMaxLeafKeys, int newMaxInternalChildren, bool priorComplete = false)
+    internal async Task InitiateResizeStateAsync(
+        int newMaxLeafKeys,
+        int newMaxInternalChildren,
+        bool priorComplete = false,
+        bool holdForBootstrap = false,
+        string? operationIdOverride = null)
     {
         var resolved = await optionsResolver.ResolveAsync(TreeId);
-        var operationId = Guid.NewGuid().ToString("N");
+        var operationId = operationIdOverride ?? Guid.NewGuid().ToString("N");
+        ArgumentException.ThrowIfNullOrEmpty(operationId);
 
         // Resolve the current physical tree ID (may already be aliased from a prior resize).
         var registry = grainFactory.GetLatticeRegistry();
@@ -384,6 +563,8 @@ internal sealed class TreeResizeGrain(
         var prevOldPhysicalTreeId = state.State.OldPhysicalTreeId;
         var prevOldRegistryEntry = state.State.OldRegistryEntry;
         var prevShardIndices = state.State.ShardIndices;
+        var prevHoldForBootstrap = state.State.HoldForBootstrap;
+        var prevBootstrapCopyCutover = state.State.BootstrapCopyCutover;
 
         // Persist intent BEFORE any external side effects.
         state.State.InProgress = true;
@@ -397,6 +578,8 @@ internal sealed class TreeResizeGrain(
         state.State.OldPhysicalTreeId = currentPhysical;
         state.State.OldRegistryEntry = oldEntry;
         state.State.ShardIndices = shardIndices;
+        state.State.HoldForBootstrap = holdForBootstrap;
+        state.State.BootstrapCopyCutover = false;
         try
         {
             await WriteResizeStateAsync();
@@ -414,6 +597,8 @@ internal sealed class TreeResizeGrain(
             state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
             state.State.OldRegistryEntry = prevOldRegistryEntry;
             state.State.ShardIndices = prevShardIndices;
+            state.State.HoldForBootstrap = prevHoldForBootstrap;
+            state.State.BootstrapCopyCutover = prevBootstrapCopyCutover;
             throw;
         }
 
@@ -458,6 +643,8 @@ internal sealed class TreeResizeGrain(
             state.State.OldPhysicalTreeId = prevOldPhysicalTreeId;
             state.State.OldRegistryEntry = prevOldRegistryEntry;
             state.State.ShardIndices = prevShardIndices;
+            state.State.HoldForBootstrap = prevHoldForBootstrap;
+            state.State.BootstrapCopyCutover = prevBootstrapCopyCutover;
 
             // Restoring a completed predecessor keeps it undoable for the rest of
             // its soft-delete window.
@@ -509,6 +696,11 @@ internal sealed class TreeResizeGrain(
             await AdvanceToSwapAsync();
         }
 
+        if (state.State.Phase == ResizePhase.BootstrapHold)
+        {
+            return;
+        }
+
         if (state.State.Phase == ResizePhase.Swap)
         {
             await SwapAliasAsync();
@@ -531,6 +723,9 @@ internal sealed class TreeResizeGrain(
     {
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
+        if (state.State.HoldForBootstrap)
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{state.State.OperationId}' for tree '{TreeId}' must be aborted by its bootstrap coordinator.");
         var operationId = state.State.OperationId;
         await ExecuteUndoAsync();
         await RecordUndoneAsync(operationId);
@@ -549,6 +744,9 @@ internal sealed class TreeResizeGrain(
         LatticeInternalOriginContext.EnsureInternalGrainOrigin(
             Context.ActivationServices, TreeId, LatticeOperation.Admin);
         var resize = DurableResizeState;
+        if (resize.HoldForBootstrap)
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{resize.OperationId}' for tree '{TreeId}' must be aborted by its bootstrap coordinator.");
         if (!resize.InProgress && !resize.Complete)
             throw new InvalidOperationException(NoResizeToUndoMessage());
 
@@ -863,11 +1061,18 @@ internal sealed class TreeResizeGrain(
         var opId = state.State.OperationId!;
         var shardIndices = OldShardIndices;
 
-        // Drain-window undo applies only while Phase == Snapshot. Phases Swap,
-        // Reject, and Cleanup all occur after the alias flip, and must follow
-        // the after-swap recovery path - routing them through the drain
-        // branch would erroneously delete the live destination tree.
-        var isBeforeSwap = state.State.InProgress && state.State.Phase == ResizePhase.Snapshot;
+        // The phase write can lag an alias swap that committed before its
+        // acknowledgement failed, so the registry's alias is authoritative.
+        // BootstrapHold is also a pre-swap phase and uses the same safe unwind.
+        var registry = grainFactory.GetLatticeRegistry();
+        var currentPhysical = state.State.BootstrapCopyCutover
+            ? await registry.ResolveAsync(TreeId)
+            : null;
+        var isBeforeSwap = state.State.InProgress
+            && (state.State.BootstrapCopyCutover
+                ? currentPhysical is not null
+                    && !string.Equals(currentPhysical, snapshotTreeId, StringComparison.Ordinal)
+                : state.State.Phase is ResizePhase.Snapshot or ResizePhase.BootstrapHold);
         if (isBeforeSwap)
         {
             // ---- Undo during drain (before swap). ----
@@ -908,9 +1113,11 @@ internal sealed class TreeResizeGrain(
             // which would refuse every subsequent undo retry.
             var prevInProgress1 = state.State.InProgress;
             var prevComplete1 = state.State.Complete;
+            var prevHoldForBootstrap1 = state.State.HoldForBootstrap;
             var prevSnapshotTreeId1 = state.State.SnapshotTreeId;
             var prevOldPhysicalTreeId1 = state.State.OldPhysicalTreeId;
             var prevOldRegistryEntry1 = state.State.OldRegistryEntry;
+            var prevBootstrapCopyCutover1 = state.State.BootstrapCopyCutover;
 
             ResetResizeState();
             try
@@ -921,9 +1128,11 @@ internal sealed class TreeResizeGrain(
             {
                 state.State.InProgress = prevInProgress1;
                 state.State.Complete = prevComplete1;
+                state.State.HoldForBootstrap = prevHoldForBootstrap1;
                 state.State.SnapshotTreeId = prevSnapshotTreeId1;
                 state.State.OldPhysicalTreeId = prevOldPhysicalTreeId1;
                 state.State.OldRegistryEntry = prevOldRegistryEntry1;
+                state.State.BootstrapCopyCutover = prevBootstrapCopyCutover1;
                 throw;
             }
 
@@ -937,7 +1146,6 @@ internal sealed class TreeResizeGrain(
         // something has already gone wrong, so refuse before any compensation
         // runs rather than recreate it as a bare row with no structural pins
         // (issue #4270).
-        var registry = grainFactory.GetLatticeRegistry();
         var logicalBefore = await registry.GetEntryAsync(TreeId)
             ?? throw new LatticeTreeNotRegisteredException(TreeId, nameof(UndoResizeAsync));
 
@@ -1071,9 +1279,11 @@ internal sealed class TreeResizeGrain(
         // which would refuse every subsequent undo retry.
         var prevInProgress2 = state.State.InProgress;
         var prevComplete2 = state.State.Complete;
+        var prevHoldForBootstrap2 = state.State.HoldForBootstrap;
         var prevSnapshotTreeId2 = state.State.SnapshotTreeId;
         var prevOldPhysicalTreeId2 = state.State.OldPhysicalTreeId;
         var prevOldRegistryEntry2 = state.State.OldRegistryEntry;
+        var prevBootstrapCopyCutover2 = state.State.BootstrapCopyCutover;
 
         ResetResizeState();
         try
@@ -1084,9 +1294,11 @@ internal sealed class TreeResizeGrain(
         {
             state.State.InProgress = prevInProgress2;
             state.State.Complete = prevComplete2;
+            state.State.HoldForBootstrap = prevHoldForBootstrap2;
             state.State.SnapshotTreeId = prevSnapshotTreeId2;
             state.State.OldPhysicalTreeId = prevOldPhysicalTreeId2;
             state.State.OldRegistryEntry = prevOldRegistryEntry2;
+            state.State.BootstrapCopyCutover = prevBootstrapCopyCutover2;
             throw;
         }
     }
@@ -1095,6 +1307,8 @@ internal sealed class TreeResizeGrain(
     {
         state.State.InProgress = false;
         state.State.Complete = false;
+        state.State.HoldForBootstrap = false;
+        state.State.BootstrapCopyCutover = false;
         state.State.SnapshotTreeId = null;
         state.State.OldPhysicalTreeId = null;
         state.State.OldRegistryEntry = null;
@@ -1134,6 +1348,9 @@ internal sealed class TreeResizeGrain(
             {
                 case ResizePhase.Snapshot:
                     await WaitForSnapshotAsync();
+                    break;
+
+                case ResizePhase.BootstrapHold:
                     break;
 
                 case ResizePhase.Swap:
@@ -1190,7 +1407,9 @@ internal sealed class TreeResizeGrain(
     private async Task AdvanceToSwapAsync()
     {
         var prevPhase = state.State.Phase;
-        state.State.Phase = ResizePhase.Swap;
+        state.State.Phase = state.State.HoldForBootstrap
+            ? ResizePhase.BootstrapHold
+            : ResizePhase.Swap;
         try
         {
             await WriteResizeStateAsync();
@@ -1297,6 +1516,9 @@ internal sealed class TreeResizeGrain(
                     entry.ShardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
                 using (LatticeAccessGateContext.EnterSystemOrigin())
                 {
+                    using var bootstrapCutover = state.State.BootstrapCopyCutover
+                        ? LatticeBootstrapShadowCutoverContext.BeginScope()
+                        : default;
                     await registry.SwapAliasAsync(
                         TreeId,
                         snapshotTreeId,

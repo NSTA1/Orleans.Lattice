@@ -5009,6 +5009,12 @@ internal sealed partial class LatticeGrain(
         // dispatching further internal calls. It does not read or mutate user
         // data; the shard grains enforce the real boundary on reads/writes.
         cancellationToken.ThrowIfCancellationRequested();
+        if (LatticeBootstrapShadowRouteContext.TryGetPhysicalTreeId(TreeId, out var shadowTreeId))
+            return GetBootstrapShadowRoutingAsync(shadowTreeId, cancellationToken);
+
+        if (ReplicationApplyScope.IsActive)
+            return GetReplicationApplyRoutingAsync(cancellationToken);
+
         var cached = _cachedRouting;
         if (cached is not null)
         {
@@ -5019,6 +5025,42 @@ internal sealed partial class LatticeGrain(
             return new ValueTask<RoutingInfo>(cached);
         }
         return GetRoutingSlowAsync(cancellationToken);
+    }
+
+    private async ValueTask<RoutingInfo> GetReplicationApplyRoutingAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var shadowTreeId = await grainFactory.GetGrain<ITreeResizeGrain>(TreeId)
+            .GetBootstrapCopyTreeIdAsync();
+        if (shadowTreeId is not null)
+        {
+            return await GetBootstrapShadowRoutingAsync(shadowTreeId, cancellationToken);
+        }
+
+        var cached = _cachedRouting;
+        if (cached is not null)
+        {
+            return await CheckCopyReceive(cached);
+        }
+
+        return await GetRoutingSlowAsync(cancellationToken);
+    }
+
+    private async ValueTask<RoutingInfo> GetBootstrapShadowRoutingAsync(
+        string physicalTreeId,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(physicalTreeId);
+        if (entry is null)
+            throw new InvalidOperationException(
+                $"Bootstrap shadow tree '{physicalTreeId}' for logical tree '{TreeId}' is not registered.");
+
+        var map = entry.ShardMap ?? ShardMap.GetOrCreateDefaultShared(
+            LatticeConstants.DefaultVirtualShardCount,
+            entry.ShardCount is > 0 and var pinned ? pinned : LatticeConstants.DefaultShardCount);
+        var routing = new RoutingInfo(physicalTreeId, map);
+        return ReplicationApplyScope.IsActive ? await CheckCopyReceive(routing) : routing;
     }
 
     /// <summary>

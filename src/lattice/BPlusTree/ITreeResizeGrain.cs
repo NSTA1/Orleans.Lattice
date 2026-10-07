@@ -20,6 +20,38 @@ namespace Orleans.Lattice.BPlusTree;
 internal interface ITreeResizeGrain : IGrainWithStringKey
 {
     /// <summary>
+    /// Starts an online copy for a receiver bootstrap and holds it before the
+    /// alias swap. Repeating the same operation id returns the same destination.
+    /// </summary>
+    Task<string> BeginBootstrapCopyAsync(string operationId);
+
+    /// <summary>
+    /// Returns whether the bootstrap copy has completed its online snapshot and
+    /// is held immediately before alias cutover.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<bool> IsBootstrapCopyReadyAsync(string operationId);
+
+    /// <summary>
+    /// Returns the destination of an active bootstrap copy so replication
+    /// applies arriving while the copy is held can join the staged view.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<string?> GetBootstrapCopyTreeIdAsync();
+
+    /// <summary>
+    /// Releases the bootstrap hold and performs the alias cutover. Idempotent
+    /// for the same operation id.
+    /// </summary>
+    Task CompleteBootstrapCopyAsync(string operationId);
+
+    /// <summary>
+    /// Discards a bootstrap copy before alias cutover, leaving the original tree
+    /// authoritative and readable.
+    /// </summary>
+    Task AbortBootstrapCopyAsync(string operationId);
+
+    /// <summary>
     /// Initiates a resize of the tree. An offline snapshot is taken to a new
     /// physical tree with the specified sizing. Once the snapshot completes,
     /// the tree alias is swapped and the old physical tree is soft-deleted.

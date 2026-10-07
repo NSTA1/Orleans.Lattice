@@ -146,6 +146,8 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey,
         LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
         LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
+        LatticeEventConstants.BootstrapShadowLogicalTreeRequestContextKey,
+        LatticeEventConstants.BootstrapShadowPhysicalTreeRequestContextKey,
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
         LatticeEventConstants.PreparedRouteRequestContextKey,
         LatticeEventConstants.OriginalPrepareStampsRequestContextKey,

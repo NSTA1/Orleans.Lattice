@@ -183,9 +183,14 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// write recorded as applied before it may no longer be in the tree, and a
     /// dependent released on that record would be visible without it. A forgotten
     /// identity is decided by the origin's frontier instead, so this only delays.
+    /// A receiver-bootstrap shadow cutover may preserve the bootstrap floor,
+    /// because the destination contains the imported contents it vouches for.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken = default);
+    /// <param name="preserveBootstrapFloor">Whether the replacement retains the imported contents vouched for by the floor.</param>
+    Task ResetAppliedIdentitiesAsync(
+        CancellationToken cancellationToken = default,
+        bool preserveBootstrapFloor = false);
 
     /// <summary>
     /// The origin's high-water mark together with the tree's bootstrap drop

@@ -12,6 +12,8 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Added
 
+- **Replication - In-place bootstrap stages imports on a shadow copy.** Re-bootstrap keeps the existing tree readable while the complete snapshot is imported, then publishes it through alias cutover; a failed import discards the shadow and preserves the original. ([#4567](https://github.com/NSTA1/Orleans.Lattice/issues/4567)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)
+
 - **Auth - Delegated tenant access administration.** Opt-in: a tenant's admins manage its own groups, member set and rules on its trees, evaluated beneath operator rules, which stay final. Capped per tenant and purged on delete; served in-process, over gRPC, as MCP tools and in the Explorer. ([#4154](https://github.com/NSTA1/Orleans.Lattice/issues/4154)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.TenantAdmin.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 - **Admin - Compliance scans and fresh storage usage run in the background.** Start either and poll its progress in entries or trees; it outlives a caller timeout, and Explorer shows its progress. The blocking compliance scan is deprecated (`LATTICE0002`). ([#4126](https://github.com/NSTA1/Orleans.Lattice/issues/4126)) (`Orleans.Lattice.Explorer.UI`)

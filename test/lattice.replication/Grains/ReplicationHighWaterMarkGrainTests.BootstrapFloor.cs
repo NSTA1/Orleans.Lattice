@@ -129,6 +129,23 @@ public partial class ReplicationHighWaterMarkGrainTests
     }
 
     [Test]
+    public async Task ResetAppliedIdentitiesAsync_preserves_the_floor_for_a_bootstrap_shadow_cutover()
+    {
+        IReplicationHighWaterMarkGrain grain = CreateGrain();
+        await grain.SetBootstrapFloorAsync(Watermarks((OriginA, Hlc(100))), Held());
+        await grain.AdvanceAppliedAsync(OriginA, Hlc(40), [Hlc(40)], advanceHighWaterMark: false, CancellationToken.None);
+
+        await grain.ResetAppliedIdentitiesAsync(CancellationToken.None, preserveBootstrapFloor: true);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That((await grain.GetAdmissionAsync(OriginA)).Drops(Hlc(50)), Is.True);
+            Assert.That(await grain.HasAppliedAsync(OriginA, Hlc(40)), Is.False,
+                "the floor survives because the shadow copy contains its contents, but pre-cutover identities still reset");
+        });
+    }
+
+    [Test]
     public async Task A_failed_write_while_clearing_the_floor_propagates_and_keeps_it()
     {
         var state = new FakePersistentState<ReplicationHighWaterMarkState>();

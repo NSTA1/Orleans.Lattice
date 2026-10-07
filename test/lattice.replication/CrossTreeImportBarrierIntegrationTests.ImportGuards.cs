@@ -52,7 +52,8 @@ public partial class CrossTreeImportBarrierIntegrationTests
             Assert.That(barrier.Decided, Is.False, "an import from before the decision decides nothing");
             Assert.That(barrier.ArrivedTrees, Is.EqualTo(new[] { treeB }), "tree A stays pending in the barrier");
             Assert.That(await ReadAsync(treeA, "k"), Is.EqualTo((false, (byte[]?)new byte[] { 7 })), "tree A is still pre-saga");
-            Assert.That((await ReadAsync(treeB, "k")).Fenced, Is.True, "tree B is not served while its barrier waits");
+            Assert.That(await ReadAsync(treeB, "k"), Is.EqualTo((false, (byte[]?)null)),
+                "tree B keeps its original readable view while its shadow import waits for the barrier");
         });
     }
 

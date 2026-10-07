@@ -161,6 +161,14 @@ public static class LatticeEventConstants
     internal const string FreshStampRequestContextKey = "ol.fsh";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key set while a receiver-bootstrap shadow
+    /// copy publishes its alias. Replication preserves the bootstrap floor
+    /// across this replacement because the destination contains the imported
+    /// contents the floor vouches for.
+    /// </summary>
+    internal const string BootstrapShadowCutoverRequestContextKey = "ol.bs.cutover";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
     /// atomic-transaction <c>(Size, Index)</c> pair from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator down
@@ -566,6 +574,14 @@ public static class LatticeEventConstants
     /// See <see cref="Orleans.Lattice.LatticeAtomicBindingContext"/>.
     /// </summary>
     internal const string AtomicBoundPhysicalTreeRequestContextKey = "ol.abp";
+
+    /// <summary>
+    /// Request-context keys binding a receiver-bootstrap apply for one logical
+    /// tree to its staged physical copy. Internal and stripped from external
+    /// callers by <see cref="LatticeCapabilityStrippingCallFilter"/>.
+    /// </summary>
+    internal const string BootstrapShadowLogicalTreeRequestContextKey = "ol.bstr.t";
+    internal const string BootstrapShadowPhysicalTreeRequestContextKey = "ol.bstr.p";
 
     /// <summary>
     /// Orleans <c>RequestContext</c> key that carries the caller's active

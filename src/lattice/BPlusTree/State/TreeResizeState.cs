@@ -72,6 +72,12 @@ internal sealed class TreeResizeState
     /// <c>ShardCount - 1</c>, the set such a resize's snapshot shadow-forwarded.
     /// </summary>
     [Id(11)] public int[]? ShardIndices { get; set; }
+
+    /// <summary>Whether this online copy is held for receiver-bootstrap import before cutover.</summary>
+    [Id(12)] public bool HoldForBootstrap { get; set; }
+
+    /// <summary>Whether alias cutover belongs to a receiver-bootstrap shadow copy.</summary>
+    [Id(13)] public bool BootstrapCopyCutover { get; set; }
 }
 
 /// <summary>
@@ -110,4 +116,10 @@ internal enum ResizePhase
     /// alias target.
     /// </summary>
     Reject = 3,
+
+    /// <summary>
+    /// The online copy is complete and is waiting for a receiver bootstrap to
+    /// finish importing before alias cutover.
+    /// </summary>
+    BootstrapHold = 4,
 }

@@ -16,12 +16,13 @@ namespace Orleans.Lattice.Replication.Tests;
 /// whose terminal for that operation has not reached this cluster is still
 /// pre-saga here, and no barrier exists to say so. So the export captures, at
 /// its end, every sibling's write-ahead-log tails and export epoch, and the
-/// importing cluster keeps the tree read-fenced until each sibling it replicates
-/// has passed that boundary: its shipper vouched acknowledged positions at or
+/// importing cluster keeps publication held until each sibling it replicates has
+/// passed that boundary: its shipper vouched acknowledged positions at or
 /// past the tails (route 1), or a drain of the sibling from an export opened
-/// after the capture ended here (route 2). A sibling that never passes is
-/// re-seeded automatically. Two real clusters: site A exports through the real
-/// remote snapshot service under its real cross-tree gate; site B imports
+/// after the capture ended here (route 2). A fresh bootstrap keeps the original
+/// view readable while publication waits on that boundary. A sibling that never
+/// passes is re-seeded automatically. Two real clusters: site A exports through
+/// the real remote snapshot service under its real cross-tree gate; site B imports
 /// through the real bootstrap coordinator and records shipped positions in its
 /// real tree frontier.
 /// </summary>
@@ -121,7 +122,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         return state;
     }
 
-    private async Task<bool> FencedAsync(string tree)
+    private async Task<bool> IsReadFencedAsync(string tree)
     {
         try
         {
@@ -143,7 +144,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     }
 
     [Test]
-    public async Task A_tree_stays_read_fenced_until_a_sibling_drained_from_an_export_after_its_capture()
+    public async Task A_tree_remains_readable_while_its_sibling_waits_for_an_export_opened_after_capture()
     {
         const string tree = "xtsb-route2-t";
         const string sibling = "xtsb-route2-s";
@@ -151,7 +152,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
 
         var held = await ImportAsync(tree, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
         await Task.Delay(1500);
-        var fencedWhileHeld = await FencedAsync(tree);
+        var readFencedWhileHeld = await IsReadFencedAsync(tree);
         var heldPhase = await Coordinator(tree).GetStateAsync(CancellationToken.None);
 
         // The sibling's own export lists no sibling here, so it completes.
@@ -162,11 +163,12 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         {
             Assert.That(held, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "the import waits for the sibling");
-            Assert.That(fencedWhileHeld, Is.True, "the tree is not served while a sibling has not passed its boundary");
+            Assert.That(readFencedWhileHeld, Is.False,
+                "the original view remains readable while publication waits for the sibling boundary");
             Assert.That(siblingPhase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                 "a drain of the sibling from an export opened after the capture passes the boundary");
-            Assert.That(await FencedAsync(tree), Is.False);
+            Assert.That(await IsReadFencedAsync(tree), Is.False);
         });
     }
 
@@ -177,7 +179,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         // the captured epoch. The sibling here was drained first, from an export
         // that opened before the tree's export captured its boundary, and its
         // shipper vouches nothing: that drain cannot carry a sibling record
-        // written between its export and the capture, so the tree stays fenced
+        // written between its export and the capture, so publication stays held
         // until the sibling is drained again from a later export.
         const string tree = "xtsb-stale-t";
         const string sibling = "xtsb-stale-s";
@@ -193,7 +195,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         var held = await ImportAsync(tree, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
         await Task.Delay(1500);
         var heldPhase = await Coordinator(tree).GetStateAsync(CancellationToken.None);
-        var fencedWhileHeld = await FencedAsync(tree);
+        var readFencedWhileHeld = await IsReadFencedAsync(tree);
 
         var siblingAgain = await ImportAsync(sibling, LatticeBootstrapState.LiveIncremental);
         var released = await AwaitPhaseAsync(tree, TimeSpan.FromSeconds(60), LatticeBootstrapState.LiveIncremental);
@@ -203,11 +205,12 @@ public class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(held, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff),
                 "a drain from an export opened before the capture does not pass the boundary");
-            Assert.That(fencedWhileHeld, Is.True);
+            Assert.That(readFencedWhileHeld, Is.False,
+                "the original view remains readable while publication waits for the later export");
             Assert.That(siblingAgain, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                 "a drain from an export opened after the capture does");
-            Assert.That(await FencedAsync(tree), Is.False);
+            Assert.That(await IsReadFencedAsync(tree), Is.False);
         });
     }
 
@@ -233,7 +236,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         await frontier.ObserveAsync(SiteAClusterId, Vouched(epoch, "another-log"));
         await Task.Delay(1500);
         var phaseOnAnotherLog = await Coordinator(tree).GetStateAsync(CancellationToken.None);
-        var fencedOnAnotherLog = await FencedAsync(tree);
+        var readFencedOnAnotherLog = await IsReadFencedAsync(tree);
 
         await frontier.ObserveAsync(SiteAClusterId, Vouched(epoch, physical));
         var released = await AwaitPhaseAsync(tree, TimeSpan.FromSeconds(60), LatticeBootstrapState.LiveIncremental);
@@ -241,10 +244,11 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         Assert.Multiple(async () =>
         {
             Assert.That(phaseOnAnotherLog, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff));
-            Assert.That(fencedOnAnotherLog, Is.True, "positions on another log do not pass the boundary");
+            Assert.That(readFencedOnAnotherLog, Is.False,
+                "the original view remains readable while positions on another log do not pass the boundary");
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                 "acknowledged positions at or past every captured tail pass the boundary");
-            Assert.That(await FencedAsync(tree), Is.False);
+            Assert.That(await IsReadFencedAsync(tree), Is.False);
         });
     }
 
@@ -268,7 +272,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         {
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental),
                 "the sibling's drained import passes the tree's boundary while its own fence is held");
-            Assert.That(await FencedAsync(tree), Is.False);
+            Assert.That(await IsReadFencedAsync(tree), Is.False);
         });
     }
 
@@ -287,7 +291,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         {
             Assert.That(siblingImported, Is.Not.Null, "the coordinator re-seeded the sibling itself");
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the re-seed passes the boundary");
-            Assert.That(await FencedAsync(tree), Is.False);
+            Assert.That(await IsReadFencedAsync(tree), Is.False);
         });
     }
 

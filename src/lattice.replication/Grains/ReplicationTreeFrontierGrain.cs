@@ -115,10 +115,12 @@ internal sealed class ReplicationTreeFrontierGrain(
     }
 
     /// <inheritdoc />
-    public async Task OnContentsReplacingAsync(CancellationToken cancellationToken)
+    public async Task OnContentsReplacingAsync(
+        CancellationToken cancellationToken,
+        bool preserveBootstrapFloor = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        await RestampAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
+        await RestampAsync(Guid.NewGuid(), cancellationToken, preserveBootstrapFloor).ConfigureAwait(true);
         state.State.Unsettled = true;
         await WriteStateAsync().ConfigureAwait(true);
         PublishModes();
@@ -128,7 +130,7 @@ internal sealed class ReplicationTreeFrontierGrain(
     public async Task OnLineageChangingAsync(Guid? nextLineage, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        await RestampAsync(nextLineage is null ? Guid.Empty : Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
+        await RestampAsync(nextLineage is null ? Guid.Empty : Guid.NewGuid(), cancellationToken, preserveBootstrapFloor: false).ConfigureAwait(true);
         state.State.ObservedRegistryLineage = nextLineage;
         state.State.Unsettled = false;
         _settledThisActivation = true;
@@ -299,7 +301,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         {
             if (current.Epoch != Guid.Empty)
             {
-                await RestampAsync(Guid.Empty, cancellationToken).ConfigureAwait(true);
+                await RestampAsync(Guid.Empty, cancellationToken, preserveBootstrapFloor: false).ConfigureAwait(true);
             }
         }
         else if (current.Unsettled)
@@ -308,12 +310,12 @@ internal sealed class ReplicationTreeFrontierGrain(
             // records the lineage it produced (or kept, when it was abandoned).
             if (current.Epoch == Guid.Empty)
             {
-                await RestampAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
+                await RestampAsync(Guid.NewGuid(), cancellationToken, preserveBootstrapFloor: false).ConfigureAwait(true);
             }
         }
         else if (current.Epoch == Guid.Empty || lineage != current.ObservedRegistryLineage)
         {
-            await RestampAsync(Guid.NewGuid(), cancellationToken).ConfigureAwait(true);
+            await RestampAsync(Guid.NewGuid(), cancellationToken, preserveBootstrapFloor: false).ConfigureAwait(true);
         }
 
         if (current.Unsettled || current.ObservedRegistryLineage != lineage)
@@ -333,7 +335,7 @@ internal sealed class ReplicationTreeFrontierGrain(
     /// caps land before the new epoch is durable, so a crash in between leaves
     /// the old epoch to be re-stamped again rather than an uncapped aggregate.
     /// </summary>
-    private async Task RestampAsync(Guid epoch, CancellationToken cancellationToken)
+    private async Task RestampAsync(Guid epoch, CancellationToken cancellationToken, bool preserveBootstrapFloor)
     {
         foreach (var origin in state.State.Origins.Keys)
         {
@@ -343,7 +345,7 @@ internal sealed class ReplicationTreeFrontierGrain(
         }
 
         await grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeId)
-            .ResetAppliedIdentitiesAsync(cancellationToken)
+            .ResetAppliedIdentitiesAsync(cancellationToken, preserveBootstrapFloor)
             .ConfigureAwait(true);
 
         foreach (var entry in state.State.Origins.Values)
