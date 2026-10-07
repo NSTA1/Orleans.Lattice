@@ -886,6 +886,9 @@ expiry, unavailable storage/transport, unbounded RPC latency, reactivation, and
 continued topology/registry-coverage churn are not unconditional progress cases.
 The counts retain their existing retry policy. An Information-level structured
 log names the tree and optimistic attempt count whenever the fallback is entered.
+A fallback read occupies a `LatticeGrain` stateless-worker activation for up to
+the 30-second gate lease, so `MaxLocalWorkers` headroom matters under sustained
+fallback traffic.
 
 The streaming `KeysAsync` / `EntriesAsync` scans instead pin the one
 snapshot they capture at scan start for every page, and are not re-run

@@ -1874,7 +1874,7 @@ internal sealed partial class LatticeGrain(
         if (unavailableCause is not null) throw OutcomeUnavailableAfterRetries(unavailableCause);
         if (gatedSnapshot is not null)
             throw new LatticeTransactionOutcomeUnavailableException(
-                $"GetManyAsync for tree '{TreeId}' crossed a shard-map change during its decision-gated read.");
+                $"GetManyAsync for tree '{TreeId}' crossed a shard-map change during its decision-gated read.") { TreeId = TreeId };
 
         return await GetManyDecisionGatedAsync(keys, stageTagTree, cancellationToken);
 

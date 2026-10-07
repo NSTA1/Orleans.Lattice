@@ -194,7 +194,8 @@ public partial class BPlusLeafGrainTests
         var h = CreateGetManyProgressHarness();
         h.DuringGatedRead = () => h.Map.Version++;
 
-        Assert.ThrowsAsync<LatticeTransactionOutcomeUnavailableException>(() => h.Lattice.GetManyAsync(h.Keys));
+        var fault = Assert.ThrowsAsync<LatticeTransactionOutcomeUnavailableException>(() => h.Lattice.GetManyAsync(h.Keys));
+        Assert.That(fault!.TreeId, Is.EqualTo("getmany-progress"));
 
         await h.Registry.MarkCommittedAsync(h.Transaction);
         await h.RegistryProxy.Received(1).ReleaseCaptureGateAsync(Arg.Any<Guid>());
