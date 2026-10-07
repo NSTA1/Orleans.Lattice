@@ -48,6 +48,13 @@ internal interface ILatticeBootstrapCoordinatorGrain : IGrainWithStringKey
     [Orleans.Concurrency.AlwaysInterleave]
     Task<BootstrapCoordinatorStatus> GetStatusAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>Returns test-only descriptions of the cross-tree holds on this import.</summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<string[]> GetPendingCrossTreeHoldsForTestingAsync();
+
+    /// <summary>Requests a fresh snapshot attempt for an aged, mutually held sibling import.</summary>
+    Task<bool> RefreshStuckSiblingImportAsync(string sourceClusterId, string requestingTreeName);
+
     /// <summary>
     /// Re-enters the normal full bootstrap path when a prior delete reconcile
     /// skipped on an unstable source generation and recorded durable owed work.

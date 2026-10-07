@@ -3503,9 +3503,9 @@ internal sealed partial class ReplicationShipperGrain(
     /// its deadline that never lands leaves a permanent hole the allocator has
     /// already moved past. The shard's trusted trim watermark separates the two;
     /// without one (a provider that keeps none, or a silo in the cluster that
-    /// predates it) every jump is treated as a trim. While a silo is still
-    /// assembling its initial manifest, defer that decision until the capability
-    /// gate can distinguish a genuine trim from an unwritten offset.
+    /// predates it) every jump is treated as a trim. While membership contains
+    /// an active silo whose manifest has not arrived, defer that decision until
+    /// the capability gate can distinguish a genuine trim from an unwritten offset.
     /// </summary>
     private async Task<bool?> IsTrimmedPastAsync(IWalShardGrain grain, long requested, CancellationToken cancellationToken)
     {

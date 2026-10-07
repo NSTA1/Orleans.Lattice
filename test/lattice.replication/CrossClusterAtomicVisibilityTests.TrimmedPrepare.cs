@@ -300,12 +300,21 @@ public partial class CrossClusterAtomicVisibilityTests
         feed.Holes.Add(0);
 
         var manifests = Substitute.For<IClusterManifestProvider>();
+        var siloA = SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11111), 1);
+        var siloB = SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11112), 1);
         var currentManifest = new ClusterManifest(
             new MajorMinorVersion(1, 1),
             ImmutableDictionary<SiloAddress, GrainManifest>.Empty);
         manifests.Current.Returns(_ => currentManifest);
+        var membership = Substitute.For<IClusterMembershipService>();
+        membership.CurrentSnapshot.Returns(_ => new ClusterMembershipSnapshot(
+            ImmutableDictionary<SiloAddress, ClusterMember>.Empty
+                .Add(siloA, new ClusterMember(siloA, SiloStatus.Active, "silo-a"))
+                .Add(siloB, new ClusterMember(siloB, SiloStatus.Active, "silo-b")),
+            new MembershipVersion(1)));
         var activationServices = Substitute.For<IServiceProvider>();
         activationServices.GetService(typeof(IClusterManifestProvider)).Returns(manifests);
+        activationServices.GetService(typeof(IClusterMembershipService)).Returns(membership);
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
@@ -325,14 +334,35 @@ public partial class CrossClusterAtomicVisibilityTests
                 "the shipper leaves the cursor at the unresolved gap");
         });
 
+        currentManifest = new ClusterManifest(
+            new MajorMinorVersion(1, 1),
+            ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(
+                siloA,
+                new GrainManifest(
+                    ImmutableDictionary<GrainType, GrainProperties>.Empty,
+                    ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty)));
+        await shipper.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "a missing active silo manifest is still startup, not evidence of a trim");
+            Assert.That(feed.ReadFromSequences, Is.EqualTo(new long[] { 0, 0 }),
+                "the shipper holds the same cursor until every active silo manifest is present");
+        });
+
         var startupReadCount = feed.ReadFromSequences.Count;
         currentManifest = new ClusterManifest(
             new MajorMinorVersion(1, 1),
             ImmutableDictionary<SiloAddress, GrainManifest>.Empty.Add(
-                SiloAddress.New(new IPEndPoint(IPAddress.Loopback, 11111), 1),
+                siloA,
                 new GrainManifest(
                     ImmutableDictionary<GrainType, GrainProperties>.Empty,
-                    ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty)));
+                    ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty))
+                .Add(
+                    siloB,
+                    new GrainManifest(
+                        ImmutableDictionary<GrainType, GrainProperties>.Empty,
+                        ImmutableDictionary<GrainInterfaceType, GrainInterfaceProperties>.Empty)));
         feed.ReportsTrimWatermark = true;
         await shipper.PumpForTestingAsync(CancellationToken.None);
         await transport.Received().SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>());

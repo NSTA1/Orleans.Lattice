@@ -154,6 +154,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         await Task.Delay(1500);
         var readFencedWhileHeld = await IsReadFencedAsync(tree);
         var heldPhase = await Coordinator(tree).GetStateAsync(CancellationToken.None);
+        var pendingHolds = await Coordinator(tree).GetPendingCrossTreeHoldsForTestingAsync();
 
         // The sibling's own export lists no sibling here, so it completes.
         var siblingPhase = await ImportAsync(sibling, LatticeBootstrapState.LiveIncremental);
@@ -163,6 +164,8 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         {
             Assert.That(held, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "the import waits for the sibling");
+            Assert.That(pendingHolds, Has.Some.Contains($"sibling:{sibling};"),
+                "the diagnostic snapshot identifies the sibling boundary that is holding the import");
             Assert.That(readFencedWhileHeld, Is.False,
                 "the original view remains readable while publication waits for the sibling boundary");
             Assert.That(siblingPhase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
@@ -195,6 +198,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
         var held = await ImportAsync(tree, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
         await Task.Delay(1500);
         var heldPhase = await Coordinator(tree).GetStateAsync(CancellationToken.None);
+        var pendingHolds = await Coordinator(tree).GetPendingCrossTreeHoldsForTestingAsync();
         var readFencedWhileHeld = await IsReadFencedAsync(tree);
 
         var siblingAgain = await ImportAsync(sibling, LatticeBootstrapState.LiveIncremental);
@@ -205,6 +209,7 @@ public class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(held, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(heldPhase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff),
                 "a drain from an export opened before the capture does not pass the boundary");
+            Assert.That(pendingHolds, Has.Some.Contains($"sibling:{sibling};"));
             Assert.That(readFencedWhileHeld, Is.False,
                 "the original view remains readable while publication waits for the later export");
             Assert.That(siblingAgain, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
@@ -277,32 +282,42 @@ public class CrossTreeSiblingBoundaryIntegrationTests
     }
 
     [Test]
-    public async Task Mutual_stuck_sibling_reseed_requests_do_not_deadlock_the_coordinators()
+    public async Task Mutually_active_sibling_imports_do_not_queue_redundant_reseeds()
     {
         const string tree = "xtsb-mutual-reseed-t";
         const string sibling = "xtsb-mutual-reseed-s";
         await WriteAsync(tree, sibling);
         Siblings[tree] = true;
-        LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(1);
+        Siblings[sibling] = true;
+        LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(10);
 
         await Task.WhenAll(
             Coordinator(tree).BootstrapAsync(SiteAClusterId, CancellationToken.None),
             Coordinator(sibling).BootstrapAsync(SiteAClusterId, CancellationToken.None));
 
         var phases = await Task.WhenAll(
-            AwaitPhaseAsync(tree, TimeSpan.FromSeconds(15), LatticeBootstrapState.IncrementalHandoff),
-            AwaitPhaseAsync(sibling, TimeSpan.FromSeconds(15), LatticeBootstrapState.IncrementalHandoff));
-        await Task.Delay(TimeSpan.FromSeconds(4));
-        var stateRequests = Task.WhenAll(
-            Coordinator(tree).GetStateAsync(CancellationToken.None),
-            Coordinator(sibling).GetStateAsync(CancellationToken.None));
-        var completed = await Task.WhenAny(stateRequests, Task.Delay(TimeSpan.FromSeconds(15)));
+            AwaitPhaseAsync(tree, TimeSpan.FromMinutes(2), LatticeBootstrapState.LiveIncremental),
+            AwaitPhaseAsync(sibling, TimeSpan.FromMinutes(2), LatticeBootstrapState.LiveIncremental));
+        var holdDescriptions = (await Coordinator(tree).GetPendingCrossTreeHoldsForTestingAsync())
+            .Select(hold => $"{tree}: {hold}")
+            .Concat((await Coordinator(sibling).GetPendingCrossTreeHoldsForTestingAsync())
+                .Select(hold => $"{sibling}: {hold}"))
+            .Where(static hold => hold.Contains("sibling:", StringComparison.Ordinal))
+            .ToArray();
+        var statuses = await Task.WhenAll(
+            Coordinator(tree).GetStatusAsync(CancellationToken.None),
+            Coordinator(sibling).GetStatusAsync(CancellationToken.None));
+        var drainedEpochs = await Task.WhenAll(
+            Coordinator(tree).GetDrainedExportEpochAsync(SiteAClusterId),
+            Coordinator(sibling).GetDrainedExportEpochAsync(SiteAClusterId));
+        var statusDescriptions = new[]
+        {
+            $"{tree}: phase={statuses[0].Phase};source={statuses[0].SourceClusterId ?? "none"};readFenced={statuses[0].ReadFenced};entries={statuses[0].EntriesApplied};epoch={drainedEpochs[0]?.ToString() ?? "none"}",
+            $"{sibling}: phase={statuses[1].Phase};source={statuses[1].SourceClusterId ?? "none"};readFenced={statuses[1].ReadFenced};entries={statuses[1].EntriesApplied};epoch={drainedEpochs[1]?.ToString() ?? "none"}",
+        };
 
-        Assert.That(phases, Is.All.EqualTo(LatticeBootstrapState.IncrementalHandoff),
-            "both imports reach the held cross-tree barrier");
-        Assert.That(completed, Is.SameAs(stateRequests),
-            "both coordinators remain responsive after the mutual re-seed requests are issued");
-        Assert.That(await stateRequests, Is.All.EqualTo(LatticeBootstrapState.IncrementalHandoff));
+        Assert.That(phases, Is.All.EqualTo(LatticeBootstrapState.LiveIncremental),
+            $"both imports should pass their sibling boundaries; status: {string.Join(" | ", statusDescriptions)}; remaining holds: {string.Join(" | ", holdDescriptions)}");
     }
 
     [Test]

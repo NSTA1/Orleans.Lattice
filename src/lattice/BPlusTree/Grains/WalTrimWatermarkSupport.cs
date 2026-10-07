@@ -14,11 +14,36 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal static class WalTrimWatermarkSupport
 {
-    /// <summary>Whether the current silo manifest is still empty during silo startup.</summary>
+    /// <summary>Whether startup has not yet published a manifest for every active silo.</summary>
     public static bool IsManifestStartingUp(IServiceProvider? services)
     {
         var manifests = services?.GetService<IClusterManifestProvider>();
-        return manifests is not null && manifests.Current.Silos.Count == 0;
+        if (manifests is null)
+        {
+            return false;
+        }
+
+        var manifest = manifests.Current;
+        if (manifest.Silos.Count == 0)
+        {
+            return true;
+        }
+
+        var membership = services?.GetService<IClusterMembershipService>();
+        if (membership is null)
+        {
+            return false;
+        }
+
+        foreach (var member in membership.CurrentSnapshot.Members.Values)
+        {
+            if (member.Status == SiloStatus.Active && !manifest.Silos.ContainsKey(member.SiloAddress))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

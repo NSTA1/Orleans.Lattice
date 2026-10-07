@@ -378,6 +378,65 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
         return true;
     }
 
+    /// <inheritdoc />
+    public Task<string[]> GetPendingCrossTreeHoldsForTestingAsync()
+    {
+        var holds = new List<string>(
+            state.State.PendingCrossTreeBarriers.Count + state.State.PendingSiblingBoundaries.Count);
+        holds.AddRange(state.State.PendingCrossTreeBarriers
+            .Order(StringComparer.Ordinal)
+            .Select(static barrier => $"barrier:{barrier}"));
+        holds.AddRange(state.State.PendingSiblingBoundaries
+            .OrderBy(static entry => entry.Key, StringComparer.Ordinal)
+            .Select(entry =>
+            {
+                var boundary = entry.Value;
+                var tails = string.Join(",", boundary.Tails);
+                var reseedRequested = state.State.SiblingReseedsRequested.Contains(entry.Key);
+                return $"sibling:{entry.Key};exportEpoch={boundary.ExportEpoch};physical={boundary.PhysicalTreeId};tails=[{tails}];reseedRequested={reseedRequested}";
+            }));
+        return Task.FromResult(holds.ToArray());
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RefreshStuckSiblingImportAsync(string sourceClusterId, string requestingTreeName)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(sourceClusterId);
+        ArgumentException.ThrowIfNullOrEmpty(requestingTreeName);
+
+        // Only the lower-named tree may refresh the higher-named side of a
+        // mutual hold. This deterministic choice prevents both coordinators
+        // from repeatedly reopening snapshots at the same time.
+        if (string.CompareOrdinal(requestingTreeName, TreeName) >= 0
+            || !state.State.InProgress
+            || state.State.Phase != LatticeBootstrapState.IncrementalHandoff
+            || !string.Equals(state.State.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+            || state.State.PendingSiblingBoundaries.Count == 0
+            || DateTime.UtcNow.Ticks - state.State.SiblingBoundariesSinceUtcTicks < SiblingBoundaryReseedAfter.Ticks)
+        {
+            return false;
+        }
+
+        var previousPhase = state.State.Phase;
+        state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.Phase = previousPhase;
+            throw;
+        }
+
+        await StartCoordinatorAsync().ConfigureAwait(true);
+
+        Logger.LogWarning(
+            "Tree '{TreeName}' is re-opening its snapshot from '{SourceClusterId}' to break an aged mutual sibling-boundary hold requested by '{RequestingTreeName}'",
+            TreeName, sourceClusterId, requestingTreeName);
+        return true;
+    }
+
     /// <summary>How long a sibling may fail to pass its boundary before this coordinator asks to re-seed it.</summary>
     internal static TimeSpan SiblingBoundaryReseedAfter { get; set; } = TimeSpan.FromMinutes(5);
 
@@ -453,20 +512,39 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
     /// replication is key-filtered) would otherwise pin the fence until an
     /// operator acts. Its import from an export opened after the capture passes
     /// the boundary. Honours <see cref="LatticeReplicationOptions.AutoBootstrapOnFallOffLog"/>
-    /// as a fall-off does; asks at most once per sibling per import.
+    /// as a fall-off does; starts an idle sibling's bootstrap once, or asks one
+    /// side of an aged mutual handoff to refresh its snapshot without starting a
+    /// competing bootstrap on an active coordinator.
     /// </summary>
-    private Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
+    private async Task RequestStuckSiblingReseedsAsync(string? sourceClusterId)
     {
         if (string.IsNullOrEmpty(sourceClusterId)
             || DateTime.UtcNow.Ticks - state.State.SiblingBoundariesSinceUtcTicks < SiblingBoundaryReseedAfter.Ticks)
         {
-            return Task.CompletedTask;
+            return;
         }
 
         foreach (var sibling in state.State.PendingSiblingBoundaries.Keys.ToList())
         {
-            if (!state.State.SiblingReseedsRequested.Add(sibling))
+            var coordinator = _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling);
+            BootstrapCoordinatorStatus status;
+            try
             {
+                status = await coordinator.GetStatusAsync(CancellationToken.None).ConfigureAwait(true);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogDebug(ex, "Reading the bootstrap status of sibling tree '{Sibling}' failed; its re-seed will be retried on a later tick", sibling);
+                continue;
+            }
+
+            if (status.SourceClusterId is null && state.State.SiblingReseedsRequested.Remove(sibling))
+            {
+                // The requested drain finished but did not pass this captured
+                // boundary. Back off before asking for another export, which
+                // must open after the boundary rather than merely repeat it.
+                state.State.SiblingBoundariesSinceUtcTicks = DateTime.UtcNow.Ticks;
+                await state.WriteStateAsync().ConfigureAwait(true);
                 continue;
             }
 
@@ -478,15 +556,53 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
                 continue;
             }
 
+            if (state.State.SiblingReseedsRequested.Contains(sibling))
+            {
+                continue;
+            }
+
+            // An active drain should normally finish on its own. If both
+            // imports have reached handoff and each is waiting for the other's
+            // captured epoch, let only the lower-named tree request one fresh
+            // snapshot from the higher-named sibling. This advances a boundary
+            // without dropping the strict epoch comparison or calling
+            // BootstrapAsync on a coordinator that is already active.
+            if (status.SourceClusterId is not null)
+            {
+                if (status.Phase != LatticeBootstrapState.IncrementalHandoff
+                    || !string.Equals(status.SourceClusterId, sourceClusterId, StringComparison.Ordinal)
+                    || string.CompareOrdinal(TreeName, sibling) >= 0
+                    || !state.State.SiblingReseedsRequested.Add(sibling))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (!await coordinator.RefreshStuckSiblingImportAsync(sourceClusterId, TreeName).ConfigureAwait(true))
+                    {
+                        state.State.SiblingReseedsRequested.Remove(sibling);
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    state.State.SiblingReseedsRequested.Remove(sibling);
+                    Logger.LogDebug(ex, "The request to refresh stuck sibling import '{Sibling}' failed; retried on a later tick", sibling);
+                }
+
+                continue;
+            }
+
+            if (!state.State.SiblingReseedsRequested.Add(sibling))
+            {
+                continue;
+            }
+
             try
             {
                 // Do not await a sibling coordinator here: it may be making the
                 // same request while its own timer turn is waiting on this one.
-                _ = ObserveSiblingReseedAsync(
-                    _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(sibling)
-                        .BootstrapAsync(sourceClusterId, CancellationToken.None),
-                    sibling,
-                    sourceClusterId);
+                _ = ObserveSiblingReseedAsync(coordinator.BootstrapAsync(sourceClusterId, CancellationToken.None), sibling, sourceClusterId);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -495,7 +611,6 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain
             }
         }
 
-        return Task.CompletedTask;
     }
 
     private async Task ObserveSiblingReseedAsync(Task request, string sibling, string sourceClusterId)
