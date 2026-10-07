@@ -20,17 +20,18 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// </para>
 /// <para>
 /// <b>Structural namespace confinement.</b> Every verb composes its target tree id
-/// through <see cref="LatticeTenantTrees.Compose"/> under the active tenant's
-/// prefix, so a caller can only ever address a tree it owns: the composed id's
+/// through <see cref="LatticeTenantTrees.Compose(TenantId, string)"/> under the active tenant's
+/// prefix, so a call can only address a tree under that assertion: the composed id's
 /// structural owner is always the active tenant, regardless of what the supplied
-/// local name contains. A tenant is therefore structurally unable to lifecycle or
-/// schema-modify a tree outside its own namespace - there is no parameter through
-/// which another tenant's tree could be named. This is the single narrowest seam
-/// at which confinement is enforced. Lifecycle verbs then delegate to the
+/// local name contains. The active tenant is a client-supplied assertion, not proof
+/// that the caller owns or may access that namespace; the access gate validates it.
+/// This is the single narrowest seam at which name confinement is enforced.
+/// Lifecycle verbs then delegate to the
 /// tree-admin facade, which applies its own fail-closed authorization on the
-/// composed id. Schema verbs delegate to the in-process schema admin, which does
-/// not authorize on its own, so callers must reach this facade through an
-/// authorized tenant-administration transport.
+/// composed id. Schema verbs authorize here over the whole composed tree:
+/// <see cref="LatticeOperation.SchemaAdmin"/> for set/clear and
+/// <see cref="LatticeOperation.Read"/> for get. A denied or key-filtered allow is
+/// refused before the ungated in-process schema admin is called.
 /// </para>
 /// <para>
 /// <b>Quota.</b> Tree creation is admitted against the active tenant's quota
@@ -137,8 +138,8 @@ public interface ILatticeTenantScopedTreeAdmin
     /// <summary>
     /// Sets or replaces the schema-enforcement policy on the active tenant's tree
     /// named <paramref name="name"/>, enforced immediately on subsequent writes. The
-    /// target id is tenant-composed here; authorization is expected at the transport
-    /// layer before this in-process schema admin call is reached.
+    /// caller must hold <see cref="LatticeOperation.SchemaAdmin"/> over the whole
+    /// composed tree before the in-process schema admin is called.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="policy">The policy to apply. Must not be <c>null</c>.</param>
@@ -146,34 +147,37 @@ public interface ILatticeTenantScopedTreeAdmin
     /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty, or a rule is invalid.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="policy"/> is <c>null</c>.</exception>
     /// <exception cref="TenantScopeRequiredException">No active tenant is in scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to manage the whole tree's schema.</exception>
     Task SetSchemaPolicyAsync(
         string name, LatticeSchemaPolicy policy, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Clears the schema-enforcement policy on the active tenant's tree named
     /// <paramref name="name"/>. Returns <c>true</c> when a policy was removed. The
-    /// target id is tenant-composed here; authorization is expected at the transport
-    /// layer before this in-process schema admin call is reached.
+    /// caller must hold <see cref="LatticeOperation.SchemaAdmin"/> over the whole
+    /// composed tree before the in-process schema admin is called.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns><c>true</c> when a policy was removed; otherwise <c>false</c>.</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
     /// <exception cref="TenantScopeRequiredException">No active tenant is in scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to manage the whole tree's schema.</exception>
     Task<bool> ClearSchemaPolicyAsync(
         string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Reads the schema-enforcement policy on the active tenant's tree named
-    /// <paramref name="name"/>, or <c>null</c> when none exists. The target id is
-    /// tenant-composed here; authorization is expected at the transport layer before
-    /// this in-process schema admin call is reached.
+    /// <paramref name="name"/>, or <c>null</c> when none exists. The caller must hold
+    /// <see cref="LatticeOperation.Read"/> over the whole composed tree before the
+    /// in-process schema admin is called.
     /// </summary>
     /// <param name="name">The tenant-local, unqualified tree name. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancels the read.</param>
     /// <returns>The enforcement policy, or <c>null</c> when none is set.</returns>
     /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
     /// <exception cref="TenantScopeRequiredException">No active tenant is in scope.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to read the whole tree's schema.</exception>
     Task<LatticeSchemaPolicy?> GetSchemaPolicyAsync(
         string name, CancellationToken cancellationToken = default);
 }

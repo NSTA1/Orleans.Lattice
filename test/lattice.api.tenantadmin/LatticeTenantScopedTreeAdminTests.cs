@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Api.TenantAdmin.Tests;
 /// ordering assumptions.
 /// </summary>
 [TestFixture]
-public sealed class LatticeTenantScopedTreeAdminTests
+public sealed partial class LatticeTenantScopedTreeAdminTests
 {
     private const string TenantValue = "acme";
 
