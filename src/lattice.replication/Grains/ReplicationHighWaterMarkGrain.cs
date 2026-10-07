@@ -200,15 +200,19 @@ internal sealed class ReplicationHighWaterMarkGrain(
     }
 
     /// <inheritdoc />
-    public async Task ResetAppliedIdentitiesAsync(CancellationToken cancellationToken)
+    public async Task ResetAppliedIdentitiesAsync(
+        CancellationToken cancellationToken,
+        bool preserveBootstrapFloor = false)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _applied.Clear();
 
         // The bootstrap drop floor vouches for the tree's contents, so it goes
-        // with them (issue #4549); a failure propagates, so the replacement does
-        // not happen with the floor still in force.
-        if (state.State.BootstrapFloor is not null)
+        // with them (issue #4549). A bootstrap shadow cutover is the exception:
+        // its destination contains the imported contents the floor vouches for.
+        // A failure propagates, so the replacement does not happen with a floor
+        // that should have been cleared still in force.
+        if (!preserveBootstrapFloor && state.State.BootstrapFloor is not null)
         {
             await ClearBootstrapFloorAsync(cancellationToken).ConfigureAwait(true);
         }

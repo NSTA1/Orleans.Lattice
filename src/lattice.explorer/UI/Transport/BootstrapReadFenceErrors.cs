@@ -3,7 +3,7 @@ using Orleans.Lattice;
 
 namespace Orleans.Lattice.Explorer.UI.Transport;
 
-/// <summary>Recognizes the fixed state-API fault used for reads refused during snapshot bootstrap.</summary>
+/// <summary>Recognizes the fixed state-API fault used for reads refused during a legacy in-place bootstrap.</summary>
 internal static class BootstrapReadFenceErrors
 {
     private const string BootstrapStatusDetail = "being bootstrapped from a snapshot";

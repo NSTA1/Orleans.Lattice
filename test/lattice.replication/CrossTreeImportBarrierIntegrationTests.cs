@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Tests;
 /// replicated cross-tree atomic write settles that tree's sub-saga from the
 /// export, in place of its terminal. The receiver's cross-tree barrier, which a
 /// sibling tree may already have delegated to, must hear of it as it would of
-/// the terminal, and the imported tree must stay read-fenced until the barrier
+/// the terminal, and the imported shadow must not be published until the barrier
 /// decides: otherwise the receiver serves the write split, the imported tree
 /// post-saga and its sibling pre-saga, permanently once the imported tree's
 /// terminal was trimmed at the source. Two real clusters: site A authors the
@@ -142,11 +142,10 @@ public partial class CrossTreeImportBarrierIntegrationTests
         return state;
     }
 
-    /// <summary>Reads <paramref name="key"/>, or reports the tree read-fenced.</summary>
     /// <summary>
     /// A window longer than two ticks of the coordinator's 2 s phase timer
     /// (<c>CoordinatorGrain.PhaseTimerPeriod</c>), each of which re-checks the
-    /// import's cross-tree hold.
+    /// import's cross-tree hold before publishing the shadow copy.
     /// </summary>
     private static readonly TimeSpan HeldWindow = TimeSpan.FromSeconds(5);
 
@@ -154,30 +153,37 @@ public partial class CrossTreeImportBarrierIntegrationTests
     private const int MinimumHeldSamples = 8;
 
     /// <summary>
-    /// Samples, every 250 ms for <paramref name="window"/>, whether a read of
-    /// <paramref name="tree"/> is fenced and whether its coordinator reports
-    /// the fence. Returns how many samples were taken and in how many the fence
-    /// was down by either measure.
+    /// Samples, every 250 ms for <paramref name="window"/>, whether reads of
+    /// <paramref name="tree"/> remain on the original view and are not fenced.
+    /// Returns the sample count and the number that observed a fence or another
+    /// view.
     /// </summary>
-    private async Task<(int Samples, int Lifted)> SampleFenceAsync(string tree, TimeSpan window)
+    private async Task<(int Samples, int Unexpected)> SampleOriginalViewAsync(
+        string tree,
+        string key,
+        byte[]? originalValue,
+        TimeSpan window)
     {
         var samples = 0;
-        var lifted = 0;
+        var unexpected = 0;
         var end = Environment.TickCount64 + (long)window.TotalMilliseconds;
         while (Environment.TickCount64 < end)
         {
-            var read = await ReadAsync(tree, "k");
+            var read = await ReadAsync(tree, key);
             var status = await Coordinator(tree).GetStatusAsync(CancellationToken.None);
             samples++;
-            if (!read.Fenced || !status.ReadFenced)
+            var isOriginal = originalValue is null
+                ? read.Value is null
+                : read.Value is not null && read.Value.AsSpan().SequenceEqual(originalValue);
+            if (read.Fenced || status.ReadFenced || !isOriginal)
             {
-                lifted++;
+                unexpected++;
             }
 
             await Task.Delay(250);
         }
 
-        return (samples, lifted);
+        return (samples, unexpected);
     }
 
     private async Task<(bool Fenced, byte[]? Value)> ReadAsync(string tree, string key)
@@ -219,7 +225,7 @@ public partial class CrossTreeImportBarrierIntegrationTests
     }
 
     [Test]
-    public async Task An_imported_cross_tree_participant_stays_read_fenced_until_its_sibling_terminal_arrives()
+    public async Task An_imported_cross_tree_participant_keeps_the_original_view_until_its_sibling_terminal_arrives()
     {
         const string treeA = "xtib-fenced-a";
         const string treeB = "xtib-fenced-b";
@@ -231,11 +237,9 @@ public partial class CrossTreeImportBarrierIntegrationTests
         var heldPhase = await AwaitPhaseAsync(treeA, LatticeBootstrapState.IncrementalHandoff, LatticeBootstrapState.LiveIncremental);
         var siblingWhileHeld = await ReadAsync(treeB, "k");
 
-        // The drain keeps the fence up, and every phase tick re-checks it
-        // (ReleaseCrossTreeHoldAsync) on the coordinator's 2 s phase timer. A
-        // single early sample would miss a tick that lifted it too soon, so the
-        // fence is sampled throughout a window spanning more than two ticks.
-        var (samples, liftedSamples) = await SampleFenceAsync(treeA, HeldWindow);
+        // The held shadow remains unpublished, and every phase tick re-checks
+        // the barrier. Sample for more than two ticks to catch an early cutover.
+        var (samples, unexpectedSamples) = await SampleOriginalViewAsync(treeA, "k", null, HeldWindow);
 
         await DeliverTreeBAsync(treeA, treeB, operationId);
         var released = await AwaitPhaseAsync(treeA, LatticeBootstrapState.LiveIncremental);
@@ -247,8 +251,8 @@ public partial class CrossTreeImportBarrierIntegrationTests
             Assert.That(heldPhase, Is.Not.EqualTo(LatticeBootstrapState.Failed));
             Assert.That(siblingWhileHeld, Is.EqualTo((false, (byte[]?)null)), "precondition: tree B is pre-saga");
             Assert.That(samples, Is.GreaterThanOrEqualTo(MinimumHeldSamples), "precondition: the window was sampled throughout");
-            Assert.That(liftedSamples, Is.Zero,
-                "tree A must not be served post-saga while tree B is pre-saga: it stays read-fenced, on every phase tick, until the barrier decides");
+            Assert.That(unexpectedSamples, Is.Zero,
+                "tree A must remain readable on its original pre-saga view until tree B's terminal decides the barrier");
             Assert.That(released, Is.EqualTo(LatticeBootstrapState.LiveIncremental), "the fence lifts once tree B's terminal decides the barrier");
             Assert.That(a, Is.EqualTo((false, (byte[]?)new byte[] { 1 })));
             Assert.That(b, Is.EqualTo((false, (byte[]?)new byte[] { 2 })));
@@ -420,11 +424,11 @@ public partial class CrossTreeImportBarrierIntegrationTests
     }
 
     [Test]
-    public async Task An_imported_tree_stays_read_fenced_while_any_barrier_indexed_under_it_is_undecided()
+    public async Task An_imported_tree_keeps_its_original_view_while_any_barrier_indexed_under_it_is_undecided()
     {
         // Issue #4684, fence condition 2 (the model's BarrierQuiet): a barrier
-        // that waits for tree A holds tree A's fence even when the import did not
-        // arrive at it.
+        // that waits for tree A prevents publication even when the import did
+        // not arrive at it.
         const string treeA = "xtib-quiet-a";
         const string treeB = "xtib-quiet-b";
         const string operationId = "xtib-quiet-op";
@@ -442,8 +446,10 @@ public partial class CrossTreeImportBarrierIntegrationTests
         Assert.Multiple(() =>
         {
             Assert.That(phase, Is.EqualTo(LatticeBootstrapState.IncrementalHandoff), "the bootstrap waits for the barrier");
-            Assert.That(a.Fenced, Is.True, "tree A is not served while a barrier waiting for it is undecided");
-            Assert.That(status.ReadFenced, Is.True);
+            Assert.That(a, Is.EqualTo((false, (byte[]?)null)),
+                "tree A remains readable on its original view while a barrier waiting for it is undecided");
+            Assert.That(status.ReadFenced, Is.False,
+                "a fresh shadow import does not fence the original tree");
         });
     }
 

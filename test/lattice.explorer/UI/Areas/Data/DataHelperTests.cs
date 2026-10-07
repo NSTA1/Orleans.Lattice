@@ -124,7 +124,7 @@ public sealed class DataHelperTests
                             "retry",
                             new RpcException(new Status(StatusCode.Unavailable, "The requested tree is being bootstrapped from a snapshot.")))),
                     "read this tree's keys"),
-                Is.EqualTo("This tree is bootstrapping from a peer; reads resume when it completes."));
+                Is.EqualTo("This tree is finishing a legacy in-place bootstrap; reads resume when it completes."));
             Assert.That(DataErrors.Describe(new InvalidOperationException("t/acme/x"), "read it"), Does.Not.Contain("t/acme"));
         });
     }

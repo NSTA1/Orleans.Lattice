@@ -42,7 +42,9 @@ internal sealed class ReplicationTreeAliasObserver(
         // without its dependency.
         await _grainFactory
             .GetGrain<IReplicationTreeFrontierGrain>(change.TreeId)
-            .OnContentsReplacingAsync(cancellationToken);
+            .OnContentsReplacingAsync(
+                cancellationToken,
+                LatticeBootstrapShadowCutoverContext.IsActive);
 
         var peers = _topology.CurrentPeers;
         if (peers.Count == 0)

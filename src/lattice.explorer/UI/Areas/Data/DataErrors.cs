@@ -59,7 +59,7 @@ internal static class DataErrors
         ArgumentException.ThrowIfNullOrEmpty(action);
         if (BootstrapReadFenceErrors.IsBootstrapReadFence(exception))
         {
-            return "This tree is bootstrapping from a peer; reads resume when it completes.";
+            return "This tree is finishing a legacy in-place bootstrap; reads resume when it completes.";
         }
 
         if (IsDenied(exception))

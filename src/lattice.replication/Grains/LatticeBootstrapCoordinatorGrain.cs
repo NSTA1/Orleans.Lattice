@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
@@ -376,6 +377,9 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var prevNextRedriveAt = state.State.NextRedriveAtUtcTicks;
         var prevPoisonSettleOrigin = state.State.PoisonSettleOriginClusterId;
         var prevPoisonSettleTxids = state.State.PoisonSettleTransactionIds;
+        var prevUseShadowCopy = state.State.UseShadowCopy;
+        var prevShadowCopyTreeId = state.State.ShadowCopyTreeId;
+        var prevShadowCopyCutoverComplete = state.State.ShadowCopyCutoverComplete;
 
         state.State.InProgress = true;
         state.State.Phase = LatticeBootstrapState.RequestingSnapshot;
@@ -393,6 +397,13 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         state.State.NextRedriveAtUtcTicks = 0;
         state.State.PoisonSettleOriginClusterId = "";
         state.State.PoisonSettleTransactionIds = new List<Guid>();
+        state.State.UseShadowCopy = !state.State.ReadFenceArmed;
+        state.State.ShadowCopyTreeId = null;
+        state.State.ShadowCopyCutoverComplete = false;
+        if (!state.State.ReadFenceArmed)
+        {
+            state.State.ImportApplied = false;
+        }
         try
         {
             await state.WriteStateAsync().ConfigureAwait(true);
@@ -411,6 +422,9 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             state.State.NextRedriveAtUtcTicks = prevNextRedriveAt;
             state.State.PoisonSettleOriginClusterId = prevPoisonSettleOrigin;
             state.State.PoisonSettleTransactionIds = prevPoisonSettleTxids;
+            state.State.UseShadowCopy = prevUseShadowCopy;
+            state.State.ShadowCopyTreeId = prevShadowCopyTreeId;
+            state.State.ShadowCopyCutoverComplete = prevShadowCopyCutoverComplete;
             throw;
         }
 
@@ -439,9 +453,26 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             await RedriveIfDueAsync().ConfigureAwait(true);
             return;
         }
+        if (state.State.Phase == LatticeBootstrapState.Failed
+            && state.State.InProgress
+            && state.State.UseShadowCopy
+            && state.State.ShadowCopyCutoverComplete)
+        {
+            await RedriveShadowCutoverIfDueAsync().ConfigureAwait(true);
+            return;
+        }
 
         try
         {
+            if (state.State.UseShadowCopy
+                && (state.State.Phase is LatticeBootstrapState.RequestingSnapshot
+                    or LatticeBootstrapState.ApplyingSnapshot
+                    or LatticeBootstrapState.IncrementalHandoff)
+                && !await EnsureShadowCopyReadyAsync().ConfigureAwait(true))
+            {
+                return;
+            }
+
             switch (state.State.Phase)
             {
                 case LatticeBootstrapState.RequestingSnapshot:
@@ -489,6 +520,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             var prevPhase = state.State.Phase;
             var prevInProgress = state.State.InProgress;
             var prevNextRedriveAt = state.State.NextRedriveAtUtcTicks;
+            var prevShadowCopyTreeId = state.State.ShadowCopyTreeId;
+            var prevShadowCopyCutoverComplete = state.State.ShadowCopyCutoverComplete;
 
             // Issue #4526. A drain that applied part of an import leaves the
             // tree read-fenced: lifting the fence would expose the partial
@@ -497,15 +530,34 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             // A fence armed before any entry was applied hides nothing and is
             // lifted; if that lift fails the fence is kept and re-driven too,
             // so no fence is ever left up without a coordinator to lift it.
+            var shadowCopyAuthoritative = state.State.UseShadowCopy
+                && await IsShadowCopyAuthoritativeAsync().ConfigureAwait(true);
+            if (state.State.UseShadowCopy && !shadowCopyAuthoritative && state.State.ShadowCopyTreeId is not null)
+            {
+                await _grainFactory.GetGrain<ITreeResizeGrain>(TreeName)
+                    .AbortBootstrapCopyAsync(state.State.OperationId)
+                    .ConfigureAwait(true);
+                await _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(TreeName)
+                    .ClearBootstrapFloorAsync(CancellationToken.None)
+                    .ConfigureAwait(true);
+                state.State.ShadowCopyTreeId = null;
+                state.State.ShadowCopyCutoverComplete = false;
+            }
+            else if (shadowCopyAuthoritative)
+            {
+                state.State.ShadowCopyCutoverComplete = true;
+            }
+
             var keepFence = state.State.ReadFenceArmed && state.State.ImportApplied;
             if (state.State.ReadFenceArmed && !keepFence)
             {
                 keepFence = !await TryLiftReadFenceAsync().ConfigureAwait(true);
             }
+            var retryShadowCutover = shadowCopyAuthoritative;
 
             state.State.Phase = LatticeBootstrapState.Failed;
-            state.State.InProgress = keepFence;
-            if (keepFence)
+            state.State.InProgress = keepFence || retryShadowCutover;
+            if (keepFence || retryShadowCutover)
             {
                 state.State.NextRedriveAtUtcTicks =
                     DateTime.UtcNow.Ticks + ComputeBackoff(state.State.RedriveAttempts + 1, RedriveInitialDelay, RedriveMaxDelay).Ticks;
@@ -524,6 +576,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 state.State.Phase = prevPhase;
                 state.State.InProgress = prevInProgress;
                 state.State.NextRedriveAtUtcTicks = prevNextRedriveAt;
+                state.State.ShadowCopyTreeId = prevShadowCopyTreeId;
+                state.State.ShadowCopyCutoverComplete = prevShadowCopyCutoverComplete;
                 persisted = false;
             }
 
@@ -547,11 +601,20 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                     "Bootstrap phase transition for tree '{TreeName}' from source '{SourceClusterId}': {PreviousPhase} -> Failed (LastAppliedHlc={LastAppliedHlc})",
                     TreeName, state.State.SourceClusterId, prevPhase, state.State.LastAppliedHlc);
 
-                if (keepFence)
+                if (keepFence || retryShadowCutover)
                 {
-                    Logger.LogWarning(
-                        "Bootstrap of tree '{TreeName}' from source '{SourceClusterId}' failed after applying part of the snapshot; the tree stays read-fenced (reads throw LatticeTreeBootstrappingException) and the bootstrap is re-driven automatically at {NextRedriveAtUtc:o}",
-                        TreeName, state.State.SourceClusterId, new DateTime(state.State.NextRedriveAtUtcTicks, DateTimeKind.Utc));
+                    if (keepFence)
+                    {
+                        Logger.LogWarning(
+                            "Bootstrap of tree '{TreeName}' from source '{SourceClusterId}' failed after applying part of the snapshot; the tree stays read-fenced (reads throw LatticeTreeBootstrappingException) and the bootstrap is re-driven automatically at {NextRedriveAtUtc:o}",
+                            TreeName, state.State.SourceClusterId, new DateTime(state.State.NextRedriveAtUtcTicks, DateTimeKind.Utc));
+                    }
+                    else
+                    {
+                        Logger.LogWarning(
+                            "Bootstrap of tree '{TreeName}' from source '{SourceClusterId}' published its shadow copy but failed to persist completion; the handoff is re-driven automatically at {NextRedriveAtUtc:o}",
+                            TreeName, state.State.SourceClusterId, new DateTime(state.State.NextRedriveAtUtcTicks, DateTimeKind.Utc));
+                    }
                 }
                 else
                 {
@@ -592,6 +655,91 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         Logger.LogWarning(
             "Re-driving bootstrap of read-fenced tree '{TreeName}' from source '{SourceClusterId}' (attempt {Attempt})",
             TreeName, state.State.SourceClusterId, state.State.RedriveAttempts);
+    }
+
+    private async Task RedriveShadowCutoverIfDueAsync()
+    {
+        if (DateTime.UtcNow.Ticks < state.State.NextRedriveAtUtcTicks)
+        {
+            return;
+        }
+
+        var prevAttempts = state.State.RedriveAttempts;
+        var prevPhase = state.State.Phase;
+        state.State.RedriveAttempts = prevAttempts + 1;
+        state.State.Phase = LatticeBootstrapState.IncrementalHandoff;
+        try
+        {
+            await state.WriteStateAsync().ConfigureAwait(true);
+        }
+        catch
+        {
+            state.State.RedriveAttempts = prevAttempts;
+            state.State.Phase = prevPhase;
+            throw;
+        }
+
+        Logger.LogWarning(
+            "Re-driving published shadow bootstrap handoff for tree '{TreeName}' from source '{SourceClusterId}' (attempt {Attempt})",
+            TreeName, state.State.SourceClusterId, state.State.RedriveAttempts);
+    }
+
+    private async Task<bool> EnsureShadowCopyReadyAsync()
+    {
+        var treeName = TreeName;
+        await EnsureTreeRegisteredAsync(treeName).ConfigureAwait(true);
+        var resize = _grainFactory.GetGrain<ITreeResizeGrain>(treeName);
+        var destination = state.State.ShadowCopyTreeId
+            ?? await resize.BeginBootstrapCopyAsync(state.State.OperationId).ConfigureAwait(true);
+
+        if (!string.Equals(state.State.ShadowCopyTreeId, destination, StringComparison.Ordinal))
+        {
+            var previous = state.State.ShadowCopyTreeId;
+            state.State.ShadowCopyTreeId = destination;
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                state.State.ShadowCopyTreeId = previous;
+                throw;
+            }
+        }
+
+        if (await resize.IsBootstrapCopyReadyAsync(state.State.OperationId).ConfigureAwait(true))
+        {
+            return true;
+        }
+
+        if (await IsShadowCopyAuthoritativeAsync().ConfigureAwait(true))
+        {
+            var previous = state.State.ShadowCopyCutoverComplete;
+            state.State.ShadowCopyCutoverComplete = true;
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                state.State.ShadowCopyCutoverComplete = previous;
+                throw;
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    private async Task<bool> IsShadowCopyAuthoritativeAsync()
+    {
+        if (state.State.ShadowCopyTreeId is not { } destination)
+        {
+            return false;
+        }
+
+        var current = await _grainFactory.GetLatticeRegistry().ResolveAsync(TreeName).ConfigureAwait(true);
+        return string.Equals(current, destination, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -896,11 +1044,9 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
 
-        // Issue #4526: no reader may observe the import part-way. Arm the read
-        // fence on every shard before anything is applied, and wait - without
-        // failing - while a migration or resize would move the tree off the
-        // shards it covers.
-        if (!await ArmReadFenceAsync().ConfigureAwait(true))
+        // Legacy in-place imports still require the #4526 read fence. New imports
+        // stage on a held resize copy, leaving the currently aliased tree readable.
+        if (!state.State.UseShadowCopy && !await ArmReadFenceAsync().ConfigureAwait(true))
         {
             return;
         }
@@ -994,8 +1140,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // finds the row it left. Kept when the reconcile below skips.
         RecordDrainedLineage(sourceClusterId, snapshot.OpenGeneration);
 
-        // Recorded before the first entry is applied: from here on the tree may
-        // hold a partial import, so a failure keeps the read fence up (#4526).
+        // Recorded before the first entry is applied so a legacy in-place import
+        // keeps its #4526 fence over a partial import.
         state.State.ImportApplied = true;
         state.State.EntriesApplied = 0;
         var pivotedToApplying = false;
@@ -1007,9 +1153,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         await state.WriteStateAsync().ConfigureAwait(true);
 
         // Issue #4549. Installed before the drain, and only once the import is
-        // recorded: from here on a failure keeps the tree fenced and re-drives
-        // the bootstrap until a drain completes, so the floor never outlives an
-        // abandoned import.
+        // recorded. A failed shadow import discards its copy and clears this
+        // provisional floor; a failed legacy import stays fenced and re-drives.
         var floorInstalled = await InstallBootstrapFloorAsync(treeName, sourceClusterId, snapshot, cancellationToken).ConfigureAwait(true);
 
         // Lazy-initialise the duration anchor on resume after a silo
@@ -1127,7 +1272,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 continue;
             }
 
-            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            var applied = await ApplyBootstrapRecordAsync(record, cancellationToken).ConfigureAwait(true);
             if (applied.Deferred)
             {
                 // Issue #4604. Deferred means "not applied by this delivery and
@@ -1410,7 +1555,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 OriginClusterId = sourceClusterId,
                 Mode = captured.MergeMode,
             };
-            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            var applied = await ApplyBootstrapRecordAsync(record, cancellationToken).ConfigureAwait(true);
             if (applied.Deferred)
             {
                 // Same rule as a deferred snapshot row (issue #4604): nothing else
@@ -1461,7 +1606,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var epoch = await hwm.SetBootstrapFloorAsync(lowWatermarks, frontier.Held, cancellationToken).ConfigureAwait(true);
 
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
         await registry.RaiseReplicationFloorEpochAsync(physicalTreeId, epoch).ConfigureAwait(true);
         var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
             ?? ShardMap.GetOrCreateDefaultShared(
@@ -1520,7 +1665,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var frontier = snapshot.OpenFrontier!;
         var localClusterId = _optionsMonitor.Get(treeName).ClusterId;
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
         var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
@@ -1608,7 +1753,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
                 OriginClusterId = sourceClusterId,
                 Mode = LatticeMergeMode.LwwRegister,
             };
-            var applied = await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+            var applied = await ApplyBootstrapRecordAsync(record, cancellationToken).ConfigureAwait(true);
             if (applied.Deferred)
             {
                 throw new LatticeBootstrapEntryDeferredException(treeName, key);
@@ -1665,7 +1810,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         CancellationToken cancellationToken)
     {
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
         var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
@@ -1705,6 +1850,27 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         {
             await registry.RegisterAsync(physicalTreeId).ConfigureAwait(true);
         }
+    }
+
+    private async Task<ApplyResult> ApplyBootstrapRecordAsync(WalRecord record, CancellationToken cancellationToken)
+    {
+        using var shadowRouteScope = state.State.UseShadowCopy
+            ? LatticeBootstrapShadowRouteContext.BeginScope(
+                TreeName,
+                state.State.ShadowCopyTreeId
+                    ?? throw new InvalidOperationException($"Bootstrap shadow copy for tree '{TreeName}' has not been recorded."))
+            : default;
+        return await _replicationApplier.ApplyAsync(record, cancellationToken).ConfigureAwait(true);
+    }
+
+    private async Task<string> ResolveBootstrapPhysicalTreeIdAsync(string treeName)
+    {
+        if (state.State.UseShadowCopy && state.State.ShadowCopyTreeId is { } shadowTreeId)
+        {
+            return shadowTreeId;
+        }
+
+        return await _grainFactory.GetLatticeRegistry().ResolveAsync(treeName).ConfigureAwait(true);
     }
 
     private async Task CapturePoisonedSagasBeforeDrainAsync(string treeName, string sourceClusterId)
@@ -1763,7 +1929,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         }
 
         var registry = _grainFactory.GetLatticeRegistry();
-        var physicalTreeId = await registry.ResolveAsync(treeName).ConfigureAwait(true);
+        var physicalTreeId = await ResolveBootstrapPhysicalTreeIdAsync(treeName).ConfigureAwait(true);
         var shardMap = await registry.GetShardMapAsync(treeName).ConfigureAwait(true)
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
@@ -1821,6 +1987,59 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         var treeName = TreeName;
         var sourceClusterId = state.State.SourceClusterId;
         var asOfHlc = state.State.SnapshotAsOfHlc;
+        var treeFrontier = _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName);
+
+        if (state.State.UseShadowCopy)
+        {
+            if (!state.State.ShadowCopyCutoverComplete)
+            {
+                await _grainFactory.GetGrain<ITreeResizeGrain>(treeName)
+                    .CompleteBootstrapCopyAsync(state.State.OperationId)
+                    .ConfigureAwait(true);
+            }
+
+            if (!await IsShadowCopyAuthoritativeAsync().ConfigureAwait(true))
+            {
+                throw new InvalidOperationException(
+                    $"Bootstrap shadow copy for tree '{treeName}' did not become authoritative.");
+            }
+
+            // Alias publication invalidates the receiver frontier. Rebind the
+            // drained source lineage and pin to the new epoch before serving the
+            // imported copy, otherwise every stamped incremental batch is refused.
+            var frontierEpoch = await treeFrontier
+                .ObserveAsync(sourceClusterId, null, CancellationToken.None)
+                .ConfigureAwait(true);
+            var previousFrontierEpoch = state.State.FrontierEpoch;
+            var hadDrainedEpoch = state.State.DrainedFrontierEpochBySource.TryGetValue(sourceClusterId, out var previousDrainedEpoch);
+            state.State.FrontierEpoch = frontierEpoch;
+            if (state.State.DrainedLineageBySource.ContainsKey(sourceClusterId))
+            {
+                state.State.DrainedFrontierEpochBySource[sourceClusterId] = frontierEpoch;
+            }
+
+            var previousCutoverComplete = state.State.ShadowCopyCutoverComplete;
+            state.State.ShadowCopyCutoverComplete = true;
+            try
+            {
+                await state.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                state.State.FrontierEpoch = previousFrontierEpoch;
+                if (hadDrainedEpoch)
+                {
+                    state.State.DrainedFrontierEpochBySource[sourceClusterId] = previousDrainedEpoch;
+                }
+                else
+                {
+                    state.State.DrainedFrontierEpochBySource.Remove(sourceClusterId);
+                }
+                state.State.ShadowCopyCutoverComplete = previousCutoverComplete;
+                throw;
+            }
+        }
+
         var hwm = _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>(treeName);
 
         // Seal the source cluster's own consumption coordinate into the
@@ -1935,8 +2154,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // sender ships from here on. Refused
         // when the contents were replaced during the drain; the replacement's
         // own forced gap brings a fresh bootstrap.
-        var pinned = await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
-            .PinAsync(
+        var pinned = await treeFrontier.PinAsync(
                 state.State.FrontierEpoch,
                 state.State.ExportedFrontier?.LowWatermarks ?? EmptyFrontierWatermarks,
                 state.State.ExportedFrontier?.Held ?? EmptyFrontierHeld,

@@ -252,7 +252,7 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find(".lt-empty h2").TextContent, Is.EqualTo("Tree is bootstrapping"));
-            Assert.That(cut.Find(".lt-empty").TextContent, Does.Contain("This tree is bootstrapping from a peer; reads resume when it completes."));
+            Assert.That(cut.Find(".lt-empty").TextContent, Does.Contain("This tree is finishing a legacy in-place bootstrap; reads resume when it completes."));
             Assert.That(cut.Markup, Does.Not.Contain("secret detail").And.Not.Contain("t/acme"));
         });
     }

@@ -9,22 +9,21 @@ using Orleans.TestingHost;
 namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
-/// Issue #4526 on a real in-process cluster: a snapshot bootstrap applies the
-/// export one row at a time, so a reader part-way through used to observe a
-/// committed atomic batch with some keys post-batch and others pre-batch. The
-/// bootstrap now arms a read fence on every shard of the tree before applying the
-/// first row and lifts it after the last; a failed drain keeps it up and is
-/// re-driven automatically, and only an explicit operator override lifts it early.
+/// Fresh bootstrap imports stage their rows on a held shadow copy: readers keep
+/// seeing the complete original tree while the import drains, and the existing
+/// resize alias cutover publishes the complete imported view. A failed drain
+/// discards the shadow copy and leaves the original tree readable. Persisted
+/// #4526 read fences remain supported for legacy in-place imports.
 /// <para>
-/// The scenario is an in-place re-bootstrap: the receiver tree already holds the
-/// pre-batch values of <c>k1</c> and <c>k2</c>, and the export carries the batch's
-/// committed values for both. A gated snapshot source pauses the drain after the
-/// first row so the test can read mid-import.
+/// The receiver tree already holds the pre-batch values of <c>k1</c> and
+/// <c>k2</c>, and the export carries the batch's committed values for both. A
+/// gated snapshot source pauses the drain after the first row so the test can
+/// read the still-authoritative original mid-import.
 /// </para>
 /// <para>
 /// A second scenario changes the source generation during an export while writes
-/// continue, proving that the unstable-export reconcile retry does not keep the
-/// receiver read-fenced after the import has drained.
+/// continue, proving that an unstable-export reconcile retry leaves the original
+/// receiver view readable.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -96,7 +95,7 @@ public sealed class BootstrapReadFenceIntegrationTests
     }
 
     [Test]
-    public async Task A_read_part_way_through_a_snapshot_drain_never_observes_a_partial_import()
+    public async Task A_read_part_way_through_a_shadow_drain_keeps_the_original_view_readable()
     {
         var treeName = $"fence-midread-{Guid.NewGuid():N}";
         await SeedPreBatchAsync(treeName);
@@ -105,18 +104,9 @@ public sealed class BootstrapReadFenceIntegrationTests
         await Coordinator.BootstrapAsync(treeName, SourceCluster);
         await GatedSnapshotSource.FirstRowAppliedAsync(TimeSpan.FromSeconds(30));
 
-        // k1's committed value is applied, k2's is not yet. Any read that
-        // returned values here would show the batch torn.
-        Exception? midRead = null;
-        Dictionary<string, byte[]>? torn = null;
-        try
-        {
-            torn = await Tree(treeName).GetManyAsync(["k1", "k2"]);
-        }
-        catch (Exception ex)
-        {
-            midRead = ex;
-        }
+        // k1's committed value is staged, k2's is not yet. Readers remain on
+        // the old physical tree, where both values are still the pre-batch view.
+        var midRead = await Tree(treeName).GetManyAsync(["k1", "k2"]);
 
         // Plain writes are not fenced: a write issued mid-drain completes.
         var write = Tree(treeName).SetAsync("k3", Bytes("written-mid-drain"));
@@ -129,11 +119,10 @@ public sealed class BootstrapReadFenceIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(torn, Is.Null,
-                $"a mid-drain read returned k1={Str(torn?.GetValueOrDefault("k1"))}, k2={Str(torn?.GetValueOrDefault("k2"))}: a partial import");
-            Assert.That(midRead, Is.InstanceOf<LatticeTreeBootstrappingException>());
+            Assert.That(Str(midRead.GetValueOrDefault("k1")), Is.EqualTo("pre"));
+            Assert.That(Str(midRead.GetValueOrDefault("k2")), Is.EqualTo("pre"));
             Assert.That(completed, Is.SameAs(write), "a plain write issued mid-drain must complete");
-            Assert.That(status.ReadFenced, Is.True, "the status reports the fence while the drain runs");
+            Assert.That(status.ReadFenced, Is.False, "a fresh shadow import does not fence reads from the original tree");
             Assert.That(status.EntriesApplied, Is.GreaterThanOrEqualTo(1));
             Assert.That(Str(after.GetValueOrDefault("k1")), Is.EqualTo("batch"));
             Assert.That(Str(after.GetValueOrDefault("k2")), Is.EqualTo("batch"));
@@ -142,7 +131,7 @@ public sealed class BootstrapReadFenceIntegrationTests
     }
 
     [Test]
-    public async Task An_unstable_export_under_continuous_writes_lifts_the_read_fence_when_the_drain_finishes()
+    public async Task An_unstable_export_under_continuous_writes_keeps_shadow_reads_unfenced()
     {
         var treeName = $"fence-unstable-{Guid.NewGuid():N}";
         await SeedPreBatchAsync(treeName);
@@ -150,7 +139,8 @@ public sealed class BootstrapReadFenceIntegrationTests
 
         await Coordinator.BootstrapAsync(treeName, SourceCluster);
         await GatedSnapshotSource.FirstRowAppliedAsync(TimeSpan.FromSeconds(30));
-        Assert.That((await Coordinator.GetStatusAsync(treeName)).ReadFenced, Is.True);
+        Assert.That((await Coordinator.GetStatusAsync(treeName)).ReadFenced, Is.False,
+            "a shadow import leaves reads on the complete original tree while its export is unstable");
 
         using var stopWriter = new CancellationTokenSource();
         var writes = 0;
@@ -190,7 +180,7 @@ public sealed class BootstrapReadFenceIntegrationTests
     }
 
     [Test]
-    public async Task A_drain_that_fails_part_way_keeps_the_fence_and_is_re_driven_until_it_completes()
+    public async Task A_failed_shadow_drain_stays_readable_and_is_re_driven_until_it_completes()
     {
         var treeName = $"fence-redrive-{Guid.NewGuid():N}";
         await SeedPreBatchAsync(treeName);
@@ -199,49 +189,52 @@ public sealed class BootstrapReadFenceIntegrationTests
         await Coordinator.BootstrapAsync(treeName, SourceCluster);
         await WaitForPhaseAsync(Coordinator, treeName, s => s.Phase == LatticeBootstrapState.Failed, TimeSpan.FromSeconds(30));
         var failed = await Coordinator.GetStatusAsync(treeName);
-        var readWhileFailed = Assert.ThrowsAsync<LatticeTreeBootstrappingException>(
-            () => Tree(treeName).GetAsync("k2"));
+        var readableWhileFailed = await Tree(treeName).GetManyAsync(["k1", "k2"]);
 
+        Assert.Multiple(() =>
+        {
+            Assert.That(failed.ReadFenced, Is.False, "the failed shadow import is discarded without fencing the original");
+            Assert.That(Str(readableWhileFailed.GetValueOrDefault("k1")), Is.EqualTo("pre"));
+            Assert.That(Str(readableWhileFailed.GetValueOrDefault("k2")), Is.EqualTo("pre"));
+        });
+
+        await Coordinator.BootstrapAsync(treeName, SourceCluster);
         await WaitForPhaseAsync(Coordinator, treeName, s => s.Phase == LatticeBootstrapState.LiveIncremental, TimeSpan.FromSeconds(60));
         var live = await Coordinator.GetStatusAsync(treeName);
         var after = await Tree(treeName).GetManyAsync(["k1", "k2"]);
 
         Assert.Multiple(() =>
         {
-            Assert.That(failed.ReadFenced, Is.True, "a failed drain that applied part of the import keeps the fence");
-            Assert.That(readWhileFailed, Is.Not.Null);
             Assert.That(live.ReadFenced, Is.False);
-            Assert.That(live.RedriveAttempts, Is.GreaterThanOrEqualTo(1), "the failed bootstrap was re-driven automatically");
             Assert.That(Str(after.GetValueOrDefault("k1")), Is.EqualTo("batch"));
             Assert.That(Str(after.GetValueOrDefault("k2")), Is.EqualTo("batch"));
         });
     }
 
     [Test]
-    public async Task An_operator_force_lift_exposes_the_partial_import_and_stops_the_re_drive()
+    public async Task A_failed_shadow_bootstrap_has_no_read_fence_for_an_operator_to_lift()
     {
         var treeName = $"fence-forcelift-{Guid.NewGuid():N}";
         await SeedPreBatchAsync(treeName);
         GatedSnapshotSource.Arm(treeName, failFirstAttempts: int.MaxValue, gate: false);
 
         await Coordinator.BootstrapAsync(treeName, SourceCluster);
-        await WaitForPhaseAsync(Coordinator, treeName, s => s.Phase == LatticeBootstrapState.Failed && s.ReadFenced, TimeSpan.FromSeconds(30));
+        await WaitForPhaseAsync(Coordinator, treeName, s => s.Phase == LatticeBootstrapState.Failed, TimeSpan.FromSeconds(30));
 
         var admin = Admin();
         var lifted = await admin.ForceLiftBootstrapReadFenceAsync(treeName, "integration test: exercising the override");
         var again = await admin.ForceLiftBootstrapReadFenceAsync(treeName, "integration test: second call is a no-op");
         var status = await Coordinator.GetStatusAsync(treeName);
-        var exposed = await Tree(treeName).GetManyAsync(["k1", "k2"]);
+        var readable = await Tree(treeName).GetManyAsync(["k1", "k2"]);
 
         Assert.Multiple(() =>
         {
-            Assert.That(lifted, Is.True);
+            Assert.That(lifted, Is.False, "a shadow-copy failure never armed the legacy read fence");
             Assert.That(again, Is.False);
             Assert.That(status.ReadFenced, Is.False);
-            Assert.That(status.SourceClusterId, Is.Null, "the automatic re-drive is stopped");
-            // The documented consequence of the override: the partial import is readable.
-            Assert.That(Str(exposed.GetValueOrDefault("k1")), Is.EqualTo("batch"));
-            Assert.That(Str(exposed.GetValueOrDefault("k2")), Is.EqualTo("pre"));
+            Assert.That(status.SourceClusterId, Is.Null, "the failed shadow copy is discarded");
+            Assert.That(Str(readable.GetValueOrDefault("k1")), Is.EqualTo("pre"));
+            Assert.That(Str(readable.GetValueOrDefault("k2")), Is.EqualTo("pre"));
         });
     }
 
@@ -253,7 +246,7 @@ public sealed class BootstrapReadFenceIntegrationTests
         // stream delivers the saga's terminal - the receiver records it
         // Committed and k1's leaf applies it with no bucket - and only then
         // does the drain apply k1's prepared row. Without the settle (#4510)
-        // the late-prepare refusal drops it, so after the fence lifts k2 reads
+        // the late-prepare refusal drops it, so after bootstrap cutover k2 reads
         // post-saga while k1 stays pre-saga, permanently.
         var treeName = $"fence-interleave-{Guid.NewGuid():N}";
         await SeedPreBatchAsync(treeName);
