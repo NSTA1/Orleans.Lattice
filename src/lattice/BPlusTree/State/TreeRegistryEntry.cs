@@ -320,4 +320,21 @@ internal sealed record TreeRegistryEntry
     /// never lowered.
     /// </summary>
     [Id(21)] public long ReplicationFloorEpoch { get; init; }
+
+    /// <summary>
+    /// Routing map of the logical id's own shards before a bare alias moves it
+    /// onto another copy. Restored when that alias is removed.
+    /// </summary>
+    [Id(22)] public ShardMap? UnaliasedShardMap { get; init; }
+
+    /// <summary>
+    /// Split allocation mark accompanying <see cref="UnaliasedShardMap"/>.
+    /// </summary>
+    [Id(23)] public int? UnaliasedNextShardIndex { get; init; }
+
+    /// <summary>
+    /// Ownership token of a bare alias publication, used by durable recovery to
+    /// distinguish its own committed row from a newer alias change.
+    /// </summary>
+    [Id(24)] public string? AliasRoutingOperationId { get; init; }
 }

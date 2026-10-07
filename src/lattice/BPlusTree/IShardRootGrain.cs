@@ -1766,6 +1766,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task ClearRetainedRedirectAsync(string operationId);
 
     /// <summary>
+    /// Clears only redirects owned by <paramref name="operationId"/>, leaving
+    /// another operation's redirects intact and restoring any displaced prior
+    /// redirect. Used to roll back a partially
+    /// installed alias fence, including shards the install never reached.
+    /// </summary>
+    Task ClearRetainedRedirectIfOwnedAsync(string operationId);
+
+    /// <summary>
     /// Releases a redirect installed by <see cref="MarkRetainedRedirectAsync"/>
     /// for traffic routed through <paramref name="logicalTreeId"/>, whichever
     /// operation installed it, because that logical tree now resolves to this
