@@ -230,6 +230,12 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// Sets a tree alias so that the logical <paramref name="treeId"/> maps to
     /// <paramref name="physicalTreeId"/>. All subsequent reads and writes routed
     /// through <see cref="ILattice"/> will target the physical tree instead.
+    /// The target's shard map is carried with the alias in one row write, after
+    /// fencing the previous copy's shards so every cached router re-resolves.
+    /// Direct physical access remains available. Durable intent and a reminder
+    /// recover interrupted moves without caller retry. A failure proven to
+    /// precede publication restores only its own fences; after publication,
+    /// recovery completes forward so accepted destination writes are retained.
     /// <para>
     /// Only a single level of indirection is allowed - <paramref name="physicalTreeId"/>
     /// must not itself be aliased. Throws <see cref="InvalidOperationException"/> if
@@ -247,7 +253,9 @@ internal interface ILatticeRegistry : IGrainWithStringKey
 
     /// <summary>
     /// Removes the alias for <paramref name="treeId"/>, restoring it to use
-    /// itself as the physical tree ID. No-op if no alias is set.
+    /// itself as the physical tree ID and restoring the map captured by a bare
+    /// alias set. Cached routers are fenced off the replaced copy. No-op if no
+    /// alias is set.
     /// </summary>
     Task RemoveAliasAsync(string treeId);
 

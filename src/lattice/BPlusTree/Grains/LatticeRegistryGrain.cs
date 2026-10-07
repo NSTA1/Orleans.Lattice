@@ -1,8 +1,11 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
 using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Views;
+using Orleans.Runtime;
+using Orleans.Timers;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -24,7 +27,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// declared.
 /// </para>
 /// </summary>
-internal sealed class LatticeRegistryGrain(
+internal sealed partial class LatticeRegistryGrain(
     IGrainFactory grainFactory,
     IOptionsMonitor<LatticeOptions> optionsMonitor,
     ITreePlacementResolver? placementResolver = null,
@@ -32,7 +35,12 @@ internal sealed class LatticeRegistryGrain(
     ILatticeAccessGate? accessGate = null,
     ILatticeMembershipContext? membership = null,
     ITreeOwnershipGuard? ownershipGuard = null,
-    TreeLineageObserverDispatcher? lineageObservers = null) : ILatticeRegistry
+    TreeLineageObserverDispatcher? lineageObservers = null,
+    IGrainContext? context = null,
+    IReminderRegistry? reminderRegistry = null,
+    [PersistentState("alias-routing", LatticeOptions.StorageProviderName)]
+    IPersistentState<Dictionary<string, AliasRoutingMoveState>>? aliasRoutingState = null,
+    ILogger<LatticeRegistryGrain>? logger = null) : ILatticeRegistry, IGrainBase, IRemindable
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -524,20 +532,52 @@ internal sealed class LatticeRegistryGrain(
         if (string.Equals(treeId, physicalTreeId, StringComparison.Ordinal))
             throw new ArgumentException("Physical tree ID must differ from the logical tree ID.", nameof(physicalTreeId));
 
+        await RecoverAliasMoveAsync(treeId);
         await EnsureAliasTargetAdmissibleAsync(treeId, physicalTreeId);
 
-        var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
-        // Writing the alias completes any cutover that carried the target's map
-        // onto this entry first, so its in-progress marker is cleared with it.
+        var existingRow = await GetEntryCoreAsync(treeId);
+        var existing = existingRow ?? new TreeRegistryEntry();
+        var current = existing.PhysicalTreeId ?? treeId;
+        var moving = !string.Equals(current, physicalTreeId, StringComparison.Ordinal);
+        var target = await GetEntryCoreAsync(physicalTreeId);
+        var targetMap = moving ? AliasCutoverShardMaps.EffectiveMap(target) : AliasCutoverShardMaps.EffectiveMap(existing);
+
+        var replacedMap = existing.AliasCutoverTarget is not null
+            ? target?.ReplacedShardMap ?? AliasCutoverShardMaps.EffectiveMap(existing)
+            : AliasCutoverShardMaps.EffectiveMap(existing);
+        if (moving)
+        {
+            await AliasCutoverShardMaps.StampReplacedCopyAsync(
+                this, treeId, current, replacedMap, existing.NextShardIndex);
+        }
+
         var updated = existing with
         {
             PhysicalTreeId = physicalTreeId,
+            ShardMap = moving ? new ShardMap
+            {
+                Slots = (int[])targetMap.Slots.Clone(),
+                Version = Math.Max(existing.ShardMap?.Version ?? 0L, targetMap.Version) + 1,
+            } : existing.ShardMap,
+            NextShardIndex = moving ? target?.NextShardIndex : existing.NextShardIndex,
+            UnaliasedShardMap = moving && existing.PhysicalTreeId is null
+                ? AliasCutoverShardMaps.EffectiveMap(existing) : existing.UnaliasedShardMap,
+            UnaliasedNextShardIndex = moving && existing.PhysicalTreeId is null
+                ? existing.NextShardIndex : existing.UnaliasedNextShardIndex,
             AliasCutoverTarget = null,
-            Lineage = string.Equals(existing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
-                ? existing.Lineage
-                : Guid.NewGuid(),
+            Lineage = moving ? Guid.NewGuid() : existing.Lineage,
         };
-        await UpdateAsync(treeId, updated);
+        if (moving)
+        {
+            await MoveAliasRoutingAsync(treeId, current, physicalTreeId, replacedMap, targetMap, existingRow, updated);
+            return;
+        }
+        else
+        {
+            await AliasCutoverShardMaps.ReleaseRedirectsAsync(
+                grainFactory, physicalTreeId, targetMap, treeId, CancellationToken.None);
+            await UpdateAsync(treeId, updated);
+        }
         await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
     }
 
@@ -547,6 +587,7 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(physicalTreeId);
         ArgumentNullException.ThrowIfNull(shardMap);
 
+        await RecoverAliasMoveAsync(treeId);
         // Every check runs before anything is written, so a refused swap leaves
         // both the alias and the map exactly as they were.
         var removing = string.Equals(treeId, physicalTreeId, StringComparison.Ordinal);
@@ -595,6 +636,7 @@ internal sealed class LatticeRegistryGrain(
             },
             NextShardIndex = nextShardIndex,
             AliasCutoverTarget = null,
+            AliasRoutingOperationId = null,
         };
         await UpdateAsync(treeId, updated);
         await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
@@ -665,6 +707,7 @@ internal sealed class LatticeRegistryGrain(
     public async Task RemoveAliasAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
+        await RecoverAliasMoveAsync(treeId);
         await grainFactory.GetGrain<ITreeDeletionGrain>(treeId).EnsureAliasWritableAsync();
 
         var existing = await GetEntryCoreAsync(treeId);
@@ -672,24 +715,26 @@ internal sealed class LatticeRegistryGrain(
 
         var oldPhysical = existing.PhysicalTreeId;
 
+        var restoredMap = existing.UnaliasedShardMap ?? AliasCutoverShardMaps.EffectiveMap(existing);
         // The logical tree now serves its own shards, not the alias target's: new
         // content lineage, as for an alias set to a different tree (#4537).
-        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null, Lineage = Guid.NewGuid() };
-        await UpdateAsync(treeId, updated);
-
-        // Removing an alias repoints the logical tree back to itself; the new
-        // effective physical id is the logical id. The early-return above
-        // guarantees an actual change (a stored alias always differs from the
-        // logical id), so this always fires when observers are present.
-        if (aliasObservers is { HasObservers: true })
+        var updated = existing with
         {
-            await aliasObservers.PublishAsync(new TreeAliasChange
+            PhysicalTreeId = null,
+            AliasCutoverTarget = null,
+            Lineage = Guid.NewGuid(),
+            ShardMap = new ShardMap
             {
-                TreeId = treeId,
-                OldPhysicalTreeId = oldPhysical,
-                NewPhysicalTreeId = treeId,
-            });
-        }
+                Slots = (int[])restoredMap.Slots.Clone(),
+                Version = Math.Max(existing.ShardMap?.Version ?? 0L, restoredMap.Version) + 1,
+            },
+            NextShardIndex = existing.UnaliasedShardMap is not null
+                ? existing.UnaliasedNextShardIndex : existing.NextShardIndex,
+            UnaliasedShardMap = null,
+            UnaliasedNextShardIndex = null,
+        };
+        await MoveAliasRoutingAsync(
+            treeId, oldPhysical, treeId, AliasCutoverShardMaps.EffectiveMap(existing), restoredMap, existing, updated);
     }
 
     public Task<string> ResolveAsync(string treeId)
