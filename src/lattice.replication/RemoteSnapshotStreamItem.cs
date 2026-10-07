@@ -52,6 +52,15 @@ public readonly record struct RemoteSnapshotStreamItem
     /// </summary>
     [Id(3)] internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; init; }
 
+    /// <summary>
+    /// On the trailer, the exported tree's own boundary captured at the export's
+    /// end (issue #4524): its physical write-ahead log and every partition's
+    /// next sequence. A receiver retires the saga decision rows the export
+    /// carried once its shipper has vouched acknowledged positions at or past
+    /// every tail; absent (a source that predates it), the rows are retained.
+    /// </summary>
+    [Id(4)] internal CrossTreeSiblingBoundary? ExportBoundary { get; init; }
+
     /// <summary>Whether this item is the trailer rather than an entry.</summary>
-    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null;
+    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null || ExportBoundary is not null;
 }

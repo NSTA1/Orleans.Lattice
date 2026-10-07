@@ -300,13 +300,20 @@ public sealed class LatticeRemoteSnapshotService : IRemoteSnapshotItemTransport
         var siblings = ExportGate is null || _replicationContext is null
             ? null
             : await ExportGate.CaptureSiblingBoundariesAsync(treeName, _replicationContext, cancellationToken).ConfigureAwait(false);
-        if (stream.CloseGeneration is not null || siblings is not null)
+        // The exported tree's own tails, likewise after the last entry: every
+        // prepare of a saga whose decision the export carried is below them, so
+        // the receiver may forget the imported decisions once past them (#4524).
+        var exportBoundary = ExportGate is null
+            ? null
+            : await ExportGate.CaptureExportBoundaryAsync(treeName, cancellationToken).ConfigureAwait(false);
+        if (stream.CloseGeneration is not null || siblings is not null || exportBoundary is not null)
         {
             yield return new RemoteSnapshotStreamItem
             {
                 CloseGeneration = stream.CloseGeneration,
                 SourceFrontier = stream.SourceFrontier,
                 SiblingBoundaries = siblings,
+                ExportBoundary = exportBoundary,
             };
         }
     }

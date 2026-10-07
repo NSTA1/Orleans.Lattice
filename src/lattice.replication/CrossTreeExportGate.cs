@@ -55,26 +55,54 @@ internal sealed class CrossTreeExportGate(IServiceProvider services)
                 continue;
             }
 
-            // The epoch first: an import of the sibling numbered above it opened
-            // after this capture.
-            var epoch = await grainFactory.GetGrain<IReplicationExportEpochGrain>(sibling).GetAsync().ConfigureAwait(false);
-            var physical = (await registry.GetEntryAsync(sibling).ConfigureAwait(false))?.PhysicalTreeId ?? sibling;
-            var partitions = Math.Max(1, options.Get(sibling).ReplogPartitions);
-            var tails = new Task<long>[partitions];
-            for (var p = 0; p < partitions; p++)
-            {
-                tails[p] = grainFactory.GetGrain<IWalShardGrain>($"{physical}/{p}").GetNextSequenceAsync(cancellationToken).AsTask();
-            }
-
-            builder[sibling] = new CrossTreeSiblingBoundary
-            {
-                PhysicalTreeId = physical,
-                Tails = [.. await Task.WhenAll(tails).ConfigureAwait(false)],
-                ExportEpoch = epoch,
-            };
+            builder[sibling] = await CaptureBoundaryAsync(grainFactory, registry, options, sibling, cancellationToken).ConfigureAwait(false);
         }
 
         return builder.ToImmutable();
+    }
+
+    /// <summary>
+    /// Captures the exported tree's own boundary at the end of an export (issue
+    /// #4524): its physical write-ahead log and every partition's next sequence.
+    /// Every prepare of a saga whose decision the export carried was appended
+    /// before that decision, so it lies below these tails; once the receiver's
+    /// shipper has vouched acknowledged positions at or past every tail, no
+    /// pre-cut prepare can still arrive and the imported decision rows may be
+    /// forgotten.
+    /// </summary>
+    public async Task<CrossTreeSiblingBoundary> CaptureExportBoundaryAsync(string treeName, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeName);
+        var grainFactory = services.GetRequiredService<IGrainFactory>();
+        var options = services.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        return await CaptureBoundaryAsync(grainFactory, grainFactory.GetLatticeRegistry(), options, treeName, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static async Task<CrossTreeSiblingBoundary> CaptureBoundaryAsync(
+        IGrainFactory grainFactory,
+        ILatticeRegistry registry,
+        IOptionsMonitor<LatticeReplicationOptions> options,
+        string tree,
+        CancellationToken cancellationToken)
+    {
+        // The epoch first: an import of the tree numbered above it opened
+        // after this capture.
+        var epoch = await grainFactory.GetGrain<IReplicationExportEpochGrain>(tree).GetAsync().ConfigureAwait(false);
+        var physical = (await registry.GetEntryAsync(tree).ConfigureAwait(false))?.PhysicalTreeId ?? tree;
+        var partitions = Math.Max(1, options.Get(tree).ReplogPartitions);
+        var tails = new Task<long>[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            tails[p] = grainFactory.GetGrain<IWalShardGrain>($"{physical}/{p}").GetNextSequenceAsync(cancellationToken).AsTask();
+        }
+
+        return new CrossTreeSiblingBoundary
+        {
+            PhysicalTreeId = physical,
+            Tails = [.. await Task.WhenAll(tails).ConfigureAwait(false)],
+            ExportEpoch = epoch,
+        };
     }
 
     /// <summary>

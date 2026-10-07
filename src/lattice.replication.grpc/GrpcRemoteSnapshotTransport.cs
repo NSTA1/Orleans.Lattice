@@ -115,7 +115,7 @@ internal sealed class GrpcRemoteSnapshotTransport : IRemoteSnapshotItemTransport
             .WithCancellation(cancellationToken)
             .ConfigureAwait(false))
         {
-            if (item.CloseGeneration is null)
+            if (!item.IsTrailer)
             {
                 yield return item.Entry;
             }

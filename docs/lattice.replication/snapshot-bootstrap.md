@@ -1136,14 +1136,40 @@ source still stores a decision for. A decision row has no key or
 value; it carries the transaction id and `SettledDecision` (`true` for
 a commit). An aged-out row is resolved to its recorded verdict first,
 whether or not it has a resident bucket. The drain records each
-outcome in the receiver's transaction registry and does not forget
-it. Re-shipping a long retained tail can outlast the receiver's
+outcome in the receiver's transaction registry and does not let it age
+out. Re-shipping a long retained tail can outlast the receiver's
 decision retention, and a prepare arriving after the row was purged
-would strand again. The receiver cannot yet observe the stream passing
-the export's cut, which is what would make retiring the row safe, so
-it retains one registry row per saga the source stored at the export
-([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524) tracks
-retiring them).
+would strand again.
+
+**Retiring the imported decision rows.** The rows are kept only until
+the stream from the source has passed the export's cut
+([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524)):
+
+- **The export carries its cut.** After its last entry the export
+  captures the tree's per-partition WAL tails and sends them on its
+  trailer. Every prepare the export could have left behind is below
+  them.
+- **The drain registers its rows.** Once the drain completes, the
+  receiver records the txids it imported, keyed by the source cluster,
+  with that boundary. A later import from the same source replaces them.
+- **The rows retire once the stream passes the cut.** A per-tree grain
+  checks every minute. It forgets the rows only once the shipper from
+  that source vouches acknowledged positions on the captured log at or
+  past every tail: the positions behind the watermark the cross-tree
+  fence reads (see
+  [Cross-tree decision purge hold](replication-drivers.md#cross-tree-decision-purge-hold)).
+  An import resets them, so only the post-import stream counts, and a
+  position passes a tail only once every earlier record from that
+  partition is acknowledged. No pre-cut prepare is then left to arrive.
+- **An older source is retained.** A sender that predates the boundary
+  sends none, and its rows are kept, as they were before. A source whose
+  log held nothing at the cut has nothing to re-ship, so its rows retire
+  at once.
+
+A forgotten row ages out as the registry's other decisions do. The
+check covers only the rows the import recorded, so a receiver-local
+decision for the same saga, which cannot exist for a saga authored at
+the source, is not tracked separately.
 
 The receiver then settles a replicated prepare against any decision
 its registry already holds, instead of staging it (the read uses the
