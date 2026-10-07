@@ -56,4 +56,43 @@ public sealed partial class SchemaRemediationPanelTests
             Assert.That(cut.Markup, Does.Not.Contain("still fails"));
         });
     }
+
+    [Test]
+    public void A_status_read_overtaken_by_a_new_operation_does_not_repaint_the_old_report()
+    {
+        UseEstate();
+        Schema.Status["orders"] = LatticeSchemaRemediationReport.Aborted(17, "order/42", "still fails", Array.Empty<byte>(), "op-0");
+        var operation = new TaskCompletionSource<LatticeSchemaRemediationReport>();
+        Schema.OperationGate = operation;
+        var cut = Open();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-abort").TextContent, Does.Contain("still fails")));
+
+        var staleRead = new TaskCompletionSource();
+        Schema.StatusGate = staleRead;
+        Button(cut, "Refresh status").Click();
+        cut.WaitUntil(() => Assert.That(Schema.StatusGate, Is.Null));
+
+        cut.FindAll(".lt-schema-builder select")[0].Change(nameof(SchemaTransformStepKind.Rename));
+        cut.FindAll(".lt-schema-builder input")[0].Input("currency");
+        cut.FindAll(".lt-schema-builder input")[1].Input("currencyCode");
+        Button(cut, "Add step").Click();
+        Button(cut, "Review and start...").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[role=alertdialog]"), Has.Count.EqualTo(1)));
+        cut.Find("[role=alertdialog] input").Input("orders");
+        cut.Find("[role=alertdialog] form").Submit();
+        cut.WaitUntil(() => Assert.That(Schema.CountOf("StartRemediation"), Is.EqualTo(1)));
+
+        operation.SetResult(LatticeSchemaRemediationReport.Completed(1234, "physical-orders-shadow", "op-1"));
+        cut.WaitUntil(() => Assert.That(Schema.OperationStatuses["op-1"].IsTerminal, Is.True));
+        Time.Advance(SchemaOperationStatus.PollInterval);
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("1,234")));
+
+        staleRead.SetResult();
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.FindAll(".lt-schema-abort"), Is.Empty);
+            Assert.That(cut.Find(".lt-schema-operation dl.lt-dl").TextContent, Does.Contain("1,234"));
+            Assert.That(cut.Markup, Does.Not.Contain("still fails"));
+        });
+    }
 }

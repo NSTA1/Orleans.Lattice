@@ -142,7 +142,7 @@ This is the **v9.x** changelog. Earlier release lines are archived: v8.x in [`CH
 
 ### Fixed
 
-- **Explorer - Schema remediation status follows the current operation.** Starting a new remediation clears prior failure diagnostics; terminal counts agree with values inspected, and member suggestions reset with their draft. Saved structured rules that can be reconstructed as cards now state their actual constraint. ([#4771](https://github.com/NSTA1/Orleans.Lattice/issues/4771)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Schema remediation status follows the current operation.** Starting a new remediation clears prior failure diagnostics, and a status read still in flight from the earlier operation can neither repaint its report nor block the new operation's final read; terminal counts agree with values inspected, and member suggestions reset with their draft. Saved structured rules that can be reconstructed as cards now state their actual constraint. ([#4771](https://github.com/NSTA1/Orleans.Lattice/issues/4771)) (`Orleans.Lattice.Explorer.UI`)
 
 - **Replication - A bootstrap's imported saga decisions are retired once the stream passes the export.** Every snapshot bootstrap recorded the export's saga decision rows on the receiver and never forgot them, so they accumulated over repeated bootstraps. The export now carries its per-partition WAL tails on its trailer, and the receiver forgets those rows once the source's shipper has acknowledged past every tail. Rows from a sender that predates the change are kept as before. ([#4524](https://github.com/NSTA1/Orleans.Lattice/issues/4524)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Replication.Grpc`)
 
