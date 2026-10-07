@@ -692,6 +692,18 @@ internal interface ITxRegistryGrain : IGrainWithStringKey
     Task<Dictionary<Guid, TxStatus>> GetCaptureGateStatusManyAsync(Guid token, IReadOnlyList<Guid> txids);
 
     /// <summary>
+    /// Returns a defensive copy of the local decision snapshot (D0) captured by
+    /// the live gate under <paramref name="token"/>. Unlike a reader snapshot,
+    /// this preserves recorded expired decisions and never resolves delegated
+    /// coordinators. An absent transaction resolves as InFlight.
+    /// Throws <see cref="TxDecisionGateRefusedException"/> when the gate is lost.
+    /// </summary>
+    /// <param name="token">The capture's gate token.</param>
+    /// <returns>The local decisions captured at gate acquisition.</returns>
+    [AlwaysInterleave]
+    Task<Dictionary<Guid, TxStatus>> GetCaptureGateSnapshotAsync(Guid token);
+
+    /// <summary>
     /// The transactions the capture under <paramref name="token"/> resolved through
     /// <see cref="GetCaptureGateStatusManyAsync"/> as <see cref="TxStatus.InFlight"/>:
     /// the sagas pending in the capture that it held pre-saga. An incremental backup

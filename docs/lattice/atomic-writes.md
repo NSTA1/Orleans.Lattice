@@ -841,6 +841,28 @@ view, so it **fails closed only when its result depends on the registry**:
   `LatticeTransactionOutcomeUnavailableException` rather than return a
   result that could be torn (some keys post-saga, some pre-saga).
 
+When saga commits repeatedly invalidate the optimistic `GetManyAsync` attempts,
+the read acquires the same local decision gate used by snapshot capture across
+the legacy registry and every registry shard in the durable high-water mark. It
+reads under the gate's immutable D0 decisions, then validates the shard map and
+releases every hold before accepting the result. A copied registry snapshot
+alone is insufficient: committed prepares drain irreversibly into ordinary leaf
+entries. The gate prevents new local decisions and delegated-verdict caching;
+terminals and late-prepare settlement follow durable local decisions, so existing
+committed sagas may drain without crossing D0.
+
+The fallback has a 30-second deadline including acquisition and certification,
+and never renews its 30-second per-registry leases. Prepares and ordinary writes
+remain admitted; saga decisions are temporarily refused and retried by their
+existing writer retry policy. Cleanup releases holds on success, failure and
+cancellation; partial acquisition releases every attempted registry. If a caller
+abandons a stalled grain call, cleanup follows its completion and the leases
+lapse independently. A lost, expired or reactivated hold, an uncovered registry
+shard, or a topology change fails closed rather than certifying a torn read.
+This removes starvation caused solely by sustained saga commits, not failures
+caused by unavailable storage/transport, unbounded RPC latency or continued
+topology/registry-coverage churn. The counts retain their existing retry policy.
+
 The streaming `KeysAsync` / `EntriesAsync` scans instead pin the one
 snapshot they capture at scan start for every page, and are not re-run
 under a fresh one. A streaming scan whose starting snapshot cannot be

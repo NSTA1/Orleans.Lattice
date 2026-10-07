@@ -155,6 +155,20 @@ internal sealed partial class TxRegistryGrain
     }
 
     /// <inheritdoc />
+    public Task<Dictionary<Guid, TxStatus>> GetCaptureGateSnapshotAsync(Guid token)
+    {
+        if (_captureHolds is null
+            || !_captureHolds.TryGetValue(token, out var hold)
+            || TimeProvider.GetUtcNow() > hold.ExpiresAt
+            || hold.Decisions is not { } decisions)
+        {
+            throw GateLapsed();
+        }
+
+        return Task.FromResult(new Dictionary<Guid, TxStatus>(decisions));
+    }
+
+    /// <inheritdoc />
     public Task<IReadOnlyList<Guid>> GetCaptureGateUndecidedAsync(Guid token)
     {
         var now = TimeProvider.GetUtcNow();

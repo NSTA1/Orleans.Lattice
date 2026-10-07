@@ -1472,7 +1472,7 @@ internal sealed partial class LatticeGrain(
                 cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
-                    var many = await GetManyAsyncCore(keys, stageTagTree);
+                    var many = await GetManyAsyncCore(keys, stageTagTree, cancellationToken);
                     // Read-path value-decoder boundary: strip the per-value
                     // envelope from each returned value. Zero-cost when inactive
                     // (cached bool) - the dictionary is returned verbatim on the
@@ -1517,7 +1517,9 @@ internal sealed partial class LatticeGrain(
     }
 
     [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder<>))]
-    private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(List<string> keys, KeyValuePair<string, object?> stageTagTree)
+    private async ValueTask<Dictionary<string, byte[]>> GetManyAsyncCore(
+        List<string> keys, KeyValuePair<string, object?> stageTagTree,
+        CancellationToken cancellationToken, Dictionary<Guid, TxStatus>? gatedSnapshot = null)
     {
         string physicalTreeId;
         ShardMap shardMap;
@@ -1576,10 +1578,11 @@ internal sealed partial class LatticeGrain(
         // (IsMigrated=true, no shadow marker) for some keys while other
         // keys show the post-saga value within a single observed map
         // version.
-        var maxRetries = Math.Max(1, Options.MaxScanRetries);
+        var maxRetries = gatedSnapshot is null ? Math.Max(1, Options.MaxScanRetries) : 1;
         LatticeTransactionOutcomeUnavailableException? unavailableCause = null;
         for (int attempt = 0; attempt < maxRetries; attempt++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             unavailableCause = null;
             if (attempt > 0)
             {
@@ -1711,7 +1714,9 @@ internal sealed partial class LatticeGrain(
                 {
                     if (pass == 0)
                     {
-                        snap1Pair = await FetchRegistrySnapshotAsync();
+                        snap1Pair = gatedSnapshot is null
+                            ? await FetchRegistrySnapshotAsync()
+                            : new RegistrySnapshotPair(gatedSnapshot, 0);
                         strictPass = !snap1Pair.Available;
                     }
 
@@ -1820,7 +1825,9 @@ internal sealed partial class LatticeGrain(
                         // A strict pass that completed resolved no prepared key;
                         // under a snapshot that is not observable, so the rule
                         // is fed the conservative answer.
-                        var verdict = strictPass
+                        var verdict = gatedSnapshot is not null
+                            ? ReaderStabilityVerdict.Stable
+                            : strictPass
                             ? ReaderStabilityVerdict.Unverifiable
                             : await ClassifySnap2Async(snap1Pair.Snap, snap1Pair.Revision);
                         if (ReaderStabilityGate.Decide(verdict, resolvedPreparedKey: !strictPass)
@@ -1865,10 +1872,11 @@ internal sealed partial class LatticeGrain(
         }
 
         if (unavailableCause is not null) throw OutcomeUnavailableAfterRetries(unavailableCause);
-        throw new InvalidOperationException(
-            $"GetManyAsync exceeded {Options.MaxScanRetries} retries while the TxRegistry " +
-            "kept committing sagas faster than the fan-out could complete. Increase " +
-            "LatticeOptions.MaxScanRetries or reduce concurrent saga rate.");
+        if (gatedSnapshot is not null)
+            throw new LatticeTransactionOutcomeUnavailableException(
+                $"GetManyAsync for tree '{TreeId}' crossed a shard-map change during its decision-gated read.");
+
+        return await GetManyDecisionGatedAsync(keys, stageTagTree, cancellationToken);
 
 #if LATTICE_DIAG
         static string DescribeBuckets(ShardFanoutBuckets<string> buckets)

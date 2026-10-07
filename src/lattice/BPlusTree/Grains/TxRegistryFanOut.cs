@@ -369,16 +369,56 @@ internal static class TxRegistryFanOut
         IGrainFactory grainFactory, string treeId, Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
-        var (_, covered) = await FanOutAsync(
-            grainFactory,
-            treeId,
-            TxRegistryHighWaterCache.Get(grainFactory, treeId),
-            async registry =>
+        var attempted = new List<ITxRegistryGrain>();
+        try
+        {
+            var (_, covered) = await FanOutAsync(
+                grainFactory,
+                treeId,
+                TxRegistryHighWaterCache.Get(grainFactory, treeId),
+                async registry =>
+                {
+                    attempted.Add(registry);
+                    await registry.AcquireCaptureGateAsync(token, mode, lease);
+                    return true;
+                });
+            return covered;
+        }
+        catch (Exception acquisitionFailure)
+        {
+            // WhenAll has observed every acquisition, including a partial
+            // failure. Release every attempted key, not just a returned mark.
+            try
             {
-                await registry.AcquireCaptureGateAsync(token, mode, lease);
-                return true;
-            });
-        return covered;
+                await Task.WhenAll(attempted.Select(registry => registry.ReleaseCaptureGateAsync(token)));
+            }
+            catch (Exception cleanupFailure)
+            {
+                throw new AggregateException("Decision-gate acquisition and partial-hold cleanup both failed.",
+                    acquisitionFailure, cleanupFailure);
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Returns the union of the local D0 snapshots under a live capture gate.
+    /// A newly discovered registry key without the hold fails closed.
+    /// </summary>
+    public static async Task<Dictionary<Guid, TxStatus>> GetCaptureGateSnapshotAsync(
+        IGrainFactory grainFactory, string treeId, Guid token)
+    {
+        ArgumentNullException.ThrowIfNull(grainFactory);
+        var (parts, _) = await FanOutAsync(
+            grainFactory, treeId, TxRegistryHighWaterCache.Get(grainFactory, treeId),
+            registry => registry.GetCaptureGateSnapshotAsync(token));
+        var merged = new Dictionary<Guid, TxStatus>();
+        foreach (var part in parts)
+        {
+            foreach (var (txid, status) in part)
+                merged[txid] = status;
+        }
+        return merged;
     }
 
     /// <summary>
