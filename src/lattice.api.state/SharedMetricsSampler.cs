@@ -43,8 +43,8 @@ internal sealed class SharedMetricsSampler(
     // visibility, never coalescing subscribers with different read access onto a
     // single loop (issue #971). Constructed exactly as LatticeStateQuery does:
     // when no real access gate is registered (or the host opted out) it reports
-    // Enabled == false and resolves no subject, so signatures stay identity-free
-    // and coalescing behaves byte-for-byte as before, at zero cost.
+    // Enabled == false and resolves no subject. Active-tenant isolation remains
+    // independent of auth-backed visibility.
     private readonly LatticeStateVisibilityFilter _visibility = new(
         services ?? throw new ArgumentNullException(nameof(services)),
         (apiOptions ?? throw new ArgumentNullException(nameof(apiOptions))).Value);
@@ -96,19 +96,15 @@ internal sealed class SharedMetricsSampler(
             interval = TimeSpan.FromSeconds(1);
         }
 
-        // Resolve the caller subject so the shared loop is keyed by visibility.
-        // The loop captures the first subscriber's ambient credential and samples
-        // the per-tree map filtered to that identity, then fans the SAME map to
-        // every subscriber on the signature; keying the signature by the resolved
-        // subject guarantees every co-attached subscriber has identical read
-        // access, so a lower-privilege subscriber can never receive metrics for a
-        // tree it cannot read. When visibility is disabled (no auth gate, or the
-        // host opted out) the subject is null and the signature is identity-free,
-        // so coalescing is unchanged and costs nothing.
+        // Capture the tenant before subject resolution can yield. Read scope is
+        // subject x active tenant, even when auth-backed visibility is disabled.
+        // The loop retains the first subscriber's credential context, so only
+        // subscribers with the same subject and tenant may share its map.
+        var tenant = LatticeActiveTenantContext.Current;
         var subject = await _visibility.ResolveSubjectAsync(cancellationToken).ConfigureAwait(false);
 
-        var signature = BuildSignature(request, interval, subject);
-        var subscriber = Attach(signature, request, interval, out var loop);
+        var signature = BuildSignature(request, interval, subject, tenant);
+        var subscriber = Attach(signature, request, interval, tenant, out var loop);
         try
         {
             var reader = subscriber.Channel.Reader;
@@ -130,6 +126,7 @@ internal sealed class SharedMetricsSampler(
         string signature,
         TreeMetricsRequest request,
         TimeSpan interval,
+        TenantId? tenant,
         out SamplerLoop loop)
     {
         // A capacity-1, drop-oldest channel keeps a slow subscriber from
@@ -148,7 +145,7 @@ internal sealed class SharedMetricsSampler(
         {
             if (!_loops.TryGetValue(signature, out loop!))
             {
-                var createdLoop = new SamplerLoop(request, interval);
+                var createdLoop = new SamplerLoop(request, interval, tenant);
                 loop = createdLoop;
                 _loops[signature] = createdLoop;
                 createdLoop.Task = Task.Run(() => RunLoopAsync(createdLoop));
@@ -179,6 +176,9 @@ internal sealed class SharedMetricsSampler(
 
     private async Task RunLoopAsync(SamplerLoop loop)
     {
+        // One scope per loop, not per tick: execution and identity use the same
+        // tenant snapshot regardless of subsequent caller context changes.
+        using var tenantScope = LatticeActiveTenantContext.With(loop.Tenant);
         var token = loop.Cancellation.Token;
         try
         {
@@ -486,7 +486,8 @@ internal sealed class SharedMetricsSampler(
         return rollups;
     }
 
-    private static string BuildSignature(TreeMetricsRequest request, TimeSpan interval, LatticeSubject? subject)
+    private static string BuildSignature(
+        TreeMetricsRequest request, TimeSpan interval, LatticeSubject? subject, TenantId? tenant)
     {
         string ids;
         if (request.TreeIds is { Count: > 0 } treeIds)
@@ -525,7 +526,16 @@ internal sealed class SharedMetricsSampler(
             $"{ids}|h={(request.IncludeShardHotness ? 1 : 0)}|v={(request.IncludeViewLag ? 1 : 0)}|s={(request.IncludeSystemTrees ? 1 : 0)}|i={interval.Ticks}");
 
         var identity = BuildIdentityComponent(subject);
-        return identity.Length == 0 ? shape : string.Concat(shape, "|id=", identity);
+        var signature = identity.Length == 0 ? shape : string.Concat(shape, "|id=", identity);
+        if (tenant is not { } activeTenant)
+        {
+            return signature;
+        }
+
+        var tenantSignature = new StringBuilder(signature);
+        tenantSignature.Append("|tenant=");
+        AppendLengthPrefixed(tenantSignature, activeTenant.Value);
+        return tenantSignature.ToString();
     }
 
     /// <summary>
@@ -533,8 +543,8 @@ internal sealed class SharedMetricsSampler(
     /// identity of the caller <paramref name="subject"/> - its stable id, the full
     /// transitively-expanded group closure, and the claim bag the access gate
     /// authorizes over. Two subscribers share a sampling loop only when this
-    /// matches, so the first subscriber's identity-filtered map is a correct view
-    /// for every subscriber attached to that loop. Empty when
+    /// and the active tenant matches, so the first subscriber's filtered map is
+    /// a correct view for every subscriber attached to that loop. Empty when
     /// <paramref name="subject"/> is <see langword="null"/> (visibility disabled),
     /// preserving the identity-free legacy signature and its coalescing.
     /// </summary>
@@ -623,13 +633,15 @@ internal sealed class SharedMetricsSampler(
         public Channel<IReadOnlyDictionary<string, TreeMetrics>> Channel { get; } = channel;
     }
 
-    private sealed class SamplerLoop(TreeMetricsRequest request, TimeSpan interval)
+    private sealed class SamplerLoop(TreeMetricsRequest request, TimeSpan interval, TenantId? tenant)
     {
         private Subscriber[] _snapshot = Array.Empty<Subscriber>();
 
         public TreeMetricsRequest Request { get; } = request;
 
         public TimeSpan Interval { get; } = interval;
+
+        public TenantId? Tenant { get; } = tenant;
 
         public List<Subscriber> Subscribers { get; } = new();
 
