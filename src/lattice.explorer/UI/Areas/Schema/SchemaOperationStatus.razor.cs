@@ -42,7 +42,8 @@ public partial class SchemaOperationStatus : IDisposable
     private string? _cancelError;
     private ITimer? _timer;
     private bool _read;
-    private bool _reading;
+    private int _generation;
+    private int? _readingGeneration;
     private bool _cancelling;
     private bool _terminalRefreshDone;
 
@@ -95,9 +96,52 @@ public partial class SchemaOperationStatus : IDisposable
         }
     }
 
-    private LatticeSchemaRemediationReport? Report => _report ?? (_local?.Report is { } terminal && !_local.IsActive ? terminal : null);
+    private LatticeSchemaRemediationReport? Report
+    {
+        get
+        {
+            if (_local is { } local)
+            {
+                if (local.OperationId is { } operationId
+                    && _report is { } current
+                    && string.Equals(current.OperationId, operationId, StringComparison.Ordinal))
+                {
+                    return current;
+                }
 
-    private LatticeOperationStatus? Status => _follower?.Status ?? _local?.Status;
+                if (!local.IsActive
+                    && local.Report is { } terminal
+                    && (local.OperationId is null || string.Equals(terminal.OperationId, local.OperationId, StringComparison.Ordinal)))
+                {
+                    return terminal;
+                }
+
+                return null;
+            }
+
+            if (_follower?.Status is { } status
+                && _report is { } report
+                && !string.Equals(report.OperationId, status.OperationId, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            return _report;
+        }
+    }
+
+    private LatticeOperationStatus? Status
+    {
+        get
+        {
+            var status = _follower?.Status ?? _local?.Status;
+            return status is { IsTerminal: true, Kind: SchemaOperationKinds.Remediation }
+                && Report is { } report
+                && string.Equals(report.OperationId, status.OperationId, StringComparison.Ordinal)
+                    ? status with { CompletedUnits = report.ScannedCount }
+                    : status;
+        }
+    }
 
     private IEnumerable<StageItem> Steps => Status is { } status && status.PhaseCount is > 0
         ? OperationSteps(status)
@@ -149,6 +193,7 @@ public partial class SchemaOperationStatus : IDisposable
         if (Workspace is { } workspace && !string.Equals(workspace.TreeId, _loadedTree, StringComparison.Ordinal))
         {
             _loadedTree = workspace.TreeId;
+            _generation++;
             _local = Operations.Find(workspace.TreeId);
             _report = null;
             _read = false;
@@ -160,7 +205,9 @@ public partial class SchemaOperationStatus : IDisposable
         }
     }
 
-    private string CurrentOperationId => _local?.OperationId ?? _report?.OperationId ?? string.Empty;
+    private string CurrentOperationId => _local is { } local
+        ? local.OperationId ?? string.Empty
+        : _report?.OperationId ?? string.Empty;
 
     private int StepPosition(StageItem step)
     {
@@ -191,29 +238,46 @@ public partial class SchemaOperationStatus : IDisposable
 
     private async Task ReadAsync()
     {
-        if (Workspace is not { } workspace || !workspace.Grants.ViewRemediation || _reading)
+        // A read started for an earlier operation or tree must neither repaint over,
+        // nor hold off, the read for the one now shown.
+        var generation = _generation;
+        if (Workspace is not { } workspace || !workspace.Grants.ViewRemediation || _readingGeneration == generation)
         {
             _read = true;
             return;
         }
 
-        _reading = true;
+        _readingGeneration = generation;
         try
         {
-            _report = await Facades.RequireSchema().GetRemediationStatusAsync(workspace.TreeId, _lifetime.Token);
-            _statusError = null;
+            var report = await Facades.RequireSchema().GetRemediationStatusAsync(workspace.TreeId, _lifetime.Token);
+            if (generation == _generation)
+            {
+                _report = report;
+                _statusError = null;
+            }
         }
         catch (OperationCanceledException) when (_lifetime.IsLeft)
         {
         }
         catch (Exception exception)
         {
-            _statusError = SchemaFailure.Describe(exception, "read the operation status");
+            if (generation == _generation)
+            {
+                _statusError = SchemaFailure.Describe(exception, "read the operation status");
+            }
         }
         finally
         {
-            _reading = false;
-            _read = true;
+            if (_readingGeneration == generation)
+            {
+                _readingGeneration = null;
+            }
+
+            if (generation == _generation)
+            {
+                _read = true;
+            }
         }
     }
 
@@ -330,13 +394,25 @@ public partial class SchemaOperationStatus : IDisposable
                 return;
             }
 
-            _local = Operations.Find(treeId);
+            var latest = Operations.Find(treeId);
+            if (latest is { IsActive: true }
+                && (_local is null || !_local.IsActive || _local.StartedAt != latest.StartedAt))
+            {
+                _generation++;
+                _report = null;
+                _statusError = null;
+                _terminalRefreshDone = false;
+                DetachFollower();
+            }
+
+            _local = latest;
             await FollowKnownOperationAsync();
             if (_local is { IsActive: false } && !_terminalRefreshDone)
             {
+                var generation = _generation;
                 await ReadAsync();
                 await workspace.RefreshAsync();
-                _terminalRefreshDone = true;
+                _terminalRefreshDone = generation == _generation;
             }
 
             UpdatePolling();
@@ -353,13 +429,14 @@ public partial class SchemaOperationStatus : IDisposable
 
         if (_follower is { Status.IsTerminal: true } && !_terminalRefreshDone)
         {
+            var generation = _generation;
             await ReadAsync();
             if (Workspace is { } workspace)
             {
                 await workspace.RefreshAsync();
             }
 
-            _terminalRefreshDone = true;
+            _terminalRefreshDone = generation == _generation;
         }
         else if (_follower is { NotFound: true })
         {

@@ -168,6 +168,27 @@ public sealed class SchemaPolicyPanelTests : SchemaTestContext
 
         cut.WaitUntil(() => Assert.That(Schema.Policies["orders"].Rules[0], Is.EqualTo(structured)));
     }
+
+    [Test]
+    public void A_supported_structured_rule_summary_states_its_editable_constraint()
+    {
+        UseTrees("orders");
+        Assert.That(SchemaCardCompiler.TryCompile(new SchemaRuleCard { Kind = SchemaCardKind.Required, Path = "customer.id" }, out var structured, out _), Is.True);
+        Schema.Policies["orders"] = new LatticeSchemaPolicy([structured]);
+
+        var cut = Open();
+
+        cut.WaitUntil(() =>
+        {
+            var summary = cut.Find("tbody tr").TextContent;
+            Assert.That(summary, Does.Contain("customer.id must be present as text"));
+            Assert.That(summary, Does.Not.Contain("not edited"));
+        });
+
+        Button(cut, "Edit policy").Click();
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-ruleset__rule").TextContent, Does.Contain("customer.id must be present as text")));
+    }
+
     [Test]
     public void A_refused_save_is_explained_in_the_editor()
     {
