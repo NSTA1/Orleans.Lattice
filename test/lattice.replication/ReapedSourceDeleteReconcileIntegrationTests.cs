@@ -459,7 +459,11 @@ public partial class ReapedSourceDeleteReconcileIntegrationTests
         Assert.That(outcomes, Does.Contain(LatticeReplicationMetrics.BootstrapReconcileOutcomeAligned),
             "every source-origin key the receiver held was carried, so it adopts the new lineage");
 
-        await siteA.DeleteAsync(deleted);
+        // Delete through the copy the alias now resolves to. The logical tree's
+        // grain on site A was activated before the move and keeps routing to the
+        // superseded copy until a routing error refreshes it, so a delete through
+        // it would land on a copy that neither the reap below nor the export reads.
+        await siteACopy.DeleteAsync(deleted);
         await ReapSourceTombstonesAsync(tree);
         outcomes = new ConcurrentBag<string>();
         using (ListenForOutcomes(tree, outcomes))
