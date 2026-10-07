@@ -9,11 +9,10 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Issue #4673: a restart that re-reads the same lineage and a backstop
-/// re-resolve of an unchanged row must never force a gap. A known absence is a
-/// lineage too, so registering a tree after its shipper bound it forces the
-/// peer to drain that first lineage. A recreate that passes through an
-/// unregistered tree is still a change. Runs the real shipper, re-activated
-/// over its own persisted state.
+/// re-resolve of an unchanged row must never force a gap. Registering a tree
+/// for the first time after its shipper bound it is not a lineage change. A
+/// recreate that passes through an unregistered tree is still a change. Runs
+/// the real shipper, re-activated over its own persisted state.
 /// </summary>
 public partial class CrossClusterAtomicVisibilityTests
 {
@@ -68,7 +67,7 @@ public partial class CrossClusterAtomicVisibilityTests
     }
 
     [Test]
-    public async Task A_tree_registered_after_its_shipper_bound_it_forces_a_gap_for_the_first_lineage()
+    public async Task A_tree_registered_after_its_shipper_bound_it_is_no_lineage_change()
     {
         const string tree = "ccv-lineage-late-register";
         var ticks = DateTime.UtcNow.Ticks;
@@ -86,18 +85,17 @@ public partial class CrossClusterAtomicVisibilityTests
         feeds[0].Append(LocalSet(tree, "first-write", Hlc(ticks, 10)));
         await PumpAsync(before, ticks: 2);
 
-        // Restart while a record is unshipped: the first-lineage gap persists
-        // with the binding that the registration stamped.
+        // Restart while a record is unshipped: it still ships under the
+        // lineage the registration stamped because no prior lineage existed.
         feeds[1].Append(LocalSet(tree, "unshipped", Hlc(ticks, 11)));
         var (after, transport) = RestartableLineageShipper(tree, feeds, walEncoder, state, registry);
         await PumpAsync(after, ticks: 3);
 
         Assert.Multiple(() =>
         {
-            Assert.That(before.ReseedRequired || after.ReseedRequired, Is.True,
-                "the peer must drain the first lineage after the shipper observed no lineage");
-            Assert.That(state.State.SourceLineageBoundary, Is.Not.Empty,
-                "the re-seed marker carries a boundary for the bound log");
+            Assert.That(before.ReseedRequired || after.ReseedRequired, Is.False,
+                "the first registration of a tree replaced nothing, so it is no gap");
+            Assert.That(state.State.SourceLineageBoundary, Is.Empty);
             Assert.That(transport.Shipped.Any(r => r.Key == "unshipped"), Is.True);
             Assert.That(after.SourceLineageStampForTesting, Is.EqualTo(lineage.Entry!.Lineage));
         });
