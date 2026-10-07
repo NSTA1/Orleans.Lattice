@@ -47,7 +47,7 @@ namespace Orleans.Lattice.Tenancy;
 /// window is therefore bounded by membership failure detection.
 /// </para>
 /// </remarks>
-internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver, ITenantEpochSubscriber, IDisposable
+internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver, ITreeAliasObserver, ITenantEpochSubscriber, IDisposable
 {
     private static readonly TimeSpan InitialAdvanceRetryDelay = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan MaxAdvanceRetryDelay = TimeSpan.FromSeconds(5);
@@ -229,6 +229,23 @@ internal sealed class CompiledTenantPolicySnapshotMaintainer : IMutationObserver
         }
 
         ScheduleRebuild();
+        return PublishAdvanceAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
+    /// <remarks>
+    /// Shadow imports replace the logical registry without a logical-tree mutation.
+    /// Invalidate immediately and publish the epoch; registry scans run off-thread,
+    /// never by re-entering the alias registry from its inline observer.
+    /// </remarks>
+    public Task OnTreeAliasChangedAsync(TreeAliasChange change, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(change.TreeId, TenantTreeNames.RegistryTree, StringComparison.Ordinal))
+        {
+            return Task.CompletedTask;
+        }
+
+        InvalidateClusterView();
         return PublishAdvanceAsync(cancellationToken);
     }
 

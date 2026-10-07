@@ -181,6 +181,8 @@ public static class LatticeTenancyServiceCollectionExtensions
         builder.Services.TryAddSingleton<CompiledTenantPolicySnapshotMaintainer>();
         builder.Services.AddSingleton<IMutationObserver>(
             sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
+        builder.Services.AddSingleton<ITreeAliasObserver>(
+            sp => sp.GetRequiredService<CompiledTenantPolicySnapshotMaintainer>());
 
         // Cross-silo currency for that snapshot (issue #4030): the change-feed hook
         // fires only on the silo that committed the registry write, so the

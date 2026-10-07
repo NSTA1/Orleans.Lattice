@@ -672,6 +672,12 @@ independently runtime-enrol it in each region: concurrent runtime enrolments can
 be ambiguous and override the static floor. Existing runtime overrides must be
 removed or resolved to the same `LwwRegister` mode.
 
+A registry snapshot import publishes a logical-tree alias cutover. Tenancy observes
+that cutover and advances the same cluster policy epoch as a registry mutation,
+invalidating policy, residency and placement snapshots on every local silo. This
+lets the drained region observe imported lifecycle changes even when bootstrap
+writes only to a shadow copy of the registry.
+
 A lasting `Draining` means the origin is still awaiting the region's confirmation:
 check that the drained region's silos run the tenant-admin API and that
 `sys-tenant-registry` ships in **both** directions. This status is not evidence

@@ -126,6 +126,30 @@ public sealed class LatticeTenancyServiceCollectionExtensionsGuardTests
     }
 
     [Test]
+    public void AddLatticeTenancy_wires_registry_alias_changes_to_the_existing_policy_snapshot_once()
+    {
+        var builder = NewBuilderWithDependencies();
+        builder.AddLatticeTenancy();
+        var observers = builder.Services.Where(d => d.ServiceType == typeof(ITreeAliasObserver)).ToArray();
+        builder.AddLatticeTenancy();
+        using var policy = new CompiledTenantPolicySnapshotMaintainer(
+            Substitute.For<ITenantRegistry>(), Substitute.For<ITenantPolicyEpochPublisher>(),
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<CompiledTenantPolicySnapshotMaintainer>.Instance);
+        var provider = Substitute.For<IServiceProvider>();
+        provider.GetService(typeof(CompiledTenantPolicySnapshotMaintainer)).Returns(policy);
+
+        var descriptor = observers.Single(d => d.ImplementationFactory is not null);
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.Services.Where(d => d.ServiceType == typeof(ITreeAliasObserver)),
+                Is.EqualTo(observers), "repeat registration must not duplicate alias observers");
+            Assert.That(descriptor.Lifetime, Is.EqualTo(ServiceLifetime.Singleton));
+            Assert.That(descriptor.ImplementationFactory!(provider), Is.SameAs(policy));
+        });
+    }
+
+    [Test]
     public void AddLatticeTenancy_repeat_call_wires_structure_only_once()
     {
         var builder = NewBuilderWithDependencies();
