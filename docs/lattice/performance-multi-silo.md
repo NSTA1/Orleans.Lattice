@@ -542,13 +542,12 @@ foreground reader to protect. The harness raises
 accordingly, to 64 against a library default of 4. The single-silo tiers do
 not set it and are unaffected.
 
-**Two saturation budgets are finite on this tier.** The library ships
-`LatticeOptions.SetManyFanOutBudget` and
-`LatticeOptions.WalAdmissionSaturationCallBudget` disabled (infinite). The
-Layer 3 harness opts its silos into finite values - 30 s and 15 s by default,
-set with `-SetManyFanOutBudgetSec` and `-WalAdmissionCallBudgetSec` - so a
-sweep measures the bounded configuration. Pass `0` for both to measure the
-out-of-the-box configuration instead.
+**Two saturation budgets are finite on this tier.** From 10.0 the library
+ships `LatticeOptions.SetManyFanOutBudget` and
+`LatticeOptions.WalAdmissionSaturationCallBudget` finite (30 s and 15 s), and
+the Layer 3 harness inherits those defaults, set with `-SetManyFanOutBudgetSec`
+and `-WalAdmissionCallBudgetSec`. Pass `0` for both to measure the pre-10.0
+unbounded configuration instead.
 
 ## Re-running it yourself
 

@@ -40,10 +40,18 @@ public sealed class GrainStorageFencingCheckIntegrationTests
     }
 
     [Test]
-    public async Task Silo_with_non_fencing_storage_fails_to_start_in_reject_mode()
+    public Task Silo_with_non_fencing_storage_fails_to_start_by_default()
+        => AssertFailsToStartAsync<NonFencingDefaultConfigurator>();
+
+    [Test]
+    public Task Silo_with_non_fencing_storage_fails_to_start_in_reject_mode()
+        => AssertFailsToStartAsync<NonFencingRejectConfigurator>();
+
+    private static async Task AssertFailsToStartAsync<TConfigurator>()
+        where TConfigurator : ISiloConfigurator, new()
     {
         var builder = new TestClusterBuilder(1);
-        builder.AddSiloBuilderConfigurator<NonFencingRejectConfigurator>();
+        builder.AddSiloBuilderConfigurator<TConfigurator>();
         var cluster = builder.Build();
         try
         {
@@ -138,6 +146,15 @@ public sealed class GrainStorageFencingCheckIntegrationTests
     }
 
     private sealed class NonFencingWarnConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder)
+        {
+            AddNonFencingLattice(siloBuilder);
+            siloBuilder.ConfigureLatticeGrainStorageFencing(o => o.Mode = LatticeGrainStorageFencingMode.Warn);
+        }
+    }
+
+    private sealed class NonFencingDefaultConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder) => AddNonFencingLattice(siloBuilder);
     }
