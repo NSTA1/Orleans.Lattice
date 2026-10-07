@@ -177,7 +177,7 @@ public partial class LatticeGrainTests
     [Test]
     public async Task SetManyAsync_is_unbounded_when_neither_budget_is_configured()
     {
-        // The no-regression control. Both budgets default to InfiniteTimeSpan,
+        // The no-regression control. The envelope budget defaults to InfiniteTimeSpan and a single-shard batch skips the fan-out budget,
         // so an existing deployment must behave exactly as it did: the write
         // completes normally and nothing refuses it.
         const string treeId = "envelope-default-unbounded";
@@ -215,8 +215,8 @@ public partial class LatticeGrainTests
         {
             Assert.That(new LatticeOptions().SetManyEnvelopeBudget,
                 Is.EqualTo(Timeout.InfiniteTimeSpan),
-                "The bound is opt-in, matching SetManyFanOutBudget, so upgrading changes "
-                + "nothing for an existing deployment.");
+                "The envelope bound stays opt-in (unlike SetManyFanOutBudget, which is "
+                + "finite from 10.0), so upgrading changes nothing for it.");
             Assert.That(LatticeOptions.DefaultSetManyEnvelopeBudget,
                 Is.EqualTo(Timeout.InfiniteTimeSpan));
         });

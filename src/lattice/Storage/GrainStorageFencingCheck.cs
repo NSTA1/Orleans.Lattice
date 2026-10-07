@@ -94,7 +94,9 @@ internal sealed class GrainStorageFencingCheck(
             + "writes some grain state directly through the provider, and it relies on the provider rejecting a stale "
             + "duplicate activation's write. Without that, an older checkpoint can overwrite a newer one and the "
             + "write-ahead log can be trimmed past entries a later rebuild needs. Use a provider that enforces ETags "
-            + "(for example Orleans' memory, Azure Table, Azure Blob, Cosmos DB or ADO.NET storage).";
+            + "(for example Orleans' memory, Azure Table, Azure Blob, Cosmos DB or ADO.NET storage). To start with a "
+            + "provider that does not enforce ETags, set LatticeGrainStorageFencingOptions.Mode to Warn or Disabled "
+            + "(siloBuilder.ConfigureLatticeGrainStorageFencing).";
 
         if (o.Mode == LatticeGrainStorageFencingMode.Reject)
         {
@@ -103,7 +105,7 @@ internal sealed class GrainStorageFencingCheck(
         }
 
         logger.LogWarning(
-            "{Message} Mode={Mode}; set LatticeGrainStorageFencingOptions.Mode to Reject to fail silo start instead.",
+            "{Message} Mode={Mode}; set LatticeGrainStorageFencingOptions.Mode to Reject (the default) to fail silo start instead.",
             message,
             o.Mode);
     }

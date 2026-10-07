@@ -1139,15 +1139,12 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void WalAdmissionSaturationCallBudget_default_is_infinite()
+    public void WalAdmissionSaturationCallBudget_default_is_fifteen_seconds()
     {
-        // (#3348) Deliberately disabled by default so enabling the per-call
-        // bound is opt-in on the released 9.x line. A finite default would
-        // change when LatticeSaturatedException surfaces for an existing
-        // consumer, which is a breaking behavioural change; #3390 tracks
-        // flipping it in the next major.
-        Assert.That(new LatticeOptions().WalAdmissionSaturationCallBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
-        Assert.That(LatticeOptions.DefaultWalAdmissionSaturationCallBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
+        // (#3390) Finite from 10.0; Timeout.InfiniteTimeSpan retains the
+        // pre-10.0 unbounded behaviour.
+        Assert.That(new LatticeOptions().WalAdmissionSaturationCallBudget, Is.EqualTo(TimeSpan.FromSeconds(15)));
+        Assert.That(LatticeOptions.DefaultWalAdmissionSaturationCallBudget, Is.EqualTo(TimeSpan.FromSeconds(15)));
     }
 
     [Test]
@@ -1182,10 +1179,12 @@ public class LatticeOptionsValidatorTests
     }
 
     [Test]
-    public void SetManyFanOutBudget_default_is_infinite()
+    public void SetManyFanOutBudget_default_is_thirty_seconds()
     {
-        Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
-        Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(Timeout.InfiniteTimeSpan));
+        // (#3386) Finite from 10.0; Timeout.InfiniteTimeSpan retains the
+        // pre-10.0 unbounded behaviour.
+        Assert.That(new LatticeOptions().SetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
+        Assert.That(LatticeOptions.DefaultSetManyFanOutBudget, Is.EqualTo(TimeSpan.FromSeconds(30)));
     }
 
     [Test]

@@ -182,7 +182,9 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
     }
 
     /// <summary>
-    /// In-memory <see cref="IGrainStorage"/> that, when armed for a tree,
+    /// In-memory <see cref="IGrainStorage"/> that enforces ETags (so it passes
+    /// the silo-start fencing check, which rejects a provider that does not)
+    /// and, when armed for a tree,
     /// parks the write that persists a shard's split intent on a gate. That
     /// holds the writing grain's non-reentrant turn open for as long as the
     /// test needs, which is the only way to observe interleaving on a real
@@ -261,8 +263,15 @@ public sealed class ShardRootGrainIsSplittingInterleaveTests
                 await gate.Task.ConfigureAwait(false);
             }
 
+            var key = MakeKey(stateName, grainId);
+            var current = _store.TryGetValue(key, out var existing) ? existing.ETag : null;
+            if (!string.Equals(current, grainState.ETag, StringComparison.Ordinal))
+            {
+                throw new InconsistentStateException("ETag mismatch.", current ?? "<none>", grainState.ETag ?? "<none>");
+            }
+
             var newEtag = Guid.NewGuid().ToString("N");
-            _store[MakeKey(stateName, grainId)] = (newEtag, grainState.State!);
+            _store[key] = (newEtag, grainState.State!);
             grainState.ETag = newEtag;
             grainState.RecordExists = true;
         }

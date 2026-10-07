@@ -30,9 +30,13 @@ public sealed class LatticeGrainStorageFencingOptions
 
     /// <summary>
     /// What to do when the provider is shown not to enforce ETags. Default
-    /// <see cref="LatticeGrainStorageFencingMode.Warn"/>.
+    /// <see cref="LatticeGrainStorageFencingMode.Reject"/> (it was
+    /// <see cref="LatticeGrainStorageFencingMode.Warn"/> before 10.0): a
+    /// provider that does not enforce ETags fails silo start. Set
+    /// <see cref="LatticeGrainStorageFencingMode.Warn"/> or
+    /// <see cref="LatticeGrainStorageFencingMode.Disabled"/> to opt out.
     /// </summary>
-    public LatticeGrainStorageFencingMode Mode { get; set; } = LatticeGrainStorageFencingMode.Warn;
+    public LatticeGrainStorageFencingMode Mode { get; set; } = LatticeGrainStorageFencingMode.Reject;
 
     /// <summary>
     /// How long the probe may take before it gives up without a verdict and

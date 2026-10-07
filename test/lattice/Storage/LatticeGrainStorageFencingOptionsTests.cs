@@ -12,11 +12,11 @@ public sealed class LatticeGrainStorageFencingOptionsTests
     private static readonly LatticeGrainStorageFencingOptionsValidator Validator = new();
 
     [Test]
-    public void Defaults_warn_with_a_thirty_second_timeout()
+    public void Defaults_reject_with_a_thirty_second_timeout()
     {
         var options = new LatticeGrainStorageFencingOptions();
 
-        Assert.That(options.Mode, Is.EqualTo(LatticeGrainStorageFencingMode.Warn));
+        Assert.That(options.Mode, Is.EqualTo(LatticeGrainStorageFencingMode.Reject));
         Assert.That(options.ProbeTimeout, Is.EqualTo(TimeSpan.FromSeconds(30)));
         Assert.That(LatticeGrainStorageFencingOptions.DefaultProbeTimeout, Is.EqualTo(options.ProbeTimeout));
         Assert.That(Validator.Validate(null, options).Succeeded, Is.True);
