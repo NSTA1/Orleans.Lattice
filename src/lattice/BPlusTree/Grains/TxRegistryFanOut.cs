@@ -364,14 +364,39 @@ internal static class TxRegistryFanOut
     /// <param name="token">The capture's gate token.</param>
     /// <param name="mode">The strength of the hold.</param>
     /// <param name="lease">The hold's lease.</param>
+    /// <param name="readGate">Uses ordered, writer-fair read admission instead of snapshot capture admission.</param>
+    /// <param name="cancellationToken">Cancels read-gate acquisition.</param>
     /// <returns>The shard high-water the hold covers.</returns>
     public static async Task<int> AcquireCaptureGateAsync(
-        IGrainFactory grainFactory, string treeId, Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease)
+        IGrainFactory grainFactory, string treeId, Guid token, TxRegistryCaptureGateMode mode, TimeSpan lease,
+        bool readGate = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         var attempted = new List<ITxRegistryGrain>();
         try
         {
+            if (readGate)
+            {
+                // EnumerateKeys puts legacy LAST. Acquiring it first is
+                // essential when a cold reader widens from legacy-only while
+                // another reader already knows the wider registry key set.
+                var highWater = TxRegistryHighWaterCache.Get(grainFactory, treeId);
+                while (true)
+                {
+                    var keys = TxRegistryRouting.EnumerateKeys(treeId, highWater);
+                    for (var i = -1; i < keys.Length - 1; i++)
+                    {
+                        var key = i < 0 ? keys[^1] : keys[i];
+                        var registry = grainFactory.GetGrain<ITxRegistryGrain>(key);
+                        attempted.Add(registry);
+                        await registry.AcquireReadCaptureGateAsync(token, lease, cancellationToken);
+                    }
+                    var mark = TxRegistryHighWaterCache.Observe(grainFactory, treeId,
+                        await grainFactory.GetGrain<ITxRegistryHighWaterGrain>(treeId).GetShardHighWaterAsync());
+                    if (mark <= highWater) return highWater;
+                    highWater = mark;
+                }
+            }
             var (_, covered) = await FanOutAsync(
                 grainFactory,
                 treeId,
@@ -390,7 +415,7 @@ internal static class TxRegistryFanOut
             // failure. Release every attempted key, not just a returned mark.
             try
             {
-                await Task.WhenAll(attempted.Select(registry => registry.ReleaseCaptureGateAsync(token)));
+                await Task.WhenAll(attempted.Distinct().Select(registry => registry.ReleaseCaptureGateAsync(token)));
             }
             catch (Exception cleanupFailure)
             {

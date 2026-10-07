@@ -106,8 +106,12 @@ keep racing its fan-out. The fallback preserves zero-or-all visibility, has a
 certifying live holds, registry coverage and a stable shard map. Loss of that
 certification raises `LatticeTransactionOutcomeUnavailableException`. Ordinary
 writes and prepares remain admitted; new saga decisions briefly wait on the
-existing writer retry path. See [Atomic writes](atomic-writes.md) for the gate
-and cleanup protocol.
+existing writer retry path. Read holds do not overlap, and each registry leaves
+a one-second writer-open interval after release or expiry so continuous fallback
+readers cannot keep healthy local decision writers permanently gated. Reader
+admission and certification remain bounded, not guaranteed under contention or
+unavailable dependencies. See [Atomic writes](atomic-writes.md) for the gate,
+writer-latency impact and cleanup protocol.
 
 `CountAsync`, `CountPerShardAsync`, `ScanKeysAsync`, and
 `ScanEntriesAsync` use a bounded retry budget

@@ -87,11 +87,11 @@ public partial class BPlusLeafGrainTests
             return await registry.SnapshotWithRevisionAsync();
         });
         proxy.GetDecisionsRevisionAsync().Returns(_ => registry.GetDecisionsRevisionAsync());
-        proxy.AcquireCaptureGateAsync(Arg.Any<Guid>(), Arg.Any<TxRegistryCaptureGateMode>(), Arg.Any<TimeSpan>())
+        proxy.AcquireReadCaptureGateAsync(Arg.Any<Guid>(), Arg.Any<TimeSpan>(), Arg.Any<CancellationToken>())
             .Returns(async c =>
             {
                 if (h.AcquireBarrier is { } barrier) await barrier.Task;
-                await registry.AcquireCaptureGateAsync(c.Arg<Guid>(), c.Arg<TxRegistryCaptureGateMode>(), c.Arg<TimeSpan>());
+                await registry.AcquireReadCaptureGateAsync(c.Arg<Guid>(), c.Arg<TimeSpan>(), c.Arg<CancellationToken>());
                 h.Gated = true;
                 await h.PrepareAsync();
             });
@@ -168,6 +168,22 @@ public partial class BPlusLeafGrainTests
 
         Assert.ThrowsAsync<LatticeTransactionOutcomeUnavailableException>(() => h.Lattice.GetManyAsync(h.Keys));
 
+        await h.Registry.MarkCommittedAsync(h.Transaction);
+        await h.RegistryProxy.Received(1).ReleaseCaptureGateAsync(Arg.Any<Guid>());
+    }
+
+    [Test]
+    public async Task GetManyAsync_gate_loss_before_D0_fails_with_the_retryable_read_fault_and_releases()
+    {
+        var h = CreateGetManyProgressHarness();
+        h.RegistryProxy.GetCaptureGateSnapshotAsync(Arg.Any<Guid>())
+            .Returns(Task.FromException<Dictionary<Guid, TxStatus>>(
+                new TxDecisionGateRefusedException("getmany-progress", TxDecisionGateRefusal.GateLapsed, TimeSpan.Zero)));
+
+        var fault = Assert.ThrowsAsync<LatticeTransactionOutcomeUnavailableException>(() => h.Lattice.GetManyAsync(h.Keys));
+
+        Assert.That(fault!.TreeId, Is.EqualTo("getmany-progress"));
+        Assert.That(fault.InnerException, Is.TypeOf<TxDecisionGateRefusedException>());
         await h.Registry.MarkCommittedAsync(h.Transaction);
         await h.RegistryProxy.Received(1).ReleaseCaptureGateAsync(Arg.Any<Guid>());
     }

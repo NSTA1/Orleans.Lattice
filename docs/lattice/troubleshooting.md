@@ -541,7 +541,13 @@ activity](#concurrent-split-activity) first - the scan is a symptom of the
 topology churn, not the cause. `GetManyAsync` spends the same budget when a
 shard-map change or a concurrently committing atomic-write saga races its
 batched read, then falls back to one bounded decision-gated read. Sustained saga
-commits alone no longer exhaust that read. A lost or expired gate, registry
+commits alone no longer invalidate every attempt after gate acquisition. An
+Information-level log, `GetManyAsync for tree {TreeId} entering bounded
+decision-gated fallback after {Attempts} optimistic attempts.`, records each
+fallback entry. Frequent entries indicate commit contention; concurrent fallback
+readers can still exhaust the bounded admission deadline. The hold briefly delays
+new local saga decisions tree-wide, with a writer-open interval between read
+holds; see [Atomic writes](atomic-writes.md) for the latency bounds. A lost or expired gate, registry
 coverage growth or a topology change during the fallback instead fails closed
 with `LatticeTransactionOutcomeUnavailableException`. A multi-key read whose result depended on a pending atomic
 write while the transaction registry could not be reached throws

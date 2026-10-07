@@ -11,6 +11,8 @@ internal sealed partial class LatticeGrain
     private async Task<Dictionary<string, byte[]>> GetManyDecisionGatedAsync(
         List<string> keys, KeyValuePair<string, object?> stageTagTree, CancellationToken cancellationToken)
     {
+        logger.LogInformation("GetManyAsync for tree {TreeId} entering bounded decision-gated fallback after {Attempts} optimistic attempts.",
+            TreeId, Math.Max(1, Options.MaxScanRetries));
         var clock = services.GetService(typeof(TimeProvider)) is TimeProvider configuredClock
             ? configuredClock : TimeProvider.System;
         using var timeout = new CancellationTokenSource(GetManyDecisionGateLease, clock);
@@ -22,7 +24,12 @@ internal sealed partial class LatticeGrain
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             throw new LatticeTransactionOutcomeUnavailableException(
-                $"GetManyAsync for tree '{TreeId}' exceeded its bounded saga decision-gate deadline.");
+                $"GetManyAsync for tree '{TreeId}' exceeded its bounded saga decision-gate deadline.") { TreeId = TreeId };
+        }
+        catch (TxDecisionGateRefusedException ex) when (ex.Refusal == TxDecisionGateRefusal.GateLapsed)
+        {
+            throw new LatticeTransactionOutcomeUnavailableException(
+                $"GetManyAsync for tree '{TreeId}' could not establish a live bounded saga decision gate.", ex) { TreeId = TreeId };
         }
     }
 
@@ -32,7 +39,8 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         var token = Guid.NewGuid();
         var highWater = await TxRegistryFanOut.AcquireCaptureGateAsync(
-            grainFactory, TreeId, token, TxRegistryCaptureGateMode.Gate, GetManyDecisionGateLease);
+            grainFactory, TreeId, token, TxRegistryCaptureGateMode.Gate, GetManyDecisionGateLease,
+            readGate: true, cancellationToken: cancellationToken);
         Dictionary<string, byte[]> result;
         bool valid;
         try
@@ -62,7 +70,7 @@ internal sealed partial class LatticeGrain
 
         if (!valid)
             throw new LatticeTransactionOutcomeUnavailableException(
-                $"GetManyAsync for tree '{TreeId}' lost its bounded saga decision gate or registry coverage during the read.");
+                $"GetManyAsync for tree '{TreeId}' lost its bounded saga decision gate or registry coverage during the read.") { TreeId = TreeId };
         return result;
     }
 }
