@@ -27,6 +27,56 @@ internal sealed class LatticeOperationIndexGrain(
     private List<LatticeOperationIndexEntry> Entries => state.State.Entries;
 
     /// <inheritdoc />
+    public async Task ReconcileAsync(LatticeOperationRecord record, bool remove)
+    {
+        var position = Find(record.OperationId);
+        if (position >= 0 && Entries[position].StartedAtUtc > record.StartedAtUtc)
+        {
+            return;
+        }
+
+        var expired = record.FinishedAtUtc is { } finished && finished + options.Value.Retention <= Clock.GetUtcNow();
+        if (remove || expired)
+        {
+            if (position >= 0 && Entries[position].StartedAtUtc == record.StartedAtUtc)
+            {
+                Entries.RemoveAt(position);
+                await state.WriteStateAsync();
+            }
+            return;
+        }
+
+        if (position >= 0)
+        {
+            if (Entries[position].StartedAtUtc == record.StartedAtUtc)
+            {
+                // A delayed queued snapshot cannot undo an acknowledged finish.
+                Entries[position].FinishedAtUtc ??= record.FinishedAtUtc;
+                Prune();
+                await state.WriteStateAsync();
+                return;
+            }
+            Entries.RemoveAt(position);
+        }
+
+        var entry = new LatticeOperationIndexEntry
+        {
+            OperationId = record.OperationId,
+            Kind = record.Kind,
+            StartedAtUtc = record.StartedAtUtc,
+            FinishedAtUtc = record.FinishedAtUtc,
+        };
+        position = 0;
+        while (position < Entries.Count && !IsAfter(entry, Entries[position]))
+        {
+            position++;
+        }
+        Entries.Insert(position, entry);
+        Prune();
+        await state.WriteStateAsync();
+    }
+
+    /// <inheritdoc />
     public async Task AddAsync(string operationId, string kind, DateTimeOffset startedAtUtc)
     {
         ArgumentException.ThrowIfNullOrEmpty(operationId);

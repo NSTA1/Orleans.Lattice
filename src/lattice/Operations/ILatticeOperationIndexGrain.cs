@@ -9,6 +9,11 @@ namespace Orleans.Lattice.Operations;
 [Alias(TypeAliases.ILatticeOperationIndexGrain)]
 internal interface ILatticeOperationIndexGrain : IGrainWithStringKey
 {
+    /// <summary>Reconciles one durable operation snapshot, ignoring superseded generations and expired additions.</summary>
+    /// <param name="record">The persisted snapshot, including its generation's start time.</param>
+    /// <param name="remove">Whether this generation has expired and must be removed.</param>
+    Task ReconcileAsync(LatticeOperationRecord record, bool remove);
+
     /// <summary>Records a newly started operation. Idempotent.</summary>
     /// <param name="operationId">The operation id.</param>
     /// <param name="kind">The operation kind.</param>
