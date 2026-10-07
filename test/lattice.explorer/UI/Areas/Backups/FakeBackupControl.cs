@@ -153,35 +153,6 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
             previousPhysicalTreeId: request.Mode == LatticeRestoreMode.ShadowCutover ? "orders-physical-previous-1c2d" : null);
 
     /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateBackupAsync(LatticeBackupCaptureRequest request, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(CreateBackupAsync), request));
-        return Capture?.Invoke(request) ?? Task.FromResult(Captured(request.Name, request.Scope, null));
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeBackupCaptureResult> CreateIncrementalBackupAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(CreateIncrementalBackupAsync), request));
-        return CaptureIncremental?.Invoke(request) ?? Task.FromResult(Captured(request.Name, request.Scope, request.BaseBackupId));
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeBackupSetCaptureResult> CreateBackupSetAsync(LatticeBackupSetCaptureRequest request, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(CreateBackupSetAsync), request));
-        if (CaptureSet is { } set)
-        {
-            return set(request);
-        }
-
-        var members = request.Scopes.Select(scope => Captured(request.Name + "-" + scope.TreeId, scope, null)).ToArray();
-        return Task.FromResult(new LatticeBackupSetCaptureResult(
-            new BackupSetManifest("set-1", request.Name, DateTimeOffset.UnixEpoch, request.CrossTreeConsistent, null, [.. members.Select(member => member.BackupId)]),
-            members));
-    }
-
-    /// <inheritdoc />
     public Task ScheduleBackupAsync(LatticeBackupScheduleRequest request, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(ScheduleBackupAsync), request));
@@ -266,13 +237,6 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
-    public Task<LatticeRestoreResult> RestoreBackupAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(RestoreBackupAsync), request));
-        return Restore?.Invoke(request) ?? Task.FromResult(RestoreResult(request));
-    }
-
-    /// <inheritdoc />
     public Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(RevertRestoreAsync), restore));
@@ -308,27 +272,6 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     }
 
     /// <inheritdoc />
-    public Task<BackupCatalogRebuildReport> RebuildCatalogFromSinkAsync(CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(RebuildCatalogFromSinkAsync), null));
-        return Rebuild();
-    }
-
-    /// <inheritdoc />
-    public Task<BackupCatalogScrubReport> ScrubCatalogAgainstSinkAsync(bool pruneOrphans = false, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(ScrubCatalogAgainstSinkAsync), pruneOrphans));
-        return Scrub(pruneOrphans);
-    }
-
-    /// <inheritdoc />
-    public Task<LatticeRestoreResult> ColdRestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(ColdRestoreAsync), request));
-        return ColdRestore(request);
-    }
-
-    /// <inheritdoc />
     public Task<BackupScopeStatus?> GetScopeStatusAsync(BackupScopeSelector scope, CancellationToken cancellationToken = default)
     {
         Calls.Add((nameof(GetScopeStatusAsync), scope));
@@ -348,14 +291,6 @@ internal sealed partial class FakeBackupControl : ILatticeBackupControl
     {
         Calls.Add((nameof(IsHealthMonitoringAvailableAsync), null));
         return HealthAvailable();
-    }
-
-    /// <inheritdoc />
-    public Task<BackupHealthReport> CheckBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)
-    {
-        Calls.Add((nameof(CheckBackupHealthAsync), backupId));
-        return Check?.Invoke(backupId)
-            ?? Task.FromResult(new BackupHealthReport(backupId, BackupHealthStatus.Healthy, true, [], [], DateTimeOffset.UnixEpoch, "All present."));
     }
 
     /// <inheritdoc />

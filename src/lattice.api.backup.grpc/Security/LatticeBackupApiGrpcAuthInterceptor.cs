@@ -185,21 +185,16 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
         var methodName = fullMethodName[(fullMethodName.LastIndexOf('/') + 1)..];
         var operation = methodName switch
         {
-            LatticeBackupGrpcMethods.CreateBackupMethodName => LatticeBackupApiOperation.CreateBackup,
-            LatticeBackupGrpcMethods.CreateIncrementalBackupMethodName => LatticeBackupApiOperation.CreateIncrementalBackup,
-            LatticeBackupGrpcMethods.CreateBackupSetMethodName => LatticeBackupApiOperation.CreateBackupSet,
             LatticeBackupGrpcMethods.ListBackupsMethodName => LatticeBackupApiOperation.ListBackups,
             LatticeBackupGrpcMethods.StreamBackupsMethodName => LatticeBackupApiOperation.StreamBackups,
             LatticeBackupGrpcMethods.DescribeBackupMethodName => LatticeBackupApiOperation.DescribeBackup,
             LatticeBackupGrpcMethods.DeleteBackupMethodName => LatticeBackupApiOperation.DeleteBackup,
-            LatticeBackupGrpcMethods.RestoreBackupMethodName => LatticeBackupApiOperation.RestoreBackup,
             LatticeBackupGrpcMethods.RevertRestoreMethodName => LatticeBackupApiOperation.RevertRestore,
             LatticeBackupGrpcMethods.ExportArtifactMethodName => LatticeBackupApiOperation.ExportArtifact,
             LatticeBackupGrpcMethods.ScheduleBackupMethodName => LatticeBackupApiOperation.ScheduleBackup,
             LatticeBackupGrpcMethods.CancelScheduleMethodName => LatticeBackupApiOperation.CancelSchedule,
             LatticeBackupGrpcMethods.GetScopeStatusMethodName => LatticeBackupApiOperation.GetScopeStatus,
             LatticeBackupGrpcMethods.IsHealthMonitoringAvailableMethodName => LatticeBackupApiOperation.IsHealthMonitoringAvailable,
-            LatticeBackupGrpcMethods.CheckBackupHealthMethodName => LatticeBackupApiOperation.CheckBackupHealth,
             LatticeBackupGrpcMethods.GetBackupHealthMethodName => LatticeBackupApiOperation.GetBackupHealth,
             LatticeBackupGrpcMethods.ConfigureBackupHealthMethodName => LatticeBackupApiOperation.ConfigureBackupHealth,
             LatticeBackupGrpcMethods.StartBackupMethodName => LatticeBackupApiOperation.StartBackup,

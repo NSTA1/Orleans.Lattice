@@ -89,13 +89,11 @@ static async Task<bool?> RebuildAsync(ILatticeTreeAdminOperations operations, Ca
 }
 ```
 
-## Migrating from the blocking verbs
+## Migrating from the removed blocking verbs
 
-`RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` on `ILatticeTreeAdmin`, and the matching blocking calls on the gRPC client, are **deprecated** and **will be removed in the next major version**. They raise compiler warning `LATTICE0002`, whose help link points here; existing code still compiles and runs.
+`RebuildViewAsync`, `ReconcileViewAsync`, `ReconcileTagIndexAsync` and `ExecuteWalMoveAsync` on `ILatticeTreeAdmin`, and the matching blocking calls that previously existed on the gRPC client and MCP surface, were deprecated in 9.9.0 with warning `LATTICE0002` and are removed in this major version. Migrate to the tracked operations below:
 
-Each deprecated verb is now a thin wrapper that starts the matching operation and waits for its in-process completion, so it returns the same result and throws the engine's own exceptions, cancelling its token cancels the work, and its work appears in `ListOperationsAsync`. It still waits, though, so a long run is still exposed to the caller's timeout. To migrate:
-
-| Deprecated | Replacement |
+| Removed blocking verb | Replacement |
 |---|---|
 | `RebuildViewAsync(viewName)` | `StartViewRebuildAsync(viewName)`, then poll; read the view with `GetViewStatusAsync`. |
 | `ReconcileViewAsync(viewName)` | `StartViewReconcileAsync(viewName)`; the verdict is `driftRepaired`. |
@@ -104,15 +102,7 @@ Each deprecated verb is now a thin wrapper that starts the matching operation an
 
 `AuditOrphanedLeavesAsync`, `SurveyOrphanedLeavesAsync` and `RepairOrphanedLeavesAsync` are **not** deprecated: each call is already one bounded batch, and they remain the way to page the per-leaf findings. The operations add a whole-tree pass that survives the caller.
 
-Over gRPC, the `RebuildView`, `ReconcileView`, `ReconcileTagIndex` and `ExecuteWalMove` RPCs stay on the wire, deprecated, until the next major version; use `StartViewRebuild`, `StartViewReconcile`, `StartTagIndexReconcile`, `StartWalMove`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair`, `GetTreeAdminOperationStatus`, `ListTreeAdminOperations` and `CancelTreeAdminOperation` (see the [gRPC binding](../lattice.api.treeadmin.grpc/README.md)). Over MCP, use the `lattice_treeadmin_*_start` and `lattice_treeadmin_operation_*` tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
-
-To keep a deliberate use of a deprecated verb building warning-free, suppress the diagnostic locally:
-
-```text
-#pragma warning disable LATTICE0002
-var status = await treeAdmin.RebuildViewAsync(viewName, cancellationToken);
-#pragma warning restore LATTICE0002
-```
+Over gRPC, use `StartViewRebuild`, `StartViewReconcile`, `StartTagIndexReconcile`, `StartWalMove`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair`, `GetTreeAdminOperationStatus`, `ListTreeAdminOperations` and `CancelTreeAdminOperation` (see the [gRPC binding](../lattice.api.treeadmin.grpc/README.md)). Over MCP, use the `lattice_treeadmin_*_start` and `lattice_treeadmin_operation_*` tools (see the [MCP tools reference](../lattice.api.mcp/tools.md)).
 
 ## Fresh storage usage
 

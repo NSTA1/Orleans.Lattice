@@ -29,7 +29,6 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_schema_count_dead_letters",
         "lattice_treeadmin_schema_get_version_config",
         "lattice_treeadmin_schema_get_remediation_status",
-        "lattice_treeadmin_schema_scan_compliance",
         "lattice_treeadmin_schema_probe_capabilities",
     };
 
@@ -40,9 +39,6 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_schema_set_version_config",
         "lattice_treeadmin_schema_clear_version_config",
         "lattice_treeadmin_schema_advance_target_version",
-        "lattice_treeadmin_schema_advance_and_migrate",
-        "lattice_treeadmin_schema_migrate_to_target",
-        "lattice_treeadmin_schema_remediate",
         "lattice_treeadmin_schema_remediation_start",
         "lattice_treeadmin_schema_migration_start",
         "lattice_treeadmin_schema_advance_and_migrate_start",
@@ -117,13 +113,9 @@ public sealed class TreeAdminToolGroupTests
         "lattice_treeadmin_tree_resize",
         "lattice_treeadmin_tree_resize_undo",
         "lattice_treeadmin_tree_snapshot",
-        "lattice_treeadmin_wal_move_execute",
         "lattice_treeadmin_wal_move_reclaim",
         "lattice_treeadmin_view_create",
-        "lattice_treeadmin_view_rebuild",
-        "lattice_treeadmin_view_reconcile",
         "lattice_treeadmin_view_drop",
-        "lattice_treeadmin_tag_index_reconcile",
         "lattice_treeadmin_view_rebuild_start",
         "lattice_treeadmin_view_reconcile_start",
         "lattice_treeadmin_tag_index_reconcile_start",
@@ -414,8 +406,8 @@ public sealed class TreeAdminToolGroupTests
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_set_version_config"), "schemaId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_set_version_config"), "targetVersion"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_advance_target_version"), "newTargetVersion"), Is.True);
-            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediate"), "transform"), Is.True);
-            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediate"), "targetPolicy"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediation_start"), "transform"), Is.True);
+            Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_schema_remediation_start"), "targetPolicy"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_shard_diagnostics"), "treeId"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_shard_diagnostics"), "deep"), Is.True);
             Assert.That(SchemaHasProperty(ServerTool(group, "lattice_treeadmin_projection_digest"), "shardIndex"), Is.True);

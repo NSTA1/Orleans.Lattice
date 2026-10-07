@@ -64,14 +64,6 @@ public sealed class LatticeSchemaControlVersioningTests
     }
 
     [Test]
-    public void MigrateToTargetVersion_without_versioning_registered_throws_invalid_operation()
-    {
-        var control = Create(versionAdmin: null);
-
-        Assert.That(async () => await control.MigrateToTargetVersionAsync(Tree), Throws.InvalidOperationException);
-    }
-
-    [Test]
     public void ClearVersionConfig_without_versioning_registered_throws_invalid_operation()
     {
         var control = Create(versionAdmin: null);
@@ -102,19 +94,6 @@ public sealed class LatticeSchemaControlVersioningTests
         var result = await control.AdvanceTargetVersionAsync(Tree, 5);
 
         Assert.That(result.TargetVersion, Is.EqualTo(5u));
-    }
-
-    [Test]
-    public async Task AdvanceAndMigrate_delegates_when_versioning_registered()
-    {
-        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
-        admin.AdvanceAndMigrateAsync(Tree, 4, Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaRemediationReport.Idle);
-        var control = Create(admin);
-
-        await control.AdvanceAndMigrateAsync(Tree, 4);
-
-        await admin.Received(1).AdvanceAndMigrateAsync(Tree, 4, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -164,27 +143,6 @@ public sealed class LatticeSchemaControlVersioningTests
         var control = Create(admin);
 
         Assert.That(await control.GetVersionConfigAsync(Tree), Is.Null);
-    }
-
-    /// <summary>
-    /// As with <c>GetVersionConfigAsync</c>, the only existing test naming
-    /// <c>MigrateToTargetVersionAsync</c> asserts the versioning-absent throw, so
-    /// the delegation itself - and the report it hands back - was unproven.
-    /// </summary>
-    [Test]
-    public async Task MigrateToTargetVersion_delegates_and_returns_admin_report()
-    {
-        var admin = Substitute.For<ILatticeSchemaVersionAdmin>();
-        var report = LatticeSchemaRemediationReport.Completed(42, "orders-v9", "op-7");
-        admin.MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>()).Returns(report);
-        var control = Create(admin);
-
-        var result = await control.MigrateToTargetVersionAsync(Tree);
-
-        Assert.That(result.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Completed));
-        Assert.That(result.ScannedCount, Is.EqualTo(42));
-        Assert.That(result.OperationId, Is.EqualTo("op-7"));
-        await admin.Received(1).MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>());
     }
 
     [Test]

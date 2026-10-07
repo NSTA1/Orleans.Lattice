@@ -28,9 +28,9 @@ open, and these cases prove that it discriminates.
 
 THE MUTATION SUITE IS THE POINT
 -------------------------------
-Cases A1-A7 establish that the guard reports what it should on inputs we
+Cases A1-A13 establish that the guard reports what it should on inputs we
 control. They cannot, on their own, establish that any individual mechanism
-inside it is load-bearing - a guard can pass all seven while one of its parts
+inside it is load-bearing - a guard can pass every case while one of its parts
 has quietly stopped contributing. So M1-M4 each reintroduce a specific defect
 and assert that a NAMED case changes its verdict. Each mutation is asserted to
 apply exactly once before it is used, because an unapplied mutation and a
@@ -275,8 +275,8 @@ def main() -> int:
               done.returncode == 1 and "distinct author identities" in done.stdout,
               done.stdout)
 
-        # -- Branch naming, asserted unchanged ------------------------------
-        print("\nBranch-name arm (must be unchanged)")
+        # -- Branch naming --------------------------------------------------
+        print("\nBranch-name arm")
 
         repo = workroot / "branch"
         base, head = build_repo(repo, CLEAN)
@@ -289,6 +289,57 @@ def main() -> int:
                          branch="feat/octocat-fixes-it", author="octocat")
         check("A6 a branch carrying the author's login fails",
               done.returncode == 1 and "username" in done.stdout, done.stdout)
+
+        for branch in ("dependabot/npm_and_yarn/videos/sharp-0.35.5",
+                       "dependabot/npm_and_yarn/videos/source-map-js-1.2.2",
+                       "dependabot/nuget/Some.Package-1.2.3"):
+            done = run_guard(script, repo, base_sha=base, head_sha=head,
+                             branch=branch, author="dependabot[bot]")
+            check(f"A8 Dependabot's generated branch passes: {branch}",
+                  done.returncode == 0 and "OK:" in done.stdout,
+                  done.stdout + done.stderr)
+
+        done = run_guard(script, repo, base_sha=base, head_sha=head,
+                         branch="dependabot/npm_and_yarn/videos/sharp-0.35.5")
+        check("A9 a human cannot use the Dependabot namespace",
+              done.returncode == 1 and "naming convention" in done.stdout, done.stdout)
+
+        done = run_guard(script, repo, base_sha=base, head_sha=head,
+                         branch="dependabot/", author="dependabot[bot]")
+        check("A10 an empty Dependabot branch description fails",
+              done.returncode == 1 and "naming convention" in done.stdout, done.stdout)
+
+        done = run_guard(script, repo, base_sha=base, head_sha=head,
+                         branch="feat/dependabot[bot]-fix", author="dependabot[bot]")
+        check("A11 the bot's username check still applies outside its namespace",
+              done.returncode == 1 and "username" in done.stdout, done.stdout)
+
+        base, head = build_repo(workroot / "bot-trailer", WRITTEN_TRAILER)
+        done = run_guard(script, workroot / "bot-trailer", base_sha=base, head_sha=head,
+                         branch="dependabot/nuget/Some.Package-1.2.3",
+                         author="dependabot[bot]")
+        check("A12 Dependabot commits still cannot carry banned trailers",
+              done.returncode == 1 and "banned trailer" in done.stdout, done.stdout)
+
+        base, head = build_repo(workroot / "bot-identities", TWO_IDENTITIES)
+        done = run_guard(script, workroot / "bot-identities", base_sha=base, head_sha=head,
+                         branch="dependabot/nuget/Some.Package-1.2.3",
+                         author="dependabot[bot]")
+        check("A13 Dependabot accepts contributor identities with an explicit-merge notice",
+              done.returncode == 0 and "explicit subject and body" in done.stdout,
+              done.stdout)
+
+        done = run_guard(script, workroot / "bot-identities", base_sha=base, head_sha=head,
+                         branch="feat/a-described-change", author="dependabot[bot]")
+        check("Dependabot outside its namespace still requires one identity",
+              done.returncode == 1 and "distinct author identities" in done.stdout,
+              done.stdout)
+
+        done = run_guard(script, workroot / "bot-identities", base_sha=head, head_sha=head,
+                         branch="dependabot/nuget/Some.Package-1.2.3",
+                         author="dependabot[bot]")
+        check("Dependabot still fails on a zero-commit range",
+              done.returncode == 1 and "zero commits" in done.stdout, done.stdout)
 
         # -- Fail-closed behaviour ------------------------------------------
         print("\nFail-closed behaviour (an unread population is not a clean one)")

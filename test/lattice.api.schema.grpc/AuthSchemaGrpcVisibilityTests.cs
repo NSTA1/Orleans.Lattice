@@ -132,28 +132,6 @@ public sealed class AuthSchemaGrpcVisibilityTests
     }
 
     [Test]
-    public void scan_compliance_without_a_credential_is_permission_denied()
-    {
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
-            _host.Methods.ScanCompliance,
-            new SchemaTreeRequest { TreeId = Tree },
-            subject: null));
-
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
-    }
-
-    [Test]
-    public async Task scan_compliance_with_a_credential_is_accepted()
-    {
-        var response = await CallAsync(
-            _host.Methods.ScanCompliance,
-            new SchemaTreeRequest { TreeId = Tree },
-            Operator);
-
-        Assert.That(response.Report.TreeId, Is.EqualTo(Tree));
-    }
-
-    [Test]
     public void probe_capabilities_without_a_credential_is_permission_denied()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
@@ -173,22 +151,6 @@ public sealed class AuthSchemaGrpcVisibilityTests
             Operator);
 
         Assert.That(capabilities.TreeId, Is.EqualTo(Tree));
-    }
-
-    [Test]
-    public void remediate_without_a_credential_is_permission_denied()
-    {
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await CallAsync(
-            _host.Methods.Remediate,
-            new RemediateRequest
-            {
-                TreeId = Tree,
-                Transform = LatticeValueTransform.Passthrough(),
-                TargetPolicy = JsonPolicy(),
-            },
-            subject: null));
-
-        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
     }
 
     [Test]

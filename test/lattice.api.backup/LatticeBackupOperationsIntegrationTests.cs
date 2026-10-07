@@ -8,10 +8,9 @@ namespace Orleans.Lattice.Api.Backup.Tests;
 /// <summary>
 /// End-to-end coverage of <see cref="ILatticeBackupOperations"/> (#4122) against a
 /// live single-silo cluster: a start returns at once and polls to the outcome, a
-/// retried start is idempotent, listing pages newest-first, every status read,
+/// retried start is idempotent, listing pages newest-first, and every status read,
 /// listing and cancel is scoped fail-closed to the caller's tenant and grants (an
-/// operation the caller may not see is not found, never forbidden), and the
-/// deprecated blocking verbs run through the same engine path and behave as before.
+/// operation the caller may not see is not found, never forbidden).
 /// </summary>
 [TestFixture]
 [Category("Integration")]
@@ -253,45 +252,6 @@ public sealed class LatticeBackupOperationsIntegrationTests
             Assert.That(status.CancelRequested, Is.False);
         });
     }
-
-#pragma warning disable LATTICE0002 // The deprecated wrappers are exercised on purpose.
-    [Test]
-    public async Task The_deprecated_blocking_verb_runs_as_a_tracked_operation_and_returns_as_before()
-    {
-        var before = (await Operations.ListOperationsAsync(new LatticeOperationListRequest { PageSize = 500 })).Operations
-            .Select(o => o.OperationId).ToHashSet();
-
-        var result = await _fixture.Control.CreateBackupAsync(Capture("blocking"));
-
-        var after = (await Operations.ListOperationsAsync(new LatticeOperationListRequest { PageSize = 500 })).Operations;
-        var tracked = after.Single(o => !before.Contains(o.OperationId));
-        Assert.Multiple(() =>
-        {
-            Assert.That(result.Manifest.Name, Is.EqualTo("blocking"));
-            Assert.That(tracked.State, Is.EqualTo(LatticeOperationState.Succeeded));
-            Assert.That(tracked.ResultReference, Is.EqualTo(result.BackupId), "One engine path serves both verbs.");
-        });
-    }
-
-    [Test]
-    public void The_deprecated_blocking_verb_still_throws_the_engines_own_exception()
-    {
-        Assert.That(
-            async () => await _fixture.Control.RestoreBackupAsync(new LatticeRestoreRequest("no-such-backup", "ops-x")),
-            Throws.TypeOf<LatticeRestoreValidationException>());
-    }
-
-    [Test]
-    public void The_deprecated_blocking_verb_honours_an_already_cancelled_token_without_starting_work()
-    {
-        using var cts = new CancellationTokenSource();
-        cts.Cancel();
-
-        Assert.That(
-            async () => await _fixture.Control.CreateBackupAsync(Capture(), cts.Token),
-            Throws.InstanceOf<OperationCanceledException>());
-    }
-#pragma warning restore LATTICE0002
 
     private sealed class AllowGate : ILatticeAccessGate
     {

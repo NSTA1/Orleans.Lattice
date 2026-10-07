@@ -38,15 +38,15 @@ The gRPC service name is `orleans.lattice.api.treeadmin`. Every RPC is unary. Th
 | Restore | `RestoreTreeAsync`, `RestoreTreeSetAsync`, `RevertTreeRestoreAsync` |
 | Reshard and resize | `ReshardTreeAsync`, `GetReshardStatusAsync`, `ResizeTreeAsync`, `UndoTreeResizeAsync`, `GetResizeStatusAsync` |
 | Snapshot | `SnapshotTreeAsync`, `GetSnapshotStatusAsync` |
-| WAL placement | `GetWalPlacementAsync`, `AuditWalPlacementAsync`, `PlanWalMoveAsync`, `ExecuteWalMoveAsync`, `ReclaimMovedWalSourceAsync` |
+| WAL placement | `GetWalPlacementAsync`, `AuditWalPlacementAsync`, `PlanWalMoveAsync`, `ReclaimMovedWalSourceAsync` |
 | WAL reclamation | `GetWalReclamationAsync` |
 | Orphaned leaves | `AuditOrphanedLeavesAsync`, `SurveyOrphanedLeavesAsync`, `RepairOrphanedLeavesAsync` |
-| Views | `ListViewsAsync`, `CreateViewAsync`, `GetViewStatusAsync`, `RebuildViewAsync`, `ReconcileViewAsync`, `DropViewAsync` |
-| Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync`, `ReconcileTagIndexAsync` |
+| Views | `ListViewsAsync`, `CreateViewAsync`, `GetViewStatusAsync`, `DropViewAsync` |
+| Tag indexes | `ListTagIndexesAsync`, `GetTagIndexStatusAsync` |
 | Compaction and retention | `TriggerShardCompactionAsync`, `GetHistoryRetentionAsync`, `SetHistoryRetentionAsync` |
 | Accept-then-poll operations | `StartViewRebuildAsync`, `StartViewReconcileAsync`, `StartTagIndexReconcileAsync`, `StartWalMoveAsync`, `StartOrphanedLeavesAuditAsync`, `StartOrphanedLeavesRepairAsync`, `GetTreeAdminOperationStatusAsync`, `ListTreeAdminOperationsAsync`, `CancelTreeAdminOperationAsync` |
 
-The operation RPCs (`StartViewRebuild`, `StartViewReconcile`, `StartTagIndexReconcile`, `StartWalMove`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair`, `GetTreeAdminOperationStatus`, `ListTreeAdminOperations`, `CancelTreeAdminOperation`) serve `ILatticeTreeAdminOperations`; a start returns a `LatticeOperationHandle` and the status reads return a `TreeAdminOperationStatusResponse` whose `Status` is `null` when the operation is not visible. A host that registers no operations facade answers them `Unimplemented`. The start RPCs reuse the existing request records, which gained an optional `TrackingOperationId` for the idempotency id. The blocking `RebuildView`, `ReconcileView`, `ReconcileTagIndex` and `ExecuteWalMove` RPCs, and their client methods, are deprecated (`LATTICE0002`) and will be removed in the next major version; see [Tree-administration operations](../lattice.api.treeadmin/operations.md).
+The operation RPCs (`StartViewRebuild`, `StartViewReconcile`, `StartTagIndexReconcile`, `StartWalMove`, `StartOrphanedLeavesAudit`, `StartOrphanedLeavesRepair`, `GetTreeAdminOperationStatus`, `ListTreeAdminOperations`, `CancelTreeAdminOperation`) serve `ILatticeTreeAdminOperations`; a start returns a `LatticeOperationHandle` and the status reads return a `TreeAdminOperationStatusResponse` whose `Status` is `null` when the operation is not visible. A host that registers no operations facade answers them `Unimplemented`. The start RPCs reuse the existing request records, which gained an optional `TrackingOperationId` for the idempotency id. The blocking `LATTICE0002` RPCs and client methods were removed in this major version; see [Tree-administration operations](../lattice.api.treeadmin/operations.md#migrating-from-the-removed-blocking-verbs).
 
 The `GetWalReclamation` RPC serves `ILatticeWalReclamation`: it takes a `TreeAdminTreeRequest` and returns the facade's `TreeWalReclamationReport` unchanged - which durable pin holds the tree's WAL floor, the leaf behind it, its pin offset and state, and whether it has wedged reclamation (see [WAL reclamation](../lattice.api.treeadmin/README.md#wal-reclamation)). A host that registers no `ILatticeWalReclamation` answers it `Unimplemented`.
 
@@ -96,7 +96,6 @@ The reshard, resize and snapshot RPCs return the facade's status records unchang
 | `AuditWalPlacementAsync` | `Task<TreeWalPlacementAudit> AuditWalPlacementAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `GetWalReclamationAsync` | `Task<TreeWalReclamationReport> GetWalReclamationAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `PlanWalMoveAsync` | `Task<TreeWalMovePlan> PlanWalMoveAsync(string treeId, int partition, string targetProviderKey, CancellationToken cancellationToken = default)` |
-| `ExecuteWalMoveAsync` | `Task<TreeWalMoveReceipt> ExecuteWalMoveAsync(string treeId, int partition, string targetProviderKey, TreeWalMoveOptions? options = null, CancellationToken cancellationToken = default)` |
 | `ReclaimMovedWalSourceAsync` | `Task<TreeWalMoveReceipt> ReclaimMovedWalSourceAsync(string treeId, int partition, string sourceProviderKey, CancellationToken cancellationToken = default)` |
 | `AuditOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> AuditOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
 | `SurveyOrphanedLeavesAsync` | `Task<TreeOrphanedLeafReport> SurveyOrphanedLeavesAsync(string treeId, string? resumeFrom = null, CancellationToken cancellationToken = default)` |
@@ -104,12 +103,9 @@ The reshard, resize and snapshot RPCs return the facade's status records unchang
 | `ListViewsAsync` | `Task<TreeViewCatalog> ListViewsAsync(CancellationToken cancellationToken = default)` |
 | `CreateViewAsync` | `Task<TreeViewStatus> CreateViewAsync(string viewName, string sourceTreeId, string providerKey, byte[] payload, CancellationToken cancellationToken = default)` |
 | `GetViewStatusAsync` | `Task<TreeViewStatus> GetViewStatusAsync(string viewName, CancellationToken cancellationToken = default)` |
-| `RebuildViewAsync` | `Task<TreeViewStatus> RebuildViewAsync(string viewName, CancellationToken cancellationToken = default)` |
-| `ReconcileViewAsync` | `Task<TreeViewReconcileResult> ReconcileViewAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `DropViewAsync` | `Task DropViewAsync(string viewName, CancellationToken cancellationToken = default)` |
 | `ListTagIndexesAsync` | `Task<TreeTagIndexCatalog> ListTagIndexesAsync(CancellationToken cancellationToken = default)` |
 | `GetTagIndexStatusAsync` | `Task<TreeTagIndexStatus> GetTagIndexStatusAsync(string indexName, CancellationToken cancellationToken = default)` |
-| `ReconcileTagIndexAsync` | `Task<TreeTagReconcileReport> ReconcileTagIndexAsync(string indexName, CancellationToken cancellationToken = default)` |
 | `TriggerShardCompactionAsync` | `Task<TreeCompactionTriggerResult> TriggerShardCompactionAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)` |
 | `GetHistoryRetentionAsync` | `Task<TreeHistoryRetention> GetHistoryRetentionAsync(string treeId, CancellationToken cancellationToken = default)` |
 | `SetHistoryRetentionAsync` | `Task<TreeHistoryRetention> SetHistoryRetentionAsync(string treeId, TreeHistoryRetentionMode? mode, TimeSpan? window, CancellationToken cancellationToken = default)` |

@@ -625,35 +625,6 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
-    public async Task ExecuteWalMoveAsync_forwards_request_with_options_and_unwraps_response()
-    {
-        var invoker = new FakeCallInvoker(_ => new TreeWalMoveReceipt
-        {
-            TreeId = "orders",
-            Partition = 1,
-            Outcome = TreeWalMoveOutcome.Moved,
-        });
-
-        var options = new TreeWalMoveOptions
-        {
-            QuiesceLeaseSeconds = 45,
-            CopyPageSize = 128,
-            DisableVerifyAfterCopy = true,
-        };
-        var result = await Adapter(invoker).ExecuteWalMoveAsync("orders", 1, "wal-secondary", options);
-
-        var sent = (TreeAdminWalMoveExecuteRequest)invoker.LastRequest!;
-        Assert.Multiple(() =>
-        {
-            Assert.That(sent.TreeId, Is.EqualTo("orders"));
-            Assert.That(sent.Partition, Is.EqualTo(1));
-            Assert.That(sent.TargetProviderKey, Is.EqualTo("wal-secondary"));
-            Assert.That(sent.Options, Is.EqualTo(options));
-            Assert.That(result.Outcome, Is.EqualTo(TreeWalMoveOutcome.Moved));
-        });
-    }
-
-    [Test]
     public async Task ReclaimMovedWalSourceAsync_forwards_request_and_unwraps_response()
     {
         var invoker = new FakeCallInvoker(_ => new TreeWalMoveReceipt
@@ -714,45 +685,6 @@ public sealed class GrpcLatticeTreeAdminTests
     }
 
     [Test]
-    public async Task RebuildViewAsync_forwards_request_and_unwraps_response()
-    {
-        var invoker = new FakeCallInvoker(_ => new TreeViewStatus
-        {
-            ViewName = "orders-by-region",
-            SourceTreeId = "orders",
-        });
-
-        var result = await Adapter(invoker).RebuildViewAsync("orders-by-region");
-
-        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
-        Assert.Multiple(() =>
-        {
-            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
-            Assert.That(result.ViewName, Is.EqualTo("orders-by-region"));
-        });
-    }
-
-    [Test]
-    public async Task ReconcileViewAsync_forwards_request_and_unwraps_response()
-    {
-        var invoker = new FakeCallInvoker(_ => new TreeViewReconcileResult
-        {
-            ViewName = "orders-by-region",
-            SourceTreeId = "orders",
-            DriftRepaired = true,
-        });
-
-        var result = await Adapter(invoker).ReconcileViewAsync("orders-by-region");
-
-        var sent = (TreeAdminViewRequest)invoker.LastRequest!;
-        Assert.Multiple(() =>
-        {
-            Assert.That(sent.ViewName, Is.EqualTo("orders-by-region"));
-            Assert.That(result.DriftRepaired, Is.True);
-        });
-    }
-
-    [Test]
     public async Task DropViewAsync_forwards_request_and_completes()
     {
         var invoker = new FakeCallInvoker(_ => new TreeAdminViewRequest { ViewName = "orders-by-region" });
@@ -796,26 +728,6 @@ public sealed class GrpcLatticeTreeAdminTests
         {
             Assert.That(sent.IndexName, Is.EqualTo("by-tag"));
             Assert.That(result.TreeId, Is.EqualTo("tag-by-tag"));
-        });
-    }
-
-    [Test]
-    public async Task ReconcileTagIndexAsync_forwards_request_and_unwraps_response()
-    {
-        var invoker = new FakeCallInvoker(_ => new TreeTagReconcileReport
-        {
-            IndexName = "by-tag",
-            TreeId = "tag-by-tag",
-            OrphanRowsRemoved = 3,
-        });
-
-        var result = await Adapter(invoker).ReconcileTagIndexAsync("by-tag");
-
-        var sent = (TreeAdminTagIndexRequest)invoker.LastRequest!;
-        Assert.Multiple(() =>
-        {
-            Assert.That(sent.IndexName, Is.EqualTo("by-tag"));
-            Assert.That(result.OrphanRowsRemoved, Is.EqualTo(3));
         });
     }
 

@@ -7,9 +7,7 @@ using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Schema;
 using Orleans.Serialization;
 
-// The deprecated blocking verbs (LATTICE0002) - the compliance scan (#4126) and the
 // remediation and migration verbs (#4123) - are exercised on purpose until their removal.
-#pragma warning disable LATTICE0002
 
 namespace Orleans.Lattice.Api.Schema.Grpc.Tests;
 
@@ -225,34 +223,6 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
     }
 
     [Test]
-    public async Task AdvanceAndMigrate_returns_the_report()
-    {
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.AdvanceAndMigrateAsync(Tree, 6, Arg.Any<CancellationToken>()).Returns(LatticeSchemaRemediationReport.Idle);
-        var service = CreateService(control);
-
-        var response = await service.AdvanceAndMigrate(
-            new AdvanceVersionRequest { TreeId = Tree, NewTargetVersion = 6 },
-            Context(LatticeSchemaGrpcMethods.AdvanceAndMigrateMethodName));
-
-        Assert.That(response.Report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
-    public async Task MigrateToTargetVersion_returns_the_report()
-    {
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>()).Returns(LatticeSchemaRemediationReport.Idle);
-        var service = CreateService(control);
-
-        var response = await service.MigrateToTargetVersion(
-            new SchemaTreeRequest { TreeId = Tree },
-            Context(LatticeSchemaGrpcMethods.MigrateToTargetVersionMethodName));
-
-        Assert.That(response.Report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
     public async Task ClearVersionConfig_returns_the_removed_flag()
     {
         var control = Substitute.For<ILatticeSchemaControl>();
@@ -267,21 +237,6 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
     }
 
     [Test]
-    public async Task Remediate_returns_the_report()
-    {
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.RemediateAsync(Tree, Arg.Any<LatticeValueTransform>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaRemediationReport.Idle);
-        var service = CreateService(control);
-
-        var response = await service.Remediate(
-            new RemediateRequest { TreeId = Tree, Transform = LatticeValueTransform.Passthrough(), TargetPolicy = JsonPolicy() },
-            Context(LatticeSchemaGrpcMethods.RemediateMethodName));
-
-        Assert.That(response.Report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
     public async Task GetRemediationStatus_returns_the_report()
     {
         var control = Substitute.For<ILatticeSchemaControl>();
@@ -293,21 +248,6 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
             Context(LatticeSchemaGrpcMethods.GetRemediationStatusMethodName));
 
         Assert.That(response.Report.Phase, Is.EqualTo(LatticeSchemaRemediationPhase.Idle));
-    }
-
-    [Test]
-    public async Task ScanCompliance_returns_the_report()
-    {
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.ScanComplianceAsync(Tree, Arg.Any<CancellationToken>())
-            .Returns(LatticeSchemaComplianceReport.Ungoverned(Tree) with { HasPolicy = true });
-        var service = CreateService(control);
-
-        var response = await service.ScanCompliance(
-            new SchemaTreeRequest { TreeId = Tree },
-            Context(LatticeSchemaGrpcMethods.ScanComplianceMethodName));
-
-        Assert.That(response.Report.TreeId, Is.EqualTo(Tree));
     }
 
     [Test]
@@ -413,73 +353,6 @@ public sealed class LatticeSchemaGrpcServiceUnitTests
         yield return new TestCaseData(new OperationCanceledException(), StatusCode.Cancelled).SetName("OperationCanceled_to_Cancelled");
         yield return new TestCaseData(new LatticeAuthorizationDeniedException("denied"), StatusCode.PermissionDenied).SetName("AuthorizationDenied_to_PermissionDenied");
         yield return new TestCaseData(new Exception("boom"), StatusCode.Internal).SetName("Unexpected_to_Internal");
-    }
-
-    [Test]
-    public void Remediate_maps_a_live_key_cap_breach_to_resource_exhausted_with_trailers()
-    {
-        // Regression: a remediation rebuilds the tree into a fresh destination one
-        // entry at a time, so it runs under the per-tree admission caps. The
-        // exception derives from InvalidOperationException, so without a typed arm
-        // placed ahead of it the breach was reported as FailedPrecondition - a
-        // precondition the caller cannot satisfy - instead of a capacity outcome.
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.RemediateAsync(Tree, Arg.Any<LatticeValueTransform>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new LatticeQuotaExceededException(
-                "Write to tree 'orders/remediated/op-1' rejected: live key count 1200 has reached the configured LatticeOptions.MaxLiveKeys cap of 1000.",
-                "orders/remediated/op-1",
-                LatticeQuotaExceededException.KeysDimension,
-                current: 1200,
-                limit: 1000));
-        var service = CreateService(control);
-
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.Remediate(
-            new RemediateRequest { TreeId = Tree, Transform = LatticeValueTransform.Passthrough(), TargetPolicy = JsonPolicy() },
-            Context(LatticeSchemaGrpcMethods.RemediateMethodName)));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
-            Assert.That(
-                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaDimensionTrailer),
-                Is.EqualTo(LatticeQuotaExceededException.KeysDimension),
-                "the client must be able to branch on the breached dimension without parsing prose");
-            Assert.That(
-                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaTreeTrailer),
-                Is.EqualTo("orders/remediated/op-1"));
-            Assert.That(ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaCurrentTrailer), Is.EqualTo("1200"));
-            Assert.That(ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaLimitTrailer), Is.EqualTo("1000"));
-        });
-    }
-
-    [Test]
-    public void MigrateToTargetVersion_maps_a_byte_cap_breach_to_resource_exhausted()
-    {
-        var control = Substitute.For<ILatticeSchemaControl>();
-        control.MigrateToTargetVersionAsync(Tree, Arg.Any<CancellationToken>())
-            .ThrowsAsync(new LatticeQuotaExceededException(
-                "Write to tree 'orders/remediated/op-2' rejected: estimated footprint 4096 bytes has reached the configured LatticeOptions.MaxEstimatedBytes cap of 2048 bytes.",
-                "orders/remediated/op-2",
-                LatticeQuotaExceededException.BytesDimension,
-                current: 4096,
-                limit: 2048));
-        var service = CreateService(control);
-
-        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.MigrateToTargetVersion(
-            new SchemaTreeRequest { TreeId = Tree },
-            Context(LatticeSchemaGrpcMethods.MigrateToTargetVersionMethodName)));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.ResourceExhausted));
-            Assert.That(
-                ex.Trailers.GetValue(LatticeSchemaGrpcService.QuotaDimensionTrailer),
-                Is.EqualTo(LatticeQuotaExceededException.BytesDimension));
-            Assert.That(
-                ex.Trailers.Select(static entry => entry.Key),
-                Has.None.Contains("tenant"),
-                "a quota trailer never carries a server-side tenant attribution");
-        });
     }
 
     [Test]

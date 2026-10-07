@@ -13,9 +13,8 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// against to discover and register the unary RPCs (<c>SetPolicy</c>,
 /// <c>ClearPolicy</c>, <c>GetPolicy</c>, <c>CountDeadLetters</c>,
 /// <c>SetVersionConfig</c>, <c>GetVersionConfig</c>, <c>AdvanceTargetVersion</c>,
-/// <c>AdvanceAndMigrate</c>, <c>MigrateToTargetVersion</c>,
-/// <c>ClearVersionConfig</c>, <c>Remediate</c>, <c>GetRemediationStatus</c>,
-/// <c>ScanCompliance</c>, <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>, and the
+/// <c>ClearVersionConfig</c>, <c>GetRemediationStatus</c>,
+/// <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>, and the
 /// accept-then-poll <c>StartComplianceScan</c>, <c>GetComplianceScanStatus</c>,
 /// <c>ListComplianceScans</c> and <c>CancelComplianceScan</c>) and the
 /// server-streaming RPC (<c>StreamDeadLetters</c>).
@@ -59,23 +58,11 @@ internal abstract class LatticeSchemaGrpcServiceBase
     /// <summary>Advances a tree's target schema version. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<VersionConfigResponse> AdvanceTargetVersion(AdvanceVersionRequest request, ServerCallContext context);
 
-    /// <summary>Advances a tree's target version and eagerly migrates. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
-    public abstract Task<SchemaRemediationReportResponse> AdvanceAndMigrate(AdvanceVersionRequest request, ServerCallContext context);
-
-    /// <summary>Migrates a tree to its current target version. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
-    public abstract Task<SchemaRemediationReportResponse> MigrateToTargetVersion(SchemaTreeRequest request, ServerCallContext context);
-
     /// <summary>Clears a tree's version config. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<SchemaRemovedResponse> ClearVersionConfig(SchemaTreeRequest request, ServerCallContext context);
 
-    /// <summary>Runs (or resumes) a tree's remediation. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
-    public abstract Task<SchemaRemediationReportResponse> Remediate(RemediateRequest request, ServerCallContext context);
-
     /// <summary>Reads a tree's remediation status. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<SchemaRemediationReportResponse> GetRemediationStatus(SchemaTreeRequest request, ServerCallContext context);
-
-    /// <summary>Scans a tree for compliance against its policy. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
-    public abstract Task<SchemaComplianceReportResponse> ScanCompliance(SchemaTreeRequest request, ServerCallContext context);
 
     /// <summary>Probes the caller's schema-management capabilities for a tree. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<LatticeSchemaCapabilities> ProbeCapabilities(SchemaTreeRequest request, ServerCallContext context);
@@ -145,12 +132,8 @@ internal abstract class LatticeSchemaGrpcServiceBase
             binder.AddMethod(methods.SetVersionConfig, (UnaryServerMethod<SetVersionConfigRequest, SchemaAckResponse>?)null);
             binder.AddMethod(methods.GetVersionConfig, (UnaryServerMethod<SchemaTreeRequest, GetVersionConfigResponse>?)null);
             binder.AddMethod(methods.AdvanceTargetVersion, (UnaryServerMethod<AdvanceVersionRequest, VersionConfigResponse>?)null);
-            binder.AddMethod(methods.AdvanceAndMigrate, (UnaryServerMethod<AdvanceVersionRequest, SchemaRemediationReportResponse>?)null);
-            binder.AddMethod(methods.MigrateToTargetVersion, (UnaryServerMethod<SchemaTreeRequest, SchemaRemediationReportResponse>?)null);
             binder.AddMethod(methods.ClearVersionConfig, (UnaryServerMethod<SchemaTreeRequest, SchemaRemovedResponse>?)null);
-            binder.AddMethod(methods.Remediate, (UnaryServerMethod<RemediateRequest, SchemaRemediationReportResponse>?)null);
             binder.AddMethod(methods.GetRemediationStatus, (UnaryServerMethod<SchemaTreeRequest, SchemaRemediationReportResponse>?)null);
-            binder.AddMethod(methods.ScanCompliance, (UnaryServerMethod<SchemaTreeRequest, SchemaComplianceReportResponse>?)null);
             binder.AddMethod(methods.ProbeCapabilities, (UnaryServerMethod<SchemaTreeRequest, LatticeSchemaCapabilities>?)null);
             binder.AddMethod(methods.GetAuthScheme, (UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>?)null);
             binder.AddMethod(methods.StartComplianceScan, (UnaryServerMethod<SchemaComplianceScanStartRequest, LatticeOperationHandle>?)null);
@@ -174,12 +157,8 @@ internal abstract class LatticeSchemaGrpcServiceBase
         binder.AddMethod(methods.SetVersionConfig, new UnaryServerMethod<SetVersionConfigRequest, SchemaAckResponse>(serviceImpl.SetVersionConfig));
         binder.AddMethod(methods.GetVersionConfig, new UnaryServerMethod<SchemaTreeRequest, GetVersionConfigResponse>(serviceImpl.GetVersionConfig));
         binder.AddMethod(methods.AdvanceTargetVersion, new UnaryServerMethod<AdvanceVersionRequest, VersionConfigResponse>(serviceImpl.AdvanceTargetVersion));
-        binder.AddMethod(methods.AdvanceAndMigrate, new UnaryServerMethod<AdvanceVersionRequest, SchemaRemediationReportResponse>(serviceImpl.AdvanceAndMigrate));
-        binder.AddMethod(methods.MigrateToTargetVersion, new UnaryServerMethod<SchemaTreeRequest, SchemaRemediationReportResponse>(serviceImpl.MigrateToTargetVersion));
         binder.AddMethod(methods.ClearVersionConfig, new UnaryServerMethod<SchemaTreeRequest, SchemaRemovedResponse>(serviceImpl.ClearVersionConfig));
-        binder.AddMethod(methods.Remediate, new UnaryServerMethod<RemediateRequest, SchemaRemediationReportResponse>(serviceImpl.Remediate));
         binder.AddMethod(methods.GetRemediationStatus, new UnaryServerMethod<SchemaTreeRequest, SchemaRemediationReportResponse>(serviceImpl.GetRemediationStatus));
-        binder.AddMethod(methods.ScanCompliance, new UnaryServerMethod<SchemaTreeRequest, SchemaComplianceReportResponse>(serviceImpl.ScanCompliance));
         binder.AddMethod(methods.ProbeCapabilities, new UnaryServerMethod<SchemaTreeRequest, LatticeSchemaCapabilities>(serviceImpl.ProbeCapabilities));
         binder.AddMethod(methods.GetAuthScheme, new UnaryServerMethod<AuthSchemeAdvertisementRequest, AuthSchemeAdvertisement>(serviceImpl.GetAuthScheme));
         binder.AddMethod(methods.StartComplianceScan, new UnaryServerMethod<SchemaComplianceScanStartRequest, LatticeOperationHandle>(serviceImpl.StartComplianceScan));
@@ -413,22 +392,9 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             return new VersionConfigResponse { Config = config };
         });
 
-#pragma warning disable LATTICE0002 // The deprecated blocking RPCs serve the deprecated facade verbs until their removal.
     /// <inheritdoc />
-    public override Task<SchemaRemediationReportResponse> AdvanceAndMigrate(AdvanceVersionRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var report = await control.AdvanceAndMigrateAsync(req.TreeId, req.NewTargetVersion, ct).ConfigureAwait(false);
-            return new SchemaRemediationReportResponse { Report = report };
-        });
 
     /// <inheritdoc />
-    public override Task<SchemaRemediationReportResponse> MigrateToTargetVersion(SchemaTreeRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var report = await control.MigrateToTargetVersionAsync(req.TreeId, ct).ConfigureAwait(false);
-            return new SchemaRemediationReportResponse { Report = report };
-        });
 
     /// <inheritdoc />
     public override Task<SchemaRemovedResponse> ClearVersionConfig(SchemaTreeRequest request, ServerCallContext context)
@@ -439,13 +405,6 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
         });
 
     /// <inheritdoc />
-    public override Task<SchemaRemediationReportResponse> Remediate(RemediateRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            var report = await control.RemediateAsync(req.TreeId, req.Transform, req.TargetPolicy, ct).ConfigureAwait(false);
-            return new SchemaRemediationReportResponse { Report = report };
-        });
-#pragma warning restore LATTICE0002
 
     /// <inheritdoc />
     public override Task<SchemaRemediationReportResponse> GetRemediationStatus(SchemaTreeRequest request, ServerCallContext context)
@@ -499,16 +458,6 @@ internal sealed class LatticeSchemaGrpcService : LatticeSchemaGrpcServiceBase
             StatusCode.Unimplemented, "This schema control API does not serve tracked schema operations."));
 
     /// <inheritdoc />
-    public override Task<SchemaComplianceReportResponse> ScanCompliance(SchemaTreeRequest request, ServerCallContext context)
-        => InvokeAsync(request, context, static async (control, req, ct) =>
-        {
-            // The deprecated blocking RPC (LATTICE0002) is served by the deprecated
-            // verb, unchanged, until the next major version removes both.
-#pragma warning disable LATTICE0002
-            var report = await control.ScanComplianceAsync(req.TreeId, ct).ConfigureAwait(false);
-#pragma warning restore LATTICE0002
-            return new SchemaComplianceReportResponse { Report = report };
-        });
 
     /// <inheritdoc />
     public override Task<LatticeOperationHandle> StartComplianceScan(SchemaComplianceScanStartRequest request, ServerCallContext context)

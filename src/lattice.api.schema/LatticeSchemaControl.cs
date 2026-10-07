@@ -192,40 +192,6 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
     }
 
     /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-
-        // Scope the caller-supplied, tenant-local name to the caller's tenant before
-        // anything uses it, so the authorization check and the operation below act on
-        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
-        // returns the bare name unchanged).
-        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return await RequireVersionAdmin()
-            .AdvanceAndMigrateAsync(treeId, newTargetVersion, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
-        string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-
-        // Scope the caller-supplied, tenant-local name to the caller's tenant before
-        // anything uses it, so the authorization check and the operation below act on
-        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
-        // returns the bare name unchanged).
-        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return await RequireVersionAdmin()
-            .MigrateToTargetVersionAsync(treeId, cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
     public async Task<bool> ClearVersionConfigAsync(string treeId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
@@ -237,27 +203,6 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
         return await RequireVersionAdmin().ClearVersionConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-
-        // Scope the caller-supplied, tenant-local name to the caller's tenant before
-        // anything uses it, so the authorization check and the operation below act on
-        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
-        // returns the bare name unchanged).
-        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        ArgumentNullException.ThrowIfNull(targetPolicy);
-        await _authorizer.AuthorizeManageAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return await _remediation
-            .RemediateAsync(treeId, transform, targetPolicy, cancellationToken)
-            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -273,21 +218,6 @@ internal sealed partial class LatticeSchemaControl : ILatticeSchemaControl, ILat
         treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
         await _authorizer.AuthorizeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
         return await _remediation.GetRemediationStatusAsync(treeId, cancellationToken).ConfigureAwait(false);
-    }
-
-    /// <inheritdoc />
-    public async Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
-        string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-
-        // Scope the caller-supplied, tenant-local name to the caller's tenant before
-        // anything uses it, so the authorization check and the operation below act on
-        // the SAME effective tree. A no-op when tenancy is off (the core null resolver
-        // returns the bare name unchanged).
-        treeId = await _tenantResolver.ResolveEffectiveTreeIdAsync(treeId, cancellationToken).ConfigureAwait(false);
-        await _authorizer.AuthorizeReadAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return await _compliance.ScanComplianceAsync(treeId, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />

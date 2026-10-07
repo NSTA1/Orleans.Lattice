@@ -188,35 +188,11 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The terminal migration report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    [Obsolete("AdvanceAndMigrateAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartAdvanceAndMigrateAsync and poll GetSchemaOperationStatusAsync instead. AdvanceAndMigrateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeSchemaRemediationReport> AdvanceAndMigrateAsync(
-        string treeId, uint newTargetVersion, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var response = await UnaryAsync(
-            _methods.AdvanceAndMigrate,
-            new AdvanceVersionRequest { TreeId = treeId, NewTargetVersion = newTargetVersion },
-            cancellationToken).ConfigureAwait(false);
-        return response.Report;
-    }
-
     /// <summary>Migrates <paramref name="treeId"/> to its current target version.</summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The terminal migration report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    [Obsolete("MigrateToTargetVersionAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartMigrationAsync and poll GetSchemaOperationStatusAsync instead. MigrateToTargetVersionAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeSchemaRemediationReport> MigrateToTargetVersionAsync(
-        string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var response = await UnaryAsync(
-            _methods.MigrateToTargetVersion,
-            new SchemaTreeRequest { TreeId = treeId },
-            cancellationToken).ConfigureAwait(false);
-        return response.Report;
-    }
-
     /// <summary>Opts <paramref name="treeId"/> back out of envelope versioning.</summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -240,22 +216,6 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <returns>The terminal remediation report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="targetPolicy"/> is <c>null</c>.</exception>
-    [Obsolete("RemediateAsync calls a blocking RPC, so a long remediation or migration is cut off by the call deadline. Use StartRemediationAsync and poll GetSchemaOperationStatusAsync instead. RemediateAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-verbs")]
-    public async Task<LatticeSchemaRemediationReport> RemediateAsync(
-        string treeId,
-        LatticeValueTransform transform,
-        LatticeSchemaPolicy targetPolicy,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        ArgumentNullException.ThrowIfNull(targetPolicy);
-        var response = await UnaryAsync(
-            _methods.Remediate,
-            new RemediateRequest { TreeId = treeId, Transform = transform, TargetPolicy = targetPolicy },
-            cancellationToken).ConfigureAwait(false);
-        return response.Report;
-    }
-
     /// <summary>Reads the current or last-known remediation status for <paramref name="treeId"/>.</summary>
     /// <param name="treeId">The governed tree id. Must not be <c>null</c> or empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
@@ -280,18 +240,6 @@ public sealed class LatticeSchemaApiGrpcClient
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The compliance report.</returns>
     /// <exception cref="ArgumentException"><paramref name="treeId"/> is <c>null</c> or empty.</exception>
-    [Obsolete("ScanComplianceAsync calls a blocking RPC, so a large scan is cut off by the call deadline. Use StartComplianceScanAsync and poll GetComplianceScanStatusAsync instead. ScanComplianceAsync will be removed in the next major version.", DiagnosticId = "LATTICE0002", UrlFormat = "https://nsta1.github.io/Orleans.Lattice/docs/lattice.api.schema/operations.html#migrating-from-the-blocking-scan")]
-    public async Task<LatticeSchemaComplianceReport> ScanComplianceAsync(
-        string treeId, CancellationToken cancellationToken = default)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(treeId);
-        var response = await UnaryAsync(
-            _methods.ScanCompliance,
-            new SchemaTreeRequest { TreeId = treeId },
-            cancellationToken).ConfigureAwait(false);
-        return response.Report;
-    }
-
     /// <summary>
     /// Starts an accept-then-poll compliance scan of <paramref name="treeId"/> and
     /// returns its handle at once; poll <see cref="GetComplianceScanStatusAsync"/>

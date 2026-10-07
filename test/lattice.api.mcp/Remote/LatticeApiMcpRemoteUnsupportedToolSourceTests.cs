@@ -27,7 +27,7 @@ public sealed class LatticeApiMcpRemoteUnsupportedToolSourceTests
     [TestCase("lattice_backup_describe")]
     [TestCase("lattice_capabilities")]
     [TestCase("lattice_treeadmin_schema_get_policy")]
-    [TestCase("lattice_treeadmin_schema_remediate")]
+    [TestCase("lattice_treeadmin_schema_remediation_start")]
     [TestCase("")]
     public void IsUnsupported_supported_tool_is_false(string toolName)
         => Assert.That(new LatticeApiMcpRemoteUnsupportedToolSource().IsUnsupported(toolName), Is.False);

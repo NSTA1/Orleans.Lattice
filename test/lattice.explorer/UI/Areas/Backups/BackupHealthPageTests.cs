@@ -104,7 +104,7 @@ public sealed class BackupHealthPageTests : BackupsTestContext
             Assert.That(cut.FindAll("button").Single(button => button.TextContent == "Checking").HasAttribute("disabled"), Is.True);
             Assert.That(cut.Find(".lt-operation-progress .lt-pill").TextContent.Trim(), Is.EqualTo("Queued"));
         });
-        Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.CheckBackupHealthAsync)), Is.Zero, "the blocking verb is not called");
+        Assert.That(Backups.CountOf("CheckBackupHealthAsync"), Is.Zero, "the blocking verb is not called");
         var id = Backups.Statuses.Keys.Single();
         Assert.That(id, Does.StartWith("health.b1."));
 
