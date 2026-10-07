@@ -1,0 +1,15 @@
+# Pairs with EventualConvergence. Records S without re-arming the causal buffer's drain.
+MODULE: EventualConvergenceRecordedLowWatermarkDoesNotRearm
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: recording a new S does not re-arm the drain, so a parked dependent waits forever
+PERTURBS: Heartbeat
+
+--- FIND
+    /\ srcv' = SOf
+    /\ Rearm
+--- REPLACE
+    /\ srcv' = SOf
+    \* MUTATION: no drain re-arm.
+    /\ UNCHANGED wake
+--- END

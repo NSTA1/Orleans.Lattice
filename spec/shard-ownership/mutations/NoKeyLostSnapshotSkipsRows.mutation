@@ -1,0 +1,16 @@
+# Pairs with NoKeyLost. The online snapshot copies nothing, so after the flip
+# the resized copy holds none of the rows written before the resize began.
+MODULE: NoKeyLostSnapshotSkipsRows
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the snapshot copies no committed rows, so the resized copy loses every pre-resize key at the flip
+PERTURBS: SnapCopy
+
+--- FIND
+    /\ row' = [x \in Copies |-> [s \in Shards |-> [k \in Keys |->
+                 IF x = R /\ s \in rzShards /\ MapOf(rmapR, k) = s
+                 THEN LWW(row[R][s][k], row[T][s][k]) ELSE row[x][s][k]]]]
+--- REPLACE
+\* MUTATION: no committed entries are copied.
+    /\ UNCHANGED row
+--- END

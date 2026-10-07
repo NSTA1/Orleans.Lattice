@@ -44,7 +44,13 @@ id, the vector clock, the optional transaction id, the maintenance category, the
 optional delta payload and the merge mode, together with the atomic-batch
 metadata (batch size, index and shard count, and the prepared flag), the merge
 and backstop flags, the authoring shard index, the keys a predicate-filtered
-range delete matched, and the cross-tree operation id and participants. The WAL
+range delete matched, the cross-tree operation id and participants, and
+whether a prepared write's stamp is its prepare's original stamp (see
+[A commit applies each value at its prepare stamp](atomic-writes.md#a-commit-applies-each-value-at-its-prepare-stamp);
+the field is additive, so a record written before it existed reads as not
+original), and whether the stored value is migrated (see
+[A later write the split imports is not dropped over the saga's value](atomic-writes.md#a-later-write-the-split-imports-is-not-dropped-over-the-sagas-value);
+also additive, read as not migrated on an older record). The WAL
 stores each envelope as its durable twin, `WalRecord` - the shape that is
 encoded onto storage and shipped to replication peers, which also carries the
 causal+ dependency summary - and a storage provider or `IMutationObserver` sees
@@ -198,9 +204,11 @@ replication change feed.
 |---|---|
 | `AppendAsync(WalRecord, CancellationToken)` | Append a captured mutation. Returns the assigned dense per-partition sequence number. |
 | `AppendBatchAsync(IReadOnlyList<WalRecord>, CancellationToken)` | Append a contiguous batch of captured mutations under a single grain hop. Returns the dense per-input offsets (`result[i]` is the offset assigned to `entries[i]`) in input order. Empty input returns an empty list and performs no provider work. The whole batch coalesces into one provider flush when under `WalMaxBatchEntries` / `WalMaxBatchBytes`; over-budget batches cut over across multiple flushes using the same in-flight cap as `AppendAsync`. |
-| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight is returned, so a cursor-advancing reader never skips a prefix hole. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
+| `ReadAsync(long fromSequence, int maxEntries, CancellationToken)` | Read a contiguous page from `fromSequence`, clamped to the durable gap-free prefix: no offset above a lower offset whose flush is still in flight, or whose abandoned flush may still land, is returned, so a cursor-advancing reader never skips a prefix hole a write can still fill. Returns a `WalShardPage` with the entries and the `NextSequence` cursor. Validates `fromSequence >= 0` and `maxEntries >= 1` (throwing `ArgumentOutOfRangeException`); a read at or beyond the durable prefix returns an empty page whose `NextSequence` is `fromSequence`. |
 | `ReadFilteredAsync(long fromSequence, long toSequenceInclusive, int maxEntries, WalKeyFilter filter, CancellationToken)` | The leaf replay read (issue #3565). Examines at most `maxEntries` entries of `[fromSequence, toSequenceInclusive]`, clamped like `ReadAsync` to the durable gap-free prefix, and returns those the filter does not exclude, plus the last examined entry routing-only (key and kind, no payload) when it is excluded. `NextSequence` therefore still moves past everything examined, and an empty page still means an empty window. The grain re-applies the rule to whatever the storage provider yields, so no excluded payload crosses the grain boundary. Validates its arguments like `ReadAsync`. |
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
+| `GetReadableHeadAsync(CancellationToken)` | Returns the head a reader may resume from: one past the highest sequence a read would expose. Lower than `GetNextSequenceAsync` while a flush is in flight, while an abandoned flush may still land, or while a trailing hole sits above every stored entry (issue #4621). |
+| `GetTrimWatermarkAsync(CancellationToken)` | Returns the shard's trim watermark when a reader may trust it, otherwise `null`. See [Abandoned flushes, holes and the trim watermark](#abandoned-flushes-holes-and-the-trim-watermark). |
 | `GetLiveEntryCountAsync(CancellationToken)` | Returns the number of live entries currently persisted, computed as `highest - lowest + 1` against the storage provider. Drops by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reports the persisted footprint rather than a monotonically-growing offset counter; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetLiveEntryCountAsync` for the trim-aware live count. |
 
@@ -480,6 +488,41 @@ slot drains instead of saturating the chain, and the
 `orleans.lattice.wal.flush.preflight.timeouts` counter attributes each trip to
 the `(tree, shard)`.
 
+### Abandoned flushes, holes and the trim watermark
+
+A flush abandoned at its deadline is still in motion and may land later (issue
+#4621). Until its provider call settles, nothing at or above its window is
+exposed to a reader - by `ReadAsync`, `ReadShippingAsync`, or the readable head
+`GetReadableHeadAsync` that readers resume from - so a late landing is never
+below a reader's position. The record of such windows is process-wide, keyed by
+provider and shard, so a reactivation of the shard in the same process is held
+too, and a WAL move's quiesce does not report the shard's tail stable while any
+window in it is unsettled (issue #4699). Exposure is also never past the highest offset the shard knows is stored,
+plus one: a recovering allocator resumes there, so a trailing hole stays
+unexposed until something lands above it, and a reissued offset can never land
+below a reader. The post-failure resync normally rewinds the allocator to that
+point itself; the bound matters when the resync fails and the activation keeps
+serving reads until it is deactivated. Once the call settles, its window is final: the entries landed,
+and are read in order, or the slot is a permanent hole, because the allocator is
+already past it. Offsets are therefore not dense.
+
+A hole directly above a trim point looks exactly like a trim to a reader that
+judges by the lowest stored offset. Every provider therefore keeps a **trim
+watermark** (`IWalStorageProvider.GetTrimWatermarkAsync`): the highest offset any
+trim has trimmed through, persisted before the trim deletes anything, never
+returned by a read. An offset at or below it was trimmed; a missing offset above
+it is a hole. The in-memory provider raises it under the same lock as the delete,
+the file provider records it as its trim marker, and the Azure Table provider in a
+per-shard row of the manifest partition. The tail every reader judges fall-off
+by - the leaf's prefix-loss check, the WAL subscriber, the fall-off detector, and
+the replication shipper's forced-gap check - is one past the watermark.
+
+A reader trusts the watermark only when every silo in the cluster manifest hosts
+the build that maintains it: a silo that predates it trims without moving it, and
+its trims would read as holes. Until then, and for a third-party provider that
+keeps no watermark, readers treat every jump in offsets as a trim, which can
+trigger a needless rebuild or re-seed during a rolling upgrade but never skips a
+trim.
 
 ### Batched leaf write path
 
@@ -799,9 +842,9 @@ does.
 
 ### Predicate
 
-A WAL entry is trim-eligible only when three independent clauses all accept
-it: the **entitlement clause**, the **causal-stable clause**, and the
-**blocked-floor clause**.
+A WAL entry is trim-eligible only when four independent clauses all accept
+it: the **entitlement clause**, the **offset-reader clause**, the
+**causal-stable clause**, and the **blocked-floor clause**.
 
 The entitlement clause has two axes. On the HLC axis it is satisfied when
 **either** of the following holds:
@@ -836,6 +879,41 @@ lowest buffer pin any consumer reports (see
 can recover from its staging state; it is inert while no consumer reports a
 pin.
 
+A fourth clause bounds the trim by the **read position of every
+offset-reading consumer** (issues #4579, #4584). The replication shipper and
+every materialised-view maintainer read each partition by offset, so the HLC
+cursor they report cannot hold the entries they have not read: a WAL partition
+is not HLC-ordered in offset (a silo whose clock trails, a merge that keeps its
+source stamp), so an unread entry can carry an HLC at or below a cursor already
+reported. That cursor is also visible only to the GC pass on the silo the
+consumer runs on, while every silo runs a pass. Each offset-reading consumer
+registers with the tree's durable consumer set before it reads the log. On every pass the GC asks each registered consumer for the
+lowest offset per partition it has not durably consumed, and refuses any entry
+at or above it. The consumer's own persisted position is the answer, so the
+bound holds on every silo and across a restart. This clause overrules the
+cursor arm and the materialiser offset admission, but not the TTL ceiling,
+which stays a bound: a consumer that falls behind it detects the trimmed gap on
+its next read. A registered consumer that has read nothing holds the whole
+log, and a member whose position cannot be read counts as position 0. Before
+the TTL ceiling trims an entry at or past a consumer's position, the pass
+durably records that consumer's saga decision-purge hold in the tree's
+`IWalPurgeHoldGrain` (issue #4534), so the transaction registry keeps every
+decision the consumer's peer may need to be re-seeded with; a failed hold
+write skips the trim, and so does a pass that cannot read the set of
+registered consumers at all. See
+[Decision-purge holds](../lattice.replication/replication-drivers.md#decision-purge-holds).
+
+An incremental backup capture is deliberately not an offset-reading consumer:
+the GC may trim past it, and the capture then falls back to a full backup. Its
+gap detection, like a view's, is exact by offset and made against what was
+actually read. The shared WAL subscriber probes the tail again whenever a read
+jumps an offset, so a trim that lands after its pre-read check is reported as a
+fall-off rather than read across. A jump the tail has not passed is a hole - a
+slot whose flush failed and was never acknowledged - and is read past. The tail
+is one past the shard's trim watermark, so a hole directly above a trim point is
+not mistaken for the trim (see [Abandoned flushes, holes and the trim
+watermark](#abandoned-flushes-holes-and-the-trim-watermark)).
+
 The clauses are AND-ed: the cursor / TTL clause is kept for safety so a
 stale or mis-configured causal-stable computation cannot cause the GC to
 over-trim past a consumer that is still pinning the HLC half.
@@ -854,9 +932,52 @@ allowed to "fall off the log" so disk usage stays bounded; that consumer
 detects the gap on its next read and re-bootstraps via the fall-off-log
 path described in [`projection-rebuild.md`](projection-rebuild.md).
 
+The ceiling never overtakes a leaf materialiser. The scan stops at the durable
+materialiser offset floor before any arm is consulted, so the ceiling cannot trim
+past what a leaf has durably checkpointed or snapshotted. A partition named by a
+standing durable block pin admits nothing at all, from the ceiling or from any
+consumer cursor, whether or not the leaf is live (issue #4622). A block pin is a
+`Zero` frontier that the offset floor does not cover: a data-bearing leaf that has
+never checkpointed. Such a leaf replays from the "nothing applied" sentinel on a
+cold activation and could not detect a trimmed prefix. Any other leaf pin the offset
+floor does not cover caps the partition's ceiling at its frontier: that frontier was
+published by an empty release, when the leaf held no row there and had applied
+nothing, so every entry the leaf has since ticked for the partition is stamped above
+it, even though the pin store's monotone merge keeps the frontier after that write.
+A leaf publishes an empty release for a partition only after its activation's
+replay has latched (issue #4669). Until then every partition counts as data-bearing
+when the leaf resolves its pins, even one it holds no row in yet, so a checkpoint
+flush that runs part-way through the replay (pass 1 flushes incrementally, sweeping
+partitions in ascending backlog order) keeps the block on a partition it has not yet
+read, unless that partition's WAL is proven empty.
+A held or capped partition grows for as long as the hold stands; watch
+`orleans.lattice.wal.gc.leaf_pin_hold_age` (see [Metrics](metrics.md)).
+
+Not every write a leaf appends is ticked by the leaf. A replicated apply, a
+replicated or idempotency-keyed range delete, a carried copy from a split, resize or
+reshard, and a compaction reap keep a stamp from elsewhere, and that stamp can sit
+below the frontier the leaf published for the partition. The merge can never lower
+the frontier, so the leaf raises an **override hold** instead (issue #4641). Before
+it appends a record stamped below its own clock, it durably records a hold for that
+partition's pin in the pin store, once per partition per activation. A shard root
+does the same for the leaves it touches before it appends a saga terminal stamped
+from an override. The GC reads a held pin whose offset is still the `-1` sentinel
+exactly as a block pin, whether or not the leaf is live: the partition admits
+nothing, and the leaf is named to the blocked-leaf remedy, which drives it to a
+checkpoint and capture. The pin store drops the hold in the same write that lands the
+pin's first real offset, because from then on the offset floor stops the scan below
+every entry the leaf has not durably covered. A hold that cannot be made durable fails
+the write before it is appended.
+
+Each pass reads every partition's head before it reads the holds, and it reads the
+holds before the offset floor, and it trims nothing past the head it read. A write
+appended after the holds were read was appended after its hold was raised, so it lies
+past that head; a hold the store dropped before the read was dropped for a real offset
+the floor then sees.
+
 The scan is conservative: the first non-eligible entry per WAL partition stops the
 walk for that partition, as does the first entry above the partition's durable
-materialiser offset floor. WAL offsets are dense and append-only but HLC
+materialiser offset floor or at an offset-reading consumer's read position. WAL offsets are dense and append-only but HLC
 `WallClockTicks` is mostly-monotonic-with-skew, so a stop-at-first-miss walk
 preserves correctness while a more aggressive scan would risk trimming an
 entry younger than a still-pinned later entry.
@@ -1134,6 +1255,52 @@ been over its byte ceiling, with a usable cursor floor, reclaiming nothing,
 for ten consecutive passes, the point at which `over_ceiling` has stopped
 being a transient.
 
+## Clock floor (replicated trees)
+
+Each WAL partition of a replicated tree keeps a durable **clock floor** ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)).
+
+**How it moves.** A replication shipper reads the partition through `ReadShippingAsync`. Each time it reads, the partition checks its floor against `now - ReplicationClockFloorLag`. Once the floor has fallen half a lag behind that target:
+
+1. The partition raises the floor to the target.
+2. It persists the new floor in its own grain state (`wal-floor`).
+3. Only then does it return the floor to the shipper, paired with its next offset.
+
+That keeps the floor between one and one and a half lags behind the wall clock, at the cost of at most two storage writes per lag per partition while it is being shipped.
+
+**What it refuses.** From then on, the partition refuses any freshly authored local write stamped below the floor, with `WalStampBelowFloorException` (counted on `orleans.lattice.wal.append.floor_refusals`). The check runs under the same state gate that assigns the offset, so a refused write is never assigned one.
+
+**Why.** The floor-and-offset pair is a promise: every fresh local write at or above that offset carries a stamp at or above the floor. So once a peer has acknowledged everything below the offset, it holds every write of this cluster, in that partition, that is stamped below the floor. That is a low watermark that is downward-closed, which the max-HLC high-water mark is not ([#1060](https://github.com/NSTA1/Orleans.Lattice/issues/1060)). The replication package's causal low watermark is built on this promise.
+
+### Which writes the floor governs
+
+The floor governs a stamp minted on this cluster for the write being appended. A **carried** stamp is exempt, because the identity it names was first appended fresh, at a lower offset. The carried stamps are:
+
+- a replicated write of another origin;
+- a merge or backstop copy;
+- a migrated row, including a saga prepare carried at its original stamp from another shard;
+- a record stamped under an HLC override, such as a shadow-forward or a prepared-bucket sweep (`WalRecord.IsCarriedStamp`);
+- a tombstone-reap envelope;
+- a record with a zero stamp.
+
+Two overrides are minted for the operation itself, so the floor governs them: a range delete's issue stamp, and a caller-supplied idempotency key.
+
+### What a writer sees when its stamp is refused
+
+| Write | On a refusal |
+|---|---|
+| Single-key `SetAsync` or `DeleteAsync` | The leaf merges its clock past the floor and re-stamps, then commits once in the same grain turn. The caller sees nothing. |
+| Typed CRDT delta, or a multi-key batch | Not re-run in the turn, because the fold or another partition may already hold part of it. The leaf merges its clock past the floor, and the caller sees a transient error whose retry is admitted. |
+| `DeleteRangeAsync` | The call re-issues a fresh dominating stamp for the remainder of the range. The keys already tombstoned keep theirs, so the delete lands as one HLC per uninterrupted run. A nested range delete keeps its owner's stamp and the refusal propagates to the owner. |
+| A write under a `LatticeIdempotencyKey` | Fails with `LatticeIdempotencyKeyExpiredException`. The key's stamp cannot be renewed without breaking its contract (see [Retry Policy](retry-policy.md#key-lifetime-on-replicated-trees)). |
+
+### Rolling upgrades and trees that are not replicated
+
+A partition advances its floor only while every active silo's grain manifest advertises `IWalClockFloorCapable`. That marker is the capability of a build that both enforces the floor and re-stamps a refused write. So during a rolling upgrade, no floor moves until the last older silo has left; the gate opens by itself, and there is no option to forget to enable.
+
+A floor already published stays enforced, because it is durable. If the gate closes again, the floor only stops moving. Downgrading to a build without the marker after a floor was published is unsupported.
+
+A tree that is not replicated is never read by a shipper. Its floor stays zero, and it never refuses a write.
+
 ## Relationship to replication
 
 Cross-cluster replication is an **additional consumer** of the same WAL - not
@@ -1168,6 +1335,7 @@ the [Options Reference](configuration.md#options-reference).
 | `WalRetention` | `null` (disabled) | Wall-clock hard ceiling on retention: entries older than `now - WalRetention` fall off the log even if a consumer still pins them. The only knob that trims past a stuck consumer - set it where unbounded growth is unacceptable. See [How the retention bounds interact](#how-the-retention-bounds-interact). |
 | `WalMaxRetainedBytes` | `null` (disabled) | Advisory per-tree byte ceiling that schedules byte-pressure trim work, but only within the safe consumer frontier. See [Tree Storage](tree-storage.md#advisory-byte-pressure-wal-retention). |
 | `WalBytePressureReclaimTarget` | `0.8` | Low-water hysteresis fraction of `WalMaxRetainedBytes` that disarms the byte-pressure policy after a trim. Inert unless `WalMaxRetainedBytes` is set. |
+| `ReplicationClockFloorLag` | 60 seconds | How far a replicated tree's [clock floor](#clock-floor-replicated-trees) trails the wall clock. It is also the shortest time an idempotency key stays usable on a replicated tree. Must be between one second and one day. |
 
 The WAL provider itself is registered separately - through a storage package's
 helper such as `AddAzureTableWalStorage` or `AddFileWalStorage`, or `siloBuilder.AddWalStorage(...)`
@@ -1185,6 +1353,7 @@ catalogued in [Metrics](metrics.md), complete the picture.
 
 | Instrument | Type | Tags | Meaning |
 |---|---|---|---|
+| `orleans.lattice.wal.append.floor_refusals` | counter (`{entry}`) | `tree`, `shard`, `tenant` | Fresh local writes a replicated tree's partition refused below its [clock floor](#clock-floor-replicated-trees). A sustained rate points at silo clock skew or a write pipeline stalled for longer than `ReplicationClockFloorLag`. |
 | `orleans.lattice.leaf.commit.duration` | histogram (ms) | `tree`, `step` (one of `wal`, `apply`, `digest`, `observer`) | Per-step latency of the foreground commit pipeline. The `wal` step is the durability cost; `apply` is the in-memory merge plus any relocation or split it triggers; `digest` hands the write's projection-digest change to the parent internal node - with the default `DigestCoalescingWindowMs` it schedules, or joins, a publish sent when the window elapses, so it includes the cross-grain publish itself only when the window is `0`; `observer` is the publish under the commit-log scope. |
 
 The bundled Grafana dashboards consume these instruments directly; see

@@ -1,0 +1,264 @@
+using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
+using Orleans.Lattice.Primitives;
+
+namespace Orleans.Lattice.Replication.Tests;
+
+/// <summary>
+/// A receiver bootstrapped while an origin saga's decision has aged out over a
+/// stranded prepare (issue #4481). The saga committed and its terminal drained
+/// keyA, but keyB's bucket was never drained; the decision's tombstone then
+/// outlived <c>TxDecisionRetention</c>, so the frozen registry snapshot reports
+/// the saga as <see cref="TxStatus.Indeterminate"/>. The export must ship the
+/// saga whole: the receiver's registry has no row for it, so a keyB shipped as a
+/// prepared row would read as in flight there and serve its pre-saga value
+/// beside keyA's post-saga value, with nothing on either side ever repairing it.
+/// </summary>
+public partial class BootstrapAtomicVisibilityTests
+{
+    private static (string KeyA, string KeyB) AgedKeysOnDistinctShards()
+    {
+        const string keyA = "stranded-alpha";
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        for (var i = 0; i < 1000; i++)
+        {
+            var candidate = $"stranded-beta-{i}";
+            if (LatticeSharding.GetShardIndex(candidate, LatticeConstants.DefaultShardCount) != shardA)
+            {
+                return (keyA, candidate);
+            }
+        }
+
+        throw new InvalidOperationException("could not find two keys on distinct shards");
+    }
+
+    /// <summary>
+    /// Replays an export onto a fresh receiver tree through the same apply seam
+    /// the bootstrap coordinator drives: committed rows as replicated writes,
+    /// prepared rows into the receiver's pending buckets.
+    /// </summary>
+    private async Task ReplayOntoReceiverAsync(string receiverTree, IEnumerable<SnapshotEntry> entries)
+    {
+        var apply = _cluster.Client.GetGrain<IReplicationApplyGrain>(receiverTree);
+        foreach (var entry in entries)
+        {
+            if (entry.IsPrepared)
+            {
+                await apply.ApplyPreparedSetAsync(
+                    entry.Key, entry.Value, entry.Timestamp, ClusterId, sourceVectorClock: null,
+                    expiresAtTicks: entry.ExpiresAtTicks, entry.TransactionId,
+                    atomicBatchSize: entry.AtomicBatchSize, atomicBatchIndex: entry.AtomicBatchIndex);
+            }
+            else
+            {
+                await apply.ApplySetAsync(
+                    entry.Key, entry.Value, entry.Timestamp, ClusterId, sourceVectorClock: null,
+                    expiresAtTicks: entry.ExpiresAtTicks);
+            }
+        }
+    }
+
+    [Test]
+    public async Task Receiver_bootstrapped_over_an_aged_out_commit_with_a_stranded_prepare_serves_the_saga_whole()
+    {
+        const string receiverTree = "snap-stranded-receiver";
+        var (keyA, keyB) = AgedKeysOnDistinctShards();
+        var sourceHlc = Hlc(3_000);
+        var txid = Guid.NewGuid();
+
+        var source = _cluster.Client.GetGrain<IReplicationApplyGrain>(AgedTree);
+        await source.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, sourceHlc, ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await source.ApplyPreparedSetAsync(
+            keyB, new byte[] { 2 }, sourceHlc, ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+
+        // The saga commits and its terminal reaches keyA's shard only, so keyB's
+        // bucket is stranded; then the decision ages out of the readable window.
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        await source.ApplyTxTerminalAsync(txid, committed: true, shardIndex: shardA, Hlc(3_100), ClusterId);
+        var registry = _cluster.Client.GetGrain<ITxRegistryGrain>(AgedTree);
+        await registry.ForgetAsync(txid);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+
+        var snapshot = await registry.SnapshotAsync();
+        var sourceLattice = _cluster.Client.GetGrain<ILattice>(AgedTree);
+        await Assert.MultipleAsync(async () =>
+        {
+            Assert.That(snapshot.TryGetValue(txid, out var aged) ? aged : TxStatus.InFlight,
+                Is.EqualTo(TxStatus.Indeterminate), "precondition: the decision has aged out while its row is stored");
+            Assert.That(await sourceLattice.GetAsync(keyA), Is.EqualTo(new byte[] { 1 }),
+                "precondition: the terminal drained keyA on the source");
+        });
+
+        var stream = await _provider.ExportAsync(AgedTree, HybridLogicalClock.Zero);
+        var entries = (await DrainAsync(stream)).Where(e => e.Key == keyA || e.Key == keyB).ToList();
+        await ReplayOntoReceiverAsync(receiverTree, entries);
+
+        var receiver = _cluster.Client.GetGrain<ILattice>(receiverTree);
+        var receivedA = await receiver.GetAsync(keyA);
+        var receivedB = await receiver.GetAsync(keyB);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
+            Assert.That(receivedB, Is.EqualTo(new byte[] { 2 }),
+                "keyB must arrive post-saga beside keyA: the recorded verdict behind the aged-out row is a commit");
+        });
+    }
+
+    [Test]
+    public async Task Re_bootstrap_over_a_populated_receiver_deletes_a_key_a_recorded_commit_deleted()
+    {
+        // The receiver already holds older values for both keys - a peer that
+        // fell off the log re-bootstraps over its existing copy, which the
+        // bootstrap drain does not clear. The saga set keyA and deleted keyB;
+        // keyB's prepared delete is the stranded bucket. Shipping the
+        // committed delete as an absence would leave keyB's older value beside
+        // keyA's post-saga value.
+        const string receiverTree = "snap-stranded-delete-receiver";
+        const string sourceCluster = "snap-stranded-delete-origin";
+        var (keyA, keyB) = AgedKeysOnDistinctShards();
+        keyA += "-del";
+        keyB += "-del";
+        while (LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount)
+            == LatticeSharding.GetShardIndex(keyB, LatticeConstants.DefaultShardCount))
+        {
+            keyB += "x";
+        }
+
+        var txid = Guid.NewGuid();
+        var source = _cluster.Client.GetGrain<IReplicationApplyGrain>(AgedTree);
+        await source.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, Hlc(4_000), ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await source.ApplyPreparedDeleteAsync(
+            keyB, Hlc(4_000), ClusterId, sourceVectorClock: null, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        await source.ApplyTxTerminalAsync(txid, committed: true, shardIndex: shardA, Hlc(4_100), ClusterId);
+        var registry = _cluster.Client.GetGrain<ITxRegistryGrain>(AgedTree);
+        await registry.ForgetAsync(txid);
+        await Task.Delay(TimeSpan.FromMilliseconds(700));
+
+        var applier = _cluster.Silos.OfType<Orleans.TestingHost.InProcessSiloHandle>().First()
+            .SiloHost.Services.GetRequiredService<IReplicationApplier>();
+        var receiver = _cluster.Client.GetGrain<ILattice>(receiverTree);
+        foreach (var (key, value) in new[] { (keyA, (byte)8), (keyB, (byte)9) })
+        {
+            await applier.ApplyAsync(new WalRecord
+            {
+                TreeId = receiverTree,
+                Op = MutationKind.Set,
+                Key = key,
+                Value = new[] { value },
+                Timestamp = Hlc(1_000),
+                OriginClusterId = sourceCluster,
+            });
+        }
+
+        Assert.That(await receiver.GetAsync(keyB), Is.EqualTo(new byte[] { 9 }), "precondition: the receiver holds keyB's older value");
+
+        var stream = await _provider.ExportAsync(AgedTree, HybridLogicalClock.Zero);
+        var entries = (await DrainAsync(stream)).Where(e => e.Key == keyA || e.Key == keyB).ToList();
+        using (LatticeBootstrapApplyContext.BeginScope())
+        {
+            foreach (var entry in entries)
+            {
+                if (Orleans.Lattice.Replication.Grains.LatticeBootstrapCoordinatorGrain.ToSnapshotWalRecord(
+                        entry, receiverTree, sourceCluster, LatticeMergeMode.LwwRegister) is { } record)
+                {
+                    await applier.ApplyAsync(record);
+                }
+            }
+        }
+
+        var receivedA = await receiver.GetAsync(keyA);
+        var receivedB = await receiver.GetAsync(keyB);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
+            Assert.That(receivedB, Is.Null, "keyB's delete must reach the receiver beside keyA's write");
+        });
+    }
+
+    [Test]
+    public async Task Re_bootstrap_over_a_populated_receiver_deletes_a_key_a_committed_saga_deleted_before_its_terminal_drained()
+    {
+        // The frozen registry view records the saga as Committed (its decision
+        // is still inside the retention window), but its terminal reached only
+        // keyA's shard, so keyB's prepared delete still sits in a pending bucket.
+        // The committed pass reads keyB as absent and emits nothing, so unless
+        // the prepared pass ships the delete as a committed tombstone the
+        // receiver keeps keyB's older value (#4504).
+        const string tree = "snap-committed-pending-delete";
+        const string receiverTree = "snap-committed-pending-delete-receiver";
+        const string sourceCluster = "snap-committed-pending-delete-origin";
+        var (keyA, keyB) = AgedKeysOnDistinctShards();
+        keyA += "-cpd";
+        keyB += "-cpd";
+        while (LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount)
+            == LatticeSharding.GetShardIndex(keyB, LatticeConstants.DefaultShardCount))
+        {
+            keyB += "x";
+        }
+
+        var txid = Guid.NewGuid();
+        var source = _cluster.Client.GetGrain<IReplicationApplyGrain>(tree);
+        await source.ApplyPreparedSetAsync(
+            keyA, new byte[] { 1 }, Hlc(5_000), ClusterId, sourceVectorClock: null,
+            expiresAtTicks: 0, txid, atomicBatchSize: 2, atomicBatchIndex: 0);
+        await source.ApplyPreparedDeleteAsync(
+            keyB, Hlc(5_000), ClusterId, sourceVectorClock: null, txid, atomicBatchSize: 2, atomicBatchIndex: 1);
+        var shardA = LatticeSharding.GetShardIndex(keyA, LatticeConstants.DefaultShardCount);
+        await source.ApplyTxTerminalAsync(txid, committed: true, shardIndex: shardA, Hlc(5_100), ClusterId);
+
+        var registrySnapshot = await _cluster.Client.GetGrain<ITxRegistryGrain>(tree).SnapshotAsync();
+        Assert.That(registrySnapshot.TryGetValue(txid, out var decided) ? decided : TxStatus.InFlight,
+            Is.EqualTo(TxStatus.Committed), "precondition: the frozen registry view records the saga as committed");
+
+        var applier = _cluster.Silos.OfType<Orleans.TestingHost.InProcessSiloHandle>().First()
+            .SiloHost.Services.GetRequiredService<IReplicationApplier>();
+        var receiver = _cluster.Client.GetGrain<ILattice>(receiverTree);
+        foreach (var (key, value) in new[] { (keyA, (byte)8), (keyB, (byte)9) })
+        {
+            await applier.ApplyAsync(new WalRecord
+            {
+                TreeId = receiverTree,
+                Op = MutationKind.Set,
+                Key = key,
+                Value = new[] { value },
+                Timestamp = Hlc(1_000),
+                OriginClusterId = sourceCluster,
+            });
+        }
+
+        Assert.That(await receiver.GetAsync(keyB), Is.EqualTo(new byte[] { 9 }), "precondition: the receiver holds keyB's older value");
+
+        var stream = await _provider.ExportAsync(tree, HybridLogicalClock.Zero);
+        var entries = (await DrainAsync(stream)).Where(e => e.Key == keyA || e.Key == keyB).ToList();
+
+        using (LatticeBootstrapApplyContext.BeginScope())
+        {
+            foreach (var entry in entries)
+            {
+                if (Orleans.Lattice.Replication.Grains.LatticeBootstrapCoordinatorGrain.ToSnapshotWalRecord(
+                        entry, receiverTree, sourceCluster, LatticeMergeMode.LwwRegister) is { } record)
+                {
+                    await applier.ApplyAsync(record);
+                }
+            }
+        }
+
+        var receivedA = await receiver.GetAsync(keyA);
+        var receivedB = await receiver.GetAsync(keyB);
+        Assert.Multiple(() =>
+        {
+            Assert.That(receivedA, Is.EqualTo(new byte[] { 1 }), "keyA arrives post-saga");
+            Assert.That(entries.Where(e => e.Key == keyB),
+                Has.Some.Matches<SnapshotEntry>(e => e.IsTombstone && !e.IsPrepared && e.Timestamp == Hlc(5_000)),
+                "keyB's committed delete must ship as a committed tombstone row at the saga's prepare HLC");
+            Assert.That(receivedB, Is.Null, "keyB's committed delete must reach the receiver beside keyA's write");
+        });
+    }
+}

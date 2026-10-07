@@ -30,6 +30,12 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-origin HWM persistent state class.</summary>
     internal const string ReplicationHighWaterMarkState = "olr.hs";
 
+    /// <summary>Alias for the bootstrap drop floor persisted on the high-water-mark state (issue #4549).</summary>
+    internal const string ReplicationBootstrapFloor = "olr.hf";
+
+    /// <summary>Alias for the high-water-mark grain's per-origin admission read (issue #4549).</summary>
+    internal const string ReplicationApplyAdmission = "olr.hm";
+
     // Inbound apply pipeline
 
     /// <summary>Alias for the apply-result return value.</summary>
@@ -58,6 +64,10 @@ public static class ReplicationTypeAliases
 
     /// <summary>Alias for <see cref="Replication.DeadLetterEntry"/>.</summary>
     internal const string DeadLetterEntry = "olr.dl";
+    /// <summary>Alias for <see cref="Replication.ReplicationDeadLetterQueueFullException"/>.</summary>
+    internal const string ReplicationDeadLetterQueueFullException = "olr.qf";
+    /// <summary>Alias for <see cref="Replication.CausalDependencyVerdict"/>.</summary>
+    internal const string CausalDependencyVerdict = "olr.dv";
 
     /// <summary>Alias for the per-tree dead-letter queue grain interface.</summary>
     internal const string IReplicationDeadLetterGrain = "olr.gd";
@@ -94,6 +104,10 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.BootstrapCoordinatorStatus"/>.</summary>
     internal const string BootstrapCoordinatorStatus = "olr.bx";
 
+    /// <summary>Alias for <see cref="Replication.SnapshotSourceGeneration"/>.</summary>
+    internal const string SnapshotSourceGeneration = "olr.sg";
+    internal const string SnapshotSourceFrontier = "olr.sx";
+
     // Production replication drivers
 
     /// <summary>Alias for the per-(tree, peer) outbound shipper grain interface.</summary>
@@ -102,11 +116,35 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for the per-(tree, peer) shipper grain persistent state class.</summary>
     internal const string ReplicationShipperState = "olr.ss";
 
+    /// <summary>Alias for a saga the shipper withholds from its peer after a prepare was dead-lettered.</summary>
+    internal const string PoisonedSaga = "olr.sp";
+
     /// <summary>Alias for the per-tree maintenance grain interface.</summary>
     internal const string IReplicationMaintenanceGrain = "olr.gm";
 
     /// <summary>Alias for the per-tree maintenance grain persistent state class.</summary>
     internal const string ReplicationMaintenanceState = "olr.ms";
+
+    /// <summary>Alias for <see cref="Grains.ICausalApplyBufferGrain"/>.</summary>
+    internal const string ICausalApplyBufferGrain = "olr.gk";
+
+    /// <summary>Alias for <see cref="Grains.CausalApplyBufferState"/>.</summary>
+    internal const string CausalApplyBufferState = "olr.cb";
+
+    /// <summary>Alias for <see cref="Grains.ParkedCausalEntry"/>.</summary>
+    internal const string ParkedCausalEntry = "olr.cr";
+
+    /// <summary>Alias for <see cref="Grains.IReceiverSagaPoisonGrain"/>.</summary>
+    internal const string IReceiverSagaPoisonGrain = "olr.yg";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonState"/>.</summary>
+    internal const string ReceiverSagaPoisonState = "olr.ys";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonRecord"/>.</summary>
+    internal const string ReceiverSagaPoisonRecord = "olr.yr";
+
+    /// <summary>Alias for <see cref="Grains.ReceiverSagaPoisonClassification"/>.</summary>
+    internal const string ReceiverSagaPoisonClassification = "olr.yq";
 
     /// <summary>Alias for <see cref="Replication.ReplicationContactDirection"/>.</summary>
     internal const string ReplicationContactDirection = "olr.cd";
@@ -239,6 +277,9 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Grains.TreeReceiveFenceState"/>.</summary>
     internal const string TreeReceiveFenceState = "olr.ft";
 
+    /// <summary>Alias for <see cref="ReceiveFenceObservation"/> (issue #4593).</summary>
+    internal const string ReceiveFenceObservation = "olr.fo";
+
     // Runtime per-tree replication configuration (the sys-replication-config
     // CRDT tree). The composite OR-Map value record carrying a tree's
     // enablement flag and declared wire merge mode.
@@ -267,4 +308,67 @@ public static class ReplicationTypeAliases
     /// <summary>Alias for <see cref="Replication.ReplicationPeerStatusCursor"/>.</summary>
     internal const string ReplicationPeerStatusCursor = "olr.pc";
 
+    // Snapshot export epoch (#4534): a per-tree counter advanced by every full
+    // export at its registry snap0, so a shipper can tell a peer's re-seed
+    // happened after it took the peer off the log.
+    internal const string IReplicationExportEpochGrain = "olr.xg";
+    internal const string ReplicationExportEpochState = "olr.xs";
+
+    // Receiver per-origin causal frontier (#4586): the origin's shipped low
+    // watermark, and the writes held here without being applied.
+    internal const string IReplicationOriginFrontierGrain = "olr.og";
+    internal const string ReplicationOriginFrontierState = "olr.os";
+
+    // The sender's applied low watermark for a receiver's tree (#4586 part 2b).
+    internal const string ReplicationSourceFrontier = "olr.sf";
+
+    // Receiver per-tree causal frontier (#4586 part 2b).
+    internal const string IReplicationTreeFrontierGrain = "olr.tf";
+    internal const string ReplicationTreeFrontierState = "olr.ts";
+    internal const string ReplicationTreeOriginFrontier = "olr.to";
+    internal const string ReplicationTreeFrontierSnapshot = "olr.tn";
+
+    // The sender's per-peer aggregate of its trees' applied low watermarks (#4586 part 2b).
+    internal const string IReplicationSourceFrontierAggregateGrain = "olr.fa";
+    internal const string ReplicationSourceFrontierAggregateState = "olr.fv";
+    internal const string SourceFrontierShipperState = "olr.fw";
+    internal const string SourceFrontierPrepare = "olr.fx";
+
+    // A receiver's record of the source lineage it last drained (#4673).
+    internal const string ReplicationDrainedLineage = "olr.dn";
+
+    // Origin cross-tree decision purge hold (#4684).
+    internal const string ICrossTreeHoldTrackerGrain = "olr.ch";
+    internal const string CrossTreeHoldTrackerState = "olr.cs";
+    internal const string CrossTreeHoldBoundary = "olr.ck";
+    internal const string CrossTreeHoldSnapshot = "olr.cn";
+    internal const string ICrossTreePeerEnrolmentGrain = "olr.pe";
+    internal const string CrossTreePeerEnrolmentState = "olr.pn";
+    internal const string ReplicationAckedPositions = "olr.ap";
+    internal const string CrossTreeSiblingBoundary = "olr.sb";
+
+    // Cross-tree decision sequences and the origin's purge frontier (#4733).
+    internal const string ICrossTreeDecisionSequenceGrain = "olr.qg";
+    internal const string CrossTreeDecisionSequenceState = "olr.qs";
+    internal const string CrossTreeDecisionSequenceSnapshot = "olr.qn";
+    internal const string ICrossTreePurgeFrontierSourceGrain = "olr.pf";
+    internal const string CrossTreePurgeFrontierSourceState = "olr.pt";
+    internal const string CrossTreePurgeFrontier = "olr.pz";
+
+    // The source lineage a sender stamped on an entry, carried with it into the
+    // causal-apply buffer and the dead-letter queue (#4707).
+    internal const string ReplicationSourceLineageStamp = "olr.ls";
+
+    // Per-peer decommission registry: a durable record that a peer was
+    // decommissioned (never re-enrolled implicitly), distinct from the
+    // reversible detach tracked by ICrossTreePeerEnrolmentGrain.
+
+    /// <summary>Alias for the cluster-wide decommissioned-peer registry grain interface.</summary>
+    internal const string IReplicationDecommissionedPeerRegistryGrain = "olr.dg";
+
+    /// <summary>Alias for <see cref="Grains.ReplicationDecommissionedPeerRegistryState"/>.</summary>
+    internal const string ReplicationDecommissionedPeerRegistryState = "olr.ds";
+
+    /// <summary>Alias for <see cref="LatticeReplicationPeerStillConfiguredException"/>.</summary>
+    internal const string LatticeReplicationPeerStillConfiguredException = "olr.dx";
 }

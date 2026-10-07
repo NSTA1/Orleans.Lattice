@@ -1,0 +1,27 @@
+# Pairs with ReadableOnceComplete. Reproduces production after #4545's first
+# fix (#4608) and before its second (#4644): a shadow marker without a prepare
+# stamp (an unmarked prepare's, the resize sweep's, a CRDT delta's) has no
+# self-check, and the leaf's only memory of the saga's terminal is per
+# activation. A leaf that lost it (a reactivation, or a fresh sibling after a
+# leaf split) accepts a late replay's marker for a saga whose terminal already
+# settled the key there, and no terminal comes again to clear it.
+MODULE: ReadableOnceCompleteMarkerWithoutSelfCheck
+TARGET: ReadableOnceComplete
+CLASS: Invariant
+SUMMARY: an unstamped marker on a leaf with no durable witness of the terminal gates the key after the saga completed
+PERTURBS: DeliverLate
+
+--- FIND
+    /\ lk /\ ~term[c][s] /\ ~wit
+    /\ row[c][s][k] < SagaV
+--- REPLACE
+\* MUTATION: an unstamped marker, and no durable witness of the terminal.
+    /\ lk /\ ~term[c][s]
+--- END
+
+--- FIND
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] /\ ~wit THEN TRUE ELSE lk
+--- REPLACE
+\* MUTATION: the install consults only the activation's memory.
+    /\ lk' = IF ~Gone(spCopy) /\ ~term[spCopy][s2] THEN TRUE ELSE lk
+--- END

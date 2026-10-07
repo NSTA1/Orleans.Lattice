@@ -1,0 +1,16 @@
+# Pairs with CausalOrder. Reproduces production before #4640 (#4586
+# part 2a): the dependency check compared the dependency's HLC with the per-origin high-water mark, the
+# maximum HLC applied. An origin's HLCs arrive out of order (#1060), so the mark
+# can pass a write that has not arrived, and its dependent is merged first. It
+# perturbs the dependency-check definition, not an action.
+MODULE: CausalOrderMaxHlcFrontier
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: a dependency counts as met once the origin high-water mark reaches its HLC, so a write is merged before the write it depends on
+
+--- FIND
+    ELSE \E k \in Keys : \E v \in val[x][k] : v.o = w.d.o /\ v.h = w.d.h
+--- REPLACE
+\* MUTATION: the dependency check reads the max-HLC high-water mark.
+    ELSE hwm[x][w.d.o] >= w.d.h
+--- END

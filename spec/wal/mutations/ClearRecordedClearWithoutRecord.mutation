@@ -1,0 +1,32 @@
+# Pairs with ClearRecorded. The purge clears a leaf it has not marked, so once
+# the row is gone recovery can never re-create the leaf and it fails closed for
+# ever. The base clears only a leaf whose marker is already durable
+# (ClearGrainStateForPurgeAsync marks first). Production analogue: #4700's
+# reordering perturbations.
+MODULE: ClearRecordedClearWithoutRecord
+TARGET: ClearRecorded
+CLASS: Invariant
+SUMMARY: the purge clears a leaf it has not marked
+PERTURBS: PurgeClear
+
+--- FIND
+PurgeClear(l) ==
+    /\ purgeRec[l]
+--- REPLACE
+\* MUTATION: the clear does not wait for the leaf's marker.
+PurgeClear(l) ==
+    /\ SnapshotLoss
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

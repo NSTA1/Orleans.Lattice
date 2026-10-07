@@ -20,7 +20,8 @@ public partial class BPlusLeafGrainTests
         ICommitLogWriter? commitLog = null,
         ILatticeMergeModeResolver? mergeModeResolver = null,
         ILatticeEnvelopeCodec? envelopeCodec = null,
-        IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null)
+        IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null,
+        Action<IGrainFactory>? configureGrainFactory = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", replicaId));
@@ -73,6 +74,7 @@ public partial class BPlusLeafGrainTests
                 grainFactory.GetGrain<IBPlusLeafGrain>(id).Returns(stub);
             }
         }
+        configureGrainFactory?.Invoke(grainFactory);
         options ??= new LatticeOptions();
         // Structural sizing (MaxLeafKeys) now flows from the registry
         // pin via LatticeOptionsResolver. Tests pin the desired sizing through

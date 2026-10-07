@@ -68,4 +68,13 @@ internal sealed class SagaWriteFenceState
     /// </summary>
     [Id(8)]
     public List<string> FencedShardKeys { get; set; } = [];
+
+    /// <summary>
+    /// The restored copies this fence closed for inbound replication (issue
+    /// #4593), each mapped to the tree it restores. Persisted before they are
+    /// closed, so every lift that resumes receiving opens exactly this set, even
+    /// after a crash between the close and the lift. Cleared once opened.
+    /// </summary>
+    [Id(9)]
+    public Dictionary<string, string> ReceiveClosedCopies { get; set; } = new(StringComparer.Ordinal);
 }

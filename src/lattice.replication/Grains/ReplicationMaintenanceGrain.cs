@@ -116,6 +116,24 @@ internal sealed class ReplicationMaintenanceGrain(
         var options = _optionsMonitor.Get(TreeName);
         var nowTicks = DateTime.UtcNow.Ticks;
 
+        // Causal-apply buffer re-arm (#4464): drain every phase tick. A parked
+        // entry whose dependencies are met must not wait for a further
+        // high-water-mark advance that may never come - after a receiver
+        // restart, under quiescence, or when the satisfying apply happened on
+        // a silo that did not know the buffer held entries. The keepalive
+        // reminder keeps this tick running across restarts; the drain is a
+        // cheap no-op when the buffer is empty.
+        try
+        {
+            await _grainFactory.GetGrain<ICausalApplyBufferGrain>(TreeName).DrainAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Causal-apply buffer drain failed for {Context}; will retry on next phase tick",
+                LogContext);
+        }
+
         // GC pass - independent cadence. The cadence stamp advances
         // only on a successful pass so a thrown GC retries on the
         // next phase tick rather than waiting a full cadence; the
@@ -190,6 +208,7 @@ internal sealed class ReplicationMaintenanceGrain(
             var prevFallOffTicks = state.State.LastFallOffCheckTicks;
             try
             {
+                await RetryReceiverSagaPoisonReseedsAsync().ConfigureAwait(true);
                 await ProbeFallOffAsync().ConfigureAwait(true);
                 state.State.LastFallOffCheckTicks = nowTicks;
                 await state.WriteStateAsync().ConfigureAwait(true);
@@ -203,6 +222,24 @@ internal sealed class ReplicationMaintenanceGrain(
                     "Fall-off-log probe pass failed for {Context}; will retry on next phase tick",
                     LogContext);
             }
+        }
+    }
+
+    private async Task RetryReceiverSagaPoisonReseedsAsync()
+    {
+        var owed = await _grainFactory.GetGrain<IReceiverSagaPoisonGrain>(TreeName)
+            .GetReseedOwedOriginsAsync()
+            .ConfigureAwait(true);
+        foreach (var origin in owed)
+        {
+            await ReceiverSagaPoisonReseed.TryStartOrMarkOwedAsync(
+                    _grainFactory,
+                    _optionsMonitor,
+                    TreeName,
+                    origin,
+                    Logger,
+                    CancellationToken.None)
+                .ConfigureAwait(true);
         }
     }
 
@@ -239,8 +276,25 @@ internal sealed class ReplicationMaintenanceGrain(
         // the local cluster is never one of its own peers.
         foreach (var peer in peers)
         {
-            if (string.IsNullOrEmpty(peer)
-                || !oldestByOrigin.TryGetValue(peer, out var oldest))
+            if (string.IsNullOrEmpty(peer))
+            {
+                continue;
+            }
+
+            try
+            {
+                await _grainFactory.GetGrain<ILatticeBootstrapCoordinatorGrain>(TreeName)
+                    .RetryOwedReconcileAsync(peer)
+                    .ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Owed bootstrap delete reconcile retry for peer {Peer} failed for {Context}; will retry on next cadence",
+                    peer, LogContext);
+            }
+
+            if (!oldestByOrigin.TryGetValue(peer, out var oldest))
             {
                 continue;
             }

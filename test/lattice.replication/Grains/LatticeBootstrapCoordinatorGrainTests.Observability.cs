@@ -35,10 +35,13 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         apply.ApplyAsync(Arg.Any<WalRecord>(), Arg.Any<CancellationToken>())
             .Returns(call => Task.FromResult(new ApplyResult
@@ -73,7 +76,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             .GetOldestAvailableHlcByOriginAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal));
         var grain = new LatticeBootstrapCoordinatorGrain(
-            context, factory, provider, apply, reminders, resolver, optionsMonitor, walIntrospection, logger, fakeState);
+            context, factory, provider, apply, reminders, resolver, optionsMonitor, walIntrospection, logger, fakeState,
+            new Orleans.Lattice.Replication.Tests.Fakes.FakeBootstrapReadFence());
         return (grain, fakeState, provider, apply, hwm, logger);
     }
 

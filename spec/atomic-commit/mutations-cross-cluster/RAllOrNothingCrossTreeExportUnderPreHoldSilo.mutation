@@ -1,0 +1,23 @@
+# Pairs with RAllOrNothing. A cross-tree export is opened, and served, while a
+# silo predates the purge hold. That silo purges on retention alone, so the
+# export names nothing of an operation whose decision it purged, and no boundary
+# exists yet for the import's fence to wait on: the tree is served post-saga
+# while its sibling's terminal is still outstanding. #4684 serves no cross-tree
+# export until every silo honours the hold (CrossTreeExportGate.EnsureMayExport),
+# which is also what makes a decision with no stamp precede every export served.
+MODULE: RAllOrNothingCrossTreeExportUnderPreHoldSilo
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a cross-tree export is served while a silo predates the purge hold
+PERTURBS: ExportOpen
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 2, Shape = 1, PreHold = 1, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ ImportPending
+    /\ ImportGate
+
+--- REPLACE
+    /\ ImportPending
+\* MUTATION: no export precondition.
+
+--- END

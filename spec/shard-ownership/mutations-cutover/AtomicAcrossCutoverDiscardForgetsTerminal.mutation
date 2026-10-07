@@ -1,0 +1,18 @@
+# Pairs with AtomicAcrossCutover. The discard drops the bucket but the leaf does
+# not remember it, so a routed prepare still on the wire lands on the previous
+# copy after the decision and recreates the orphan, which a stale reader is
+# served before the redirect is armed.
+MODULE: AtomicAcrossCutoverDiscardForgetsTerminal
+TARGET: AtomicAcrossCutover
+CLASS: Invariant
+SUMMARY: the discard is not remembered by the leaf, so a straggling prepare recreates the bucket
+PERTURBS: Discard
+
+--- FIND
+    /\ term' = [term EXCEPT ![c] = [k \in Keys |-> TRUE]]
+    /\ disc' = disc \cup {c}
+--- REPLACE
+    \* MUTATION: the leaf forgets the discard.
+    /\ UNCHANGED term
+    /\ disc' = disc \cup {c}
+--- END

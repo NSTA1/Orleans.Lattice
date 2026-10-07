@@ -458,5 +458,78 @@ public readonly record struct WalRecord
     /// </para>
     /// </summary>
     [Id(25)] public IReadOnlyList<string>? CrossTreeParticipants { get; init; }
+
+    /// <summary>
+    /// Whether this saga prepare-phase record is stamped with its prepare's
+    /// <i>original</i> stamp (issue #4522): minted by the leaf the routing tier
+    /// dispatched the prepare to, or carried verbatim from that leaf by a split's
+    /// shadow-forward or retroactive sweep. Mirrors
+    /// <see cref="LatticeMutation.PrepareStampOriginal"/>, so the activation-time
+    /// replay classifies the rebuilt pending bucket exactly as the foreground
+    /// write did. Meaningful only when <see cref="IsPrepared"/> is set.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store: each
+    /// encoder and storage provider persists the record through the canonical
+    /// Orleans serializer, so a record authored before the slot existed decodes
+    /// as <see langword="false"/> (unmarked, keeping the pre-#4522 drain), and an
+    /// older decoder skips the unknown id. Ignored by a replication receiver,
+    /// which re-authors its own prepare record; a replicated prepare's bucket
+    /// carries its origin cluster id and drains at the source stamp regardless.
+    /// </para>
+    /// </summary>
+    [Id(27)] public bool PrepareStampOriginal { get; init; }
+
+    /// <summary>
+    /// The migration provenance (<c>LwwValue.IsMigrated</c>) of the value this
+    /// record stores: set on a cross-shard migration import, and on a saga value
+    /// stored at an original prepare stamp carried from another shard - its
+    /// prepare, its drain and its committed-values backstop (issue #4564). Mirrors
+    /// <see cref="LatticeMutation.IsMigrated"/>, so the activation-time replay
+    /// restores the flag the foreground write stored and a later migration import
+    /// is admitted or dropped exactly as it would have been before the leaf
+    /// reactivated.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store, like
+    /// <see cref="PrepareStampOriginal"/>: a record authored before the slot
+    /// existed decodes as <see langword="false"/>, which is how replay treated
+    /// every record before it, and an older decoder skips the unknown id.
+    /// </para>
+    /// </summary>
+    [Id(28)] public bool IsMigrated { get; init; }
+
+    /// <summary>
+    /// Whether the record's stamp was carried from a write that was already
+    /// appended - set by the commit-log writer when the producer stamped the
+    /// record under a <see cref="LatticeHlcOverrideContext"/> that is not marked
+    /// as freshly minted (issue #4586). A carried stamp is exempt from the WAL
+    /// partition's clock floor, because the identity it names was first appended
+    /// fresh at a lower offset. Only the appending partition reads it.
+    /// <para>
+    /// Strictly additive on the wire and in every write-ahead-log store: a record
+    /// authored before the slot existed decodes as <see langword="false"/>, and an
+    /// older decoder skips the unknown id.
+    /// </para>
+    /// </summary>
+    [Id(29)] public bool IsCarriedStamp { get; init; }
+
+    /// <summary>
+    /// The decision stamps of the cross-tree write a shipped terminal belongs to
+    /// (issue #4684): per participating tree, that tree's snapshot export epoch
+    /// read after the decision was durable. Set by the replication shipper on
+    /// the wire copy of a terminal only, never in the write-ahead log; a
+    /// receiver's cross-tree barrier compares a participant's stamp with the
+    /// export it imported that participant from. Strictly additive on the wire:
+    /// an older decoder skips the unknown id, and a record without it decodes as
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(30)] internal IReadOnlyDictionary<string, long>? CrossTreeDecisionStamps { get; init; }
+
+    /// <summary>
+    /// The decision sequences of the cross-tree write a shipped terminal belongs
+    /// to (issue #4733), beside <see cref="CrossTreeDecisionStamps"/> and set the
+    /// same way: on the wire copy only. A receiver keeps its decided tombstone
+    /// for the operation until the origin's purge frontier passes them.
+    /// </summary>
+    [Id(31)] internal IReadOnlyDictionary<string, long>? CrossTreeDecisionSequences { get; init; }
 }
 

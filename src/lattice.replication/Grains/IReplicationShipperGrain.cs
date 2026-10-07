@@ -83,4 +83,26 @@ internal interface IReplicationShipperGrain : IGrainWithStringKey
     /// <param name="newPhysicalTreeId">The source tree's new physical identity.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     Task NotifySourceIdentityChangedAsync(string newPhysicalTreeId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Stops holding the write-ahead log for a peer removed from the
+    /// replication topology (issue #4534): durably marks the shipper detached,
+    /// withdraws it from the log's offset consumers, and releases its saga
+    /// decision-purge hold. The shipper keeps shipping best effort, so a trim
+    /// may pass it; if the peer is added back
+    /// (<see cref="EnsureActiveAsync"/> re-attaches it) and a trim did pass
+    /// it, the peer must be re-seeded. Idempotent.
+    /// </summary>
+    Task DetachFromLogAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The tombstone reap watermark toward the peer (issue #4615): every write
+    /// this cluster stamped strictly below it to the tree, within the shipper's
+    /// key filter, was acknowledged by the peer under its current lineage, so a
+    /// tombstone stamped below it was applied there. Computed with the
+    /// watermark the shipper ships, but never shipped and not frozen by a key
+    /// filter. <see cref="HybridLogicalClock.Zero"/> while the shipper vouches
+    /// for nothing.
+    /// </summary>
+    Task<HybridLogicalClock> GetReapLowWatermarkAsync();
 }

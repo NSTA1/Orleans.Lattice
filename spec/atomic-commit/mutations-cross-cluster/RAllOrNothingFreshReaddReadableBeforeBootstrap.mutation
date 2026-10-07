@@ -1,0 +1,21 @@
+# Pairs with RAllOrNothing. The origin's trees, added back after a decommission,
+# serve reads from their reset state before their fresh imports land, while a
+# sibling imported first serves the operation post-saga. Each tree added back
+# stays unreadable until its fresh import.
+MODULE: RAllOrNothingFreshReaddReadableBeforeBootstrap
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: trees added back after a decommission are readable before their fresh imports
+PERTURBS: ReaddFresh
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ afresh' = TRUE
+    /\ bfresh' = ("B" \in DecTrees)
+
+--- REPLACE
+\* MUTATION: the re-added trees are readable at once.
+    /\ afresh' = FALSE
+    /\ bfresh' = FALSE
+
+--- END

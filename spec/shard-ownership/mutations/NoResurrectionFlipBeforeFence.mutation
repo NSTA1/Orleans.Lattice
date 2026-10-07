@@ -1,0 +1,18 @@
+# Pairs with NoResurrection. Reproduces #4362: the alias flips before T's
+# shards are fenced, so a router whose cached pair names T keeps reading T
+# after R has taken a write T never receives, and serves the older value.
+MODULE: NoResurrectionFlipBeforeFence
+TARGET: NoResurrection
+CLASS: Invariant
+SUMMARY: the alias flips before the old copy is fenced, so a stale router reads an older value from it
+PERTURBS: ResizeFlip
+
+--- FIND
+ResizeFlip ==
+    /\ rz = "copied"
+    /\ fence = rzShards
+--- REPLACE
+ResizeFlip ==
+    /\ rz = "copied"
+\* MUTATION: the flip does not wait for the fence.
+--- END

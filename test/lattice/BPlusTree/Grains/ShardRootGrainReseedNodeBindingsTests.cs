@@ -11,14 +11,13 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Unit tests for <see cref="ShardRootGrain.ReseedNodeBindingsAsync"/> - the
-/// post-recovery repair that re-asserts every node's tree id and shard index
-/// so an interrupted purge cannot leave a routable node unbound and therefore
-/// rejecting typed CRDT writes.
+/// post-recovery repair that re-binds every node a shard routes to, re-creating
+/// the leaves an interrupted purge cleared (issue #4700) through
+/// <see cref="IBPlusLeafGrain.RecoverBindingAsync"/>.
 /// <para>
-/// The internal-rooted descent, the best-effort catch arm, and the
-/// <c>MaxReseedNodes</c> budget truncation are all structurally unreachable
-/// from a flat-tree fixture, which is why they need their own topology shapes
-/// here.
+/// The internal-rooted descent, the paging of the leaf work and the propagation
+/// of a walk fault are structurally unreachable from a flat-tree fixture, which is
+/// why they need their own topology shapes here.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -26,36 +25,46 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
 {
     private const string ShardKey = "reseed-tree/3";
 
-    /// <summary>Mirrors the private <c>ShardRootGrain.MaxReseedNodes</c> repair budget.</summary>
-    private const int MaxReseedNodes = 4096;
+    private static async Task<int> ReseedAllAsync(ShardRootGrain grain, List<int>? pageStarts = null)
+    {
+        var next = 0;
+        var calls = 0;
+        do
+        {
+            pageStarts?.Add(next);
+            next = await grain.ReseedNodeBindingsAsync(next);
+            calls++;
+        }
+        while (next >= 0);
+
+        return calls;
+    }
 
     [Test]
     public async Task ReseedNodeBindingsAsync_is_a_no_op_when_shard_has_no_root()
     {
         var harness = new ReseedHarness();
 
-        await harness.Grain.ReseedNodeBindingsAsync();
-
+        Assert.That(await harness.Grain.ReseedNodeBindingsAsync(0), Is.EqualTo(-1));
         Assert.That(harness.Logger.Warnings, Is.Empty);
     }
 
     [Test]
-    public async Task ReseedNodeBindingsAsync_rebinds_the_single_root_leaf_when_tree_is_flat()
+    public async Task ReseedNodeBindingsAsync_recovers_the_single_root_leaf_when_tree_is_flat()
     {
         var harness = new ReseedHarness();
         var l0 = harness.Leaf("L0");
         harness.State.State.RootNodeId = l0.Id;
         harness.State.State.RootIsLeaf = true;
 
-        await harness.Grain.ReseedNodeBindingsAsync();
+        Assert.That(await harness.Grain.ReseedNodeBindingsAsync(0), Is.EqualTo(-1));
 
-        await l0.Grain.Received(1).SetTreeIdAsync("reseed-tree");
-        await l0.Grain.Received(1).SetShardIndexAsync(3);
+        await l0.Grain.Received(1).RecoverBindingAsync("reseed-tree", 3);
         Assert.That(harness.Logger.Warnings, Is.Empty);
     }
 
     [Test]
-    public async Task ReseedNodeBindingsAsync_descends_internal_nodes_and_rebinds_every_leaf()
+    public async Task ReseedNodeBindingsAsync_descends_internal_nodes_and_recovers_every_leaf()
     {
         // I0 (children internal) -> [I1, I2]; I1 -> [L0, L1]; I2 -> [L2].
         // The descent must reach every leaf routing can still deliver to, not
@@ -72,12 +81,11 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
         harness.State.State.RootNodeId = i0.Id;
         harness.State.State.RootIsLeaf = false;
 
-        await harness.Grain.ReseedNodeBindingsAsync();
+        await ReseedAllAsync(harness.Grain);
 
         foreach (var leaf in new[] { l0, l1, l2 })
         {
-            await leaf.Grain.Received(1).SetTreeIdAsync("reseed-tree");
-            await leaf.Grain.Received(1).SetShardIndexAsync(3);
+            await leaf.Grain.Received(1).RecoverBindingAsync("reseed-tree", 3);
         }
 
         foreach (var node in new[] { i0, i1, i2 })
@@ -89,13 +97,11 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
     }
 
     [Test]
-    public async Task ReseedNodeBindingsAsync_degrades_to_no_repair_and_warns_when_the_walk_throws()
+    public void ReseedNodeBindingsAsync_fails_the_recovery_when_the_walk_throws()
     {
-        // A topology whose internal root was itself cleared has nothing to
-        // descend, and a node's silo may be momentarily unreachable. Recovery
-        // succeeded before this repair existed, so degrading to "no repair" is
-        // strictly no worse than the status quo - throwing would make recovery
-        // newly fragile.
+        // Issue #4700: the leaves a purge cleared are re-created only by this
+        // repair, so a repair skipped would leave them failed closed with no path
+        // back. The fault propagates and the recovery is retried.
         var harness = new ReseedHarness();
         var l0 = harness.Leaf("L0");
         var i0 = harness.Internal("I0", childrenAreLeaves: true, children: [l0.Id]);
@@ -104,47 +110,70 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
         harness.State.State.RootNodeId = i0.Id;
         harness.State.State.RootIsLeaf = false;
 
-        Assert.DoesNotThrowAsync(async () => await harness.Grain.ReseedNodeBindingsAsync());
-
-        // No binding was re-asserted, and the degradation is reported.
-        await l0.Grain.DidNotReceive().SetTreeIdAsync(Arg.Any<string>());
-        Assert.That(harness.Logger.Warnings, Has.Count.EqualTo(1));
-        Assert.That(harness.Logger.Warnings[0], Does.Contain("re-assert node bindings after recovery"));
+        Assert.ThrowsAsync<TimeoutException>(async () => await harness.Grain.ReseedNodeBindingsAsync(0));
     }
 
     [Test]
-    public async Task ReseedNodeBindingsAsync_truncates_at_the_repair_budget_and_warns()
+    public async Task ReseedNodeBindingsAsync_pages_the_leaf_work_and_reaches_every_leaf()
     {
-        // The repair runs inside one grain call, and an unbounded node walk in
-        // one grain call is what stranded the topology in the first place, so
-        // the walk is capped at MaxReseedNodes and the overrun is reported
-        // rather than allowed to run long.
-        //
-        // Each pushed child contributes one internal node plus one leaf, so a
-        // root fanning out to (MaxReseedNodes / 2) + 8 children overruns the
-        // budget with room to spare.
+        // Issue #4700: more routed leaves than one call handles are re-bound over
+        // several calls, each resuming where the last stopped, so no leaf beyond
+        // the first page is left behind.
         var harness = new ReseedHarness();
-        var childCount = (MaxReseedNodes / 2) + 8;
-        var sharedLeaf = harness.Leaf("Lshared");
-        var children = new List<GrainId>(childCount);
-        for (var i = 0; i < childCount; i++)
-        {
-            children.Add(harness.Internal($"I{i}", childrenAreLeaves: true, children: [sharedLeaf.Id]).Id);
-        }
-
-        var root = harness.Internal("Iroot", childrenAreLeaves: false, children: children);
+        var leafCount = ShardRootGrain.ReseedLeafPageSize + 10;
+        var leaves = Enumerable.Range(0, leafCount).Select(i => harness.Leaf($"L{i}")).ToList();
+        var root = harness.Internal("Iroot", childrenAreLeaves: true, children: leaves.Select(l => l.Id).ToList());
         harness.State.State.RootNodeId = root.Id;
         harness.State.State.RootIsLeaf = false;
 
-        await harness.Grain.ReseedNodeBindingsAsync();
+        var pageStarts = new List<int>();
+        var calls = await ReseedAllAsync(harness.Grain, pageStarts);
 
-        Assert.That(harness.Logger.Warnings, Has.Count.EqualTo(1));
-        Assert.That(harness.Logger.Warnings[0], Does.Contain("repair budget"));
-        // The walk stopped at the budget rather than visiting every child.
+        Assert.Multiple(async () =>
+        {
+            Assert.That(calls, Is.EqualTo(2));
+            Assert.That(pageStarts, Is.EqualTo(new[] { 0, ShardRootGrain.ReseedLeafPageSize }));
+            await leaves[0].Grain.Received(1).RecoverBindingAsync("reseed-tree", 3);
+            await leaves[^1].Grain.Received(1).RecoverBindingAsync("reseed-tree", 3);
+        });
         await root.Grain.Received(1).SetTreeIdAsync("reseed-tree");
-        Assert.That(harness.InternalNodesWalked, Is.LessThan(childCount));
     }
 
+    [Test]
+    public async Task ReseedNodeBindingsAsync_leaves_a_refused_leaf_failed_closed_and_recovers_the_rest()
+    {
+        // A rowless leaf no purge cleared is refused (its row may have been lost);
+        // the refusal is reported and the rest of the shard is still recovered.
+        var harness = new ReseedHarness();
+        var lost = harness.Leaf("Llost");
+        var fine = harness.Leaf("Lfine");
+        lost.Grain.RecoverBindingAsync(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(Task.FromException(new LeafStateRowLostException("leaf", "reseed-tree", "no purge cleared it", null)));
+        var root = harness.Internal("I0", childrenAreLeaves: true, children: [lost.Id, fine.Id]);
+        harness.State.State.RootNodeId = root.Id;
+        harness.State.State.RootIsLeaf = false;
+
+        Assert.That(await harness.Grain.ReseedNodeBindingsAsync(0), Is.EqualTo(-1));
+
+        await fine.Grain.Received(1).RecoverBindingAsync("reseed-tree", 3);
+        Assert.That(harness.Logger.Warnings, Has.Count.EqualTo(1));
+        Assert.That(harness.Logger.Warnings[0], Does.Contain("does not show that a purge cleared it"));
+    }
+
+    [Test]
+    public void ReseedNodeBindingsAsync_fails_the_recovery_when_a_leaf_cannot_be_recovered()
+    {
+        // A fault other than a refusal - the leaf's record could not be read - fails
+        // the recovery, which is retried, rather than strand a cleared leaf.
+        var harness = new ReseedHarness();
+        var l0 = harness.Leaf("L0");
+        l0.Grain.RecoverBindingAsync(Arg.Any<string>(), Arg.Any<int>())
+            .Returns(Task.FromException(new TimeoutException("record store unreachable")));
+        harness.State.State.RootNodeId = l0.Id;
+        harness.State.State.RootIsLeaf = true;
+
+        Assert.ThrowsAsync<TimeoutException>(async () => await harness.Grain.ReseedNodeBindingsAsync(0));
+    }
     /// <summary>
     /// Directly-constructed <see cref="ShardRootGrain"/> plus node substitutes,
     /// with a capturing logger so the best-effort warning arms are observable.
@@ -180,8 +209,7 @@ public sealed class ShardRootGrainReseedNodeBindingsTests
         {
             var id = GrainId.Create("leaf", $"{ShardKey}:{key}");
             var grain = Substitute.For<IBPlusLeafGrain>();
-            grain.SetTreeIdAsync(Arg.Any<string>()).Returns(Task.CompletedTask);
-            grain.SetShardIndexAsync(Arg.Any<int>()).Returns(Task.CompletedTask);
+            grain.RecoverBindingAsync(Arg.Any<string>(), Arg.Any<int>()).Returns(Task.CompletedTask);
             Factory.GetGrain<IBPlusLeafGrain>(id).Returns(grain);
             return new LeafNode(id, grain);
         }

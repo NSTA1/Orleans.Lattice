@@ -1,0 +1,18 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Reproduces production
+# before #4647, the fix for #4537: the drain applies only the rows the export carries, so a
+# delete that is behind the trim point and whose tombstone s has reaped reaches r
+# by no path, and r keeps the deleted value for ever.
+MODULE: EventualConvergenceReapedDeleteNotReconciled
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: no reconcile: a delete behind the trim point whose tombstone was reaped never reaches the receiver
+PERTURBS: EndExport
+
+--- FIND
+       IN /\ reg' = IF ok THEN [reg EXCEPT ![r] = Merge(@, fab)] ELSE reg
+          /\ clk' = IF ok THEN [clk EXCEPT ![r] = Max2(@, fab.h)] ELSE clk
+--- REPLACE
+\* MUTATION: the drain does not reconcile.
+       IN /\ reg' = reg
+          /\ clk' = clk
+--- END

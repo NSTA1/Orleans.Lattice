@@ -64,6 +64,16 @@ public static class CoyoteModelHarness
     public const int DefaultMaxSteps = 200;
 
     /// <summary>
+    /// The exploration seed a guard (a test that removes one fix and requires a
+    /// violation) passes to <see cref="Explore"/>, so that it explores the same
+    /// runs on every execution and cannot flake (issue #4727). A guard that is
+    /// green under this seed is green on every run; a model change that moves
+    /// the violation out of reach turns it red deterministically, in the change
+    /// that caused it.
+    /// </summary>
+    public const uint GuardSeed = 1;
+
+    /// <summary>
     /// Explores up to <paramref name="iterations"/> runs of
     /// <paramref name="model"/> and reports what was found, without asserting.
     /// </summary>
@@ -91,17 +101,38 @@ public static class CoyoteModelHarness
     /// accurately. A model that needs genuine thread interleaving is a new
     /// harness, not a degree setting on this one.
     /// </para>
+    /// <para>
+    /// Without <paramref name="seed"/> every call explores a different random
+    /// sample of the choice space, which is what a fixed-design run wants. A guard
+    /// that requires a SPECIFIC assertion to report its violation wants a seed:
+    /// Coyote stops at the first violation, and when the removed fix breaks two
+    /// properties, which one is reported first depends on the sample (issue #4727).
+    /// With a seed the exploration, and so the report, is identical on every run.
+    /// </para>
     /// </remarks>
+    /// <param name="model">The model to explore.</param>
+    /// <param name="iterations">The number of runs to explore before giving up.</param>
+    /// <param name="maxSteps">The scheduling-step bound of each run.</param>
+    /// <param name="seed">
+    /// The exploration strategy's random seed, making the exploration
+    /// deterministic; <see langword="null"/> for a fresh random seed per call.
+    /// </param>
+    /// <returns>What the exploration found.</returns>
     public static CoyoteExplorationResult Explore(
         ICoyoteModel model,
         int iterations = DefaultIterations,
-        int maxSteps = DefaultMaxSteps)
+        int maxSteps = DefaultMaxSteps,
+        uint? seed = null)
     {
         ArgumentNullException.ThrowIfNull(model);
 
         var configuration = Configuration.Create()
             .WithTestingIterations((uint)iterations)
             .WithMaxSchedulingSteps((uint)maxSteps);
+        if (seed is { } fixedSeed)
+        {
+            configuration = configuration.WithRandomGeneratorSeed(fixedSeed);
+        }
 
         using var engine = TestingEngine.Create(configuration, model.Run);
         engine.Run();

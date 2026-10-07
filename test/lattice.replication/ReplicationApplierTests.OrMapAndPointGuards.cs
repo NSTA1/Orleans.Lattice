@@ -33,7 +33,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var lattice = Substitute.For<ILattice>();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);

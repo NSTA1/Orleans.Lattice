@@ -65,6 +65,7 @@ internal static class ShellTransportServiceCollectionExtensions
         typeof(ILatticeStorageUsageOperations),
         typeof(ILatticeWalReclamation),
         typeof(ILatticeReplicationControl),
+        typeof(ILatticeReplicationPeerAdmin),
         typeof(ILatticeReplicationStatus),
         typeof(ILatticeAppsControl),
         typeof(ILatticeAppCatalog),
@@ -109,6 +110,7 @@ internal static class ShellTransportServiceCollectionExtensions
         services.TryAddKeyedScoped<ILatticeStorageUsageOperations, ShellStorageUsageOperationsTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeWalReclamation, ShellWalReclamationTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeReplicationControl, ShellReplicationControlTransport>(ShellFacades.Key);
+        services.TryAddKeyedScoped<ILatticeReplicationPeerAdmin, ShellReplicationControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeReplicationStatus, ShellReplicationStatusTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppsControl, ShellAppsControlTransport>(ShellFacades.Key);
         services.TryAddKeyedScoped<ILatticeAppCatalog, ShellAppCatalogTransport>(ShellFacades.Key);

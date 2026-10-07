@@ -1,0 +1,21 @@
+# Pairs with RAllOrNothing. Regression check for issue #4448, fixed by #4461.
+# The point read path answers Indeterminate for a delegation whose coordinator
+# cannot be dialled; before #4461 the snapshot read paths (SnapshotAsync,
+# SnapshotWithRevisionAsync) left such a txid out of the snapshot, and
+# TxDecisionView resolves an absent txid to InFlight. A multi-key receiver
+# reader resolving through a snapshot therefore served a delegated tree's key
+# pre-saga while the barrier had committed and a sibling tree was finalised.
+# Since #4461 the snapshot carries the txid as Indeterminate, which is the
+# base's single read view. This edits the read view, not an action: it is the
+# answer one class of reader was given, which is exactly where the defect lived.
+MODULE: RAllOrNothingSnapshotReadsUnresolvableAsInFlight
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: an undiallable receiver delegation reads InFlight rather than Indeterminate, as the snapshot read paths answered it before #4461
+
+--- FIND
+    ELSE IF rdeleg[tr] THEN (IF rdial[tr] THEN "indeterminate" ELSE cdec)
+--- REPLACE
+\* MUTATION: the unresolvable delegation is left out, so it reads InFlight.
+    ELSE IF rdeleg[tr] THEN (IF rdial[tr] THEN "inflight" ELSE cdec)
+--- END

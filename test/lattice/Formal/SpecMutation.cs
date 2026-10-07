@@ -26,8 +26,8 @@ public enum SpecPropertyClass
 }
 
 /// <summary>
-/// One mutation of <c>spec/AtomicCommit.tla</c>, paired with the single
-/// property it must make TLC report as violated.
+/// One mutation of a module under <c>spec/</c> (see <see cref="SpecModule"/>),
+/// paired with the single property it must make TLC report as violated.
 /// <para>
 /// A mutation is stored as a set of anchored edits rather than as a mutated
 /// copy of the specification, and this is the whole point of the type. The
@@ -51,8 +51,6 @@ public enum SpecPropertyClass
 /// </summary>
 public sealed record SpecMutation
 {
-    private const string BaseModuleName = "AtomicCommit";
-
     /// <summary>File stem of the mutation, used as the test case name.</summary>
     public required string Name { get; init; }
 
@@ -115,6 +113,27 @@ public sealed record SpecMutation
     public const string DeadlockSwitch = "-deadlock";
 
     /// <summary>
+    /// The model-size overrides applied to the mutant arm only, from the
+    /// optional <c>BOUNDS:</c> header: comma-separated <c>Name = value</c>
+    /// assignments to a bound the specification declares or defines.
+    /// <para>
+    /// A mutant has to show one counterexample, not hold over the whole
+    /// instance, and a temporal mutant pays for the full state graph before TLC
+    /// reports it. Running it on the smallest instance that still exhibits the
+    /// violation saves that cost without weakening anything the experiment
+    /// asserts: the control arm, which is where "the property holds on the
+    /// base" is decided, is built by <see cref="BuildConfig"/> and never sees
+    /// these assignments, so it still checks the module's own bounds; and the
+    /// mutant arm still has to report exactly its target, so an override that
+    /// shrinks the instance below the violation leaves the mutant clean and
+    /// fails the experiment rather than passing it. A name the specification
+    /// does not have would be accepted by TLC and silently ignored, so
+    /// <see cref="SpecMutationCatalogueTests"/> refuses one without a toolchain.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<CfgAssignment> Bounds { get; init; } = [];
+
+    /// <summary>
     /// The exact text TLC emits when <see cref="Target"/> is violated.
     /// <para>
     /// Note the asymmetry in the <see cref="SpecPropertyClass.Temporal"/> case:
@@ -142,9 +161,15 @@ public sealed record SpecMutation
     /// Throws with a specific message if any anchor no longer matches exactly
     /// once, which is the drift signal.
     /// </summary>
-    public string Apply(string baseSpecification)
+    /// <param name="baseSpecification">The base module's text.</param>
+    /// <param name="baseModuleName">
+    /// The base module's name, whose <c>MODULE</c> header the mutant renames to
+    /// <see cref="Module"/>.
+    /// </param>
+    public string Apply(string baseSpecification, string baseModuleName)
     {
         ArgumentNullException.ThrowIfNull(baseSpecification);
+        ArgumentException.ThrowIfNullOrEmpty(baseModuleName);
 
         // Normalised before anchoring. The anchors are stored with \n endings,
         // so on a CRLF checkout an un-normalised compare would fail to match
@@ -154,7 +179,7 @@ public sealed record SpecMutation
 
         var text = ReplaceExactlyOnce(
             normalised,
-            $"MODULE {BaseModuleName} ",
+            $"MODULE {baseModuleName} ",
             $"MODULE {Module} ",
             "the module header");
 
@@ -193,8 +218,26 @@ public sealed record SpecMutation
     /// <c>TypeOK</c> instead, the banner assertion fails, and the mistake
     /// surfaces as a mistake.
     /// </para>
+    /// <para>
+    /// Everything else in the base cfg is carried over unchanged - the
+    /// <c>SPECIFICATION</c> (or <c>INIT</c>/<c>NEXT</c>), <c>CONSTANTS</c>,
+    /// <c>CONSTRAINT</c>, <c>SYMMETRY</c> and so on - so both arms check the
+    /// same bounded instance the base model does, whatever directives a module
+    /// uses to bound it. Only the checked-property blocks are replaced.
+    /// </para>
     /// </summary>
-    public string BuildConfig(string baseConfig)
+    public string BuildConfig(string baseConfig) => BuildConfig(baseConfig, []);
+
+    /// <summary>
+    /// Builds the cfg for the mutant arm: <see cref="BuildConfig"/> plus a
+    /// <c>CONSTANTS</c> block holding <see cref="Bounds"/>, so the mutant runs
+    /// on the smaller instance its header declares while the control arm keeps
+    /// the module's own bounds. Identical to <see cref="BuildConfig"/> for a
+    /// mutation that declares no bounds.
+    /// </summary>
+    public string BuildMutantConfig(string baseConfig) => BuildConfig(baseConfig, Bounds);
+
+    private string BuildConfig(string baseConfig, IReadOnlyList<CfgAssignment> bounds)
     {
         ArgumentNullException.ThrowIfNull(baseConfig);
 
@@ -202,14 +245,23 @@ public sealed record SpecMutation
         builder.AppendLine($"\\* Generated for mutation {Name}. Do not check this file in.");
         builder.AppendLine($"\\* Target: {Target} ({PropertyClass}).");
         builder.AppendLine();
-        builder.AppendLine("SPECIFICATION Spec");
-        builder.AppendLine();
-        builder.AppendLine(ExtractConstants(baseConfig));
+        builder.AppendLine(SpecMutationCatalogue.CarriedConfiguration(baseConfig));
         builder.AppendLine();
 
+        if (bounds.Count > 0)
+        {
+            builder.AppendLine("CONSTANTS");
+            foreach (var bound in bounds)
+            {
+                builder.AppendLine($"    {bound.Name} = {bound.Value}");
+            }
+
+            builder.AppendLine();
+        }
+
         builder.AppendLine("INVARIANTS");
-        builder.AppendLine("    TypeOK");
-        if (PropertyClass == SpecPropertyClass.Invariant && Target != "TypeOK")
+        builder.AppendLine($"    {SpecMutationCatalogue.TypeInvariant}");
+        if (PropertyClass == SpecPropertyClass.Invariant && Target != SpecMutationCatalogue.TypeInvariant)
         {
             builder.AppendLine($"    {Target}");
         }
@@ -224,35 +276,6 @@ public sealed record SpecMutation
         return builder.ToString();
     }
 
-    private static string ExtractConstants(string baseConfig)
-    {
-        var lines = baseConfig.ReplaceLineEndings("\n").Split('\n');
-        var start = Array.FindIndex(lines, line => line.TrimStart().StartsWith("CONSTANTS", StringComparison.Ordinal));
-        if (start < 0)
-        {
-            throw new InvalidOperationException("spec/AtomicCommit.cfg has no CONSTANTS block.");
-        }
-
-        var captured = new List<string> { lines[start] };
-        for (var i = start + 1; i < lines.Length; i++)
-        {
-            var trimmed = lines[i].TrimStart();
-            if (trimmed.StartsWith("INVARIANTS", StringComparison.Ordinal)
-                || trimmed.StartsWith("PROPERTIES", StringComparison.Ordinal)
-                || trimmed.StartsWith("SPECIFICATION", StringComparison.Ordinal))
-            {
-                break;
-            }
-
-            if (trimmed.Length > 0 && !trimmed.StartsWith("\\*", StringComparison.Ordinal))
-            {
-                captured.Add(lines[i]);
-            }
-        }
-
-        return string.Join(Environment.NewLine, captured).TrimEnd();
-    }
-
     private string ReplaceExactlyOnce(string text, string find, string replace, string what)
     {
         var occurrences = CountOccurrences(text, find);
@@ -260,7 +283,7 @@ public sealed record SpecMutation
         {
             var diagnosis = occurrences == 0
                 ? "The base specification no longer contains this text, so the mutation has drifted "
-                  + "and must be re-derived against the current spec/AtomicCommit.tla."
+                  + "and must be re-derived against the current base module."
                 : $"The base specification contains this text {occurrences} times, so the anchor is "
                   + "ambiguous and the mutation would be applied somewhere unintended. Widen it with "
                   + "surrounding context until it is unique.";
@@ -303,7 +326,7 @@ public sealed record SpecMutation
 public sealed record SpecEdit(string Find, string Replace);
 
 /// <summary>
-/// Reads the <c>*.mutation</c> files in <c>spec/mutations/</c>.
+/// Reads the <c>*.mutation</c> files in a module's mutation directory.
 /// <para>
 /// The format is deliberately dull: <c>KEY: value</c> metadata, then one or
 /// more <c>--- FIND</c> / <c>--- REPLACE</c> / <c>--- END</c> blocks holding
@@ -405,7 +428,46 @@ public static class SpecMutationCatalogue
                 ? perturbs.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 : [],
             DeadlockCheckDisabled = ParseDeadlock(metadata, name),
+            Bounds = ParseBounds(metadata, name),
         };
+    }
+
+    /// <summary>
+    /// Reads the optional <c>BOUNDS:</c> header: one or more comma-separated
+    /// <c>Name = value</c> assignments, where the value is an integer or an
+    /// identifier. A definition override (<c>&lt;-</c>), an empty entry, a
+    /// repeated name or anything else is refused, because a malformed bound
+    /// that TLC silently ignored would run the mutant at full size and look
+    /// like a bound that worked.
+    /// </summary>
+    private static IReadOnlyList<CfgAssignment> ParseBounds(IDictionary<string, string> metadata, string name)
+    {
+        if (!metadata.TryGetValue("BOUNDS", out var value))
+        {
+            return [];
+        }
+
+        var bounds = new List<CfgAssignment>();
+        foreach (var entry in value.Split(','))
+        {
+            var match = Regex.Match(entry.Trim(), @"^([A-Za-z][A-Za-z0-9_]*)\s*=\s*([0-9]+|[A-Za-z][A-Za-z0-9_]*)$");
+            if (!match.Success)
+            {
+                throw new InvalidOperationException(
+                    $"{name}.mutation declares 'BOUNDS: {value}'. Each entry must be 'Name = value', with an integer "
+                    + "or identifier value, separated by commas.");
+            }
+
+            var bound = new CfgAssignment(match.Groups[1].Value, IsOverride: false, match.Groups[2].Value);
+            if (bounds.Any(b => string.Equals(b.Name, bound.Name, StringComparison.Ordinal)))
+            {
+                throw new InvalidOperationException($"{name}.mutation declares the bound '{bound.Name}' twice.");
+            }
+
+            bounds.Add(bound);
+        }
+
+        return bounds;
     }
 
     /// <summary>
@@ -469,10 +531,75 @@ public static class SpecMutationCatalogue
     public const string PropertiesBlock = "PROPERTIES";
 
     /// <summary>
+    /// The type invariant every module's base model must check, and that every
+    /// generated cfg carries alongside its target so an out-of-domain mutation
+    /// reports as itself rather than as the target.
+    /// </summary>
+    public const string TypeInvariant = "TypeOK";
+
+    /// <summary>
+    /// Every directive a TLC cfg may open a block with. Recognising all of them,
+    /// not only the property blocks, is what stops a <c>CONSTRAINT</c> or
+    /// <c>SYMMETRY</c> line after an <c>INVARIANTS</c> block being read as two
+    /// more invariants.
+    /// </summary>
+    private static readonly Regex Directive = new(
+        @"^(SPECIFICATION|INIT|NEXT|CONSTANTS?|INVARIANTS?|PROPERTY|PROPERTIES|CONSTRAINTS?|ACTION_CONSTRAINTS?|SYMMETRY|VIEW|ALIAS|POSTCONDITION|CHECK_DEADLOCK)\b(.*)$");
+
+    /// <summary>
+    /// The base cfg with its checked-property blocks and comments removed:
+    /// everything a generated cfg carries over so that it checks the same
+    /// bounded instance. Throws when the cfg names no behaviour to check, since
+    /// a generated cfg without one would not run at all.
+    /// </summary>
+    public static string CarriedConfiguration(string baseConfig)
+    {
+        ArgumentNullException.ThrowIfNull(baseConfig);
+
+        var kept = new List<string>();
+        var skipping = false;
+        foreach (var raw in baseConfig.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var line = StripCfgComment(raw).TrimEnd();
+            if (line.Trim().Length == 0)
+            {
+                continue;
+            }
+
+            var directive = Directive.Match(line.Trim());
+            if (directive.Success)
+            {
+                skipping = directive.Groups[1].Value.StartsWith("INVARIANT", StringComparison.Ordinal)
+                    || directive.Groups[1].Value.StartsWith("PROPERT", StringComparison.Ordinal);
+            }
+
+            if (!skipping)
+            {
+                kept.Add(line);
+            }
+        }
+
+        if (!kept.Any(l => Regex.IsMatch(l.Trim(), @"^(SPECIFICATION|INIT)\b")))
+        {
+            throw new InvalidOperationException(
+                "the base cfg declares neither SPECIFICATION nor INIT, so a generated cfg would name no "
+                + "behaviour for TLC to check.");
+        }
+
+        return string.Join(Environment.NewLine, kept);
+    }
+
+    private static string StripCfgComment(string line)
+    {
+        var comment = line.IndexOf("\\*", StringComparison.Ordinal);
+        return comment >= 0 ? line[..comment] : line;
+    }
+
+    /// <summary>
     /// Reads the property names the base model actually checks, so the
     /// completeness gate is driven by the model rather than by a list somebody
     /// has to remember to update. Adding a property to
-    /// <c>spec/AtomicCommit.cfg</c> without pairing it therefore fails.
+    /// a module's base cfg without pairing it therefore fails.
     /// <para>
     /// Flattens both blocks. Use
     /// <see cref="ReadCheckedPropertiesByBlock"/> when the distinction matters,
@@ -509,31 +636,29 @@ public static class SpecMutationCatalogue
 
         foreach (var raw in baseConfig.ReplaceLineEndings("\n").Split('\n'))
         {
-            var comment = raw.IndexOf("\\*", StringComparison.Ordinal);
-            var line = (comment >= 0 ? raw[..comment] : raw).Trim();
+            var line = StripCfgComment(raw).Trim();
             if (line.Length == 0)
             {
                 continue;
             }
 
-            var declaration = Regex.Match(line, @"^(INVARIANTS?|PROPERTY|PROPERTIES)\b(.*)$");
-            if (declaration.Success)
+            var directive = Directive.Match(line);
+            if (directive.Success)
             {
-                current = declaration.Groups[1].Value.StartsWith("INVARIANT", StringComparison.Ordinal)
-                    ? invariants
-                    : properties;
-                line = declaration.Groups[2].Value.Trim();
+                var keyword = directive.Groups[1].Value;
+                if (!keyword.StartsWith("INVARIANT", StringComparison.Ordinal)
+                    && !keyword.StartsWith("PROPERT", StringComparison.Ordinal))
+                {
+                    current = null;
+                    continue;
+                }
+
+                current = keyword.StartsWith("INVARIANT", StringComparison.Ordinal) ? invariants : properties;
+                line = directive.Groups[2].Value.Trim();
                 if (line.Length == 0)
                 {
                     continue;
                 }
-            }
-
-            if (line.StartsWith("SPECIFICATION", StringComparison.Ordinal)
-                || line.StartsWith("CONSTANTS", StringComparison.Ordinal))
-            {
-                current = null;
-                continue;
             }
 
             // A CONSTANTS assignment line ('t1 = t1') keeps capturing off; only
@@ -553,5 +678,58 @@ public static class SpecMutationCatalogue
             [InvariantsBlock] = invariants,
             [PropertiesBlock] = properties,
         };
+    }
+
+    /// <summary>
+    /// Reads every assignment a cfg's <c>CONSTANT</c> / <c>CONSTANTS</c> blocks
+    /// make: <c>Name = value</c> (a value for a declared constant, or for a
+    /// defined operator, which TLC also accepts) and <c>Name &lt;- Other</c>
+    /// (a definition override). Used by the variant gates, because TLC accepts
+    /// an assignment to a name the specification does not have when it is
+    /// written <c>Name = value</c>, and silently checks the unchanged model.
+    /// </summary>
+    /// <param name="config">The cfg text.</param>
+    public static IReadOnlyList<CfgAssignment> ReadConstantAssignments(string config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var assignments = new List<CfgAssignment>();
+        var inConstants = false;
+
+        foreach (var raw in config.ReplaceLineEndings("\n").Split('\n'))
+        {
+            var line = StripCfgComment(raw).Trim();
+            if (line.Length == 0)
+            {
+                continue;
+            }
+
+            var directive = Directive.Match(line);
+            if (directive.Success)
+            {
+                inConstants = directive.Groups[1].Value.StartsWith("CONSTANT", StringComparison.Ordinal);
+                line = directive.Groups[2].Value.Trim();
+                if (!inConstants || line.Length == 0)
+                {
+                    continue;
+                }
+            }
+
+            if (!inConstants)
+            {
+                continue;
+            }
+
+            var assignment = Regex.Match(line, @"^([A-Za-z][A-Za-z0-9_]*)\s*(=|<-)\s*(\S.*)$");
+            if (assignment.Success)
+            {
+                assignments.Add(new CfgAssignment(
+                    assignment.Groups[1].Value,
+                    assignment.Groups[2].Value == "<-",
+                    assignment.Groups[3].Value.Trim()));
+            }
+        }
+
+        return assignments;
     }
 }

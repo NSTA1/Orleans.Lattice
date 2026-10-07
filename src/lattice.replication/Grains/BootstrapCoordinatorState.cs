@@ -74,7 +74,7 @@ internal sealed class BootstrapCoordinatorState
     /// <summary>
     /// The <see cref="SnapshotStream.AsOfHlc"/> reported by the most
     /// recent <see cref="ISnapshotProvider.ExportAsync"/> call. Pinned
-    /// on <see cref="IReplicationHighWaterMarkGrain.PinSnapshotAsync"/>
+    /// on <see cref="IReplicationHighWaterMarkGrain.MergeBootstrapFrontierAsync"/>
     /// during <see cref="LatticeBootstrapState.IncrementalHandoff"/>.
     /// </summary>
     [Id(5)] public HybridLogicalClock SnapshotAsOfHlc { get; set; }
@@ -88,4 +88,205 @@ internal sealed class BootstrapCoordinatorState
     /// is never <see langword="null"/> at pin time.
     /// </summary>
     [Id(6)] public VersionVector CausalStableFrontier { get; set; } = new();
+
+    /// <summary>
+    /// The source's export epoch of the snapshot the current (or last) run
+    /// drained (issue #4534); <c>0</c> from a source that does not number
+    /// its exports. Legacy state decodes to <c>0</c>.
+    /// </summary>
+    [Id(7)] public long SnapshotExportEpoch { get; set; }
+
+    /// <summary>
+    /// Per source cluster, the export epoch of the last full bootstrap that
+    /// reached <see cref="LatticeBootstrapState.LiveIncremental"/> (issue
+    /// #4534). Echoed on replication acknowledgements so a sender that took
+    /// this receiver off the log knows it has been re-seeded. Legacy state
+    /// decodes to an empty map.
+    /// </summary>
+    [Id(8)] public Dictionary<string, long> CompletedExportEpochs { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether this coordinator has armed the tree's receiver bootstrap read
+    /// fence (issue #4526) and not yet lifted it. Recorded before the fence is
+    /// armed, so a crash part-way through arming still lifts it.
+    /// </summary>
+    [Id(9)] public bool ReadFenceArmed { get; set; }
+
+    /// <summary>
+    /// The physical tree the read fence was armed on, or <see langword="null"/>
+    /// when none is armed.
+    /// </summary>
+    [Id(10)] public string? FencedPhysicalTreeId { get; set; }
+
+    /// <summary>
+    /// The routed shard indices of <see cref="FencedPhysicalTreeId"/> the read
+    /// fence was armed on, or <see langword="null"/> when none is armed.
+    /// </summary>
+    [Id(11)] public int[]? FencedShardIndices { get; set; }
+
+    /// <summary>
+    /// Whether a drain has applied at least one snapshot entry since the read
+    /// fence was armed and before it completed: the tree may hold a partial
+    /// import, so the fence must stay up until a later drain completes. Recorded
+    /// before the first entry is applied.
+    /// </summary>
+    [Id(12)] public bool ImportApplied { get; set; }
+
+    /// <summary>
+    /// Snapshot entries applied by the current drain attempt. Progress
+    /// reporting only; reset when an attempt starts.
+    /// </summary>
+    [Id(13)] public long EntriesApplied { get; set; }
+
+    /// <summary>
+    /// Automatic re-drives of a bootstrap that failed after applying part of an
+    /// import, since the bootstrap was kicked off. Drives the backoff.
+    /// </summary>
+    [Id(14)] public int RedriveAttempts { get; set; }
+
+    /// <summary>
+    /// The UTC tick at or after which a failed, fenced bootstrap is re-driven.
+    /// </summary>
+    [Id(15)] public long NextRedriveAtUtcTicks { get; set; }
+
+    /// <summary>
+    /// Origin whose receiver-poisoned saga set was captured at the start of the
+    /// current drain for pre-export pending-bucket discard.
+    /// </summary>
+    [Id(16)] public string PoisonSettleOriginClusterId { get; set; } = "";
+
+    /// <summary>
+    /// Poisoned transaction ids captured at the start of the current drain.
+    /// Retired only after the full re-seed reaches the live-incremental handoff.
+    /// </summary>
+    [Id(17)] public List<Guid> PoisonSettleTransactionIds { get; set; } = new();
+
+    /// <summary>
+    /// Per sender cluster id, the highest export epoch it asked this receiver to
+    /// re-seed past (<c>x-lattice-replication-reseed-after</c>, issues #4533 /
+    /// #4534) and that no drain has consumed yet. While a sender waits it
+    /// withholds every saga record, so a drain from it whose export epoch is
+    /// greater clears the stale pending buckets its purged sagas left behind,
+    /// and removes the entry. State written before this slot decodes to an
+    /// empty map.
+    /// </summary>
+    [Id(18)] public Dictionary<string, long> ReseedAfterEpochs { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Source lineage token this receiver's copy is aligned with, keyed by
+    /// source cluster id (issue #4537). Recorded by a bootstrap that began with
+    /// no row of that source's origin on the receiver, or adopted when the
+    /// export carried every source-origin key the receiver held.
+    /// </summary>
+    [Id(19)] public Dictionary<string, Guid> AlignedLineageBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Sources whose last delete-reconcile attempt skipped because the source
+    /// generation was unknown, changed, or reported deletion during the export. A
+    /// later full re-bootstrap retries from the beginning with a fresh pre-capture.
+    /// </summary>
+    [Id(20)] public Dictionary<string, bool> ReconcileOwedBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Whether the receiver tree held no row of the source's origin at all,
+    /// tombstones and expiring rows included, when the current import began (issue
+    /// #4537). Recorded before the import's first entry is applied and kept across
+    /// a resume or re-drive of a partial import, so a first bootstrap still records
+    /// its aligned lineage after a crash. Legacy state decodes to
+    /// <see langword="false"/>, which skips alignment fail-safe.
+    /// </summary>
+    [Id(21)] public bool HeldNoSourceRowsAtImportStart { get; set; }
+
+    /// <summary>
+    /// Per source cluster, how many owed delete-reconcile retries have been
+    /// started since the last decision that owed nothing (issue #4537). Drives the
+    /// retry backoff, so a sender that never reports its generation does not
+    /// re-bootstrap the tree on every maintenance tick.
+    /// </summary>
+    [Id(22)] public Dictionary<string, int> OwedRetryAttemptsBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the UTC tick before which an owed delete-reconcile
+    /// retry is not started (issue #4537).
+    /// </summary>
+    [Id(23)] public Dictionary<string, long> OwedRetryNotBeforeTicksBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The receiver tree frontier's epoch captured immediately before the
+    /// current drain's export was requested (issue #4586 part 2b). The
+    /// handoff pins the export's watermarks only if the epoch is unchanged, so
+    /// a drain that straddled a replacement of the tree's contents installs
+    /// nothing. State written before this slot decodes to
+    /// <see cref="Guid.Empty"/>, which pins nothing.
+    /// </summary>
+    [Id(24)] public Guid FrontierEpoch { get; set; }
+
+    /// <summary>
+    /// The source's applied low watermarks and held writes the current drain's
+    /// export carried, kept only when the export's source generation was stable
+    /// under the lineage they were read under (issue #4586 part 2b); the handoff
+    /// pins them on the tree frontier. <see langword="null"/> installs none.
+    /// </summary>
+    [Id(25)] public SnapshotSourceFrontier? ExportedFrontier { get; set; }
+
+    /// <summary>
+    /// Per source cluster, the source lineage of the last whole-tree export this
+    /// receiver began draining (issue #4673): the export's opening lineage,
+    /// recorded before the first entry is applied and wherever
+    /// <see cref="AlignedLineageBySource"/> is written. A pushed batch the source
+    /// stamped with any other lineage is refused, so a batch the source read
+    /// before a restore, purge or alias move cannot land on a copy drained from
+    /// the new lineage. Never cleared by a skipped reconcile: refusing the
+    /// source's current lineage only costs the sender a forced gap. State
+    /// written before this slot decodes to an empty map, under which every
+    /// batch is applied as before.
+    /// </summary>
+    [Id(26)] public Dictionary<string, Guid> DrainedLineageBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Per source cluster, the receiver tree frontier's epoch
+    /// (<see cref="FrontierEpoch"/>) when <see cref="DrainedLineageBySource"/>
+    /// was recorded (issue #4673). The frontier re-mints its epoch on every
+    /// possible replacement of the tree's contents, so a recorded drain whose
+    /// epoch is no longer current no longer describes the tree, and every
+    /// stamped batch from that source is refused until a whole-tree export is
+    /// drained again. State written before this slot decodes to an empty map.
+    /// </summary>
+    [Id(27)] public Dictionary<string, Guid> DrainedFrontierEpochBySource { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The cross-tree receiver barriers the last drain recorded this tree's
+    /// arrival at, from a cross-tree sub-saga's decision row, that had not yet
+    /// decided when the drain ended (issue #4683). The tree stays read-fenced,
+    /// and the bootstrap does not complete, until every one has decided: the
+    /// import serves the sub-saga post-saga, and a sibling tree may still serve
+    /// it pre-saga until its own terminal reaches the barrier. State written
+    /// before this slot decodes to an empty list.
+    /// </summary>
+    [Id(28)] public List<string> PendingCrossTreeBarriers { get; set; } = [];
+
+    /// <summary>
+    /// The sibling trees replicated here whose boundary, captured at the end of
+    /// the drained export, has not been passed yet (issue #4684): the tree stays
+    /// read-fenced until each sibling's shipper has vouched acknowledged
+    /// positions at or past the captured tails, or this cluster has completed an
+    /// import of the sibling from an export numbered above the captured epoch.
+    /// </summary>
+    [Id(29)] public Dictionary<string, CrossTreeSiblingBoundary> PendingSiblingBoundaries { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>When the pending sibling boundaries were recorded (UTC ticks); drives the automatic re-seed.</summary>
+    [Id(30)] public long SiblingBoundariesSinceUtcTicks { get; set; }
+
+    /// <summary>The pending siblings this coordinator has already asked to re-seed.</summary>
+    [Id(31)] public HashSet<string> SiblingReseedsRequested { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Set when <see cref="SourceClusterId"/> was decommissioned while this
+    /// import still held its cross-tree read fence (issue #4742). The
+    /// decommission abandons the source's barriers without deciding them, and
+    /// an abandon is not a decision, so the fence must not lift on the strength
+    /// of it: it stays up until a re-add of the source re-drives the import,
+    /// which clears this flag and lets the fresh drain decide the fence.
+    /// </summary>
+    [Id(32)] public bool FenceHeldForDecommissionedSource { get; set; }
 }

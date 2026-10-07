@@ -19,6 +19,7 @@ Every `treeId` these operations accept is a **tenant-local name**: the facade re
 | Enable replication | `Task<ReplicationEnableResult> EnableReplicationAsync(string treeId, LatticeMergeMode mode, string? bootstrapSourceClusterId = null, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then enables it under the fixed `mode`. Rejects an in-place mode change on an already-enabled tree. When `bootstrapSourceClusterId` is supplied and the tree already holds data, requests a snapshot bootstrap; an enable that finds the tree already enabled under the same mode returns `AlreadyEnabled = true` and requests none. |
 | Disable replication | `Task<ReplicationDisableResult> DisableReplicationAsync(string treeId, CancellationToken cancellationToken = default)` | Authorizes the tree fail-closed, then disables its runtime enrollment without purging peer data. Idempotent. |
 | Get replication config | `Task<ReplicationConfigReport> GetReplicationConfigAsync(CancellationToken cancellationToken = default)` | Returns a permission-scoped report; trees the caller may not manage are omitted rather than throwing. |
+| Decommission peer | `Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)` | Authorizes against a cluster-wide replication-administration capability (there is no single tree to scope the check to), then removes `peerClusterId`'s durable enrollment from every registered tree and releases any origin-side cross-tree decision hold waiting on its acknowledgement ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684), [#4723](https://github.com/NSTA1/Orleans.Lattice/issues/4723)). Refuses with `LatticeReplicationPeerStillConfiguredException` while the peer is still present in `ReplicationPeers` - a configured peer's acknowledgement is still awaited via live topology regardless of enrollment, so decommissioning it first would silently fail to release anything. A re-added peer re-enrolls from a fresh bootstrap; decommission is not the same operation as a detach, which keeps the hold (see [Architecture](architecture.md)). Idempotent for an already-decommissioned peer. |
 
 ## Peer status facade
 
@@ -53,6 +54,14 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | Member | Type | Meaning |
 |---|---|---|
 | `Trees` | `IReadOnlyList<ReplicationTreeConfigEntry>` | The per-tree entries the caller is authorized to see. `ReplicationConfigReport.Empty` is the canonical empty report. |
+
+### `ReplicationDecommissionPeerResult`
+
+| Member | Type | Meaning |
+|---|---|---|
+| `PeerClusterId` | `string` | The decommissioned peer cluster id. |
+| `TreeCount` | `int` | The number of registered trees whose durable enrollment the peer was removed from. |
+| `AlreadyDecommissioned` | `bool` | `true` when the peer was already decommissioned and the call was an idempotent no-op. |
 
 ### `ReplicationTreeConfigEntry`
 
@@ -121,7 +130,7 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `Unknown` | Not enough is known to judge the link: it has never made a successful contact and no threshold has been crossed. Also the value an entry from a peer that predates the field decodes to. |
 | `Healthy` | Every signal is within its lagging threshold. |
 | `Lagging` | At least one signal is past its lagging threshold and none is past its stalled threshold. |
-| `Stalled` | At least one signal is past its stalled threshold. |
+| `Stalled` | At least one signal is past its stalled threshold, or the sender has taken the peer off the log after a write-ahead-log trim lost records it never shipped and is waiting for the peer to re-seed ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)); such a peer receives no saga records until it does. |
 
 ## Exceptions
 
@@ -135,6 +144,8 @@ All model records live in `Orleans.Lattice.Api.Abstractions` (namespace `Orleans
 | `LatticeReplicationModeChangeRejectedException` | An enable would change the merge mode of an already-enabled tree, or targets an enabled tree whose mode is currently ambiguous. Carries `TreeId`, `CurrentMode`, `RequestedMode`, and `CurrentModeAmbiguous`. (Defined in `Orleans.Lattice.Replication`.) |
 | `LatticeReplicationPreconditionFailedException` | A runtime precondition for authoring the change was not met: no local replica id is configured - the config entry's flag dots are stamped with it, so both an enable and the disable of an enabled tree need one - or a flag-based merge mode is requested without one. (Defined in `Orleans.Lattice.Replication`.) |
 | `InvalidOperationException` | An enable that requests a snapshot bootstrap finds a bootstrap for the same tree already in progress from a different source cluster. The enable itself has already been written to the config tree by the time this is raised. |
+| `LatticeReplicationPeerStillConfiguredException` | `DecommissionPeerAsync` is called while the peer is still present in `ReplicationPeers`. (`InvalidOperationException`-derived; defined in `Orleans.Lattice.Replication`.) |
+| `LatticeReplicationEngineNotHostedException` | `DecommissionPeerAsync` is called in a process that registered `AddLatticeReplicationApi` without the replication engine (`ILatticeReplicationPeerDecommissioner` is not registered), so the facade cannot carry out the decommission. Raised after authorization succeeds. (`InvalidOperationException`-derived; defined in `Orleans.Lattice.Api.Abstractions`.) |
 
 ## See also
 

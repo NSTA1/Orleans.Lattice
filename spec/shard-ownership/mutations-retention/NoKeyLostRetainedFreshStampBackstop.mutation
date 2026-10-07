@@ -1,0 +1,20 @@
+# Pairs with NoKeyLost. Reproduces production before #4522's carriage fix
+# (#4610): the
+# committed-values backstop installs a key the terminal finds no bucket for at
+# a freshly ticked stamp, above whatever the row holds, instead of
+# last-writer-wins at the saga's own prepare stamp. A terminal that reaches a
+# split destination after a later write of the moved key has landed there
+# overwrites that acknowledged write. The edit lies in TermRow, the operator
+# the terminal broadcast applies, so the mutation declares no PERTURBS.
+MODULE: NoKeyLostRetainedFreshStampBackstop
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: the terminal's backstop installs over a later write with a dominating stamp
+
+--- FIND
+    ELSE IF pend[c][s][k] = "old" \/ MapOf(CopyMap(c), k) = s THEN Max(row[c][s][k], SagaV)
+--- REPLACE
+    ELSE IF pend[c][s][k] = "old" THEN Max(row[c][s][k], SagaV)
+\* MUTATION: the backstop is stamped above the row, whatever the row holds.
+    ELSE IF MapOf(CopyMap(c), k) = s THEN SagaV
+--- END

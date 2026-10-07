@@ -31,7 +31,8 @@ internal sealed class LatticeRegistryGrain(
     TreeAliasObserverDispatcher? aliasObservers = null,
     ILatticeAccessGate? accessGate = null,
     ILatticeMembershipContext? membership = null,
-    ITreeOwnershipGuard? ownershipGuard = null) : ILatticeRegistry
+    ITreeOwnershipGuard? ownershipGuard = null,
+    TreeLineageObserverDispatcher? lineageObservers = null) : ILatticeRegistry
 {
     // Uses the internal ISystemLattice surface so the registry can address its
     // own backing system tree (`_lattice_trees`). The public ILattice surface
@@ -99,6 +100,11 @@ internal sealed class LatticeRegistryGrain(
 #endif
 
         var bytes = SerializeEntry(seeded);
+        if (lineageObservers is { HasObservers: true })
+        {
+            await lineageObservers.NotifyChangingAsync(treeId, currentLineage: null, seeded.Lineage);
+        }
+
         await Registry.SetAsync(treeId, bytes);
     }
 
@@ -118,6 +124,7 @@ internal sealed class LatticeRegistryGrain(
             // the activation-time materialiser always agree on the
             // partition fan-out shape for the lifetime of the tree.
             WalPartitions = entry.WalPartitions ?? siloDefaultWalPartitions,
+            Lineage = entry.Lineage ?? Guid.NewGuid(),
         };
     }
 
@@ -272,6 +279,14 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(entry);
         ThrowIfReservedPrefix(treeId, nameof(treeId));
 
+        // Observers of a lineage change are told before it is persisted (#4537),
+        // and a failing observer aborts the write.
+        if (lineageObservers is { HasObservers: true })
+        {
+            var current = (await GetEntryCoreAsync(treeId))?.Lineage;
+            await lineageObservers.NotifyChangingAsync(treeId, current, entry.Lineage);
+        }
+
         await Registry.SetAsync(treeId, SerializeEntry(entry));
     }
 
@@ -280,7 +295,18 @@ internal sealed class LatticeRegistryGrain(
         ArgumentNullException.ThrowIfNull(treeId);
         return RegistryCallCensus.MeasureAsync(
             RegistryCallCensus.Unregister,
-            () => Registry.DeleteAsync(treeId));
+            () => UnregisterCoreAsync(treeId));
+    }
+
+    private async Task UnregisterCoreAsync(string treeId)
+    {
+        if (lineageObservers is { HasObservers: true }
+            && (await GetEntryCoreAsync(treeId))?.Lineage is { } current)
+        {
+            await lineageObservers.NotifyChangingAsync(treeId, current, nextLineage: null);
+        }
+
+        await Registry.DeleteAsync(treeId);
     }
 
     public Task<bool> ExistsAsync(string treeId)
@@ -503,7 +529,14 @@ internal sealed class LatticeRegistryGrain(
         var existing = await GetEntryCoreAsync(treeId) ?? new TreeRegistryEntry();
         // Writing the alias completes any cutover that carried the target's map
         // onto this entry first, so its in-progress marker is cleared with it.
-        var updated = existing with { PhysicalTreeId = physicalTreeId, AliasCutoverTarget = null };
+        var updated = existing with
+        {
+            PhysicalTreeId = physicalTreeId,
+            AliasCutoverTarget = null,
+            Lineage = string.Equals(existing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal)
+                ? existing.Lineage
+                : Guid.NewGuid(),
+        };
         await UpdateAsync(treeId, updated);
         await PublishAliasChangeAsync(treeId, existing.PhysicalTreeId ?? treeId, physicalTreeId);
     }
@@ -638,7 +671,10 @@ internal sealed class LatticeRegistryGrain(
         if (existing?.PhysicalTreeId is null) return;
 
         var oldPhysical = existing.PhysicalTreeId;
-        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null };
+
+        // The logical tree now serves its own shards, not the alias target's: new
+        // content lineage, as for an alias set to a different tree (#4537).
+        var updated = existing with { PhysicalTreeId = null, AliasCutoverTarget = null, Lineage = Guid.NewGuid() };
         await UpdateAsync(treeId, updated);
 
         // Removing an alias repoints the logical tree back to itself; the new
@@ -876,6 +912,21 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updated);
     }
 
+    public async Task RaiseReplicationFloorEpochAsync(string treeId, long epoch)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentOutOfRangeException.ThrowIfNegative(epoch);
+
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(RaiseReplicationFloorEpochAsync));
+        if (existing.ReplicationFloorEpoch >= epoch)
+        {
+            return;
+        }
+
+        // The lineage is unchanged, so no lineage observer is told.
+        await UpdateAsync(treeId, existing with { ReplicationFloorEpoch = epoch });
+    }
+
     public async Task LatchProjectionDigestPermanentlyDisabledAsync(string treeId)
     {
         ArgumentNullException.ThrowIfNull(treeId);
@@ -951,6 +1002,123 @@ internal sealed class LatticeRegistryGrain(
         await UpdateAsync(treeId, updatedEntry);
         return updatedPin;
     }
+
+    public async Task<WalPlacementPin> RaiseWalMoveFencesAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(partitions);
+        ArgumentException.ThrowIfNullOrEmpty(moveId);
+        if (partitions.Count == 0)
+        {
+            throw new ArgumentException("A WAL move fence must name at least one partition.", nameof(partitions));
+        }
+        if (lease <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lease), lease, "A WAL move fence lease must be positive.");
+        }
+
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(RaiseWalMoveFencesAsync));
+        var current = existing.WalPlacement ?? WalPlacementPin.Create();
+        if (current.Version != expectedVersion)
+        {
+            throw new InvalidOperationException(
+                $"WAL placement for tree '{treeId}' changed concurrently: expected version {expectedVersion} but found {current.Version}. Re-read the placement and retry.");
+        }
+
+        var nowTicks = TimeProvider.System.GetUtcNow().UtcTicks;
+        var expiresTicks = WalMoveFenceLeaseTicks(nowTicks, lease);
+        var updated = current;
+        foreach (var partition in partitions)
+        {
+            var sourceKey = current.ResolveKey(partition);
+            var decision = WalMoveFenceCore.EvaluateRaise(current.ResolveFence(partition), sourceKey, moveId, renew, nowTicks);
+            switch (decision)
+            {
+                case WalMoveFenceRaise.RefusedHeldByOtherMove:
+                    throw new InvalidOperationException(
+                        $"WAL partition {treeId}/{partition} is fenced by another placement move ('{current.ResolveFence(partition)!.MoveId}') "
+                        + "whose lease has not lapsed. Wait for it to finish or lapse, then retry.");
+                case WalMoveFenceRaise.RefusedReleased:
+                    throw new InvalidOperationException(
+                        $"WAL move '{moveId}' of {treeId}/{partition} no longer holds its fence: the lease lapsed and the fence was "
+                        + "released, so the source may have accepted appends the copy has not seen. The move must abort; retry it.");
+            }
+            updated = updated.WithFence(partition, new WalMoveFence
+            {
+                MoveId = moveId,
+                SourceProviderKey = sourceKey,
+                LeaseExpiresUtcTicks = expiresTicks,
+            });
+        }
+
+        await UpdateAsync(treeId, existing with { WalPlacement = updated });
+        return updated;
+    }
+
+    public async Task<WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentException.ThrowIfNullOrEmpty(moveId);
+
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(ReleaseWalMoveFenceAsync));
+        var current = existing.WalPlacement ?? WalPlacementPin.Create();
+        var nowTicks = TimeProvider.System.GetUtcNow().UtcTicks;
+        if (!WalMoveFenceCore.IsReleaseAdmitted(current.ResolveFence(partition), moveId, onlyIfExpired, nowTicks))
+        {
+            return current;
+        }
+
+        var updated = current.WithoutFence(partition);
+        await UpdateAsync(treeId, existing with { WalPlacement = updated });
+        return updated;
+    }
+
+    public async Task<WalPlacementPin> FlipFencedWalPlacementAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        ArgumentNullException.ThrowIfNull(moves);
+        ArgumentException.ThrowIfNullOrEmpty(moveId);
+        if (moves.Count == 0)
+        {
+            throw new ArgumentException("A batch WAL placement update must contain at least one move.", nameof(moves));
+        }
+        foreach (var (_, providerKey) in moves)
+        {
+            ArgumentException.ThrowIfNullOrEmpty(providerKey, nameof(moves));
+        }
+
+        var existing = await GetRegisteredEntryCoreAsync(treeId, nameof(FlipFencedWalPlacementAsync));
+        var current = existing.WalPlacement ?? WalPlacementPin.Create();
+        if (current.Version != expectedVersion)
+        {
+            throw new InvalidOperationException(
+                $"WAL placement for tree '{treeId}' changed concurrently: expected version {expectedVersion} but found {current.Version}. Re-read the placement and retry.");
+        }
+        foreach (var (partition, _) in moves)
+        {
+            if (!WalMoveFenceCore.IsFlipAdmitted(current.ResolveFence(partition), moveId))
+            {
+                throw new InvalidOperationException(
+                    $"WAL move '{moveId}' of {treeId}/{partition} refused to flip: the partition no longer carries the move's "
+                    + "fence, which lapsed and was released. The source may hold acknowledged appends the copy has not seen, "
+                    + "so the placement was left unchanged; retry the move.");
+            }
+        }
+
+        var updatedPin = current.WithPartitions(moves, expectedVersion + 1);
+        await UpdateAsync(treeId, existing with { WalPlacement = updatedPin });
+        return updatedPin;
+    }
+
+    /// <summary>
+    /// The UTC tick at which a WAL move fence raised at <paramref name="nowTicks"/>
+    /// for <paramref name="lease"/> lapses, saturating rather than overflowing for
+    /// an extreme lease.
+    /// </summary>
+    internal static long WalMoveFenceLeaseTicks(long nowTicks, TimeSpan lease)
+        => lease.Ticks >= DateTime.MaxValue.Ticks - nowTicks ? DateTime.MaxValue.Ticks : nowTicks + lease.Ticks;
 
     private static byte[] SerializeEntry(TreeRegistryEntry entry) =>
         JsonSerializer.SerializeToUtf8Bytes(entry, RegistryEntryContext.Default.TreeRegistryEntry);

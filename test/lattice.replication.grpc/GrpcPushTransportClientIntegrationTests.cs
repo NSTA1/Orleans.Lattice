@@ -89,6 +89,9 @@ public class GrpcPushTransportClientIntegrationTests
                     dictionaryProvider.TryInstall(8u, PulledDictionaryBytes);
                     services.AddSingleton<ILatticeCompressionDictionaryProvider>(dictionaryProvider);
                     services.AddEnrollAllReplicationContext();
+                    var topology = Substitute.For<IReplicationTopology>();
+                    topology.CurrentPeers.Returns(new[] { "self" });
+                    services.AddSingleton(topology);
                     services.AddLatticeReplicationGrpc();
                     services.Configure<LatticeReplicationSecurityOptions>(o => o.RequireAuthentication = false);
                 });
@@ -186,6 +189,53 @@ public class GrpcPushTransportClientIntegrationTests
     }
 
     [Test]
+    public async Task SendAsync_carries_the_source_frontier_to_the_receiver_and_returns_its_epoch()
+    {
+        // Issue #4586 part 2b: the frontier travels as a call header, is parsed
+        // by the receiver after origin authentication, and the receiver's
+        // frontier epoch comes back on the ack.
+        var epoch = Guid.NewGuid();
+        var frontier = new ReplicationSourceFrontier
+        {
+            ReceiverLineage = Guid.NewGuid(),
+            TreeLowWatermark = new HybridLogicalClock { WallClockTicks = 900, Counter = 2 },
+            OriginLowWatermark = new HybridLogicalClock { WallClockTicks = 800 },
+            OriginGeneration = 7,
+        };
+        var treeFrontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        treeFrontier.ObserveAsync("self", Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>()).Returns(epoch);
+        _grainFactory.GetGrain<IReplicationTreeFrontierGrain>("frontier-tree", Arg.Any<string?>()).Returns(treeFrontier);
+        var batch = new ReplicationBatch
+        {
+            TargetClusterId = "peer",
+            TreeName = "frontier-tree",
+            OriginClusterId = "self",
+            Payload = Array.Empty<byte>(),
+            SourceFrontier = frontier,
+        };
+
+        var ack = await _transport.SendAsync(batch, CancellationToken.None);
+
+        Assert.That(ack.ReceiverLineage, Is.EqualTo(epoch));
+        await treeFrontier.Received(1).ObserveAsync("self", frontier, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SendAsync_without_a_source_frontier_vouches_for_nothing()
+    {
+        var treeFrontier = Substitute.For<IReplicationTreeFrontierGrain>();
+        treeFrontier.ObserveAsync("self", Arg.Any<ReplicationSourceFrontier?>(), Arg.Any<CancellationToken>()).Returns(Guid.Empty);
+        _grainFactory.GetGrain<IReplicationTreeFrontierGrain>("frontier-none", Arg.Any<string?>()).Returns(treeFrontier);
+
+        var ack = await _transport.SendAsync(
+            new ReplicationBatch { TargetClusterId = "peer", TreeName = "frontier-none", OriginClusterId = "self", Payload = Array.Empty<byte>() },
+            CancellationToken.None);
+
+        Assert.That(ack.ReceiverLineage, Is.EqualTo(Guid.Empty));
+        await treeFrontier.Received(1).ObserveAsync("self", null, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task SendAsync_ships_a_typed_envelope_and_returns_max_hwm()
     {
         var hlcA = new HybridLogicalClock { WallClockTicks = 100, Counter = 0 };
@@ -251,7 +301,7 @@ public class GrpcPushTransportClientIntegrationTests
     [Test]
     public async Task ExchangeContentManifestAsync_returns_a_plan_over_the_wire()
     {
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("self", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(HybridLogicalClock.Zero));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);
@@ -328,7 +378,7 @@ public class GrpcPushTransportClientIntegrationTests
         // sole production caller (ReplicationDigestProbeGrain) passes
         // options.ClusterId for exactly that reason.
         var clock = new HybridLogicalClock { WallClockTicks = 7777, Counter = 2 };
-        var hwmGrain = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwmGrain = HighWaterMarkSubstitute.Create();
         hwmGrain.GetAsync("self", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(clock));
         _grainFactory.GetGrain<IReplicationHighWaterMarkGrain>("tree").Returns(hwmGrain);

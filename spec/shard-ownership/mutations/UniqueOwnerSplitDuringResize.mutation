@@ -1,0 +1,25 @@
+# Pairs with UniqueOwner. Reproduces production before #4452 was fixed (#4466):
+# an adaptive split may open its window while an online resize is in flight. The split
+# commits on T and routes k2 to s2, a shard the resize neither forwards nor
+# fences, and the flip carries R's pre-split map, so a router that cached
+# (T, s2) keeps serving T/s2 while the registry routes k2 to R/s1.
+#
+# The base has no split-abandon path (its interlock makes one unreachable), so
+# in this mutant a flip can strand a split mid-flight. A second edit lets that
+# split count as finished, standing for AbandonRetargetedSplitAsync, so the
+# mutant cannot deadlock and the invariant is the only thing TLC can report.
+MODULE: UniqueOwnerSplitDuringResize
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: an adaptive split opens during a resize, so a stale router keeps serving the split target after the flip
+PERTURBS: SplitBegin
+
+--- FIND
+SplitBegin ==
+    /\ sp = "idle"
+    /\ rs = "migrating" \/ rz \in {"idle", "retired", "purged", "undone"}
+--- REPLACE
+SplitBegin ==
+    /\ sp = "idle"
+\* MUTATION: no interlock with an in-flight resize.
+--- END

@@ -1,0 +1,40 @@
+# Pairs with RNoStrandedPrepare. Regression check for issue #4482, fixed by
+# #4510. After a bootstrap the stream does not resume cleanly at the cut:
+# records written before it that the origin's WAL still retains are shipped
+# again. Before #4510 the export carried no decision rows and the receiver's
+# prepare seam staged every replicated prepare, so nothing settled a saga
+# record against what the snapshot had already settled. A retained prepare
+# whose terminal had been trimmed - the two are in different WAL partitions,
+# trimmed independently - was staged on the receiver for a saga the snapshot
+# had already settled, and no terminal would ever consume it.
+MODULE: RNoStrandedPrepareBootstrapReshipsPreCut
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: re-shipped pre-cut prepares are staged with no decision row to settle them, as before #4510
+PERTURBS: Bootstrap, DeliverPrepare
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
+
+--- FIND
+         /\ rdec' = [rdec EXCEPT !["A"] = IF Decided(snap) THEN snap ELSE @]
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
+--- REPLACE
+\* MUTATION: the export carries no decision rows.
+         /\ rdec' = rdec
+         /\ BarrierImportBare("A", snap, ABare(snap))
+         /\ afence' = (afence \/ (ViaBarrier(snap) \/ ABare(snap)))
+         /\ outbox' = {r \in outbox : ~Aff(r) \/ (Split /\ r \notin xs.cut)} \cup kept
+--- END
+--- FIND
+    /\ rpend' = IF SettleView(m.key) = "inflight" /\ rterm[m.key] = "none"
+                THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ rproj' = IF SettleView(m.key) = "committed" THEN [rproj EXCEPT ![m.key] = "post"] ELSE rproj
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
+--- REPLACE
+\* MUTATION: no settle; every replicated prepare is staged.
+    /\ rpend' = IF rterm[m.key] = "none" THEN [rpend EXCEPT ![m.key] = "pending"] ELSE rpend
+    /\ UNCHANGED <<originVars, xtree, oext, orcv, rconn, rterm, rproj, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, afence, ubnd, decom, afresh, bVars>>
+--- END

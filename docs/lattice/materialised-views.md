@@ -869,10 +869,14 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 
 ### Lag budget and dead-view eviction
 
-A view pins the source WAL only up to a per-view `MaxLagBudget` (default `0`
+A view holds the source WAL from the first offset it has not durably consumed:
+the maintainer registers with the source log's durable consumer set before it
+reads it, and the WAL GC on every silo asks it for that position on each pass, so
+a view never loses an entry to a pass on a silo it does not run on (issue #4584).
+It holds the WAL only up to a per-view `MaxLagBudget` (default `0`
 disables it). A view that exceeds the budget - chronically slow, or a crashed
-maintainer - is force-evicted: the WAL pin is released and the view is rebuilt
-from current source state. Eviction is emitted on
+maintainer - is force-evicted: the view is rebuilt from current source state,
+and its hold moves to the source heads the rebuild captures. Eviction is emitted on
 `orleans.lattice.view.lag_budget_eviction`, and a `LagEvictionCooldown`
 (default 30 s) prevents repeated evictions from thrashing a view that is kept
 chronically over budget. Size `LatticeOptions.WalRetention` at or above the

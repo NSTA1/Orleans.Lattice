@@ -116,4 +116,19 @@ public partial class PublicReplicationApiContractTests
                 Is.SameAs(LatticeReplicationMetrics.Meter));
         });
     }
+
+    [Test]
+    public void LatticeReplicationMetrics_bootstrap_reconcile_counter_is_exposed_with_documented_name()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcileName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.reconcile"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcile, Is.Not.Null);
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcile.Name,
+                Is.EqualTo(LatticeReplicationMetrics.BootstrapReconcileName));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcile.Meter,
+                Is.SameAs(LatticeReplicationMetrics.Meter));
+        });
+    }
 }

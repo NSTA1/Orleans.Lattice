@@ -60,7 +60,7 @@ See [Replication Modes](replication-modes.md) and [Replication Drivers](replicat
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `LatticeReplicationOptions` | class | Main replication options. | Identity, tree opt-in, WAL, apply, ship, bootstrap, compression, wire-version, and remediation properties. See [Configuration](configuration.md). |
-| `FallOffLogDecision` | readonly record struct | Result of a receiver-side fall-off check: whether the receiver's per-origin high-water mark is older than the sender's oldest retained WAL entry, and whether a bootstrap was triggered or absorbed. | `FellOffLog`, `LocalHighWaterMark`, `BootstrapTriggered`, `Suppressed` |
+| `FallOffLogDecision` | readonly record struct | Result of a receiver-side local fall-off check: whether the receiver's per-origin high-water mark is older than the local oldest retained WAL entry for that origin, and whether a bootstrap was triggered or absorbed. | `FellOffLog`, `LocalHighWaterMark`, `BootstrapTriggered`, `Suppressed` |
 | `OperatorReseedDecision` | readonly record struct | Result of an operator snapshot request. | `Triggered`, `LastRequestedAt`, `RetryAfter` |
 
 `ReplicatedTrees` is the static opt-in map from tree id to `LatticeMergeMode`. Trees not in the map do not ship unless runtime replication config is enabled (`AddLatticeReplication(..., enableRuntimeConfig: true)`), in which case a tree enabled at runtime through `ILatticeReplicationConfigAuthority` replicates too - see [Runtime Replication Config](runtime-config.md). `KeyFilter` and `KeyPrefixes` narrow which keys the shipper emits from opted-in trees; snapshot exports do not apply them.
@@ -98,7 +98,7 @@ See [Replication Apply](replication-apply.md) and [Deltas](deltas.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReplicationApplier` | interface | Applies inbound WAL records to the local tree. | `ApplyAsync`, `ApplyBatchAsync` |
-| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried) |
+| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried), `SourceLineageRefused` (the sender read it under a source lineage this tree no longer holds; the sender re-resolves its binding, and a refused dead-letter replay stays parked) |
 | `IReplicationLocalVcSeeder` | interface | Rebuilds a tree's local vector clock from the vector-clock slots on its values after an intra-cluster snapshot restore, so inbound dependency checks do not run against a zeroed vector. A no-op for a non-replicated tree. | `SeedFromTreeAsync(string, CancellationToken)` returning `LocalVcSeedReport` |
 | `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | `TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` |
 
@@ -133,8 +133,8 @@ See [Dead-Letter Queue](dead-letter-queue.md).
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync` |
-| `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks` |
+| `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures; host-trusted receiver saga poison and quarantine release. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync`, `PoisonSagaAsync`, `ReleaseQuarantinedSagaAsync` |
+| `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks`, `SourceLineageClusterId`, `SourceLineage` (the source lineage the entry's sender stamped, which a replay is checked against; `null` when unstamped) |
 
 Replay runs the parked entry through the canonical applier and removes it on any non-throwing, non-deferred return, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).
 
@@ -144,9 +144,9 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
-| `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync` |
+| `ILatticeReplicationAdmin` | interface | Operator-driven snapshot re-seed controls, and two alarmed overrides: lifting the read fence a failed snapshot bootstrap left up ([Snapshot bootstrap](snapshot-bootstrap.md)), and resolving a prepared coordinated-restore participant whose coordinator is lost ([Coordinated restore](coordinated-restore.md#resolving-a-participant-whose-coordinator-is-lost)). Both overrides are default members that throw `NotSupportedException` on an implementation that does not support them. | `RequestSnapshotAsync`, `ForceRequestSnapshotAsync`, `ForceLiftBootstrapReadFenceAsync`, `ResolveCrossClusterSagaParticipantAsync` |
 | `ILatticeWalIntrospection` | interface | Sender-side view of retained WAL availability. | `GetOldestAvailableHlcAsync`, `GetOldestAvailableHlcByOriginAsync` |
-| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against a sender's oldest retained WAL entry; on fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
+| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against this receiver's local retained WAL for that origin; on local fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. Source WAL trims are detected by the sender shipper and carried as `ReplicationBatch.ReseedAfterEpoch`. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.
 
@@ -273,13 +273,13 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `ISagaParticipant` | interface | Service-provider interface a host implements to take part in a cross-cluster saga: it votes on prepare, then applies or discards its staged work. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` |
-| `ISagaControlChannel` | interface | Outbound control channel the coordinator uses to drive a named peer cluster through the saga phases. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` (each taking the target `clusterId`) |
+| `ISagaControlChannel` | interface | Outbound control channel the coordinator uses to drive a named peer cluster through the saga phases, and a prepared participant uses to ask the coordinator cluster for the saga's decision once its cutover fence expires ([#4637](https://github.com/NSTA1/Orleans.Lattice/issues/4637)). `GetDecisionAsync` is a default member that throws `NotSupportedException`, which the participant treats as an unreachable coordinator. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` (each taking the target `clusterId`), `GetDecisionAsync(coordinatorClusterId, ...)` |
 | `ISagaPeerAuthorizer` | interface | Fail-closed gate deciding whether an inbound saga control request from a claimed origin cluster is accepted. | `IsAuthorizedAsync(string? originClusterId, CancellationToken)` |
-| `ILatticeSagaControlHandler` | interface | Server-side delegation seam for the inbound saga control channel. The gRPC saga service validates the request and enforces peer authorization, then delegates each imperative RPC to this handler. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` (each taking a `SagaControlRequest`) |
+| `ILatticeSagaControlHandler` | interface | Server-side delegation seam for the inbound saga control channel. The gRPC saga service validates the request and enforces peer authorization, then delegates each imperative RPC to this handler. `GetDecisionAsync` answers a participant's decision query on the coordinator cluster; it is a default member that throws `NotSupportedException`. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync`, `GetDecisionAsync` (each taking a `SagaControlRequest`) |
 | `NoParticipantSagaControlHandler` | sealed class | The transport-only fallback handler the gRPC binding registers with `TryAddSingleton`. `AddLatticeReplication` registers its own durable handler - which routes each inbound saga call to the per-saga participant - with `TryAddSingleton` too, so on a silo that calls it before the gRPC binding (as the setup above does) the durable handler is the effective one and this class is never used. Holds no participant state: it reports `SagaPhase.None` for every saga and votes `SagaVote.Abort` on prepare, because a participant that cannot durably prepare must not let the coordinator commit. | `PrepareAsync`, `CommitAsync`, `AbortAsync`, `GetStatusAsync` |
 | `SagaPhase` | enum | The durable phase a participant reports for a saga. | `None = 0`, `Prepared = 1`, `Committed = 2`, `Aborted = 3` |
 | `SagaVote` | enum | A participant's prepare-phase vote. | `None = 0`, `Commit = 1`, `Abort = 2` |
-| `SagaControlRequest` | readonly record struct | The request every saga control call carries. | `SagaId`, `TargetTree`, `ManifestId`, `CoordinatorClusterId`, `SetId` |
+| `SagaControlRequest` | readonly record struct | The request every saga control call carries. `RequesterClusterId` names the participant asking a `GetDecision` query; the receiving transport overwrites it with the authenticated origin, and the coordinator checks it against the saga's recorded participants. | `SagaId`, `TargetTree`, `ManifestId`, `CoordinatorClusterId`, `SetId`, `RequesterClusterId` |
 | `SagaControlResponse` | readonly record struct | A participant cluster's answer to a saga control call. | `SagaId`, `Phase`, `Vote`, `Detail` |
 | `SagaParticipantPrepareResult` | readonly record struct | An `ISagaParticipant` prepare vote. | `Vote`, `Detail` |
 | `LatticeSystemTreeNames` | static class | The reserved system-tree names the replication package owns. | `MembershipGroups`, `MembershipEdges`, `AuthPolicy`, `AuthAudit`, `ReplicationConfig`, `ReplicationConfigMapKey`, `BuildEnrolmentMap`, `BuildReplicationConfigEnrolmentMap` |

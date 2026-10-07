@@ -856,6 +856,58 @@ internal sealed class LatticeOptionsResolver(
     }
 
     /// <summary>
+    /// The floor on how long an activation stays fenced when it could not release
+    /// a fence its own clock reads as lapsed (the registry's clock disagreed, or
+    /// another move renewed it): the activation then deactivates on its next
+    /// append after this delay and the following activation tries again.
+    /// </summary>
+    internal static readonly TimeSpan WalMoveFenceRetryFloor = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Resolves a WAL shard activation's placement and its durable move fence
+    /// (issue #4525). Reads the pin fresh, resolves the provider, and evaluates the
+    /// partition's fence with <see cref="WalMoveFenceCore.EvaluateActivationFence"/>:
+    /// a live fence is reported so the activation comes up fenced; a lapsed one is
+    /// released in the registry first, and the provider is then resolved again
+    /// from the pin the release returned, because a flip may have landed in
+    /// between and only that pin is ordered against it. Fails closed per
+    /// <see cref="ResolveWalProvider"/>.
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL partition is activating.</param>
+    /// <param name="partition">The WAL partition index.</param>
+    public async Task<WalShardPlacementResolution> ResolveWalShardPlacementAsync(string treeId, int partition)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        var pin = await GetWalPlacementSnapshotAsync(treeId).ConfigureAwait(false);
+        var (provider, key) = ResolveWalProvider(treeId, pin, partition);
+        var fence = pin.ResolveFence(partition);
+        var nowTicks = TimeProvider.System.GetUtcNow().UtcTicks;
+        switch (WalMoveFenceCore.EvaluateActivationFence(fence, key, nowTicks))
+        {
+            case WalMoveFenceActivation.Unfenced:
+                return new WalShardPlacementResolution(provider, pin.Version, key, null);
+            case WalMoveFenceActivation.Fenced:
+                return new WalShardPlacementResolution(provider, pin.Version, key, fence!.LeaseExpiresUtcTicks);
+        }
+
+        var registry = grainFactory.GetLatticeRegistry();
+        pin = await registry.ReleaseWalMoveFenceAsync(treeId, partition, fence!.MoveId, onlyIfExpired: true).ConfigureAwait(false);
+        (provider, key) = ResolveWalProvider(treeId, pin, partition);
+        fence = pin.ResolveFence(partition);
+        if (WalMoveFenceCore.EvaluateActivationFence(fence, key, nowTicks) == WalMoveFenceActivation.Unfenced)
+        {
+            return new WalShardPlacementResolution(provider, pin.Version, key, null);
+        }
+
+        // The registry kept a fence on this provider: it was renewed, taken over,
+        // or the registry's clock does not yet read it as lapsed. Stay fenced and
+        // let the next activation try again.
+        var retryTicks = nowTicks + WalMoveFenceRetryFloor.Ticks;
+        return new WalShardPlacementResolution(
+            provider, pin.Version, key, Math.Max(fence!.LeaseExpiresUtcTicks, retryTicks));
+    }
+
+    /// <summary>
     /// Resolves the effective options for <paramref name="treeId"/>, seeding a
     /// registry row for a user tree that has none. The seed is refused, with an
     /// <see cref="InvalidOperationException"/> and no registration, for an id

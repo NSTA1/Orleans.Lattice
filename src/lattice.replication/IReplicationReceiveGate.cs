@@ -16,4 +16,16 @@ internal interface IReplicationReceiveGate
     /// <param name="treeId">Physical tree id the inbound entry targets.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     ValueTask<bool> IsReceivePausedAsync(string treeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns whether inbound apply for <paramref name="treeId"/> is paused,
+    /// and the receive fence's epoch the answer was read under (issue #4593).
+    /// The applier stamps an admitted entry with that epoch. The default reports
+    /// epoch zero, which a restored copy refuses: a gate that cannot report an
+    /// epoch fails closed against every restored copy.
+    /// </summary>
+    /// <param name="treeId">Tree id the inbound entry targets.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    async ValueTask<ReceiveFenceObservation> ObserveAsync(string treeId, CancellationToken cancellationToken = default)
+        => new() { Paused = await IsReceivePausedAsync(treeId, cancellationToken).ConfigureAwait(false), Epoch = 0 };
 }

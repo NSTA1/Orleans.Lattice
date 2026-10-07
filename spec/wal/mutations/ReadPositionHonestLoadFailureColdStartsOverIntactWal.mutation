@@ -1,0 +1,29 @@
+# Pairs with ReadPositionHonest. The design that cold-starts a leaf whose
+# snapshot failed to load whenever its WAL prefix is still intact (tail 0) at
+# the moment of the probe. The leaf's pin was resolved against that snapshot
+# and the pin store can never lower it, so the GC stays entitled to trim the
+# covered prefix for the whole cold rebuild; it trims, and the rebuild reads
+# from the new tail past the leaf's own acknowledged writes. A standing check
+# that an instantaneous tail probe does not make the cold path safe (#4450).
+MODULE: ReadPositionHonestLoadFailureColdStartsOverIntactWal
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a failed snapshot load cold-starts when the tail reads 0, and the GC trims under the leaf's old pin mid-rebuild
+PERTURBS: ActivateLoadFail
+--- FIND
+    /\ snapCov[l] # NoSnap \/ SnapshotVanished(l)
+    /\ UNCHANGED vars
+--- REPLACE
+    /\ snapCov[l] # NoSnap
+\* MUTATION: cold start when the prefix probes intact.
+    /\ tail = 0
+    /\ up' = [up EXCEPT ![l] = TRUE]
+    /\ cache' = [cache EXCEPT ![l] = {}]
+    /\ rp' = [rp EXCEPT ![l] = -1]
+    /\ stCp' = [stCp EXCEPT ![l] = durCp[l]]
+    /\ anchor' = [anchor EXCEPT ![l] = durCp[l]]
+    /\ UNCHANGED walVars
+    /\ UNCHANGED <<durCp, clk, cov, snapCov, snapRows, stale>>
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+--- END

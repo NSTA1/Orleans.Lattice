@@ -893,7 +893,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                var forwardTask = TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 var splitResult = await TraverseForWriteAsync(key, value);
 
                 // If the root node split, we need to create a new internal root.
@@ -904,7 +903,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -933,7 +933,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                var forwardTask = TrackShadowForward((key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks);
 
                 while (splitResult is not null)
@@ -945,7 +944,8 @@ internal sealed partial class ShardRootGrain(
                 // The target fetches the authoritative entry via the normal merge
                 // path so expiry is preserved end-to-end.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value, expiresAtTicks);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -970,16 +970,15 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                // Shadow-forward the same semantic operation so the destination tree
-                // observes GetOrSet semantics too. LWW on the destination absorbs
-                // the interleaving between drain reads and this forward.
-                var forwardTask = TrackShadowForward((key, value), static (t, s) => t.GetOrSetAsync(s.key, s.value));
+                // The resize mirror forwards only a write that occurred here, as the
+                // row it stored (issue #4522). Re-running GetOrSet on the
+                // destination could write the caller's value there while this
+                // copy kept its existing one.
                 var result = await TraverseForGetOrSetAsync(key, value);
 
                 // If the key was already live, no write occurred - return existing value.
                 if (result.ExistingValue is not null)
                 {
-                    await forwardTask;
                     return result.ExistingValue;
                 }
 
@@ -992,7 +991,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await forwardTask;
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1044,7 +1044,8 @@ internal sealed partial class ShardRootGrain(
 
                 // shadow-forward the write to the split target if applicable.
                 await ForwardLocalWriteToShadowIfNeededAsync(key, value);
-                await TrackShadowForward((key, value), static (t, s) => t.SetAsync(s.key, s.value));
+                // Online-resize mirror, at this copy's own stamps (issue #4522).
+                await MirrorAppliedWritesAsync([key], (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1082,6 +1083,12 @@ internal sealed partial class ShardRootGrain(
                     splitResult = await PromoteRootAsync(splitResult);
                 }
 
+                // Issue #4613: mirror the post-fold row to the split target, as
+                // SetAsync does for a plain write.
+                await ForwardLocalCrdtWriteToShadowIfNeededAsync(key);
+                // Issue #4618: and to an online resize's destination, at this
+                // copy's own stamp, joined there with the destination's row.
+                await MirrorAppliedRowsAsync([key]);
                 return result.Version;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -1105,13 +1112,6 @@ internal sealed partial class ShardRootGrain(
             RecordWrite(entries.Count);
 
             if (entries.Count == 0) return;
-
-            // Online-resize shadow-forward: forward the whole batch once in parallel
-            // with the local apply. Without batched forward, a single SetManyAsync
-            // of N entries would pay N sequential shadow-forward RTTs. Mirrors
-            // MergeManyAsync's pattern. LWW on the destination absorbs any
-            // interleaving with the drain reader.
-            var forwardTask = TrackShadowForward(entries, static (t, s) => t.SetManyAsync(s));
 
             // Preserve the local exception as the primary diagnostic. The
             // older shape (try { local } finally { await forwardTask; }) would
@@ -1138,11 +1138,17 @@ internal sealed partial class ShardRootGrain(
 
             if (localFailure is null)
             {
-                // Local succeeded - surface any forward failure to the caller.
+                // Local succeeded - mirror the batch to the online-resize
+                // destination once, at this copy's own stamps (issue #4522), and
+                // surface any forward failure to the caller.
                 var forwardTs = Stopwatch.GetTimestamp();
                 try
                 {
-                    await forwardTask;
+                    await MirrorAppliedWritesAsync(
+                        DistinctKeys(entries),
+                        entries,
+                        static (t, s) => t.SetManyAsync(s),
+                        static s => ShadowForwardRefusal.PerEntry(s));
                 }
                 finally
                 {
@@ -1331,10 +1337,9 @@ internal sealed partial class ShardRootGrain(
     /// <see cref="SetManyAsync"/>, routed with the same bucket-by-leaf,
     /// dispatch-in-parallel, promote-splits-sequentially shape.
     /// <para>
-    /// Deliberately does <b>not</b> shadow-forward: the single-key CRDT path
-    /// (<c>TraverseForCrdtApplyAsync</c>) does not either, so the batch stays
-    /// per-key indistinguishable from N single-key applies rather than
-    /// inventing a forwarding contract the CRDT surface does not otherwise have.
+    /// Mirrors exactly as N single-key applies would: the post-fold rows to an
+    /// adaptive split's target (issue #4613) and to an online resize's
+    /// destination (issue #4618).
     /// </para>
     /// </summary>
     /// <param name="deltas">The key / typed-delta-bytes pairs to apply.</param>
@@ -1367,6 +1372,8 @@ internal sealed partial class ShardRootGrain(
                 flatSplit = await PromoteRootAsync(flatSplit);
             }
 
+            await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
+            await MirrorAppliedRowsAsync(DistinctKeys(deltas));
             return;
         }
 
@@ -1436,6 +1443,23 @@ internal sealed partial class ShardRootGrain(
                 split = await PromoteRootAsync(split);
             }
         }
+
+        await ForwardCrdtBatchToShadowIfNeededAsync(deltas);
+        await MirrorAppliedRowsAsync(DistinctKeys(deltas));
+    }
+
+    /// <summary>
+    /// The batched form of the single-key CRDT apply's split forward (issue
+    /// #4613): each key whose slot a split is moving has its post-fold row
+    /// mirrored to the split target. A no-op outside a split window.
+    /// </summary>
+    private async Task ForwardCrdtBatchToShadowIfNeededAsync(List<KeyValuePair<string, byte[]>> deltas)
+    {
+        if (state.State.SplitInProgress is null && state.State.MovedAwaySlots.Count == 0)
+            return;
+
+        foreach (var (key, _) in deltas)
+            await ForwardLocalCrdtWriteToShadowIfNeededAsync(key);
     }
 
     /// <summary>
@@ -1573,15 +1597,6 @@ internal sealed partial class ShardRootGrain(
 
             if (entries.Count == 0) return Array.Empty<string>();
 
-            // Online-resize shadow-forward of the whole conditional batch in
-            // parallel with the local apply. The destination shard re-evaluates
-            // the guard against its own copy; LWW reconciles any interleaving with
-            // the drain reader. The forwarded written set is discarded - this
-            // shard's local apply is authoritative for the returned set.
-            var forwardTask = TrackShadowForward(
-                (entries, predicate),
-                static (t, s) => t.SetManyWherePredicateAsync(s.entries, s.predicate));
-
             System.Runtime.ExceptionServices.ExceptionDispatchInfo? localFailure = null;
             IReadOnlyList<string> written = Array.Empty<string>();
             var localApplyTs = Stopwatch.GetTimestamp();
@@ -1601,10 +1616,19 @@ internal sealed partial class ShardRootGrain(
 
             if (localFailure is null)
             {
+                // Mirror only the entries the guard admitted, as written here and
+                // at this copy's own stamps (issue #4522): re-evaluating the guard
+                // on the destination's copy could admit a different set.
                 var forwardTs = Stopwatch.GetTimestamp();
                 try
                 {
-                    await forwardTask;
+                    var writtenKeys = new HashSet<string>(written, StringComparer.Ordinal);
+                    var writtenEntries = entries.FindAll(e => writtenKeys.Contains(e.Key));
+                    await MirrorAppliedWritesAsync(
+                        writtenKeys,
+                        writtenEntries,
+                        static (t, s) => t.SetManyAsync(s),
+                        static s => ShadowForwardRefusal.PerEntry(s));
                 }
                 finally
                 {
@@ -1855,14 +1879,6 @@ internal sealed partial class ShardRootGrain(
         {
             try
             {
-                // For online resize, tombstones MUST be forwarded - the destination
-                // tree becomes authoritative at swap, so a tombstone that never
-                // reached T' would leave the key alive post-swap. LWW on the
-                // destination resolves any interleaving with the drain reader.
-                // This differs from the adaptive-split path, where post-swap
-                // cleanup restores convergence within one tree.
-                var forwardTask = TrackShadowForward(key, static (t, s) => t.DeleteAsync(s));
-
                 bool result;
                 GrainId leafId;
                 if (state.State.RootIsLeaf && IsLeafGrainId(state.State.RootNodeId!.Value))
@@ -1904,7 +1920,13 @@ internal sealed partial class ShardRootGrain(
                 // coordinator's cleanup phase; only a saga prepare needs the
                 // marker to close the mid-saga atomic-visibility torn read.
                 await ForwardLocalDeleteToShadowIfNeededAsync(key);
-                await forwardTask;
+                // For online resize, tombstones MUST be forwarded - the
+                // destination tree becomes authoritative at swap, so a tombstone
+                // that never reached it would leave the key alive post-swap. The
+                // mirror ships the tombstone row at this copy's own stamp (issue
+                // #4522). This differs from the adaptive-split path, where
+                // post-swap cleanup restores convergence within one tree.
+                await MirrorAppliedWritesAsync([key], key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
@@ -2123,6 +2145,67 @@ internal sealed partial class ShardRootGrain(
         await PublishDeleteRangeAsync(startInclusive, endExclusive, matchedKeys);
         RecordRecordsWritten(totalDeleted);
         return new ShardRangeDeletePage { Deleted = totalDeleted, ResumeFromInclusive = resumeFrom };
+    }
+
+    /// <inheritdoc />
+    public Task<ShardRangeClockPage> GetRangeClockBoundedAsync(string startInclusive, string endExclusive)
+    {
+        var scan = BeginScanPage(nameof(GetRangeClockBoundedAsync));
+        return GuardScanPageAsync(scan, GetRangeClockBoundedCoreAsync(startInclusive, endExclusive, scan));
+    }
+
+    private async Task<ShardRangeClockPage> GetRangeClockBoundedCoreAsync(
+        string startInclusive,
+        string endExclusive,
+        ScanPageWalk scan)
+    {
+        EnsureInternalOrigin(LatticeOperation.RangeDelete);
+        if (!await PrepareForReadAsync()) return new ShardRangeClockPage();
+
+        // The same descent and chain walk as DeleteRangeBoundedCoreAsync, so the
+        // probe covers every leaf the delete can tombstone (issue #4530). It may
+        // visit one leaf more - a leaf that declares no high bound is followed to
+        // its sibling - which only raises the maximum.
+        scan.Phase = ScanPagePhase.Descent;
+        GrainId leafId = state.State.RootIsLeaf
+            ? state.State.RootNodeId!.Value
+            : await TraverseToLeafAsync(startInclusive);
+        if (!IsLeafGrainId(leafId))
+        {
+            leafId = await DescendToLeafForKeyAsync(leafId, startInclusive);
+        }
+
+        scan.Phase = ScanPagePhase.LeafWalk;
+        var max = HybridLogicalClock.Zero;
+        string? resumeFrom = null;
+        while (true)
+        {
+            StandDownIfCeilingFired(scan, leafId);
+            var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
+            var clock = await leafGrain.GetClockAsync();
+            if (clock > max) max = clock;
+            scan.Budget.RecordLeafVisited();
+
+            var bounds = await leafGrain.GetKeyRangeAsync();
+            if (bounds.HighKeyExclusive is { } high)
+            {
+                if (string.CompareOrdinal(high, endExclusive) >= 0)
+                    break;
+                if (scan.Budget.ShouldYield() && string.CompareOrdinal(high, startInclusive) > 0)
+                {
+                    resumeFrom = high;
+                    break;
+                }
+            }
+
+            var nextSibling = await leafGrain.GetNextSiblingAsync();
+            if (nextSibling is null)
+                break;
+
+            leafId = nextSibling.Value;
+        }
+
+        return new ShardRangeClockPage { MaxClock = max, ResumeFromInclusive = resumeFrom };
     }
 
     /// <inheritdoc />
@@ -2843,12 +2926,24 @@ internal sealed partial class ShardRootGrain(
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(shardKey);
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
-        await leafGrain.SetTreeIdAsync(TreeId);
-        await leafGrain.SetShardIndexAsync(MyShardIndex);
+
+        // This shard is creating its root leaf, so the leaf's first row write
+        // carries a create intent naming it (issue #4654).
+        using (LatticeNewLeafIntentContext.BeginScope(leafGrain.GetGrainId()))
+        {
+            await leafGrain.SetTreeIdAsync(TreeId);
+            await leafGrain.SetShardIndexAsync(MyShardIndex);
+        }
         var prevRootNodeId = state.State.RootNodeId;
         var prevRootIsLeaf = state.State.RootIsLeaf;
+        var prevIsPurged = state.State.IsPurged;
         state.State.RootNodeId = leafGrain.GetGrainId();
         state.State.RootIsLeaf = true;
+
+        // Seeding a purged copy is the reuse PrepareForPurgedCopyAsync admitted
+        // only once the registry named this copy live again (issue #4503), so
+        // the tombstone is lifted in the same write.
+        state.State.IsPurged = false;
         try
         {
             await WriteShardStateAsync();
@@ -2875,6 +2970,7 @@ internal sealed partial class ShardRootGrain(
             state.State.IsRegistered = prevIsRegistered;
             state.State.RootNodeId = prevRootNodeId;
             state.State.RootIsLeaf = prevRootIsLeaf;
+            state.State.IsPurged = prevIsPurged;
             throw;
         }
 
@@ -3009,13 +3105,17 @@ internal sealed partial class ShardRootGrain(
     /// destination, so a batch in flight across the fence or the retirement lands
     /// whole on both copies instead of on some of this copy's shards only, which
     /// a resize undo would re-expose torn (issue #4369). A purge clears the
-    /// mirror, and with it this admission.
+    /// mirror, and with it this admission. The rule is <see cref="ResizeFence.AdmitsBoundSaga"/>;
+    /// it is asked only on the cold path where a shadow-forward is active, so its
+    /// arguments are read eagerly.
     /// </summary>
     private bool AdmitsBoundSagaWhileFenced(bool admitBoundSaga) =>
-        state.State.ShadowForward is { Phase: ShadowForwardPhase.Rejecting }
-        && (admitBoundSaga
-            || (LatticePreparedContext.Current
-                && string.Equals(LatticeAtomicBindingContext.Current, TreeId, StringComparison.Ordinal)));
+        ResizeFence.AdmitsBoundSaga(
+            rejecting: state.State.ShadowForward is { Phase: ShadowForwardPhase.Rejecting },
+            directTerminal: admitBoundSaga,
+            preparedScope: LatticePreparedContext.Current,
+            boundPhysicalTreeId: LatticeAtomicBindingContext.Current,
+            physicalTreeId: TreeId);
 
     private static readonly Task<bool> ShardReady = Task.FromResult(true);
 
@@ -3045,6 +3145,14 @@ internal sealed partial class ShardRootGrain(
             ThrowIfRetainedRedirect();
             ThrowIfDeleted();
             ThrowIfRetired();
+        }
+
+        // A purged copy keeps refusing whoever still addresses it (issue #4503).
+        // A live shard never carries the tombstone, so this is one field read on
+        // the hot path; the registry is consulted only on a purged shard.
+        if (state.State.IsPurged)
+        {
+            return PrepareForPurgedCopyAsync(forWrite, purgedAnswersEmpty);
         }
 
         // Steady-state sync fast path: on the read hot path each `await`
@@ -3091,10 +3199,64 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
+    /// <summary>
+    /// <see cref="PrepareForOperationAsync(bool, bool, bool)"/> on a shard the
+    /// purge has tombstoned (<see cref="ShardRootState.IsPurged"/>, issue #4503).
+    /// The copy is live again only when the registry says so: for a routed call,
+    /// when the router's logical tree resolves to this copy; for a call with no
+    /// routed stamp, when this id is registered and not aliased elsewhere. That
+    /// is the deliberate reuse of the id (issue #3940), and the seed that follows
+    /// lifts the tombstone. Otherwise a routed call is refused with the
+    /// stale-routing signal the soft-delete window gave, so its router refreshes
+    /// and retries on the live copy; an unrouted read answers as the empty tree
+    /// the purge left; and any other unrouted call - a maintenance verb, a write
+    /// addressed to the copy, an atomic-write saga's direct terminal - is refused
+    /// with <see cref="LatticeTreePurgedException"/>. Nothing is seeded on a copy
+    /// the registry does not name, so a purged copy cannot be re-opened by any
+    /// caller.
+    /// </summary>
+    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty)
+    {
+        var routedLogical = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string;
+        var registry = grainFactory.GetLatticeRegistry();
+        if (routedLogical is not null)
+        {
+            var resolved = await registry.ResolveAsync(routedLogical);
+            if (!string.Equals(resolved, TreeId, StringComparison.Ordinal))
+            {
+                throw new StaleTreeRoutingException(
+                    logicalTreeId: routedLogical,
+                    stalePhysicalTreeId: TreeId,
+                    destinationPhysicalTreeId: resolved);
+            }
+        }
+        else
+        {
+            var entry = await registry.GetEntryAsync(TreeId);
+            var live = entry is not null
+                && (entry.PhysicalTreeId is null
+                    || string.Equals(entry.PhysicalTreeId, TreeId, StringComparison.Ordinal));
+            if (!live)
+            {
+                if (!forWrite && purgedAnswersEmpty) return false;
+                throw new LatticeTreePurgedException(TreeId);
+            }
+        }
+
+        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
+    }
+
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         await (isCrossShardMigration ? PrepareForOperationAsync() : PrepareForWriteAsync());
+        // A merge that is not a split's own migration import is a write like
+        // any other: it is refused for a slot this shard is handing off, so the
+        // caller re-routes (the resize mirror's refusal chase, #4478; a
+        // replication apply's stale-routing retry), and during a split's drain
+        // it is forwarded to the split destination below (issue #4522).
+        if (!isCrossShardMigration)
+            ThrowIfRejectedForAnyMergeKey(entries);
         RecordWrite(entries.Count);
 
         if (entries.Count == 0)
@@ -3112,7 +3274,7 @@ internal sealed partial class ShardRootGrain(
         // destination tree's perspective the forwarded write is a normal merge,
         // NOT a cross-shard migration, so isCrossShardMigration is deliberately
         // not threaded through TrackShadowForward.
-        var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s));
+        var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync. Decided by node TYPE so a
@@ -3122,6 +3284,8 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(entries, isCrossShardMigration,
                 Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
+            if (!isCrossShardMigration)
+                await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
             await forwardTask;
             return;
         }
@@ -3165,6 +3329,9 @@ internal sealed partial class ShardRootGrain(
         {
             await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
         }
+
+        if (!isCrossShardMigration)
+            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
 
         // Await forwardTask at the end of the grouped path - matches the
         // root-is-leaf fast path and surfaces any forward failure to the

@@ -172,6 +172,30 @@ public class LeafSnapshotProviderTests
         Assert.That(projected.TransactionId, Is.EqualTo(txId));
     }
 
+    [Test]
+    public async Task StreamAsync_projects_a_committed_tombstone_as_a_committed_delete()
+    {
+        var tombstone = Entry("b", 9) with
+        {
+            Value = Array.Empty<byte>(),
+            IsTombstone = true,
+            Timestamp = new HybridLogicalClock { WallClockTicks = 7_000, Counter = 2 },
+        };
+        var adapter = new LeafSnapshotProvider(
+            SnapshotProviderYielding(tombstone), Substitute.For<ICommitLogReader>());
+
+        var projected = await SingleAsync(adapter);
+
+        // The export ships a source delete as a committed tombstone row (#4504);
+        // projecting it as a Set would install an empty value for a deleted key.
+        Assert.That(projected.IsPrepared, Is.False);
+        Assert.That(projected.Kind, Is.EqualTo(MutationKind.Delete));
+        Assert.That(projected.IsTombstone, Is.True);
+        Assert.That(projected.Value, Is.Null);
+        Assert.That(projected.Timestamp, Is.EqualTo(tombstone.Timestamp));
+        Assert.That(projected.TransactionId, Is.EqualTo(Guid.Empty));
+    }
+
     private static async Task<LatticeMutation> SingleAsync(LeafSnapshotProvider adapter)
     {
         var projected = new List<LatticeMutation>();

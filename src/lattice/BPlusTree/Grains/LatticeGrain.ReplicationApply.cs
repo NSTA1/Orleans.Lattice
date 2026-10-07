@@ -21,8 +21,90 @@ internal sealed partial class LatticeGrain
         }
     }
 
+    /// <summary>
+    /// Issue #4593: refuses a replication apply that routed to a physical copy a
+    /// coordinated restore has fenced against it - a restored copy still closed,
+    /// or an open restored copy the apply was admitted before the restore's pause
+    /// (its stamped <see cref="ReplicationAdmissionEpoch"/> is below the copy's
+    /// minimum admission epoch, or it carries no stamp). Called on every routing
+    /// resolution made under <see cref="ReplicationApplyScope"/>, including the
+    /// cached fast path. An open copy's status is cached, because a copy only moves
+    /// from closed to open and its epoch is fixed once open; a closed one is
+    /// always re-read.
+    /// <para>
+    /// The check runs on every resolution, not once per apply, because a write
+    /// whose first resolution reached the replaced copy is redirected by that
+    /// copy's retained redirect and re-resolves onto the restored copy. That
+    /// re-resolution is the check that refuses it.
+    /// </para>
+    /// </summary>
+    private ValueTask<RoutingInfo> CheckCopyReceive(RoutingInfo routing)
+    {
+        if (_receiveOpenCopies is { } open && open.TryGetValue(routing.PhysicalTreeId, out var floor))
+        {
+            return AdmittedBelow(floor)
+                ? ValueTask.FromException<RoutingInfo>(RefuseCopyReceive(routing.PhysicalTreeId, admittedBeforeRestore: true))
+                : new ValueTask<RoutingInfo>(routing);
+        }
+
+        return ReadCopyReceiveAsync(routing);
+    }
+
+    private async ValueTask<RoutingInfo> ReadCopyReceiveAsync(RoutingInfo routing)
+    {
+        var physicalTreeId = routing.PhysicalTreeId;
+        var status = await grainFactory.GetGrain<ICopyReceiveFenceGrain>(physicalTreeId).GetStatusAsync();
+        if (status.Closed)
+        {
+            throw RefuseCopyReceive(physicalTreeId, admittedBeforeRestore: false);
+        }
+
+        (_receiveOpenCopies ??= new Dictionary<string, long>(StringComparer.Ordinal))[physicalTreeId] = status.MinAdmissionEpoch;
+        if (AdmittedBelow(status.MinAdmissionEpoch))
+        {
+            throw RefuseCopyReceive(physicalTreeId, admittedBeforeRestore: true);
+        }
+
+        return routing;
+    }
+
+    /// <summary>
+    /// Whether the current apply was admitted below <paramref name="floor"/>: by this
+    /// tree's receive fence under an older epoch, or with no stamp at all (fail
+    /// closed). A copy no restore closed has a floor of zero and admits every apply.
+    /// An apply another tree's fence admitted - a cross-tree saga's sibling
+    /// finalize - carries no epoch of this tree's fence, so only the closed check
+    /// applies to it: a terminal by itself writes no data, and a restored copy holds
+    /// no pending bucket for a saga whose prepares predate its restore, so a
+    /// pre-cutover terminal finds nothing to flip there.
+    /// </summary>
+    private bool AdmittedBelow(long floor)
+    {
+        if (floor <= 0)
+        {
+            return false;
+        }
+
+        if (!ReplicationAdmissionEpoch.TryGet(out var admittingTree, out var epoch))
+        {
+            return true;
+        }
+
+        return string.Equals(admittingTree, TreeId, StringComparison.Ordinal) && epoch < floor;
+    }
+
+    private CopyReceiveFencedException RefuseCopyReceive(string physicalTreeId, bool admittedBeforeRestore)
+    {
+        LatticeMetrics.CopyReceiveFencedApplies.Add(
+            1,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, TreeId),
+            new KeyValuePair<string, object?>(LatticeMetrics.TagReason, admittedBeforeRestore ? "pre_cutover" : "closed"),
+            LatticeTenantLabel.ForTree(TreeId));
+        return new CopyReceiveFencedException(TreeId, physicalTreeId, admittedBeforeRestore);
+    }
+
     /// <inheritdoc />
-    public Task ApplySetAsync(
+    public async Task ApplySetAsync(
         string key,
         byte[] value,
         HybridLogicalClock sourceHlc,
@@ -35,6 +117,10 @@ internal sealed partial class LatticeGrain
         ArgumentNullException.ThrowIfNull(key);
         ArgumentNullException.ThrowIfNull(value);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         var lww = LwwValue<byte[]>.CreateWithExpiry(value, sourceHlc, expiresAtTicks)
             with
@@ -43,11 +129,11 @@ internal sealed partial class LatticeGrain
                 VectorClock = sourceVectorClock,
             };
 
-        return ApplyMergeOneAsync(key, lww);
+        await ApplyMergeOneAsync(key, lww);
     }
 
     /// <inheritdoc />
-    public Task ApplyDeleteAsync(
+    public async Task ApplyDeleteAsync(
         string key,
         HybridLogicalClock sourceHlc,
         string originClusterId,
@@ -57,6 +143,10 @@ internal sealed partial class LatticeGrain
         ThrowIfSystemTree();
         ArgumentNullException.ThrowIfNull(key);
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         var tombstone = LwwValue<byte[]>.Tombstone(sourceHlc)
             with
@@ -65,7 +155,7 @@ internal sealed partial class LatticeGrain
                 VectorClock = sourceVectorClock,
             };
 
-        return ApplyMergeOneAsync(key, tombstone);
+        await ApplyMergeOneAsync(key, tombstone);
     }
 
     /// <inheritdoc />
@@ -101,6 +191,11 @@ internal sealed partial class LatticeGrain
         {
             return;
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         // A predicate-filtered range delete ships the explicit set of keys the
         // authoring leaf matched. The receiver must tombstone exactly that set
@@ -221,6 +316,11 @@ internal sealed partial class LatticeGrain
         {
             return;
         }
+
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         if (items.Count == 1)
         {
@@ -363,6 +463,11 @@ internal sealed partial class LatticeGrain
             return;
         }
 
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+
         // Fold every delta inside this single grain turn. The grain is
         // non-reentrant, so no other apply or local write to this tree
         // interleaves between the per-item folds - that is what lets the
@@ -453,7 +558,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
+    public async Task ApplyCrdtDeltaWithExpiryAsync(string key, LatticeMergeMode mode, byte[] deltaBytes, long expiresAtTicks)
     {
         EnsureInternalOrigin(LatticeOperation.Replication);
         ThrowIfSystemTree();
@@ -462,7 +567,11 @@ internal sealed partial class LatticeGrain
         // Same guarded flow the public no-TTL per-entry apply takes (the caller
         // sets only the ambient origin scope, so the receiver advances its own
         // clock), with the absolute expiry threaded through the fold.
-        return ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+        await ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, CancellationToken.None);
     }
 
     /// <inheritdoc />
@@ -491,6 +600,11 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
 
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+
 #if LATTICE_DIAG
         Orleans.Lattice.BPlusTree.Grains.DiagSink.Write(
             $"[DIAG xc-apply-prepared-set] tree={TreeId} key={key} tx={transactionId} hlc={sourceHlc} " +
@@ -517,6 +631,17 @@ internal sealed partial class LatticeGrain
         // The terminal mark that arrives subsequently via
         // ApplyTxTerminalAsync flips the pending bucket into the
         // visible projection.
+        // A receiver whose registry already holds this saga's decision
+        // settles the prepare against it instead of staging it (#4482).
+        if (await TrySettleReplicatedPrepareAsync(
+                transactionId,
+                () => mode != LatticeMergeMode.LwwRegister && delta is not null
+                    ? ApplyCrdtDeltaPreparedCommittedAsync(key, mode, delta, expiresAtTicks, originClusterId)
+                    : ApplySetAsync(key, value, sourceHlc, originClusterId, sourceVectorClock, expiresAtTicks)))
+        {
+            return;
+        }
+
         LatticeTransactionContext.Set(transactionId);
         using (LatticeAtomicBatchContext.With(
             atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
@@ -571,6 +696,18 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
 
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
+
+        if (await TrySettleReplicatedPrepareAsync(
+                transactionId,
+                () => ApplyDeleteAsync(key, sourceHlc, originClusterId, sourceVectorClock)))
+        {
+            return;
+        }
+
         LatticeTransactionContext.Set(transactionId);
         using (LatticeAtomicBatchContext.With(
             atomicBatchSize > 0 ? (atomicBatchSize, atomicBatchIndex) : null))
@@ -580,6 +717,81 @@ internal sealed partial class LatticeGrain
         using (LatticeHlcOverrideContext.With(sourceHlc))
         {
             await DeleteAsync(key);
+        }
+    }
+
+    /// <summary>
+    /// Settles a replicated prepare against a decision this receiver's
+    /// transaction registry already holds, instead of staging it in a pending
+    /// bucket (#4482). A saga record the source's write-ahead log retained from
+    /// before a snapshot bootstrap's cut can be re-shipped after the bootstrap,
+    /// and its terminal may already be trimmed; the bootstrap recorded the
+    /// snapshot's settled sagas in this registry, so a prepare for one of them
+    /// would otherwise be staged where no terminal will ever drain it.
+    /// <list type="bullet">
+    ///   <item><description><see cref="TxStatus.Committed"/>: the prepare is
+    ///   applied as a committed write at its source clock. Last-writer-wins at
+    ///   that clock keeps it below any newer write the key already holds, and
+    ///   makes it a no-op over the snapshot row the bootstrap installed. It
+    ///   also heals a prepare that arrives after its saga's terminal.</description></item>
+    ///   <item><description><see cref="TxStatus.Aborted"/>: the prepare is dropped.</description></item>
+    ///   <item><description>Otherwise the prepare is staged as before.</description></item>
+    /// </list>
+    /// A registry row whose tombstone aged out reads as
+    /// <see cref="TxStatus.Indeterminate"/>; the recorded verdict behind it is
+    /// used, as the leaf's own sweep does, because this finishes work the
+    /// receiver owns rather than answering a reader.
+    /// <para>
+    /// Settling applies a terminal, so the decision is read the way every
+    /// terminal-applying path reads it, through
+    /// <see cref="ITxRegistryGrain.GetStatusForTerminalAsync"/>, never the
+    /// reader's <see cref="ITxRegistryGrain.GetStatusAsync"/> (issue #4590).
+    /// While a snapshot capture holds the registry's decision gate (#4485), a
+    /// reader is still served a delegated saga's coordinator verdict, uncached
+    /// and outside the gate's decision snapshot; settling on it would land the
+    /// saga's committed value on this key while a sibling key's bucket resolves
+    /// against that snapshot as pre-saga, so the capture would hold the batch
+    /// torn. The terminal-intent read answers such a saga
+    /// <see cref="TxStatus.InFlight"/> under the gate, so the prepare is staged
+    /// instead - failing closed - and settles after the gate is released, when
+    /// the verdict is cached and the leaf's sweep or the saga's terminal drains
+    /// the bucket. The recorded-status fallback reads local decisions only, which
+    /// a gate admits no new ones of, so it cannot step outside the snapshot either.
+    /// </para>
+    /// </summary>
+    /// <returns><see langword="true"/> when the prepare was settled and must not be staged.</returns>
+    private async Task<bool> TrySettleReplicatedPrepareAsync(Guid transactionId, Func<Task> applyCommitted)
+    {
+        var registry = TxRegistryRouting.GetRegistry(grainFactory, TreeId, transactionId);
+        var status = await registry.GetStatusForTerminalAsync(transactionId);
+        if (status == TxStatus.Indeterminate)
+        {
+            status = await registry.GetRecordedStatusAsync(transactionId);
+        }
+
+        switch (status)
+        {
+            case TxStatus.Committed:
+                await applyCommitted();
+                return true;
+            case TxStatus.Aborted:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Folds a typed CRDT delta a settled-committed saga's prepare carried into
+    /// the key's current state, under the origin's identity, with the
+    /// absolute expiry the prepare carried.
+    /// </summary>
+    private async Task ApplyCrdtDeltaPreparedCommittedAsync(
+        string key, LatticeMergeMode mode, byte[] delta, long expiresAtTicks, string originClusterId)
+    {
+        using (LatticeOriginContext.With(originClusterId))
+        {
+            await ApplyCrdtDeltaGuardedAsync(key, mode, delta, expiresAtTicks, CancellationToken.None);
         }
     }
 
@@ -627,6 +839,10 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
         cancellationToken.ThrowIfCancellationRequested();
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
         // Step 1 (cross-cluster all-or-nothing visibility gate) -
         // Record this per-source-shard terminal arrival against the
@@ -688,7 +904,13 @@ internal sealed partial class LatticeGrain
             // Legacy single-tree path: the per-shard gate is the only
             // barrier, so mark the per-tree linearization point and fan
             // the terminal out as soon as the gate completes.
-            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
+            //
+            // Issue #4485: while a snapshot capture holds this tree's decision
+            // gate the mark is refused rather than waited out, and the refusal
+            // propagates so the replication applier defers the entry (the
+            // sender re-ships it). The tally above is idempotent per source
+            // shard, so the re-delivery reaches this point again.
+            await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed, waitOutDecisionGate: false);
 
             await ApplyTerminalPostGateAsync(
                 transactionId, committed, tally.ObservedSourceShards,
@@ -758,7 +980,7 @@ internal sealed partial class LatticeGrain
     }
 
     /// <inheritdoc />
-    public Task FinalizeCrossTreeTerminalAsync(
+    public async Task FinalizeCrossTreeTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyList<int> observedSourceShards,
@@ -777,8 +999,12 @@ internal sealed partial class LatticeGrain
                 nameof(transactionId));
         }
         cancellationToken.ThrowIfCancellationRequested();
+        // Issue #4593: mark this flow as a replication apply, so every routing
+        // resolution it makes checks the copy's receive fence, and check it now.
+        ReplicationApplyScope.Enter();
+        await GetRoutingAsync();
 
-        return FinalizeCrossTreeTerminalCoreAsync(
+        await FinalizeCrossTreeTerminalCoreAsync(
             transactionId, committed, observedSourceShards, terminalHlc, originClusterId, cancellationToken);
     }
 
@@ -798,7 +1024,7 @@ internal sealed partial class LatticeGrain
     {
         var registry = TxRegistryRouting.GetRegistry(
             grainFactory, TreeId, transactionId);
-        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed);
+        await TxRegistryWriteRetry.MarkDecisionAsync(registry, transactionId, committed, waitOutDecisionGate: false);
 
         await ApplyTerminalPostGateAsync(
             transactionId, committed, observedSourceShards,

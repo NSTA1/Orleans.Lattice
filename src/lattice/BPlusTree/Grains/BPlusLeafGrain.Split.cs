@@ -1050,7 +1050,9 @@ internal sealed partial class BPlusLeafGrain
                 siblingId);
         }
 
-        await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+        // The witness for the moved keys rides the sibling's birth write below.
+        await EnsureTerminalWitnessHydratedAsync();
+        var siblingInit = new SiblingInitialization
         {
             TreeId = state.State.TreeId!,
             ShardIndex = state.State.ShardIndex,
@@ -1070,13 +1072,29 @@ internal sealed partial class BPlusLeafGrain
                 : null,
             MovedAwayVirtualShardCount = state.State.MovedAwayVirtualShardCount,
 
+            // The donor's clock (issue #4522), so the sibling stamps every later
+            // write above every prepare the donor minted for its keys.
+            DonorClock = state.State.Clock,
             // The heads captured above ride this same round-trip so the
             // sibling's birth pin can publish a real offset rather than the
             // "-1" sentinel (issue #3094). They are the identical values
             // SetCheckpointOffsetHintsAsync stamps below, so the pin and the
             // sibling's projection checkpoint start life in agreement.
             WalHeadsAtBirth = resolvedHeads,
-        });
+
+            // The donor's applied-terminal witnesses for the moved keys (issue
+            // #4545), adopted before any migrated row or shadow marker reaches the
+            // sibling, so a delayed marker for a saga whose terminal the donor
+            // already applied to one of those keys is recognised there too.
+            TerminalWitnesses = CollectTerminalWitnessesForSibling(splitKey),
+        };
+
+        // The sibling is being created here, so its first row write carries a
+        // create intent naming it (issue #4654).
+        using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+        {
+            await newLeaf.InitializeSiblingAsync(siblingInit);
+        }
 
         // Join the back-pointer fixup before mutating the donor's own
         // state so a thrown fixup surfaces here (and not on a later
@@ -1253,6 +1271,24 @@ internal sealed partial class BPlusLeafGrain
         state.State.SplitInFlight = false;
         state.State.SplitState = state.State.SplitState.Merge(Primitives.SplitState.SplitComplete);
 
+        // A terminal can interleave with the transfer above (the leaf mutation
+        // surface is [AlwaysInterleave]) and, while this leaf still declared the
+        // moved range, settle a moved key here and record its witness on this
+        // leaf only - after the sibling adopted the witnesses sent at its birth
+        // (issue #4545). The span has just narrowed, so from here on such a
+        // terminal is re-routed to the sibling, which records the witness itself;
+        // what was recorded before is re-sent now, before any write can persist
+        // the narrowed span. The sibling adopts it as a union and makes it
+        // durable in its own sidecar before this call returns.
+        var movedWitnesses = CollectTerminalWitnessesForSibling(splitKey);
+        if (HasWitnessNotIn(movedWitnesses, siblingInit.TerminalWitnesses))
+        {
+            using (LatticeNewLeafIntentContext.BeginScope(siblingId))
+            {
+                await newLeaf.InitializeSiblingAsync(siblingInit with { TerminalWitnesses = movedWitnesses });
+            }
+        }
+
         // Advance the donor's per-partition projection checkpoints to
         // the WAL heads captured at split time.
         //
@@ -1359,21 +1395,40 @@ internal sealed partial class BPlusLeafGrain
         IBPlusLeafGrain sibling,
         IReadOnlyCollection<string> movedKeys)
     {
+        // The marker transfer reads the applied-terminal witness (issue #4545).
+        await EnsureTerminalWitnessHydratedAsync();
         var bySaga = CollectShadowMarkers(movedKeys);
         if (bySaga is null)
             return;
 
-        foreach (var (txid, keys) in bySaga)
-            await sibling.MarkSagaShadowAsync(txid, keys);
+        // Each saga's markers travel with the marked prepare stamp P each one
+        // carries here, so the sibling's read gate can release them once the
+        // row it guards incorporates the saga (issue #4545). A marker without a
+        // known P travels without one and keeps the gate it had here.
+        foreach (var (txid, (keys, stamps)) in bySaga)
+        {
+            using (LatticeOriginalPrepareStampContext.WithoutPreparedRoute())
+            using (LatticeOriginalPrepareStampContext.With(stamps))
+            {
+                await sibling.MarkSagaShadowAsync(txid, keys);
+            }
+        }
     }
 
     /// <summary>
     /// Gathers the saga shadow markers this leaf holds that cover any of
-    /// <paramref name="movedKeys"/>, grouped by transaction. Returns
-    /// <c>null</c> - without allocating - when this leaf holds neither
-    /// markers nor prepared buckets, which is the steady state.
+    /// <paramref name="movedKeys"/>, grouped by transaction, each with the marked
+    /// prepare stamps known for its keys. Returns <c>null</c> - without
+    /// allocating - when this leaf holds neither markers nor prepared buckets,
+    /// which is the steady state.
+    /// <para>
+    /// A saga whose terminal this leaf has already applied is skipped (issue
+    /// #4545): its markers here guard nothing, and the terminal that would clear
+    /// a copy on the sibling has already been delivered here, so the copy would
+    /// gate the moved key until the decision aged out.
+    /// </para>
     /// </summary>
-    private Dictionary<Guid, List<string>>? CollectShadowMarkers(
+    private Dictionary<Guid, (List<string> Keys, Dictionary<string, HybridLogicalClock>? Stamps)>? CollectShadowMarkers(
         IReadOnlyCollection<string> movedKeys)
     {
         var haveMarkers = _shadowedSagas is { Count: > 0 };
@@ -1381,7 +1436,7 @@ internal sealed partial class BPlusLeafGrain
         if (!haveMarkers && !havePending)
             return null;
 
-        Dictionary<Guid, List<string>>? bySaga = null;
+        Dictionary<Guid, (List<string> Keys, Dictionary<string, HybridLogicalClock>? Stamps)>? bySaga = null;
 
         // Existing destination-side markers for the moved keys.
         if (haveMarkers)
@@ -1389,24 +1444,44 @@ internal sealed partial class BPlusLeafGrain
             foreach (var key in movedKeys)
             {
                 if (_shadowedSagas!.TryGetValue(key, out var sagas))
+                {
                     foreach (var txid in sagas)
-                        AddSagaKeyMarker(ref bySaga, txid, key);
+                    {
+                        if (IsTerminalWitnessed(txid, key))
+                            continue;
+                        AddSagaKeyMarker(ref bySaga, txid, key, ShadowMarkerStamp(key, txid));
+                    }
+                }
             }
         }
 
         // Locally prepared, not-yet-terminal sagas whose bucket still holds a
         // moved key - the isolation that a same-shard prepare relies on, which
-        // has no explicit marker of its own.
+        // has no explicit marker of its own. A marked last-writer-wins prepare
+        // carries its own stamp, which is the saga's original P (issue #4522).
         if (havePending)
         {
             var moved = movedKeys as HashSet<string>
                 ?? new HashSet<string>(movedKeys, StringComparer.Ordinal);
             foreach (var (txid, bucket) in _pendingTx!)
             {
-                foreach (var key in bucket.Keys)
+                // Per saga, unlike the marker loop above: a terminal drains every
+                // bucket of its saga present at that moment, so a bucket that
+                // outlives the saga's terminal here is a late orphan the next
+                // delivery discards, and it needs no isolation on the sibling.
+                if (IsRecentlyTerminal(txid))
+                    continue;
+
+                Dictionary<string, (byte[] Delta, LatticeMergeMode Mode)>? deltaBucket = null;
+                _pendingTxDeltas?.TryGetValue(txid, out deltaBucket);
+                foreach (var (key, prepared) in bucket)
                 {
-                    if (moved.Contains(key))
-                        AddSagaKeyMarker(ref bySaga, txid, key);
+                    if (!moved.Contains(key))
+                        continue;
+                    var stamp = IsMarkedLwwPrepare(txid, key, deltaBucket)
+                        ? prepared.Timestamp
+                        : (HybridLogicalClock?)null;
+                    AddSagaKeyMarker(ref bySaga, txid, key, stamp);
                 }
             }
         }
@@ -1415,17 +1490,24 @@ internal sealed partial class BPlusLeafGrain
     }
 
     private static void AddSagaKeyMarker(
-        ref Dictionary<Guid, List<string>>? bySaga,
+        ref Dictionary<Guid, (List<string> Keys, Dictionary<string, HybridLogicalClock>? Stamps)>? bySaga,
         Guid txid,
-        string key)
+        string key,
+        HybridLogicalClock? stamp)
     {
-        bySaga ??= new Dictionary<Guid, List<string>>();
-        if (!bySaga.TryGetValue(txid, out var list))
+        bySaga ??= new Dictionary<Guid, (List<string> Keys, Dictionary<string, HybridLogicalClock>? Stamps)>();
+        if (!bySaga.TryGetValue(txid, out var entry))
         {
-            list = new List<string>();
-            bySaga[txid] = list;
+            entry = (new List<string>(), null);
         }
-        if (!list.Contains(key))
-            list.Add(key);
+        if (!entry.Keys.Contains(key))
+            entry.Keys.Add(key);
+        if (stamp is { } p)
+        {
+            var stamps = entry.Stamps ?? new Dictionary<string, HybridLogicalClock>(StringComparer.Ordinal);
+            stamps[key] = stamps.TryGetValue(key, out var existing) && existing.CompareTo(p) > 0 ? existing : p;
+            entry = (entry.Keys, stamps);
+        }
+        bySaga[txid] = entry;
     }
 }

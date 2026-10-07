@@ -37,15 +37,27 @@ stateDiagram-v2
    the registry, persists its intent, and opens *S*'s shadow-write window for
    the moved slots. From that moment every successful write *S* applies to a
    key in a moved virtual slot is also mirrored to *T* through *T*'s batched
-   merge, preserving the original HLC. Before the drain begins, the
+   merge, preserving the original HLC; a typed CRDT delta apply
+   (`ApplyCrdtDeltaAsync`, `ApplyCrdtDeltaManyAsync`) is mirrored as the
+   key's post-fold state
+   ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)). Before the drain begins, the
    coordinator then runs a **retroactive prepared-mutation sweep**: it walks
    *S*'s leaf chain, snapshots every in-flight prepared saga mutation whose
    key hashes into a moved virtual slot, and replays each one into *T*'s
    pending-transaction buckets under its original transaction id, HLC,
-   origin, vector clock, and expiry, so any prepared write that landed on *S*
+   origin, vector clock, expiry, and atomic-batch membership (batch size
+   and index, so the copy reaches *T*'s write-ahead log exactly as the
+   saga's own dispatch would have written it and a replicating peer
+   tallies it like any other member of the batch,
+   [#4499](https://github.com/NSTA1/Orleans.Lattice/issues/4499)), so any prepared write that landed on *S*
    before the window opened survives the topology change. A saga the
    transaction registry already reports as committed or aborted has its
-   terminal applied to *T* directly instead. The sweep is idempotent per
+   terminal applied to *T* directly instead, and so does one whose decision
+   the registry still records but has stopped reporting once its retention
+   window elapsed (`Indeterminate`): the sweep reads the recorded decision
+   rather than replaying a prepare *T* would refuse for a decided saga
+   ([#4473](https://github.com/NSTA1/Orleans.Lattice/issues/4473)). An online
+   resize snapshot carries prepared buckets through the same sweep. The sweep is idempotent per
    `(transaction, key)`, and a coordinator crash mid-sweep re-runs the whole
    sweep on recovery. Instrumentation:
    `orleans.lattice.split.retroactive_forward.entries` (counter, per
@@ -428,6 +440,13 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
 * **No data loss** - every write committed to *S* is either drained,
   shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
+  A CRDT key can take contributions on both shards during the split - a
+  saga's delta folded on *T* by its terminal while *S* takes a non-atomic
+  CRDT write - so a migrated CRDT row is joined into the row *T* holds, through
+  the key's registered `CrdtShape`, rather than replacing it or being refused
+  by it: *T* ends with the union of both copies' contributions whatever order
+  the fold, the mirror and the drain arrive in
+  ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)).
 * **No prepared-mutation loss** - the retroactive sweep at
   `BeginShadowWrite` re-stamps every in-flight prepared mutation from
   *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`
@@ -446,10 +465,40 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   coordinator therefore installs a per-key marker naming the shadowing
   saga, and *T*'s read gate resolves it against the registry: a saga the
   registry reports as in-flight or aborted is safe (the pre-saga value is
-  the correct answer), and so is any saga whose backstop terminal has
-  already landed on *T*. Otherwise the read raises
+  the correct answer), and so is a saga whose terminal has already settled
+  that key on the leaf - drained its prepared bucket there or installed
+  its committed value as a backstop. Otherwise the read raises
   `StaleShardRoutingException` and the deadline-bounded retry loop
-  re-fans once the backstop lands. A saga whose decision has aged out of
+  re-fans once the backstop lands. The check is per key, not per saga: a
+  saga's terminal can reach a leaf for one of its keys while its value
+  for another key is still on its way, and that other key must stay
+  gated.
+
+  A marker can also arrive after the terminal that would clear it: a
+  delayed shadow forward or sweep replay, possibly after the leaf has
+  reactivated or after a leaf split has moved the key to a new sibling
+  that never sees the terminal. Two rules keep such a marker from hiding
+  the key (issue
+  [#4545](https://github.com/NSTA1/Orleans.Lattice/issues/4545)):
+
+  - The marker carries the saga's original prepare stamp whenever the
+    prepare is a marked last-writer-wins write, and the gate serves a
+    migrated row stamped at or above it: such a row is the saga's own
+    value or a later write, so serving it never tears the batch. A row
+    below that stamp is the pre-saga value and stays gated.
+  - For every key a terminal settled without such a stamp - a CRDT fold,
+    an unmarked prepare, a backstop that carried no stamp - and every key
+    an abort discarded, the leaf keeps a durable record per saga and key,
+    in a sidecar row of its own rather than in its state row. The record
+    is written before any state write that could move the leaf's
+    projection checkpoint past the terminal (the write-ahead log holds it
+    until then), carried to a split sibling for the keys that move, and
+    dropped only once the registry no longer reports the saga. A leaf
+    does not install, carry across its own split, or gate on a marker for
+    a key that record names.
+
+  A saga
+  whose decision has aged out of
   `TxDecisionRetention` reads as `Indeterminate` and takes the same
   conservative arm as a committed one - serving the migrated pre-saga
   value there would be an affirmative claim that the saga did not commit,

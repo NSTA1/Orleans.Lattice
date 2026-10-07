@@ -1,0 +1,15 @@
+# Pairs with ProvenanceNoEmptyOrigin. Drops the #2621 normalisation: an
+# unstamped (locally authored) write keys a per-origin high-water by the empty
+# origin. In production the BackupOriginProvenance constructor then throws,
+# which failed every full capture of a tree without replication.
+MODULE: ProvenanceNoEmptyOriginDropsRule
+TARGET: ProvenanceNoEmptyOrigin
+CLASS: Invariant
+SUMMARY: an unstamped write contributes an empty-origin high-water (#2621)
+
+--- FIND
+StampedOrigins(I) == {log[i].stamp : i \in I} \ {""}
+--- REPLACE
+\* MUTATION: the empty origin is not normalised away.
+StampedOrigins(I) == {log[i].stamp : i \in I}
+--- END

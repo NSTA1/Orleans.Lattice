@@ -397,6 +397,25 @@ public class LatticeReplicationOptionsValidatorTests
 
     [TestCase(0)]
     [TestCase(-1)]
+    public void Validate_fails_when_saga_deferral_timeout_is_non_positive(int seconds)
+    {
+        var opts = new LatticeReplicationOptions
+        {
+            ClusterId = "site-a",
+            SagaDeferralTimeout = TimeSpan.FromSeconds(seconds),
+        };
+
+        var result = Validator.Validate(name: null, opts);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeReplicationOptions.SagaDeferralTimeout)));
+        });
+    }
+
+    [TestCase(0)]
+    [TestCase(-1)]
     public void Validate_fails_when_dead_letter_queue_capacity_is_non_positive(int capacity)
     {
         var opts = new LatticeReplicationOptions
@@ -421,6 +440,7 @@ public class LatticeReplicationOptionsValidatorTests
         {
             ClusterId = "site-a",
             MaxApplyRetries = 1,
+            SagaDeferralTimeout = TimeSpan.FromMilliseconds(1),
             DeadLetterQueueCapacity = 1,
         };
 

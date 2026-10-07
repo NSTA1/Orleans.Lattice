@@ -1,0 +1,15 @@
+# Pairs with RestoreNeverTorn. A routing activation re-resolves the alias but
+# keeps the shard map it had cached, so after a cutover it routes the shadow
+# by the previous copy's map.
+MODULE: RestoreNeverTornRefreshKeepsMap
+TARGET: RestoreNeverTorn
+CLASS: Invariant
+SUMMARY: a routing refresh re-reads the alias but not the map
+PERTURBS: Refresh
+
+--- FIND
+    /\ route' = [alias |-> alias, map |-> map]
+--- REPLACE
+    \* MUTATION: the cached map is kept.
+    /\ route' = [alias |-> alias, map |-> route.map]
+--- END

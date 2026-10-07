@@ -44,6 +44,7 @@ The facade operations (each reached over the gRPC binding as one RPC, and over M
 | Enable replication | Enable a tree under a fixed merge mode, optionally bootstrapping a non-empty tree from a named source cluster. |
 | Disable replication | Disable a tree's runtime enrollment without purging already-replicated peer data. Idempotent. |
 | Get replication config | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source put it in force. |
+| Decommission peer | Remove a peer's durable cross-tree enrollment from every registered tree, releasing any origin-side cross-tree decision hold still waiting on its acknowledgement. Refuses while the peer is still present in `ReplicationPeers`; a later re-add starts a fresh bootstrap rather than resuming the old enrollment. Idempotent. |
 
 ## Peer status
 

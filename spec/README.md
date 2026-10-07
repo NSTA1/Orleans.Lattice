@@ -1,188 +1,220 @@
-# TLA+ specification of the Orleans.Lattice atomic-commit protocol
+# TLA+ specifications
 
-This directory holds a TLA+ specification of the distributed atomic-commit
-protocol - the multi-leaf prepare / commit / abort saga, the per-tree
-transaction-registry decision, and reader visibility - together with a TLC
-model configuration that checks its safety and liveness properties
-exhaustively over a small bounded instance.
+This directory holds the TLA+ specifications of Orleans.Lattice's concurrent
+protocols, one module per area, each with a TLC model configuration that
+checks its safety and liveness properties exhaustively over a small bounded
+instance. Every module is checked by TLC in CI, every property and every
+protocol action is paired with a mutation that makes it fire, and a refinement
+note maps each spec construct to the production symbols it abstracts and to the
+detector tests that would notice production deviating from it.
 
-It is the deliverable of level-C epic #1588, Phase 7 (#1596), lever (c): a
-design-level specification above the code, checked by TLC, with a refinement
-note ([`Refinement.md`](Refinement.md)) mapping it to the extracted Coyote
-protocol cores.
+The gates that enforce all of that live in `test/lattice/Formal/`, and they find
+the modules by **discovering them from disk**: nothing in the test code names a
+module. A module directory that follows the layout below is checked as soon as
+it exists, and one that looks like a module but does not follow it fails the
+build rather than being skipped. A module the gates cannot see is exactly the
+vacuity the atomicity audit (epic #2299) found, so discovery is never allowed to
+be quiet about one.
+
+## Modules
+
+| Directory | Module | What it specifies |
+|-----------|--------|-------------------|
+| [`atomic-commit/`](atomic-commit/README.md) | `AtomicCommit` | The multi-leaf prepare / commit / abort saga, the per-tree transaction-registry decision, and reader visibility. |
+| [`atomic-commit/`](atomic-commit/README.md#the-cross-cluster-module) | `AtomicCommitCrossCluster` | The same saga replicated to a peer cluster: the receiver's terminal tally, cross-tree barrier, delegation dial-back and bootstrap, every way a record is lost to the peer with its re-seed, and the receiver's all-or-nothing visibility. |
+| [`replication/`](replication/README.md) | `Replication` | Plain (non-saga) cross-cluster replication: the shipper's cursor and cycle-break, the receiver's dedup, causal buffer and dead-lettering, and the bootstrap handoff, over a lossy, reordering transport. |
+| [`replication/`](replication/README.md) | `ReplicationCausalDelivery` | Causal-dependency delivery to a receiver whose shippers block at the head of the line, over shipping orders that differ from authoring order. |
+| [`replication/`](replication/README.md) | `ReplicationReBootstrap` | An in-place re-bootstrap after the source reaped a delete the receiver missed: the receiver-side reconcile and its gates. |
+| [`replication/`](replication/README.md) | `ReplicationLowWatermark` | The low watermark behind the causal-dependency check: per-partition clock floors, the watermark from the acknowledged cursor, the prepare clamp, the capability gate, held-back writes, lost marks and the bootstrap pin. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnership` | Who serves a key across an adaptive split, an online reshard and an online resize with its fence, flip, undo and purge, with stale routers and an atomic-write saga bound to one physical copy. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipRetention` | What the registry's mask and retirement, a late forwarded prepare and a leaf reactivation do to a saga bound across a split and a resize. The companion of `ShardOwnership`; the seam between the two is described in that directory's README. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipCrdt` | That a leaf split, a shard split and an online resize join a CRDT-mode key's copies rather than overwrite them, so no acknowledged contribution is lost. |
+| [`shard-ownership/`](shard-ownership/README.md) | `ShardOwnershipCutover` | An atomic-write saga bound to the previous copy across a local shadow-cutover restore and its revert: the re-bind, the discard of the prepares it left behind, and the retained redirect's admission of the saga's direct calls. |
+| [`backup/`](backup/README.md) | `BackupCapture` | A backup capture racing in-flight sagas: the per-tree decision gate (#4485) and a cross-tree set's fence, drain gate, re-check and validation. |
+| [`backup/`](backup/README.md) | `BackupIncremental` | An incremental backup racing a saga: its prepares and terminals in the delta window resolved against the decision gate, the frontier held back for an unsettled saga, the undecided sagas a link hands on, and the fall back to a full backup (#4589). |
+| [`backup/`](backup/README.md) | `BackupProvenance` | What a backup chain records: per-origin provenance, the empty-origin rule and the chain's HLC frontier. |
+| [`backup/`](backup/README.md) | `BackupRestore` | A coordinated restore across regions, its per-record admission, and the replication that resumes after it. |
+| [`backup/`](backup/README.md) | `BackupCutover` | A local shadow-cutover restore and its revert: alias and map moved together, stale-routing redirects, the alias reservation. |
+| [`wal/`](wal/README.md) | `WalDurability` | The leaf WAL durability lifecycle under crash-anywhere recovery: append, out-of-order flush, per-leaf read checkpoints whose persist can fail, snapshots, durable pins and the GC trim they bound. |
+| [`wal/`](wal/README.md) | `WalMove` | A WAL partition moving between storage providers: fence, quiesced copy, placement switch and shard crash. |
+
+`SpecModuleDiscoveryTests` fails if this index and discovery disagree in either
+direction, so a module cannot be added, removed or renamed without this table
+changing with it.
 
 ## Why this lives here (and not in the solution)
 
-The specification is intentionally **outside** the compiled solution
-(`Orleans.Lattice.slnx`). It is not C#; it is checked by TLC, which needs a
-Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
-fixture that shells out to it rather than by building anything here - see the
-"CI decision" section below. This directory contains only `.tla`, `.cfg`,
-`.mutation`, and `.md` files; nothing here is built by `dotnet`.
+The specifications are intentionally **outside** the compiled solution
+(`Orleans.Lattice.slnx`). They are not C#; they are checked by TLC, which needs
+a Java runtime and the TLA+ tools. TLC **is** run per PR, but through an NUnit
+fixture that shells out to it rather than by building anything here - see
+[CI decision](#ci-decision). This directory contains only `.tla`, `.cfg`,
+`.mutation`, `.json` and `.md` files; nothing here is built by `dotnet`.
 
-## Files
+## Module layout
+
+Every directory directly under `spec/` is a module directory, named for its area
+in kebab-case. A module directory holds:
 
 | File | What it is |
 |------|-----------|
-| [`AtomicCommit.tla`](AtomicCommit.tla) | The specification: state, actions, safety invariants, liveness properties. |
-| [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
-| [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
-| [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
-| `README.md` | This file. |
+| `<Module>.tla` | The specification. Its header must read `---- MODULE <Module> ----`. |
+| `<Module>.cfg` | The TLC model: the bounded instance and the invariant / property list. It must check `TypeOK`, which every generated mutation cfg carries alongside its target. |
+| `<Module>.<Variant>.cfg` | Optional: a variant configuration, the same specification checked under a different bound (see "Variant configurations" below). |
+| `<Module>.manifest.json` | The manifest (below). |
+| a mutation directory | One `.mutation` file per experiment, named by the manifest (conventionally `mutations/`). The file format is described in [`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md#file-format). |
+| a refinement note | The mapping from spec to code, named by the manifest (conventionally `Refinement.md`), with `## Variable mapping`, `## Action mapping` and `## Property mapping` tables and an optional `## Excluded properties` table. [`atomic-commit/Refinement.md`](atomic-commit/Refinement.md) is the worked example. |
+| `README.md` | What the module models, and a `## Counts` table (below). |
 
-## What is modelled
+Discovery (`SpecModuleCatalogue`) fails, naming every problem at once, when a
+directory under `spec/` holds no `.tla`; when a `.tla` has no `.cfg` or no
+manifest, or a `.cfg` or manifest has no `.tla`; when a module directory has no
+`README.md`; when a manifest is malformed or names a mutation directory or note
+that does not exist; when a module header does not match its file name; when a
+`.tla` sits directly in `spec/`; when two directories declare the same module
+name; or when a variant configuration and the manifest disagree (a variant cfg
+the manifest does not declare, a declared variant with no cfg, a variant cfg of
+no module, or a malformed variant name). It also fails when it finds no module at
+all.
 
-The specification is deliberately abstract: keys, participant leaves, and a
-transaction status. There is no serialization, no timers, no HLC, no WAL - the
-issue scopes those out. The abstraction is chosen so TLC can enumerate every
-interleaving of the protocol's decision and broadcast steps.
+One module per directory is the norm. A directory may hold a second module (for
+example one that `EXTENDS` the first); each `.tla` is then its own module with
+its own cfg, manifest, mutation directory and refinement note, and every `.tla`
+in the directory is copied beside a module when TLC checks it. Module names must
+be unique across `spec/`, because they name the test cases.
 
-- **Coordinator** (`PrepareTx`, `DecideTx`, `BroadcastStep`) - the saga:
-  prepare fan-out into hidden per-leaf pending buckets, a single terminal
-  decision, then the per-leaf terminal broadcast one leaf at a time.
-- **Transaction registry** (`decision`, `forgotten`, `revision`) - the single
-  tree-wide commit / abort decision, whether its row has since been retired,
-  and the monotonic revision. Recording the decision *before* the broadcast is
-  the linearization point. `ForgetDecision` models the saga's post-fan-out
-  cleanup: it retires the row (so `RegistryView` reverts to in-flight) without
-  changing the outcome, and only once every participant has drained.
-  `RegistryMask` models the registry declining to report the saga's outcome
-  (`masked`, production's `Indeterminate`: an aged-out row it still stores, or
-  a delegated cross-tree txid whose coordinator cannot be dialled), with no
-  ordering against the participants or even the decision.
-- **Reader visibility** (`Observed`, `SurfaceViaGate`) - the per-key gate that
-  resolves how a read of a key carrying a pending mutation is answered, resolved
-  against one registry view so a saga is all-or-nothing visible. A read has
-  three outcomes, not two: the post-saga value, the pre-saga value, or
-  `"hidden"` when the registry has declined to report the decision - the gate's
-  `Indeterminate` arm, which asserts nothing about the saga and so is never
-  treated as a pre-saga read.
-- **Reshard / migration** (`ShadowForwardOrphan`, `OrphanDrain`) - an abstract
-  online shard-split step that shadow-forwards a stale prepared write onto a
-  leaf that already applied the saga's terminal, and the leaf's discard of
-  that late bucket. Until it is discarded, the gate's orphan guard
-  (`AlreadyTerminal`, which `SurfaceViaGate` reads) makes the bucket fall
-  through instead of shadowing the authoritative value (the #1584 class at
-  design level).
+### The manifest
 
-## Properties checked
+`<Module>.manifest.json` records what the gates used to hard-code for the one
+module that existed. Every key is required and no other key is accepted, so
+nothing is ever defaulted:
 
-Safety invariants (checked at every reachable state):
+```json
+{
+  "mutations": "mutations",
+  "refinement": "Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 7,
+    "properties": 6,
+    "actions": 8,
+    "mutations": 20,
+    "behaviourRows": 17,
+    "distinctStates": 31684
+  }
+}
+```
 
-| Invariant | Meaning |
-|-----------|---------|
-| `TypeOK` | State stays well-typed. |
-| `AllOrNothing` | Atomicity: within one saga a snapshot reader never sees one key post-saga and another pre-saga - never a split view. A hidden key is compatible with either. |
-| `VisibilityMatchesDecision` | A key is post-saga-visible only when the tree-wide decision is committed, and pre-saga-visible only when it is not (sharpest safety statement; implies `AllOrNothing` and `StrictIsolation`). |
-| `StrictIsolation` | An in-flight or aborted saga is never surfaced as committed. |
-| `CommitIntegrity` | Commit implies every participant acked; abort implies at least one nack. |
-| `LinearizedTerminals` | No leaf applies a commit / abort terminal before the registry recorded that decision (decision-before-broadcast). |
-| `NoMixedTerminals` | A saga never applies commit on one leaf and abort on another. |
+| Key | Meaning | Checked by |
+|-----|---------|-----------|
+| `mutations` | The mutation directory, relative to the module directory. | Discovery. |
+| `refinement` | The refinement note, relative to the module directory. | Discovery. |
+| `nonBehaviouralActions` | Actions in `Next` that model no protocol step, so need neither a perturbing mutation nor a detector. Each must have exactly one action row in the note. | `SpecActionMutationCoverageTests`, `RefinementDetectorMappingTests`. |
+| `counts.invariants` | Names in the cfg's `INVARIANT(S)` blocks. | `SpecMutationCatalogueTests`. |
+| `counts.properties` | Names in the cfg's `PROPERTY` / `PROPERTIES` blocks. The only count that may be zero. | `SpecMutationCatalogueTests`. |
+| `counts.actions` | Disjuncts of `Next`, non-behavioural ones included. | `SpecActionMutationCoverageTests`. |
+| `counts.mutations` | `.mutation` files in the mutation directory. | `SpecMutationCatalogueTests`. |
+| `counts.behaviourRows` | Action and property rows of the note that assert a production behaviour. | `RefinementDetectorMappingTests`. |
+| `counts.distinctStates` | Distinct states TLC finds for the base model. | `TlcModelCheckTests`. |
+| `variants` | Optional, and the only optional key: `{ "<Variant>": { "distinctStates": N } }`, one entry per variant configuration, with the distinct states TLC finds under it. Omitted when the module has none; its absence is cross-checked against the disk, so it is never a silent default. | Discovery, `TlcModelCheckTests`. |
 
-Action and temporal properties (`DecisionDurability` and `RevisionMonotonic` are
-single-step action properties; `MonotonicVisibility` is a safety property stated
-over whole behaviours; the last three are liveness properties):
+Every count is an equality, not a floor. The gates that compare two derived sets
+(properties against mutation targets, actions against note rows) stay green when
+both sides shrink together, so a count is what turns deleting a property and its
+mutation in one commit into a deliberate act.
 
-| Property | Meaning |
-|----------|---------|
-| `DecisionDurability` | Once terminal, the registry decision never flips to the other terminal, and its row is never retired while a written key has not yet applied its terminal (its prepared bucket is still undrained). |
-| `MonotonicVisibility` | Once a key has been observed post-saga it is never observed pre-saga at any later state (even across a reshard, or while the registry declines to report the decision). Going hidden is not a reversion, but it cannot launder one: post, then hidden, then pre is a violation, which is why the property is stated over the behaviour rather than over one step. |
-| `RevisionMonotonic` | The registry revision counter never decreases. |
-| `Termination` | Every saga terminates (under weak fairness of saga progress). Fails on a protocol defect under that fairness, not only without it. |
-| `EveryCommittedKeyReadable` | Every committed saga's keys are eventually all materialised at their post-saga value on their own leaf. Not entailed by any invariant; for a committed saga it coincides with `NoStrandedPrepare` (see its comment in the spec). |
-| `NoStrandedPrepare` | Every participant of a decided saga eventually applies the saga's terminal. The only one of the three liveness properties that sees an aborted saga's stranded bucket. |
+### The counts table
 
-All three liveness properties fail on protocol defects under the fairness the
-spec asserts. `Termination` and `NoStrandedPrepare` each have one the other two
-miss; `EveryCommittedKeyReadable`'s is also caught by `NoStrandedPrepare`, with
-which it coincides for a committed saga. The paired mutations in
-[`mutations/`](mutations/README.md) are the standing demonstration.
+Each module directory's `README.md` carries a `## Counts` table with exactly
+these columns, one row per module in the directory:
 
-## The bounded instance
+```markdown
+| Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
+|--------|------------|------------|---------|-----------|----------------|-----------------|
+| `AtomicCommit` | 7 | 6 | 8 | 21 | 17 | 31,684 |
+```
 
-`AtomicCommit.cfg` fixes a concrete instance:
+`SpecModuleDiscoveryTests` checks it against the manifest. It is the one place a
+module README states its current totals; prose elsewhere should cite it rather
+than repeat a number nothing checks.
 
-- 2 concurrent sagas (`t1`, `t2`),
-- 3 keys (`k1`, `k2`, `k3`),
-- `t1` writes `{k1, k2}`, `t2` writes `{k2, k3}` - 2 participants each,
-  overlapping on `k2`,
-- a bounded reshard orphan step per key (used-once budget).
+### Variant configurations
 
-**What the `k2` overlap does and does not buy.** The two sagas do share a key,
-and TLC does interleave their two lifecycles. What the overlap does *not* do is
-exercise any *cross-saga* claim, because every property above is stated
-per-saga - bar `TypeOK` and `RevisionMonotonic`, which
-constrain only the variables' domains and the shared revision counter: each
-quantifies `\A t \in Txns` and then resolves that saga's keys against that
-saga's own `decision[t]`, `terminal[t]` and `pend[t]`. No property relates
-`t1`'s state to `t2`'s, and no protocol action's guard does either: every
-variable but the shared revision counter is indexed by saga, so each saga's
-properties are checked exactly as they would be for that saga alone. Read the
-overlap as naming a shared key, not as evidence that concurrent sagas
-contending for one key have been checked.
+A variant configuration, `<Module>.<Variant>.cfg`, checks the module's unchanged
+specification under a different bound. It exists for a bound whose full check is
+too slow for the TLC budget: the module's own cfg keeps every property at the
+smaller bound, and the variant re-checks the properties that stay affordable -
+typically the invariants and action properties, since liveness is what grows -
+at the larger one. `spec/wal/WalDurability.TwoFaults.cfg` is the worked example:
+`WalDurability.cfg` checks everything with one fault, and the variant checks every
+invariant and both action properties with two, which is what reaches #4523.
 
-Such a property is *unexpressed here*, not inexpressible, and the price is
-worth stating rather than hand-waving. The natural one is
-`NoConcurrentPreparedWriters`: at most one saga holds a pending bucket on a key
-at a time. It would strengthen the design rather than mirror the code: the
-implementation takes no per-key admission lock, so two sagas writing one key
-each stage their own per-transaction pending bucket on the leaf, and
-overlapping sagas are resolved pairwise by last-writer-wins ("Ordering across
-distinct sagas" in [atomic writes](../docs/lattice/atomic-writes.md)). As an
-invariant alone it is false here for the same reason: `PrepareTx` has no
-cross-saga precondition and both sagas may hold a bucket on `k2`. Making it
-true costs one conjunct on `PrepareTx` requiring no other saga's bucket on any
-key it writes.
+The variant changes the bound in its `CONSTANTS` block. TLC accepts both a value
+for a defined operator (`MaxFaults = 2`, where the module says `MaxFaults == 1`)
+and a definition override (`MaxFaults <- TwoFaults`), so a module need not turn
+its bound into a declared `CONSTANT` to have a variant. The variant name is a
+letter followed by letters or digits, and the manifest records it under
+`variants` with its state count.
 
-That one conjunct is not free, and the reason is specific rather than general
-caution: `ShadowForwardOrphan` may re-install a bucket on `k2` after `t1` is
-done, `OrphanDrain` is **deliberately not fair** (see the fairness note in
-`AtomicCommit.tla`), so a behaviour exists in which that orphan is never drained
-and the gated `PrepareTx(t2)` is never enabled - which would break `Termination`.
-Adding the property therefore also means deciding whether `OrphanDrain` becomes
-fair, which weakens the "every safety property holds whether or not the orphan
-fires" guarantee that its unfairness currently buys. Two coupled changes and a
-re-run of TLC, not one conjunct.
+TLC ACCEPTS a value assignment to a name the specification does not have
+(`MaxFalts = 2`) and silently checks the unchanged model, so a misspelt bound
+would pass as a second, larger check while re-checking the base. Two gates refuse
+it, from opposite sides:
 
-The deeper limit is that the model abstracts values away entirely: even with the
-conjunct in place, "which of two committed writers does a reader of `k2` observe" is
-not a question this instance can ask, because `Observed` returns which side of
-the saga a read lands on rather than a value. A cross-saga *visibility* property needs a value
-domain, which is a larger change than that conjunct.
+- `SpecMutationCatalogueTests` requires every name a variant assigns or overrides
+  to be declared or defined by the specification, the variant to change at least
+  one assignment the base cfg makes, and `TypeOK` to be checked. No toolchain.
+- `TlcModelCheckTests.Each_variant_configuration_holds` runs the variant and
+  requires it to hold over exactly the recorded state count, and that count to
+  DIFFER from the base cfg's, which is the evidence the override took effect.
 
-To widen the instance, declare the new model values on the `CONSTANTS` line of
-`AtomicCommit.tla`, extend `TxWrites`, `Txns`, and `Keys` there, and add the
-matching model-value assignments to `AtomicCommit.cfg`. The state space stays
-small for the default instance (31,684 distinct states), but no
-protocol action's guard refers to another saga, so the sagas' reachable states
-combine as a product: every saga added multiplies the count by what one saga
-alone can reach, and larger instances grow quickly.
+A mutation that needs the larger bound to fire raises it in its own text edit
+(`MaxFaults == 1` to `MaxFaults == 2`); generated mutation cfgs are built from the
+module's own cfg, not from a variant. Classify the properties a variant leaves at
+the smaller bound as bounded-out in the refinement note (issue #2321), with the
+budget as the reason.
 
-## Claims in this directory that open issues own
+## The gates
 
-No issue that is still **open** owns claims made in this directory.
+Every gate in `test/lattice/Formal/` that takes a module runs once per
+discovered module, and each test case is named with the module
+(`Each_property_fires_under_its_mutation_and_not_on_the_base(AtomicCommit,TerminationNoFairness)`):
 
-The four that used to appear here - **#2319** (verification artefacts named for
-what they could not exercise; the Coyote concurrency degree was deliberately not
-raised, see `CoyoteModelHarness`), **#2320** (the unordered decision-masking
-action, now `RegistryMask`), **#2325** (documentation and API overclaims in the
-atomicity surface, including the `k2` overlap discussed above) and **#2333**
-(the `DecisionDurability` prose and its refinement seam) - are all resolved.
-Further issues filed while closing them are about production behaviour, not
-claims made here: #4428, #4445 and #4448.
+- `TlcModelCheckTests` (category `Tlc`): the base model holds with the
+  manifest's state count, each variant configuration holds with its own count,
+  and each mutation runs as a two-arm (or, with `DEADLOCK: off`, three-arm)
+  experiment. A mutation's `BOUNDS:` header shrinks only the mutant arm's
+  instance; the control arm always checks the module's own bounds, and
+  mutations that build the same control share one run of it.
+- `SpecMutationCatalogueTests`: every checked property is paired, the counts
+  match, `TypeOK` is checked, temporal properties sit under `PROPERTIES`, every
+  mutation applies to the current base and changes something, every generated
+  cfg names its target once, every variant and every mutation `BOUNDS:` header
+  assigns only names the specification has, and only the mutant arm carries a
+  mutation's bounds.
+- `SpecActionMutationCoverageTests`: the note's action table matches `Next`, and
+  every behavioural action is perturbed by a mutation that really edits it.
+- `RefinementNoteTests`, `RefinementPropertyCoverageTests`,
+  `RefinementMappingStalenessTests`, `RefinementDetectorMappingTests`: the note
+  parses, covers every checked property, names only code that exists and
+  detectors that resolve, and states no hand-maintained census count.
+- `SpecModuleDiscoveryTests`: the floor, the counts table and this index.
 
-The boundary is recorded in full under
-[territory owned by other open issues](Refinement.md#territory-owned-by-other-open-issues)
-in the refinement note, which is where a census of that note's Detector column
-meets it. Read it before filing any of these findings as new.
+`SpecModuleDiscoveryControlTests` and
+`TlcModelCheckTests.A_synthetic_module_is_model_checked_by_every_TLC_gate` are
+the controls on all of the above. They build a small module in a temp
+directory, find every gate by its signature rather than from a list, and require
+each to run over that module and pass; then they break the module one way at a
+time and require the gate that owns each fault to report it, and require
+discovery to refuse every malformed layout listed above.
 
 ## How to run TLC
 
 You need a Java runtime (JDK/JRE 11+) and `tla2tools.jar` from the
-[TLA+ tools releases](https://github.com/tlaplus/tlaplus/releases).
+[TLA+ tools releases](https://github.com/tlaplus/tlaplus/releases). From a
+module directory, for example `atomic-commit/`:
 
 ```bash
-# From this directory, with tla2tools.jar on hand:
 java -cp /path/to/tla2tools.jar tlc2.TLC -config AtomicCommit.cfg AtomicCommit.tla
 ```
 
@@ -196,9 +228,12 @@ A clean run ends with `Model checking completed. No error has been found.`
 and reports zero invariant or temporal-property violations and no deadlock.
 
 TLC keeps its working files in a `states/` directory beside the specification
-by default, and git does not ignore `spec/states/`: delete it after a run, or
-pass `-metadir` with a directory outside the repository. The NUnit fixture
-below avoids it by running every model in a scratch directory.
+by default, and git does not ignore `spec/<area>/states/`: delete it after a
+run, or pass `-metadir` with a directory outside the repository. The NUnit
+fixture below avoids it by running every model in a scratch directory.
+
+To run one module's gates, or one mutation, filter on the names in the test
+case, for example `--filter "FullyQualifiedName~TerminationNoFairness"`.
 
 ### How the NUnit fixture finds the toolchain
 
@@ -209,88 +244,6 @@ repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
 falling back to the first `java` on `PATH`. The CI workflows download the pinned
 tla2tools v1.7.4 release to `tools/tla2tools.jar` and verify its SHA-256 digest
 before the tests run.
-
-### Confirming the model is non-vacuous
-
-The invariants are load-bearing, not trivially true. To convince yourself,
-temporarily weaken `BroadcastStep` so a leaf may apply a commit terminal while
-the saga is still in `phase = "prepared"` (i.e. before `DecideTx` records the
-decision): admit `"prepared"` to its phase guard and make the terminal kind
-commit for every phase but `"aborting"`, which is what
-[`mutations/LinearizedTerminalsBroadcastBeforeDecision.mutation`](mutations/LinearizedTerminalsBroadcastBeforeDecision.mutation)
-does. Widening the guard alone is not enough: the unchanged kind rule then
-applies an abort terminal, which TLC reports as
-`Invariant LinearizedTerminals is violated` rather than as a split view. With
-both changes, TLC reports `Invariant AllOrNothing is violated` with a
-counterexample trace: a reader observes one key at its post-saga value while a
-sibling key still shows pre-saga - exactly the split view the linearization
-point exists to prevent. Revert the weakening to restore the clean run.
-
-## The refinement note is gated for staleness, not for truth
-
-[`Refinement.md`](Refinement.md) names production C# symbols in backticks. A
-rename or deletion in `src/lattice/` would leave those references pointing at
-code that no longer exists, while the note went on reading as authoritative.
-`RefinementMappingStalenessTests` (in `test/lattice/Formal/`) closes that gap:
-it parses the backticked `Type.Member` references out of the three mapping
-tables and fails if any of them no longer resolves in `src/`. It is
-toolchain-free, needs no JVM, and runs in the deterministic tier in
-milliseconds. It skips the `Detector` column, whose test names
-`RefinementDetectorMappingTests` resolves against `test/` instead.
-
-Resolution handles three forms deliberately: an ordinary type member, a nested
-type, and a **partial-class file suffix**. The mapping tables rely on the first
-and the last - `ShardRootGrain.TxTerminal` is not a member at all but the file
-`src/lattice/BPlusTree/Grains/ShardRootGrain.TxTerminal.cs`. A checker that
-assumed `Type.Member` would report that (and `ShardRootGrain.Split` and
-`BPlusLeafGrain.PendingTx`) as missing and be wrong. The gate reads source text
-rather than using reflection, because several mapped symbols are `private` or
-`internal` and the file-suffix form has no reflective existence at all.
-
-**What a green run does and does not mean.** The gate checks that each named
-symbol **exists**. It does not check that the row's claim about that symbol is
-**true**. A row can name a dozen perfectly resolvable symbols and still assert
-behaviour the code does not have; nothing here would notice. Verifying the
-behavioural claims is separate work. Do not read a passing run as the note
-having been validated, only as the note not naming code that has disappeared.
-
-Bare backticked identifiers are not checked. In these tables they are
-indistinguishable from TLA+ variables, spec-level string values, enum members
-quoted without their type, and parameter names, so checking them would produce
-false alarms; a staleness gate that cries wolf gets suppressed and is then
-worse than no gate. The honest cost is that a rename of a symbol the note
-mentions only in bare form is not caught.
-
-A second toolchain-free gate, `RefinementPropertyCoverageTests`, checks the
-note from the model's side: every property `AtomicCommit.cfg` checks must have
-a row in the note's property-mapping table or, with a stated reason, in its
-excluded-properties table, and a prose mention alone does not count. Like the
-staleness gate, it checks coverage, not the truth of a mapping.
-
-## Last checked
-
-This specification was checked with **TLC 2.19** (tla2tools, rev 5a47802) on a
-Temurin 21 JRE when it was added (#1597):
-
-```
-Model checking completed. No error has been found.
-7649 states generated, 2809 distinct states found, 0 states left on queue.
-The depth of the complete state graph search is 17.
-```
-
-All seven invariants and all five temporal properties held; no deadlock. That run
-predates #2612, which added the `forgotten` variable and the `ForgetDecision`
-action and strengthened `DecisionDurability`, so these counts describe the earlier
-model, not the current one. After #2320 added `masked` and `RegistryMask` and
-#2321 added `NoStrandedPrepare`, a local run on tla2tools v1.7.4 checked all seven
-invariants and all six temporal properties over 29,929 distinct states at depth 21
-(124,625 generated), clean. The review that followed (PR #4424) dropped
-`RegistryMask`'s decision guard and restated `MonotonicVisibility` and
-`EveryCommittedKeyReadable`; the same toolchain then checked all seven
-invariants and all six action and temporal properties over 31,684 distinct
-states at depth 21 (134,633 generated), clean, with deadlock checking on. The current specification is model-checked in CI by
-`TlcModelCheckTests.The_base_specification_holds`, against the tla2tools v1.7.4
-release the workflows pin (see [CI decision](#ci-decision)).
 
 ## CI decision
 
@@ -330,17 +283,17 @@ specification's own diagnostic power, and unlike the design it tracks, it
 regresses silently the moment somebody weakens a property - which is exactly
 the failure the atomicity audit (epic #2299) found four times over.
 
-Each of the thirteen properties is paired with at least one mutation, every
-protocol action in `Next` is perturbed by at least one (issue #2322, gated by
-`SpecActionMutationCoverageTests`), and each pairing runs as a two-arm
-experiment: the generated single-property model must be **clean**
+Every property of every module is paired with at least one mutation, every
+protocol action in each module's `Next` is perturbed by at least one (issue
+#2322, gated by `SpecActionMutationCoverageTests`), and each pairing runs as a
+two-arm experiment: the generated single-property model must be **clean**
 against the unmutated specification and **violated** against the mutant. The
 control arm is what makes a red mutant evidence rather than merely a red run,
 and it is the standing proof that the fixture is not vacuous. See
-[`mutations/README.md`](mutations/README.md).
+[`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md).
 
 The local invocation documented above remains supported and is still the fast
-path when iterating on the protocol design.
+path when iterating on a protocol design.
 
 The dev loop does **not** run this category. The Tier 2 filter in
 [`.github/instructions/testing.instructions.md`](../.github/instructions/testing.instructions.md)
@@ -351,3 +304,45 @@ handled asymmetrically and deliberately - the fixture skips locally (a visible
 nor failed nor skipped and which has already produced a false green here) and
 **fails** when `GITHUB_ACTIONS` is `true`, because in CI a missing toolchain is a
 broken pipeline rather than a missing convenience.
+
+## CI budget
+
+TLC time is dominated by how many TLC processes run, not by state-space size,
+except for temporal mutants, which pay for the whole state graph before TLC
+reports the violation; those declare `BOUNDS:` to run on the smallest instance
+that still exhibits it (see the mutation format in
+[`atomic-commit/mutations/README.md`](atomic-commit/mutations/README.md)):
+the atomic-commit base model finishes in about six seconds on an idle machine,
+and most of each run is JVM start-up. A module costs one run for its base model,
+two per mutation (the control arm and the mutant), one more per
+`DEADLOCK: off` mutation and one per variant configuration, so the atomic-commit
+module costs 43 runs. A variant's run is usually the most expensive one of its
+module - it exists to check a larger bound - so measure it on two workers and keep
+it well under the per-run ceiling: `WalDurability.TwoFaults` takes about forty
+seconds there.
+
+Measured on a 16-core Windows workstation that other builds were loading at the
+time (so treat the figures as an upper bound), for the atomic-commit module's
+base model and twenty mutations:
+
+| Concurrency | Wall clock |
+|-------------|------------|
+| 1 (`LATTICE_TLC_CONCURRENCY=1`) | 6 min 30 s |
+| 4 (the default on 8 or more cores) | 1 min 34 s |
+
+`TlcModelCheckTests` runs its cases in parallel, at most half the cores' worth
+of TLC processes at once (between one and four, or `LATTICE_TLC_CONCURRENCY`),
+each with an equal share of the cores as TLC workers and its own
+`java.io.tmpdir`, because TLC extracts its standard modules there and concurrent
+runs sharing one directory corrupt each other's parse. On a four-core CI runner
+that is two processes of two workers each.
+
+The expectation as modules are added is therefore linear in the number of TLC
+runs: roughly `(1 + 2 x mutations)` runs per module, divided by the
+concurrency. Five more modules of the atomic-commit module's size would add
+about five times its cost - on the order of ten minutes of TLC on a four-core
+runner, which the `test/lattice` leg can absorb but a sixth or seventh area
+would make worth splitting into its own shard. The five-minute timeout is per
+TLC run, as a hang guard, and the wait for a concurrency slot is outside it, so
+it does not tighten as modules are added; a single run approaching it means the
+model is wrong, not that the budget is.

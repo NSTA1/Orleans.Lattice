@@ -259,6 +259,9 @@ internal sealed partial class ShardRootGrain
             throw new ShardRootDeactivatingException(ShardKeyForFence());
         }
 
+        // Or a bootstrap drop-floor arm, which raised the floor epoch (#4549).
+        ThrowIfFloorAdmissionStale();
+
         await InvokeAdmittedPointWrite(context);
     }
 

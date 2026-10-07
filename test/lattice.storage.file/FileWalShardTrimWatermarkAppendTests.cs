@@ -58,6 +58,35 @@ public sealed class FileWalShardTrimWatermarkAppendTests
     }
 
     [Test]
+    public async Task A_crash_after_the_trim_marker_leaves_the_covered_records_on_disk_and_never_readable()
+    {
+        // Issue #4621: the trim marker is durable before the in-memory delete, so
+        // a process lost in between leaves the trimmed records' bytes on disk
+        // below the marker. Recovery must report the marker and drop them.
+        // Compaction is held off so the trimmed bytes stay where a crash leaves them.
+        FileWalShard Uncompacted() => new(
+            ShardDirectory,
+            new FileWalStorageOptions { RootDirectory = _root, FlushToDisk = false, CompactionMinimumDeadBytes = int.MaxValue });
+
+        using (var shard = Uncompacted())
+        {
+            await shard.AppendAsync(
+                new[] { Record(0, 0xA0), Record(1, 0xA1), Record(2, 0xA2) },
+                CancellationToken.None);
+            await shard.TrimAsync(1, CancellationToken.None);
+        }
+
+        using var reopened = Uncompacted();
+        var live = await LiveOffsetsAsync(reopened);
+        Assert.Multiple(async () =>
+        {
+            Assert.That(reopened.DeadEntries, Is.EqualTo(2), "the trimmed records are still on disk");
+            Assert.That(live, Is.EqualTo(new long[] { 2 }), "and never read back");
+            Assert.That(await reopened.GetTrimWatermarkAsync(CancellationToken.None), Is.EqualTo(1L));
+            Assert.That(await reopened.GetLowestOffsetAsync(CancellationToken.None), Is.EqualTo(2L));
+        });
+    }
+    [Test]
     public async Task AppendAsync_rejects_an_offset_at_or_below_the_watermark_of_an_emptied_shard()
     {
         using (var shard = CreateShard())

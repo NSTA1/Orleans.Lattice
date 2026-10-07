@@ -1,0 +1,17 @@
+# Pairs with ReclamationEventuallyAdvances, and reproduces issue #2270: the read
+# position advances only over entries the leaf applied, not over every entry it
+# read. A leaf that owns nothing in the partition - l2 here, and the common case
+# in production - never moves past its first entry, so its pin never releases
+# and the WAL is never reclaimed. The spec's fairness is intact.
+MODULE: ReclamationEventuallyAdvancesReadPositionTracksOwnEntries
+TARGET: ReclamationEventuallyAdvances
+CLASS: Temporal
+SUMMARY: the checkpoint advances only over owned entries, so a leaf that owns nothing never moves and pins the WAL
+PERTURBS: ReadStep
+
+--- FIND
+       IN /\ rp' = [rp EXCEPT ![l] = o]
+--- REPLACE
+\* MUTATION: the read position records applied entries only.
+       IN /\ rp' = [rp EXCEPT ![l] = IF Owner[o] = l THEN o ELSE @]
+--- END

@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Replication.Grpc.Tests;
 /// <see cref="ILatticeSagaControlHandler"/>.
 /// </summary>
 [TestFixture]
-public class LatticeSagaGrpcServiceTests
+public partial class LatticeSagaGrpcServiceTests
 {
     private const string Saga = "saga-1";
     private const string Tree = "tree";
@@ -325,6 +325,8 @@ public class LatticeSagaGrpcServiceTests
         public int CommitCalls;
         public int AbortCalls;
         public int GetStatusCalls;
+        public int GetDecisionCalls;
+        public SagaControlRequest? LastDecisionRequest;
 
         public RecordingHandler(SagaControlResponse response) => _response = response;
 
@@ -349,6 +351,13 @@ public class LatticeSagaGrpcServiceTests
         public Task<SagaControlResponse> GetStatusAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
         {
             GetStatusCalls++;
+            return Task.FromResult(_response);
+        }
+
+        public Task<SagaControlResponse> GetDecisionAsync(SagaControlRequest request, CancellationToken cancellationToken = default)
+        {
+            GetDecisionCalls++;
+            LastDecisionRequest = request;
             return Task.FromResult(_response);
         }
     }

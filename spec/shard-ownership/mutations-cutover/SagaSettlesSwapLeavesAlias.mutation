@@ -1,0 +1,17 @@
+# Pairs with SagaSettles. The cutover's swap leaves the alias on the previous
+# copy, which the restore then arms to redirect: the copy the tree resolves to
+# refuses its own bound saga, which has nowhere to re-bind.
+MODULE: SagaSettlesSwapLeavesAlias
+TARGET: SagaSettles
+CLASS: Temporal
+SUMMARY: the swap does not move the alias
+PERTURBS: Swap
+
+--- FIND
+    /\ rp = "idle"
+    /\ alias' = S
+--- REPLACE
+    /\ rp = "idle"
+    \* MUTATION: the alias stays.
+    /\ alias' = alias
+--- END

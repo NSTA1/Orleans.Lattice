@@ -143,6 +143,37 @@ public class TxRegistryFanOutTests
     }
 
     [Test]
+    public async Task ReleaseCaptureGateAsync_is_invalid_when_the_high_water_grew_past_the_covered_keys()
+    {
+        // A registry shard minted above the high-water a capture's gate covered
+        // was never gated, so a decision may have been recorded on it during the
+        // capture: the release must refuse the capture even though every key it
+        // did gate released cleanly (BackupCapture's LeaseLapse row).
+        foreach (var registry in _registries.Values)
+        {
+            registry.ReleaseCaptureGateAsync(Arg.Any<Guid>()).Returns(true);
+        }
+
+        _highWater.GetShardHighWaterAsync().Returns(Count + 1);
+
+        var valid = await TxRegistryFanOut.ReleaseCaptureGateAsync(_factory, TreeId, Count, Guid.NewGuid());
+
+        Assert.That(valid, Is.False);
+    }
+
+    [Test]
+    public async Task ReleaseCaptureGateAsync_is_valid_when_every_covered_key_released_and_the_high_water_held()
+    {
+        foreach (var registry in _registries.Values)
+        {
+            registry.ReleaseCaptureGateAsync(Arg.Any<Guid>()).Returns(true);
+        }
+
+        var valid = await TxRegistryFanOut.ReleaseCaptureGateAsync(_factory, TreeId, Count, Guid.NewGuid());
+
+        Assert.That(valid, Is.True);
+    }
+    [Test]
     public async Task GetDecisionsRevisionAsync_sums_every_key()
     {
         Shard(0).GetDecisionsRevisionAsync().Returns(1L);

@@ -126,7 +126,7 @@ public partial class TreeDeletionGrainTests
         {
             var shard = factory.GetGrain<IShardRootGrain>($"{TreeId}/{i}");
             await shard.Received(1).UnmarkDeletedAsync();
-            await shard.Received(1).ReseedNodeBindingsAsync();
+            await shard.Received(1).ReseedNodeBindingsAsync(0);
         }
         Assert.That(await grain.IsPhysicalDeletedAsync(), Is.False);
     }

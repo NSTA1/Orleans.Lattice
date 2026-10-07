@@ -506,6 +506,19 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     Task SetWalMaxRetainedBytesAsync(string treeId, long? walMaxRetainedBytes);
 
     /// <summary>
+    /// Raises the physical tree's bootstrap drop-floor epoch to
+    /// <paramref name="epoch"/> (issue #4549). Like every non-create verb it
+    /// refuses a tree with no registry entry, with
+    /// <see cref="LatticeTreeNotRegisteredException"/>, and writes nothing. A
+    /// lower or equal value is a no-op: the epoch never decreases. Every shard
+    /// root of the tree then refuses a replicated write admitted under an older
+    /// epoch.
+    /// </summary>
+    /// <param name="treeId">The physical tree id.</param>
+    /// <param name="epoch">The floor epoch to raise to.</param>
+    Task RaiseReplicationFloorEpochAsync(string treeId, long epoch);
+
+    /// <summary>
     /// Stamps the
     /// <see cref="State.TreeRegistryEntry.ProjectionDigestPermanentlyDisabled"/>
     /// latch to <c>true</c> for <paramref name="treeId"/>. Idempotent
@@ -581,4 +594,70 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// <param name="expectedVersion">The placement version the caller last observed.</param>
     /// <param name="moves">The partition-to-key reassignments to apply together.</param>
     Task<State.WalPlacementPin> UpdateWalPlacementAsync(string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves);
+
+    /// <summary>
+    /// Raises, or renews, a WAL placement move's durable fence on each of
+    /// <paramref name="partitions"/> (issue #4525), so that every activation of
+    /// the source comes up fenced until the move flips, aborts, or lets the lease
+    /// lapse. The new lease runs for <paramref name="lease"/> from the registry's
+    /// own clock. Does not bump <see cref="State.WalPlacementPin.Version"/>.
+    /// Carries no <see cref="AlwaysInterleaveAttribute"/>, so it is atomic against
+    /// every other mutator, including the flip and the release.
+    /// <para>
+    /// Throws <see cref="InvalidOperationException"/> and changes nothing when the
+    /// placement version is not <paramref name="expectedVersion"/>, when another
+    /// move holds a live fence on any of the partitions, or - on a renewal - when
+    /// this move's fence is no longer held (it lapsed and was released, so the
+    /// source may have served appends the copy never saw). Another move's lapsed
+    /// fence is taken over. Throws <see cref="LatticeTreeNotRegisteredException"/>
+    /// and creates nothing when the tree has no registry row.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL partitions are being moved.</param>
+    /// <param name="expectedVersion">The placement version the move read.</param>
+    /// <param name="partitions">The partitions to fence.</param>
+    /// <param name="moveId">The move's identity.</param>
+    /// <param name="lease">How long the fence holds before an activation of the source may release it.</param>
+    /// <param name="renew"><see langword="true"/> to renew a fence this move already raised; <see langword="false"/> to raise it.</param>
+    Task<State.WalPlacementPin> RaiseWalMoveFencesAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<int> partitions, string moveId, TimeSpan lease, bool renew);
+
+    /// <summary>
+    /// Releases a WAL placement move's durable fence on <paramref name="partition"/>
+    /// when <paramref name="moveId"/> still holds it and, when
+    /// <paramref name="onlyIfExpired"/>, its lease has lapsed by the registry's
+    /// clock. Otherwise changes nothing. Returns the pin as it stands after the
+    /// call, so a source activation that released a lapsed fence resolves its
+    /// provider from a pin the release has been ordered against. Carries no
+    /// <see cref="AlwaysInterleaveAttribute"/>, so a release and a flip are
+    /// serialised and exactly one of them wins. Throws
+    /// <see cref="LatticeTreeNotRegisteredException"/> when the tree has no
+    /// registry row.
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL partition is fenced.</param>
+    /// <param name="partition">The fenced partition.</param>
+    /// <param name="moveId">The move whose fence is released.</param>
+    /// <param name="onlyIfExpired">Whether to release only a fence whose lease has lapsed.</param>
+    Task<State.WalPlacementPin> ReleaseWalMoveFenceAsync(string treeId, int partition, string moveId, bool onlyIfExpired);
+
+    /// <summary>
+    /// The placement flip of a fenced WAL move: re-points every partition in
+    /// <paramref name="moves"/> under a single compare-and-swap on
+    /// <see cref="State.WalPlacementPin.Version"/>, exactly as
+    /// <see cref="UpdateWalPlacementAsync(string, long, IReadOnlyCollection{ValueTuple{int, string}})"/>
+    /// does, but only when every moved partition still carries the durable fence
+    /// <paramref name="moveId"/> raised, and clears those fences in the same write
+    /// (issue #4525). A fence that is gone was released after its lease lapsed,
+    /// and the source may since have acknowledged appends the copy never saw, so
+    /// the flip is refused with <see cref="InvalidOperationException"/> and
+    /// nothing changes. Carries no <see cref="AlwaysInterleaveAttribute"/>. Throws
+    /// <see cref="LatticeTreeNotRegisteredException"/> and creates nothing when
+    /// the tree has no registry row.
+    /// </summary>
+    /// <param name="treeId">The tree whose WAL placement is being changed.</param>
+    /// <param name="expectedVersion">The placement version the move read.</param>
+    /// <param name="moves">The partition-to-key reassignments to apply together.</param>
+    /// <param name="moveId">The move's identity; every moved partition must carry its fence.</param>
+    Task<State.WalPlacementPin> FlipFencedWalPlacementAsync(
+        string treeId, long expectedVersion, IReadOnlyCollection<(int Partition, string ProviderKey)> moves, string moveId);
 }

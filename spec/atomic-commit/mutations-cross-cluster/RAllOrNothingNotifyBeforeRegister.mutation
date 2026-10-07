@@ -1,0 +1,37 @@
+# Pairs with RAllOrNothing. The receiver hands a tree to the cross-tree barrier
+# in the wrong order: it notifies the barrier first and registers the
+# delegation afterwards. LatticeGrain.ReplicationApply states the ordering as
+# never reversible, and this is why: once the barrier has decided on the other
+# tree's notify, that tree is finalised and serves the saga post-saga, while
+# this tree has neither a delegation nor a local decision, so its registry
+# answers InFlight and the gate serves its key pre-saga.
+MODULE: RAllOrNothingNotifyBeforeRegister
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: a cross-tree receiver notifies the barrier before it registers the delegation, so a sibling can finalise while this tree reads InFlight
+PERTURBS: DeliverTerminal, ReceiverRegister, ReceiverNotify
+
+--- FIND
+                  /\ rstage' = IF rstage[tr] = "idle" THEN [rstage EXCEPT ![tr] = "register"] ELSE rstage
+--- REPLACE
+\* MUTATION: the hand-off starts with the notify.
+                  /\ rstage' = IF rstage[tr] = "idle" THEN [rstage EXCEPT ![tr] = "notify"] ELSE rstage
+--- END
+--- FIND
+    /\ rstage' = [rstage EXCEPT ![tr] = "notify"]
+--- REPLACE
+\* MUTATION: registration is the last step.
+    /\ rstage' = [rstage EXCEPT ![tr] = "done"]
+--- END
+--- FIND
+    /\ rstage' = [rstage EXCEPT ![tr] = "done"]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, bclr, bdrop, dw, bfresh>>
+--- REPLACE
+\* MUTATION: the notify is followed by the registration.
+    /\ rstage' = [rstage EXCEPT ![tr] = "register"]
+    /\ UNCHANGED <<originVars, xtree, netVars, leafVars, rarr, rexp, rdec, rout, rdeleg, rdial, rtodo,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, bclr, bdrop, dw, bfresh>>
+--- END

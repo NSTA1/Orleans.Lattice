@@ -1,0 +1,17 @@
+# Pairs with SetCaptureCompletes, under the fairness Spec asserts. The set's
+# first lease is a GATE rather than a FENCE, so the finalize Marks that drain
+# the delegation rows are refused while the drain waits for them: the drain
+# can never pass, and only the fault path (which is not fair) could end the
+# capture.
+MODULE: SetCaptureCompletesFenceTakesGate
+TARGET: SetCaptureCompletes
+CLASS: Temporal
+SUMMARY: the set capture fences with a gate, so the rows it drains can never finalize
+PERTURBS: Fence
+
+--- FIND
+    /\ lease' = [T \in Trees |-> IF T \in Members THEN "fence" ELSE lease[T]]
+--- REPLACE
+    \* MUTATION: gate mode refuses the finalize Marks.
+    /\ lease' = [T \in Trees |-> IF T \in Members THEN "gate" ELSE lease[T]]
+--- END

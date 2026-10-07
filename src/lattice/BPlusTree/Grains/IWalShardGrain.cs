@@ -195,6 +195,18 @@ internal interface IWalShardGrain : IGrainWithStringKey
     ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the head a reader may resume from: one past the highest sequence a
+    /// read would expose. It is at or below <see cref="GetNextSequenceAsync"/>,
+    /// lower while a flush is in flight, while an abandoned flush may still land,
+    /// or while a trailing hole sits above every stored entry (issue #4621). A
+    /// reader that resumes from the raw next sequence past such an offset can have
+    /// a write land below its position and never see it; one that resumes from
+    /// this head re-reads at most entries it already holds.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the number of <i>live</i> entries currently persisted in
     /// this WAL shard - i.e. the count of entries between the lowest
     /// still-stored offset and the highest assigned offset, inclusive.
@@ -208,6 +220,31 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// rather than comparing against a monotonically-growing offset counter.
     /// </summary>
     Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the lowest sequence number this shard still stores, or
+    /// <c>-1</c> when it stores nothing (empty, or trimmed through its last
+    /// entry). Read from the storage provider, so it reflects every
+    /// <see cref="IWalStorageProvider.TrimAsync"/> and is not clamped by a
+    /// transient hole below an in-flight flush: every entry the shard still
+    /// retains has a sequence at or above the returned value. The transaction
+    /// registry's decision-purge guard reads it (issue #4508).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> GetLowestRetainedSequenceAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Returns the shard's trim watermark - the highest sequence any trim has
+    /// trimmed through, <c>-1</c> when nothing has been - when a reader may trust
+    /// it, or <see langword="null"/> when it may not: the storage provider keeps
+    /// no watermark, or a silo in the cluster predates the build whose providers
+    /// persist it (issue #4621). A sequence at or below a trusted watermark was
+    /// trimmed; a missing sequence above it is a hole that was never written. A
+    /// reader given <see langword="null"/> must treat any jump in sequences as a
+    /// trim.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the approximate number of retained on-wire payload bytes
@@ -288,6 +325,15 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// the cutover, the <paramref name="lease"/> expires and a subsequent append
     /// deactivates the shard so the next activation re-resolves placement from
     /// the durable pin.
+    /// </para>
+    /// <para>
+    /// The tail is reported only when it is stable. If the drain budget
+    /// force-faulted in-flight appends, or a flush deadline abandoned a provider
+    /// call, whose writes may still land, the call returns a non-quiesced result
+    /// with <see cref="WalMoveQuiesceResult.DrainIncomplete"/> set, and the
+    /// coordinator must not copy (issue #4525). The in-memory fence this call
+    /// raises dies with the activation; the coordinator's durable fence in the
+    /// placement pin is what fences any activation that replaces it.
     /// </para>
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so the fence is raised

@@ -731,7 +731,7 @@ internal sealed partial class BPlusLeafGrain(
             // loop re-fans under a fresh snapshot.
             if (lww.IsMigrated && TryGetShadowedSagas(key, out var sagas))
             {
-                return await GetWithShadowedMigratedAsync(key, lww.Value, sagas);
+                return await GetWithShadowedMigratedAsync(key, lww.Value, lww.Timestamp, sagas);
             }
 #if LATTICE_DIAG
             // DIAG: single-key read-return path.
@@ -759,9 +759,9 @@ internal sealed partial class BPlusLeafGrain(
     /// <c>(-1, -1, -1)</c> tuple so the caller's deadline-bounded
     /// retry loop re-fans under a fresh snapshot.
     /// </summary>
-    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HashSet<Guid> sagas)
+    private async Task<byte[]?> GetWithShadowedMigratedAsync(string key, byte[]? migratedValue, HybridLogicalClock rowStamp, HashSet<Guid> sagas)
     {
-        if (await IsShadowedReadSafeAsync(sagas))
+        if (await IsShadowedReadSafeAsync(key, rowStamp, sagas))
         {
 #if LATTICE_DIAG
             DiagSink.Write($"[DIAG read1-shadow-pass] gid={context.GrainId} key={key} valRound={DiagDecodeRound(migratedValue)}");
@@ -1079,7 +1079,7 @@ internal sealed partial class BPlusLeafGrain(
                 // is installed.
                 if (lww.IsMigrated && TryGetShadowedSagas(key, out var shadowSagas))
                 {
-                    if (!await IsShadowedReadSafeAsync(shadowSagas))
+                    if (!await IsShadowedReadSafeAsync(key, lww.Timestamp, shadowSagas))
                     {
 #if LATTICE_DIAG
                         DiagSink.Write($"[DIAG read-shadow-stale] silo={DiagSiloTag} gid={context.GrainId} key={key} sagas=[{string.Join(',', shadowSagas)}]");
@@ -1187,7 +1187,20 @@ internal sealed partial class BPlusLeafGrain(
             RecordSpanFailOpenCommit(spanFailOpen, SpanWriteOrigin.ClientWrite);
         }
 
-        return SplitResult.Combine(recovered, await CommitSetAsync(key, value, expiresAtTicks));
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        SplitResult? committed;
+        try
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            committed = await CommitSetAsync(key, value, expiresAtTicks);
+        }
+
+        return SplitResult.Combine(recovered, committed);
     }
 
     /// <summary>
@@ -1235,8 +1248,14 @@ internal sealed partial class BPlusLeafGrain(
         // strictly above stamp, causing the filter to silently drop this
         // entry on its next refresh. Passing stamp directly avoids that.
         // See PublishVersionAdvance's XML doc for the full invariant.
-        var stamp = AdvanceClockOrOverride();
         var isPrepared = LatticePreparedContext.Current;
+        HybridLogicalClock stamp;
+        var stampOriginal = false;
+        var stampCarried = false;
+        if (isPrepared)
+            (stamp, stampOriginal, stampCarried) = MintPreparedStamp(key);
+        else
+            stamp = AdvanceClockOrOverride();
         if (!isPrepared)
             PublishVersionAdvance(stamp);
         BumpLocalRevision();
@@ -1265,6 +1284,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                IsMigrated = stampCarried,
             };
 
         var options = await GetOptionsAsync();
@@ -1280,7 +1300,7 @@ internal sealed partial class BPlusLeafGrain(
                 state.State.ShardIndex ?? 0,
                 key,
                 newEntry,
-                isPrepared);
+                isPrepared) with { PrepareStampOriginal = stampOriginal };
             await writer.AppendAsync(entry);
         }
         RecordCommitStep("wal", walStartTicks);
@@ -1312,7 +1332,9 @@ internal sealed partial class BPlusLeafGrain(
                 key,
                 newEntry,
                 delta: preparedDelta,
-                mode: preparedMode);
+                mode: preparedMode,
+                batch: LatticeAtomicBatchContext.Current ?? default,
+                stampOriginal: stampOriginal);
         }
         else
         {
@@ -1740,11 +1762,32 @@ internal sealed partial class BPlusLeafGrain(
         // byte-identical.
         var atomicBatchDeleteSet = LatticeAtomicBatchContext.CurrentDeleteSet;
 
+        // Issue #4522: classify each prepared entry's stamp. The route check is
+        // per call; a carried original stamp is per key (only a forward carries
+        // them, so the common path never looks one up).
+        var routeOriginal = isPrepared
+            && LatticeHlcOverrideContext.Current is null
+            && IsPreparedRouteToThisShard();
+        var hasCarriedStamps = isPrepared && LatticeOriginalPrepareStampContext.HasStamps;
+
         for (var i = 0; i < count; i++)
         {
             var key = entries[i].Key;
             var value = entries[i].Value;
-            var stamp = AdvanceClockOrOverride();
+            HybridLogicalClock stamp;
+            var stampOriginal = routeOriginal;
+            var stampCarried = false;
+            if (hasCarriedStamps && LatticeOriginalPrepareStampContext.TryGetStamp(key, out var carried))
+            {
+                state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, carried);
+                stamp = carried;
+                stampOriginal = true;
+                stampCarried = true;
+            }
+            else
+            {
+                stamp = AdvanceClockOrOverride();
+            }
             stamps[i] = stamp;
             var isDelete = atomicBatchDeleteSet is not null && atomicBatchDeleteSet.Contains(key);
             var lww = isDelete
@@ -1753,12 +1796,14 @@ internal sealed partial class BPlusLeafGrain(
                     {
                         OriginClusterId = origin,
                         VectorClock = vectorClock,
+                        IsMigrated = stampCarried,
                     }
                 : LwwValue<byte[]>.CreateWithExpiry(value, stamp, 0L)
                     with
                     {
                         OriginClusterId = origin,
                         VectorClock = vectorClock,
+                        IsMigrated = stampCarried,
                     };
             values[i] = lww;
             int atomicBatchIndexForEntry;
@@ -1799,6 +1844,8 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchIndex = atomicBatchIndexForEntry,
                 IsPrepared = isPrepared,
                 ShardIndex = shardIndex,
+                PrepareStampOriginal = isPrepared && stampOriginal,
+                IsMigrated = lww.IsMigrated,
             };
         }
 
@@ -1839,7 +1886,17 @@ internal sealed partial class BPlusLeafGrain(
             // parameter is a single ~24 B allocation per call, dwarfed
             // by the per-call WalRecord[count] array allocation the
             // pool path replaces.
-            await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            try
+            {
+                await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+            }
+            catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
+            {
+                // Issue #4586: unreachable - the filter merges the leaf clock
+                // past the floor so the caller's retry is admitted. A batch is
+                // not re-run here: another partition may already hold part of it.
+                throw;
+            }
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1875,13 +1932,22 @@ internal sealed partial class BPlusLeafGrain(
                     && atomicBatchDeltaMap.TryGetValue(key, out var d)
                     ? d
                     : null;
+                // The same membership the batch's WAL records were stamped
+                // with above, so a sweep can replay it (#4499).
+                var membership = atomicBatchSize > 0
+                    ? (atomicBatchSize, atomicBatchIndexMap is not null && atomicBatchIndexMap.TryGetValue(key, out var mapped)
+                        ? mapped
+                        : atomicBatchBaseIndex + i)
+                    : default((int, int));
                 AddPreparedMutation(
                     transactionId,
                     key,
                     values[i],
                     count,
                     delta: perEntryDelta,
-                    mode: perEntryDelta is not null ? preparedMode : LatticeMergeMode.LwwRegister);
+                    mode: perEntryDelta is not null ? preparedMode : LatticeMergeMode.LwwRegister,
+                    batch: membership,
+                    stampOriginal: walEntries[i].PrepareStampOriginal);
             }
         }
         else
@@ -2078,6 +2144,27 @@ internal sealed partial class BPlusLeafGrain(
             return new LeafDeleteResult { Split = recovered };
         }
 
+        // Issue #4586: a WAL partition refuses a fresh stamp below its clock
+        // floor before anything is appended or applied, so the commit re-runs
+        // once with the leaf clock merged past the floor.
+        try
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+        catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
+        {
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+        }
+    }
+
+    /// <summary>
+    /// Commit path for a single-key <see cref="MutationKind.Delete"/> once
+    /// <see cref="DeleteCoreAsync"/> has resolved routing: stamp, append, apply,
+    /// publish. Re-runnable until its WAL append succeeds, because nothing
+    /// before the append changes durable or visible state.
+    /// </summary>
+    private async Task<LeafDeleteResult> CommitDeleteAsync(string key, bool tracked, bool isPrepared, SplitResult? recovered)
+    {
         if (await IsLatePrepareForTerminalTransactionAsync())
         {
             return new LeafDeleteResult { Split = recovered };
@@ -2088,7 +2175,13 @@ internal sealed partial class BPlusLeafGrain(
         // own Timestamp; the cache filter `lww.Timestamp > callerClock`
         // then delivers the tombstone on its next refresh. See
         // CommitSetAsync for the full invariant.
-        var stamp = AdvanceClockOrOverride();
+        HybridLogicalClock stamp;
+        var stampOriginal = false;
+        var stampCarried = false;
+        if (isPrepared)
+            (stamp, stampOriginal, stampCarried) = MintPreparedStamp(key);
+        else
+            stamp = AdvanceClockOrOverride();
         // Prepared deletes route to the pending-tx map and skip the
         // Version publication for the same reason as CommitSetAsync (see
         // the build-step comment there for the cache-callerClock argument).
@@ -2100,6 +2193,7 @@ internal sealed partial class BPlusLeafGrain(
             {
                 OriginClusterId = LatticeOriginContext.Current,
                 VectorClock = LatticeVectorClockContext.Current,
+                IsMigrated = stampCarried,
             };
         var delta = LatticeDeltaContext.Current;
         var batch = LatticeAtomicBatchContext.Current;
@@ -2131,6 +2225,8 @@ internal sealed partial class BPlusLeafGrain(
                 AtomicBatchSize = batch?.Size ?? 0,
                 AtomicBatchIndex = batch?.Index ?? 0,
                 IsPrepared = isPrepared,
+                PrepareStampOriginal = stampOriginal,
+                IsMigrated = tombstone.IsMigrated,
             };
             await writer.AppendAsync(entry);
         }
@@ -2143,7 +2239,7 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? relocatedSplit = null;
         if (isPrepared)
         {
-            AddPreparedMutation(transactionId, key, tombstone);
+            AddPreparedMutation(transactionId, key, tombstone, batch: batch ?? default, stampOriginal: stampOriginal);
         }
         else
         {
@@ -2924,6 +3020,26 @@ internal sealed partial class BPlusLeafGrain(
                 changed = true;
             }
 
+            // The donor's clock (issue #4522): every stamp this sibling mints
+            // must be above every stamp the donor minted, so a write it accepts
+            // after a saga prepared one of its keys on the donor is stamped above
+            // that prepare. A merge only advances the clock, so it needs no
+            // revert if the persist below fails.
+            if (init.DonorClock.CompareTo(state.State.Clock) > 0)
+            {
+                state.State.Clock = HybridLogicalClock.Merge(state.State.Clock, init.DonorClock);
+                changed = true;
+            }
+
+            // The donor's applied-terminal witnesses for the keys this sibling
+            // receives (issue #4545). A union, like the clock, so it needs no
+            // revert if the persist below fails: a witness for a key that has no
+            // row here yet claims nothing a later row from the donor contradicts.
+            if (AdoptTerminalWitnesses(init.TerminalWitnesses))
+            {
+                changed = true;
+            }
+
             if (changed)
             {
                 // A split sibling is a topology seed: an unbound donor (#1744) mints
@@ -2976,7 +3092,24 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod)
+    /// <summary>
+    /// Whether an entry stamped <paramref name="timestamp"/> may be reaped under
+    /// <paramref name="reapCeiling"/> (issue #4615): an ungated pass reaps on the
+    /// grace period alone; a gated one also needs the stamp strictly below the
+    /// ceiling, below which no write the entry beats can still arrive. An entry
+    /// the ceiling keeps counts as still inside the grace window, so the leaf
+    /// does not stamp its compaction version and a later pass re-scans it.
+    /// </summary>
+    private static bool BelowReapCeiling(HybridLogicalClock timestamp, HybridLogicalClock? reapCeiling) =>
+        reapCeiling is not { } ceiling || timestamp.CompareTo(ceiling) < 0;
+
+    public Task<LeafCompactionResult> CompactTombstonesAsync(TimeSpan gracePeriod) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling: null);
+
+    public Task<LeafCompactionResult> CompactTombstonesBelowAsync(TimeSpan gracePeriod, HybridLogicalClock reapCeiling) =>
+        CompactTombstonesCoreAsync(gracePeriod, reapCeiling);
+
+    private async Task<LeafCompactionResult> CompactTombstonesCoreAsync(TimeSpan gracePeriod, HybridLogicalClock? reapCeiling)
     {
         // Clock starts here, not at the scan loop. The replay barrier below is
         // part of the time this call holds the leaf, and on a cold activation it
@@ -3128,7 +3261,7 @@ internal sealed partial class BPlusLeafGrain(
 
                 if (lww.IsTombstone)
                 {
-                    if (lww.Timestamp.WallClockTicks <= cutoff)
+                    if (lww.Timestamp.WallClockTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, false));
                     }
@@ -3147,7 +3280,7 @@ internal sealed partial class BPlusLeafGrain(
                 // whose clock is behind could re-send the pre-expiry LwwValue).
                 if (lww.ExpiresAtTicks != 0 && lww.ExpiresAtTicks <= nowTicks)
                 {
-                    if (lww.ExpiresAtTicks <= cutoff)
+                    if (lww.ExpiresAtTicks <= cutoff && BelowReapCeiling(lww.Timestamp, reapCeiling))
                     {
                         toRemove.Add((key, lww.Timestamp, true));
                     }
@@ -3566,6 +3699,9 @@ internal sealed partial class BPlusLeafGrain(
                     IsPrepared = false,
                     IsMerge = true,
                     ShardIndex = shardIndex,
+                    // Mirrors the IsMigrated=true the apply step stores, so replay
+                    // restores the provenance a later import is judged by (#4564).
+                    IsMigrated = true,
                 };
             }
         }
@@ -4180,6 +4316,7 @@ internal sealed partial class BPlusLeafGrain(
         var maxIncoming = HybridLogicalClock.Zero;
         var appliedAny = false;
         Dictionary<string, LwwValue<byte[]>>? stranded = null;
+        List<(string Key, LatticeMergeMode Mode)>? joinedModes = null;
 
         // step 0 (filter + build) - first pass classifies each incoming
         // entry under the asymmetric migration-vs-foreground rule
@@ -4218,7 +4355,10 @@ internal sealed partial class BPlusLeafGrain(
                 ? ArrayPool<WalRecord>.Shared.Rent(entries.Count)
                 : new WalRecord[entries.Count];
         }
-        if (isCrossShardMigration && entries.Count > 0)
+        // A split's migration import joins CRDT rows (issue #4613), and so does a
+        // resize or snapshot mirror or drain that opts in (issue #4618).
+        var joinCrdt = isCrossShardMigration || LatticeCrdtJoinMergeContext.Current;
+        if (joinCrdt && entries.Count > 0)
             accepted = new List<KeyValuePair<string, LwwValue<byte[]>>>(entries.Count);
 
         try
@@ -4255,23 +4395,38 @@ internal sealed partial class BPlusLeafGrain(
             // Entries' HLCs. This guard handles the reverse ordering
             // (terminal-FIRST on a fresh leaf, migration-SECOND with
             // an inverted HLC).
-            if (isCrossShardMigration
+            LwwValue<byte[]> toStore;
+            if (joinCrdt
                 && Cache.TryGetRow(key, out var existing)
+                && TryJoinMigratedCrdtRow(key, existing, incoming, out var joined, out var joinedMode))
+            {
+                // Issue #4613: a CRDT key whose copy here took its own
+                // contribution (the saga terminal's fold, a backstop, a direct
+                // apply after the swap) is joined with the imported state, never
+                // replaced by it nor kept in its place - each copy can hold a
+                // contribution the other lacks.
+                toStore = joined;
+                (joinedModes ??= []).Add((key, joinedMode));
+            }
+            else if (isCrossShardMigration
+                && Cache.TryGetRow(key, out existing)
                 && !existing.IsMigrated)
             {
                 continue;
             }
+            else
+            {
+                // Stamp IsMigrated=true ONLY on the cross-shard migration
+                // callsite. Non-migration callers preserve the incoming entry's
+                // own IsMigrated flag verbatim - that flag is normally `false`
+                // for foreground writes on the source and `true` only when the
+                // source-side entry was itself a migration import being
+                // re-replicated / re-merged forward.
+                toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+            }
 
-            if (incoming.Timestamp > maxIncoming)
-                maxIncoming = incoming.Timestamp;
-
-            // Stamp IsMigrated=true ONLY on the cross-shard migration
-            // callsite. Non-migration callers preserve the incoming entry's
-            // own IsMigrated flag verbatim - that flag is normally `false`
-            // for foreground writes on the source and `true` only when the
-            // source-side entry was itself a migration import being
-            // re-replicated / re-merged forward.
-            var toStore = isCrossShardMigration ? (incoming with { IsMigrated = true }) : incoming;
+            if (toStore.Timestamp > maxIncoming)
+                maxIncoming = toStore.Timestamp;
             accepted?.Add(new KeyValuePair<string, LwwValue<byte[]>>(key, toStore));
 
             if (walEntries is not null)
@@ -4292,6 +4447,7 @@ internal sealed partial class BPlusLeafGrain(
                     IsPrepared = false,
                     IsMerge = true,
                     ShardIndex = shardIndex,
+                    IsMigrated = toStore.IsMigrated,
                 };
             }
         }
@@ -4334,14 +4490,22 @@ internal sealed partial class BPlusLeafGrain(
         // on the non-migration path every entry survives unchanged and
         // we iterate `entries` directly to avoid the per-batch work
         // list allocation.
-        if (isCrossShardMigration)
+        if (accepted is not null)
         {
-            if (accepted is { Count: > 0 })
+            if (accepted.Count > 0)
             {
                 for (var i = 0; i < accepted.Count; i++)
                 {
                     StoreAdmittedEntry(accepted[i].Key, accepted[i].Value, ref stranded);
                     appliedAny = true;
+                }
+
+                // StoreEntry evicts a key's recorded merge mode; a joined row is
+                // still a CRDT row, so a later import of the key joins again.
+                if (joinedModes is not null)
+                {
+                    foreach (var (joinedKey, mode) in joinedModes)
+                        Cache.SetMergeMode(joinedKey, mode);
                 }
             }
         }
@@ -4415,9 +4579,24 @@ internal sealed partial class BPlusLeafGrain(
     /// </summary>
     private bool _leafStateCleared;
 
-    public async Task ClearGrainStateAsync()
+    public Task ClearGrainStateAsync() => ClearGrainStateCoreAsync(forPurge: false);
+
+    /// <inheritdoc />
+    public Task ClearGrainStateForPurgeAsync() => ClearGrainStateCoreAsync(forPurge: true);
+
+    private async Task ClearGrainStateCoreAsync(bool forPurge)
     {
         using var routingMutation = EnterLeafRoutingMutation();
+
+        // A purge commits to clearing this leaf before anything is cleared (issue
+        // #4700): the mark is what lets a recovery of the tree re-create the leaf
+        // empty, and tell it apart from a leaf whose row was lost. A failure here
+        // clears nothing, and the purge retries.
+        if (forPurge && RowRecord is { } purgeRecord)
+        {
+            await purgeRecord.MarkPurgeClearedAsync();
+        }
+
         // Retire the replay BEFORE the clear (issue #2871). The replay now runs
         // concurrently with requests, so an in-flight one would otherwise
         // re-hydrate the cache from the WAL immediately after this clear -
@@ -4431,7 +4610,24 @@ internal sealed partial class BPlusLeafGrain(
         // they cannot be computed at all. A pin left behind here is a permanent
         // WAL retention floor: the GC resolves the leaf, activates it, finds no
         // tree id bound, and gets NotDriven for the life of the deployment.
-        await UnregisterMaterialiserPinsAsync();
+        //
+        // A purge only NAMES the pins here and retires them last, once the row is
+        // gone (issue #4700). A purge interrupted between the two leaves the leaf
+        // marked but rowful, and recovery hands its data back: had its pins gone
+        // first, the WAL GC - floored by the tree's other leaves alone - could trim
+        // past its durable checkpoint, and the recovered leaf would latch
+        // LeafProjectionStaleException. Once the row is gone the pins protect
+        // nothing; one left by an interruption is retired by the GC's orphan sweep,
+        // which finds no tree id bound, or replaced by the block pin a re-create seeds.
+        MaterialiserPinRetirement? purgePins = null;
+        if (forPurge)
+        {
+            purgePins = await ResolveMaterialiserPinRetirementAsync();
+        }
+        else
+        {
+            await UnregisterMaterialiserPinsAsync();
+        }
 
         // Stop any new snapshot capture, and let one already under way land,
         // before the snapshot storage is deleted below (issue #4383). A capture
@@ -4474,6 +4670,24 @@ internal sealed partial class BPlusLeafGrain(
             // - and re-running this method on a leaf whose state is already
             // cleared is idempotent and resumes the snapshot clear where it left off.
             await ClearSnapshotStorageAsync();
+
+            // The applied-terminal witness sidecar is keyed by the leaf too
+            // (issue #4545), and goes with it on the same terms.
+            await ClearTerminalWitnessSidecarAsync();
+
+            // The row record goes last of all (issue #4654): until it is deleted, a
+            // rowless activation of this leaf fails closed, so an interrupted clear
+            // never leaves a leaf that reads as empty while its snapshot survives.
+            // A purge keeps it, marked as cleared by the purge, for recovery to
+            // find (issue #4700); the purge deletes it once the shard is purged.
+            if (!forPurge)
+            {
+                await ClearRowRecordAsync();
+            }
+            else
+            {
+                await RetireMaterialiserPinsAsync(purgePins);
+            }
         }
         finally
         {

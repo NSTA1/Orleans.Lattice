@@ -135,6 +135,43 @@ public partial class TreeSnapshotGrainTests
     }
 
     [Test]
+    public async Task Copy_merges_an_online_drain_batch_under_the_crdt_join_scope()
+    {
+        // Issue #4618: the destination may already hold its own fold of a CRDT
+        // key (a mirrored saga terminal stamped above the source's row), so the
+        // online drain must merge under the join scope, where the destination
+        // leaf joins a CRDT row instead of keeping only the last-writer-wins
+        // winner. The mirror alone cannot cover a key the source wrote before
+        // the window opened: only the drain carries that write.
+        var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
+        SetupKeepalive(reminderRegistry);
+
+        var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString());
+        SetupShardForSnapshot(grainFactory, SourceTreeId, 0, new Dictionary<string, byte[]> { ["key-a"] = [1] }, leafId);
+        SetupShardForSnapshot(grainFactory, SourceTreeId, 1);
+        SetupShardMocks(grainFactory, DestTreeId);
+
+        var destShard = grainFactory.GetGrain<IShardRootGrain>($"{DestTreeId}/0");
+        bool? joinScopeDuringMerge = null;
+        destShard
+            .When(d => d.MergeManyAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>()))
+            .Do(_ => joinScopeDuringMerge = LatticeCrdtJoinMergeContext.Current);
+
+        state.State.InProgress = true;
+        state.State.Phase = SnapshotPhase.Copy;
+        state.State.NextShardIndex = 0;
+        state.State.ShardCount = ShardCount;
+        state.State.DestinationTreeId = DestTreeId;
+        state.State.Mode = SnapshotMode.Online;
+        state.State.OperationId = "test-op";
+
+        await grain.ProcessNextPhaseAsync();
+
+        Assert.That(joinScopeDuringMerge, Is.True, "the online drain must merge under the CRDT join scope");
+        Assert.That(LatticeCrdtJoinMergeContext.Current, Is.False, "the scope must not outlive the drain's merge");
+    }
+
+    [Test]
     public async Task Copy_drains_source_and_bulk_loads_destination_in_offline_mode()
     {
         // Offline drain: source is locked, destination is guaranteed empty,

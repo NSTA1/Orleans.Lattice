@@ -7,15 +7,19 @@ namespace Orleans.Lattice.Replication;
 /// Per-tree bounded FIFO buffer holding <see cref="WalRecord"/>
 /// records the receiver-side <see cref="ReplicationApplier"/> could
 /// not apply because their declared causal dependencies were not yet
-/// satisfied by the local vector clock. Drained on every successful
-/// apply that advances the local vector clock; entries whose deps
+/// satisfied (the tree's high-water-mark grain checks them, see
+/// <see cref="RequiredDependencies"/>). Drained by its owning
+/// <see cref="Grains.CausalApplyBufferGrain"/> after every park, whenever a
+/// high-water-mark advance or the bootstrap pin asks for it, and on every
+/// replication maintenance tick; entries whose deps
 /// remain unsatisfied stay parked. Overflows route the oldest entry
 /// to the per-tree dead-letter queue with reason
 /// <see cref="LatticeReplicationMetrics.ReasonHlcSkew"/>.
 /// <para>
-/// The buffer is a single per-tree instance owned by the applier
-/// singleton; concurrent receiver-side calls into the same applier
-/// serialize through the buffer's private lock. There is no
+/// One instance is the in-memory mirror inside each tree's durable
+/// <see cref="Grains.CausalApplyBufferGrain"/> (#4464), which serializes every
+/// park and drain for the tree and persists every change; the lock below keeps
+/// the type safe for direct use as well. There is no
 /// cross-tree coordination - each tree's buffer is independent. Each
 /// instance carries its own pre-built tag arrays (tagged
 /// <see cref="LatticeReplicationMetrics.TagTree"/> and
@@ -179,18 +183,85 @@ internal sealed class CausalApplyBuffer
     }
 
     /// <summary>
-    /// Removes and returns every parked entry whose declared
-    /// dependencies are dominated by <paramref name="localVc"/>.
-    /// Iteration is FIFO so causally-earlier entries unblock first.
-    /// A dependency on <paramref name="localClusterId"/> (the receiver's
-    /// own cluster) is treated as satisfied - see
-    /// <see cref="DependenciesSatisfied(WalRecord, VersionVector, string?)"/>
-    /// for why the self-diagonal can never be satisfied through the
-    /// foreign-only local vector clock.
+    /// Re-inserts an entry restored from the durable buffer state on
+    /// activation, at the tail of the FIFO, keeping its original park time.
+    /// Updates the buffered-entry and buffer-byte gauges like a park, but does
+    /// not count a new causal violation (the violation was counted when the
+    /// entry was first parked). A duplicate identity is ignored.
     /// </summary>
-    public List<WalRecord> DrainSatisfied(VersionVector localVc, string? localClusterId = null)
+    public void Restore(WalRecord entry, long parkedAtTicks)
     {
-        ArgumentNullException.ThrowIfNull(localVc);
+        var size = EstimateSize(entry);
+        var key = EntryKey.From(entry);
+        lock (_gate)
+        {
+            if (_index.ContainsKey(key))
+            {
+                return;
+            }
+
+            _index[key] = _entries.AddLast(new BufferedEntry(entry, size, parkedAtTicks));
+            _totalBytes += size;
+        }
+
+        LatticeReplicationMetrics.ApplyBufferedEntries.Add(1, _treeShardTags);
+        LatticeReplicationMetrics.ApplyBufferBytes.Add(size, _treeShardTags);
+    }
+
+    /// <summary>
+    /// Returns the parked entries, oldest first, with their original park
+    /// times - the shape the durable buffer state persists.
+    /// </summary>
+    public List<(WalRecord Entry, long ParkedAtTicks)> Snapshot()
+    {
+        lock (_gate)
+        {
+            var snapshot = new List<(WalRecord, long)>(_entries.Count);
+            foreach (var buffered in _entries)
+            {
+                snapshot.Add((buffered.Entry, buffered.ParkedAtTicks));
+            }
+            return snapshot;
+        }
+    }
+
+    /// <summary>
+    /// Empties the buffer and withdraws its contribution from the
+    /// buffered-entry and buffer-byte gauges. Called when the owning
+    /// activation discards this in-memory copy (deactivation, or a rebuild
+    /// from durable state after a failed write) so the gauges do not drift.
+    /// </summary>
+    public void Release()
+    {
+        int count;
+        long bytes;
+        lock (_gate)
+        {
+            count = _entries.Count;
+            bytes = _totalBytes;
+            _entries.Clear();
+            _index.Clear();
+            _totalBytes = 0;
+        }
+
+        if (count > 0)
+        {
+            LatticeReplicationMetrics.ApplyBufferedEntries.Add(-count, _treeShardTags);
+            LatticeReplicationMetrics.ApplyBufferBytes.Add(-bytes, _treeShardTags);
+        }
+    }
+
+    /// <summary>
+    /// Removes and returns, in FIFO order, every parked entry for which
+    /// <paramref name="isSatisfied"/> returns <see langword="true"/>. The
+    /// owning grain evaluates each entry's dependencies on the tree's
+    /// high-water-mark grain first (see <see cref="RequiredDependencies"/>) and
+    /// passes the verdicts in, so this call stays synchronous under the
+    /// buffer's lock.
+    /// </summary>
+    public List<WalRecord> DrainSatisfied(Func<WalRecord, bool> isSatisfied)
+    {
+        ArgumentNullException.ThrowIfNull(isSatisfied);
         List<WalRecord> ready;
         // Single auxiliary list for per-entry wait samples; bytes
         // accumulate into a scalar so there is no second list.
@@ -210,7 +281,7 @@ internal sealed class CausalApplyBuffer
             while (node is not null)
             {
                 var next = node.Next;
-                if (DependenciesSatisfied(node.Value.Entry, localVc, localClusterId))
+                if (isSatisfied(node.Value.Entry))
                 {
                     ready.Add(node.Value.Entry);
                     drainedBytesTotal += node.Value.SizeBytes;
@@ -246,37 +317,37 @@ internal sealed class CausalApplyBuffer
     }
 
     /// <summary>
-    /// Returns <see langword="true"/> when every origin component in
-    /// <paramref name="entry"/>'s vector-clock frontier is
-    /// dominated-or-equal by the corresponding component on
-    /// <paramref name="localVc"/>. The entry's own origin diagonal
-    /// is excluded - the apply path handles that component through its
-    /// own duplicate and idempotency checks, and including it
-    /// here would deadlock the diagonal.
+    /// Returns the dependencies of <paramref name="entry"/> the receiver must
+    /// see applied before it applies the entry, or <see langword="null"/> when
+    /// there are none. Each <c>(origin, t)</c> in the entry's vector-clock
+    /// frontier names <em>origin's write at HLC t</em>; the tree's
+    /// high-water-mark grain checks it
+    /// (<see cref="Grains.IReplicationHighWaterMarkGrain.CheckDependenciesAsync"/>),
+    /// and reports a dependency on a write the tree lost for good as
+    /// <see cref="CausalDependencyVerdict.Lost"/> (#4603).
     /// <para>
-    /// A dependency on <paramref name="localClusterId"/> (the receiver's
-    /// own cluster) is likewise treated as satisfied. The receiver-side
-    /// local vector clock tracks only <em>foreign</em>-applied frontiers,
-    /// so it never advances its own diagonal; but the receiver, by
-    /// definition, durably holds every write it authored itself, so any
-    /// foreign entry that causally depends on one of the receiver's own
-    /// writes is trivially satisfiable. Without this exemption such an
-    /// entry parks forever (the self-diagonal stays at zero), which
-    /// stalls convergence whenever a peer's write causally follows a
-    /// write the receiver originated - e.g. after an A-C partition heals
-    /// and C's post-partition write carries a vector-clock dependency on
-    /// A's pre-partition write.
+    /// Two components are excluded. The entry's own origin diagonal: that
+    /// origin's writes reach the receiver over the same shipper as the entry,
+    /// and requiring it would deadlock the diagonal. And a dependency on
+    /// <paramref name="localClusterId"/> (the receiver's own cluster): the
+    /// receiver, by definition, durably holds every write it authored itself,
+    /// so a foreign entry that depends on one of them is trivially satisfiable.
+    /// Without this exemption such an entry parks forever (the receiver's own
+    /// diagonal never advances), which stalls convergence whenever a peer's write causally
+    /// follows a write the receiver originated - e.g. after an A-C partition
+    /// heals and C's post-partition write carries a dependency on A's
+    /// pre-partition write.
     /// </para>
     /// </summary>
-    public static bool DependenciesSatisfied(WalRecord entry, VersionVector localVc, string? localClusterId = null)
+    public static VersionVector? RequiredDependencies(in WalRecord entry, string? localClusterId = null)
     {
-        ArgumentNullException.ThrowIfNull(localVc);
         var vc = entry.VectorClock;
         if (vc is null || vc.Entries.Count == 0)
         {
-            return true;
+            return null;
         }
 
+        VersionVector? required = null;
         foreach (var (origin, ts) in vc.Entries)
         {
             if (string.Equals(origin, entry.OriginClusterId, StringComparison.Ordinal))
@@ -290,13 +361,10 @@ internal sealed class CausalApplyBuffer
                 continue;
             }
 
-            if (localVc.GetClock(origin) < ts)
-            {
-                return false;
-            }
+            (required ??= new VersionVector()).Entries[origin] = ts;
         }
 
-        return true;
+        return required;
     }
 
     private static long EstimateSize(WalRecord entry)
@@ -309,7 +377,8 @@ internal sealed class CausalApplyBuffer
 
     private readonly record struct BufferedEntry(WalRecord Entry, long SizeBytes, long ParkedAtTicks);
 
-    private readonly record struct EntryKey(
+    /// <summary>The identity a parked entry is deduplicated by.</summary>
+    internal readonly record struct EntryKey(
         string TreeId,
         string OriginClusterId,
         HybridLogicalClock Timestamp,

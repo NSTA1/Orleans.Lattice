@@ -32,6 +32,7 @@ public sealed class LatticeReplicationApiGrpcClientRoundTripTests
     private (LatticeReplicationApiGrpcClient Client, ILatticeReplicationControl Control) CreateClient()
     {
         var control = Substitute.For<ILatticeReplicationControl>();
+        var peerAdmin = Substitute.For<ILatticeReplicationPeerAdmin>();
         var bridge = Substitute.For<ILatticeReplicationApiCredentialBridge>();
         bridge.Resolve(Arg.Any<ServerCallContext>()).Returns((LatticeCredential?)null);
         var authSchemeSource = Substitute.For<ILatticeReplicationApiAuthSchemeSource>();
@@ -40,6 +41,7 @@ public sealed class LatticeReplicationApiGrpcClientRoundTripTests
         var service = new LatticeReplicationGrpcService(
             LatticeReplicationGrpcMethods.FromServiceProvider(_services),
             control,
+            peerAdmin,
             bridge,
             authSchemeSource,
             Options.Create(new LatticeReplicationApiGrpcOptions()),

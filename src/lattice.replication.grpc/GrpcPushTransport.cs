@@ -367,10 +367,50 @@ internal sealed class GrpcPushTransport : IReplicationTransport, IReplicationDig
         var outcome = "error";
         try
         {
+            global::Grpc.Core.Metadata? headers = null;
+            if (batch.ReseedAfterEpoch is { } reseedAfter)
+            {
+                headers = new global::Grpc.Core.Metadata
+                {
+                    {
+                        LatticeReplicationGrpcMetadataNames.ReseedAfterEpochHeader,
+                        reseedAfter.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    },
+                };
+            }
+
+            // The sender's applied low watermark for this tree at the peer
+            // (issue #4586 part 2b) travels beside the batch, like the re-seed
+            // epoch, so the framing is unchanged.
+            if (batch.SourceFrontier is { } frontier)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.SourceFrontierHeader, frontier.ToText());
+                if (frontier.AckedPositions is { } acked)
+                {
+                    headers.Add(LatticeReplicationGrpcMetadataNames.AckedPositionsHeader, acked.ToText());
+                }
+            }
+
+            // The origin's cross-tree purge frontier (issue #4733), whatever the
+            // batch's tree.
+            if (batch.CrossTreePurgeFrontier is { Frontiers.Count: > 0 } purge)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.CrossTreePurgeFrontierHeader, purge.ToText());
+            }
+
+            // The source lineage the batch was read under (issue #4673).
+            if (batch.SourceLineage is { } sourceLineage)
+            {
+                (headers ??= new global::Grpc.Core.Metadata())
+                    .Add(LatticeReplicationGrpcMetadataNames.SourceLineageHeader, sourceLineage.ToString("D"));
+            }
+
             using var call = channel.Invoker.AsyncUnaryCall(
                 _method.Push,
                 host: null,
-                options: new CallOptions(cancellationToken: cancellationToken),
+                options: new CallOptions(headers: headers, cancellationToken: cancellationToken),
                 request: envelopeBox);
 
             var ackBox = await call.ResponseAsync.ConfigureAwait(false);

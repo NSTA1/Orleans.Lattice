@@ -1,0 +1,19 @@
+# Pairs with AtomicOnOwner. The saga starts with k1 recorded as dispatched
+# though it never was - a dispatch checkpoint persisted ahead of the dispatch -
+# so it commits a batch with k1 unstaged and readers see k2 post-saga beside
+# k1 pre-saga.
+MODULE: AtomicOnOwnerStartSkipsEntry
+TARGET: AtomicOnOwner
+CLASS: Invariant
+SUMMARY: the saga records an entry as dispatched before dispatching it, so the batch commits torn
+PERTURBS: SagaStart
+
+--- FIND
+    /\ bound' = alias
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, prepped, told, dec, wDone, ackOn>>
+--- REPLACE
+    /\ bound' = alias
+\* MUTATION: k1 is checkpointed as dispatched without being dispatched.
+    /\ prepped' = {k1}
+    /\ UNCHANGED <<alias, rmap, published, rmapR, rmapOld, row, mig, pend, term, sp, spCopy, rs, rz, rzShards, fence, redir, refusals, told, dec, wDone, ackOn>>
+--- END

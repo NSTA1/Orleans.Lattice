@@ -344,6 +344,58 @@ internal sealed class ShardRootState
     /// </para>
     /// </summary>
     [Id(22)] public bool IsRetired { get; set; }
+
+    /// <summary>
+    /// <see langword="true"/> once <c>IShardRootGrain.PurgeAsync</c> has purged
+    /// this shard: the purge tombstone (issue #4503). Every other field is at its
+    /// default, so the shard holds no data and mirrors nowhere.
+    /// <para>
+    /// A purge used to delete the shard's row, so a routing activation that still
+    /// cached this physical copy - a resized tree's old copy, a discarded copy, a
+    /// restore shadow - met a fresh, empty shard after the purge: a read answered
+    /// empty and a write was accepted on a copy nothing reads again. The tombstone
+    /// keeps the refusal the soft-delete window gave. While it is set, a routed
+    /// call is served only when the registry resolves the router's logical tree
+    /// to this copy, and is refused with <see cref="StaleTreeRoutingException"/>
+    /// otherwise; a call with no routed stamp is served only when this id is
+    /// registered and not aliased elsewhere, and is otherwise answered as the
+    /// empty purged tree (a read) or refused with
+    /// <see cref="LatticeTreePurgedException"/>. A call the registry does admit -
+    /// the id was deliberately reused (issue #3940) - lifts the tombstone.
+    /// </para>
+    /// <para>
+    /// Not set on a system tree. Adding this slot is backward-compatible: state
+    /// persisted before the field existed deserializes to <c>false</c>, and a
+    /// purge by an earlier build left no row at all.
+    /// </para>
+    /// </summary>
+    [Id(23)] public bool IsPurged { get; set; }
+
+    /// <summary>
+    /// Whether this shard refuses reads because a receiver snapshot bootstrap is
+    /// draining into the tree (issue #4526). Set on every shard of the tree before
+    /// the drain applies its first entry and cleared only after it has applied the
+    /// last, so no reader observes a partial import; a failed drain leaves it set.
+    /// Writes are unaffected. Adding this slot is backward-compatible: state
+    /// persisted before the field existed deserializes to <c>false</c>.
+    /// </summary>
+    [Id(24)] public bool BootstrapReadFenced { get; set; }
+
+    /// <summary>
+    /// The leaves whose row records a completed purge of this shard marked as
+    /// cleared by the purge, still to be deleted (issue #4700). Written in the same
+    /// write as the purge tombstone, and dropped once every record is deleted, so a
+    /// purge that dies after its tombstone leaves the work for its retry. Purge
+    /// recovery never reads it: each cleared leaf carries its own mark.
+    /// <para>
+    /// <c>[Id(25)]</c> held the shard-wide <c>LeafClearsBegun</c> flag, retired by
+    /// issue #4700 and never to be reused.
+    /// </para>
+    /// </summary>
+    [Id(26)] public List<GrainId>? PurgeClearedLeafRecords { get; set; }
+
+    // [Id(25)] RESERVED: the retired shard-wide LeafClearsBegun flag (issue #4700).
+    // State persisted by an older silo still carries it; never reuse this slot.
 }
 
 /// <summary>

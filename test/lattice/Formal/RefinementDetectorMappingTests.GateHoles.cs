@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Tests.Formal;
 /// whole suite green, kept as permanent regressions (issue #2561).
 /// <para>
 /// Both were found by a post-merge adversarial review of #2555 and both were
-/// confirmed by experiment: perturbing <c>spec/Refinement.md</c> in either way
+/// confirmed by experiment: perturbing <c>spec/atomic-commit/Refinement.md</c> in either way
 /// left the <c>Refinement</c> filter reporting 48 passed, 0 failed. The
 /// perturbations are reproduced here verbatim against hand-written markdown,
 /// so the holes cannot reopen without a red test, and so the evidence does not
@@ -88,7 +88,7 @@ internal sealed partial class RefinementDetectorMappingTests
     {
         var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
             NoteWithDetectorCell(ProseOnlyCell),
-            NonBehaviouralRows,
+            SyntheticNonBehaviouralRows,
             _ => true);
 
         Assert.Multiple(() =>
@@ -127,7 +127,7 @@ internal sealed partial class RefinementDetectorMappingTests
 
         var failures = RefinementDetectorRule.BehaviourRowsWithoutAResolvableTest(
             NoteWithDetectorCell($"Yes: `{RottedDetectorName}`."),
-            NonBehaviouralRows,
+            SyntheticNonBehaviouralRows,
             d => resolver.TestExists(d.TypeName, d.MemberName));
 
         Assert.Multiple(() =>

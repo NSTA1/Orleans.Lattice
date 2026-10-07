@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A retry moves the operation into a phase the model does
+# not declare.
+MODULE: TypeOkRetryUndeclaredPhase
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a retry enters an undeclared phase
+PERTURBS: Retry
+
+--- FIND
+    /\ rp' = CASE rp = "failed" /\ alias = "shadow" -> "swapped"
+--- REPLACE
+    \* MUTATION: an undeclared phase.
+    /\ rp' = CASE rp = "failed" /\ alias = "shadow" -> "retrying"
+--- END

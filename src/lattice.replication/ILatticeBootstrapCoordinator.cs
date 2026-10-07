@@ -7,7 +7,7 @@ namespace Orleans.Lattice.Replication;
 /// entry through the local apply seam preserving the source HLC, and
 /// pins the snapshot's causal-stable frontier on the per-tree
 /// high-water-mark grain so the first incremental entry arriving after the
-/// snapshot sees a non-empty frontier and a snapshot-pinned floor.
+/// snapshot sees a non-empty frontier.
 /// <para>
 /// Triggered by the fall-off detector when the maintenance pass
 /// finds the receiver behind the source cluster's retained WAL,
@@ -92,8 +92,8 @@ public interface ILatticeBootstrapCoordinator
     /// <param name="treeName">The logical tree id to bootstrap. Must be non-null and non-empty.</param>
     /// <param name="sourceClusterId">
     /// The id of the cluster the snapshot was produced on. Stamped
-    /// onto every applied entry as its origin id so the snapshot-pinned
-    /// floor can recognise the snapshot/incremental boundary.
+    /// onto every applied entry as its origin id so the per-origin
+    /// high-water mark records the snapshot/incremental boundary.
     /// Must be non-null and non-empty.
     /// </param>
     /// <param name="cancellationToken">Cancellation token observed at every state transition and on every yielded snapshot entry.</param>

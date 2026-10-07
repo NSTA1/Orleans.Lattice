@@ -30,4 +30,23 @@ internal readonly record struct ReplicationPeerStatusRow(
     [property: Id(4)] long BytesBehind,
     [property: Id(5)] long ConsecutiveErrors,
     [property: Id(6)] double LastContactSeconds,
-    [property: Id(7)] long InFlight);
+    [property: Id(7)] long InFlight)
+{
+    /// <summary>
+    /// Seconds since the local sender took the peer off the log after a
+    /// write-ahead-log trim lost records it never shipped, or
+    /// <see langword="null"/> when no re-seed is outstanding (issue #4534).
+    /// While set the sender withholds saga records from the peer, so the link
+    /// classifies as stalled. Legacy rows decode to <see langword="null"/>.
+    /// </summary>
+    [Id(8)] public double? ReseedRequiredSeconds { get; init; }
+
+    /// <summary>
+    /// Seconds since the per-tree dead-letter queue first refused an entry of
+    /// this link because it was full, or <see langword="null"/> when it is not
+    /// refusing (#4603). The refused entry is kept unacknowledged, so the link
+    /// makes no progress and classifies as stalled. Legacy rows decode to
+    /// <see langword="null"/>.
+    /// </summary>
+    [Id(9)] public double? DeadLetterFullSeconds { get; init; }
+}

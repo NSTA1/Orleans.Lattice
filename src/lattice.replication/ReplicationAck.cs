@@ -23,8 +23,7 @@ public readonly record struct ReplicationAck
     /// its cursor past the batch's start.
     /// <para>
     /// Note that <see cref="Accepted"/> is <see langword="true"/> even
-    /// when every entry in the batch was de-duplicated - dropped at or
-    /// below the snapshot-pinned floor, matched in the recent
+    /// when every entry in the batch was de-duplicated - matched in the recent
     /// exact-identity cache, or re-applied idempotently at the leaf -
     /// because dedup is a successful idempotent apply, not a
     /// rejection. In that case <see cref="HighestAppliedHlc"/> still
@@ -216,6 +215,57 @@ public readonly record struct ReplicationAck
     /// </para>
     /// </summary>
     [Id(7)] public AdvertisedCompressionDictionary[]? AdvertisedDictionaries { get; init; }
+
+    /// <summary>
+    /// The snapshot export epoch of the last full bootstrap this receiver
+    /// completed from the sender for the batch's tree, or <see langword="null"/>
+    /// when it has completed none (issue #4534). A sender that took this peer
+    /// off the log after a write-ahead-log trim lost records it never shipped
+    /// withholds saga records until it sees an epoch greater than the one it
+    /// recorded at that point, which proves the peer was re-seeded from an
+    /// export taken afterwards. A range-scoped re-replay never advances it.
+    /// <para>
+    /// Strictly additive on the wire: receivers built before this slot omit it,
+    /// and a sender that never takes a peer off the log ignores it.
+    /// </para>
+    /// </summary>
+    [Id(8)] public long? BootstrapEpoch { get; init; }
+
+    /// <summary>
+    /// The receiver's frontier epoch for the batch's tree (issue #4586): an
+    /// identity the receiver re-mints whenever the tree's contents may have been
+    /// replaced - a restore, revert, alias swap, purge and recreate, or a change
+    /// of the tree's registry lineage. A sender tags the applied low watermark it
+    /// ships with the epoch its covering acknowledgements were taken under, and
+    /// treats a move to a non-empty epoch it has not seen last as a forced gap:
+    /// it re-seeds the peer, because the new contents may lack writes it already
+    /// shipped.
+    /// <list type="bullet">
+    /// <item><description><see langword="null"/>: not reported on this ack (a receiver
+    /// built before this slot, or a transient failure). Not a change; the ack
+    /// vouches for no epoch.</description></item>
+    /// <item><description><see cref="Guid.Empty"/>: the receiver tracks no lineage for
+    /// the tree (degraded mode), so the sender ships no watermark.</description></item>
+    /// <item><description>Any other value: the current epoch.</description></item>
+    /// </list>
+    /// <para>
+    /// Strictly additive on the wire: receivers built before this slot omit
+    /// it.
+    /// </para>
+    /// </summary>
+    [Id(9)] public Guid? ReceiverLineage { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when the receiver refused the batch because the
+    /// sender read it under a source lineage the receiver's tree does not hold
+    /// (issue #4673): the lineage the receiver last drained from the sender is
+    /// another one, or the receiver's contents were replaced since. The batch is
+    /// not accepted, so the sender's cursor holds. The sender re-resolves its
+    /// source binding: a stale binding rebinds and never re-sends the old log,
+    /// and a current one takes the peer off the log so a re-seed drains the
+    /// current lineage. A receiver built before this slot omits it.
+    /// </summary>
+    [Id(10)] public bool SourceLineageRefused { get; init; }
 }
 
 /// <summary>

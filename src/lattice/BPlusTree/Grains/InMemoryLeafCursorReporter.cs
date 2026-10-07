@@ -100,6 +100,13 @@ internal sealed class InMemoryLeafCursorReporter(IWalCursorRegistry registry) : 
         CancellationToken cancellationToken)
         => AcknowledgedTask;
 
+    /// <inheritdoc />
+    public Task RaiseOverrideHoldsAsync(
+        string treeName,
+        IReadOnlyList<string> consumerIds,
+        CancellationToken cancellationToken)
+        => Task.CompletedTask;
+
     // Nothing to write is trivially acknowledged; cached so the no-op allocates nothing.
     private static readonly Task<bool> AcknowledgedTask = Task.FromResult(true);
 }

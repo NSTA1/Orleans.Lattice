@@ -1,0 +1,15 @@
+# Pairs with BackupSagaConsistent. A lease that lapses does not report the
+# lapse to its holder's validation, so a capture whose gate expired - letting
+# a decision and its terminals in - is accepted.
+MODULE: BackupSagaConsistentLapseUnreported
+TARGET: BackupSagaConsistent
+CLASS: Invariant
+SUMMARY: a lease lapse leaves the token reported as held
+PERTURBS: LeaseLapse
+
+--- FIND
+    /\ held' = [held EXCEPT ![T] = FALSE]
+--- REPLACE
+    \* MUTATION: the lapse is not reported.
+    /\ UNCHANGED held
+--- END

@@ -1,0 +1,41 @@
+# Pairs with RAllOrNothing. Regression check for issue #4481, fixed by #4501.
+# The origin retires its registry row while one of the saga's buckets is still
+# resident - the stranded prepare of issue #2318, which production reaches when
+# the terminal fan-out misses a bucket (a split destination its participant
+# query passed over) and the decision's tombstone then ages out. Before #4501 a
+# receiver that bootstrapped in that window was exported the drained key's
+# committed projection and the stranded key as a prepared row with no outcome
+# (Indeterminate, issue #2328's vocabulary). The receiver registry had no row
+# for the saga, so it answered InFlight, and the gate served the stranded key
+# pre-saga beside the other key post-saga, with nothing to repair it: the
+# terminal that drained the other key is before the cut. Since #4501 a stored
+# row is exported by its recorded verdict, which the base's Snap0 does.
+MODULE: RAllOrNothingExportOverStrandedPrepare
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the origin forgets a saga over a still-resident bucket and exports the aged-out row as Indeterminate, as it did before #4501
+PERTURBS: OriginForget
+BOUNDS: LossPath = 0, JoinStart = 1, Shape = 0
+
+--- FIND
+OriginForget ==
+    /\ Origin!ForgetDecision(T)
+    /\ UNCHANGED xvars
+--- REPLACE
+OriginForget ==
+\* MUTATION: the row is retired with no drain ordering (a stranded bucket).
+    /\ decision[T] # "inflight"
+    /\ ~forgotten[T]
+    /\ forgotten' = [forgotten EXCEPT ![T] = TRUE]
+    /\ revision' = revision + 1
+    /\ UNCHANGED <<phase, vote, decision, terminal, pend, orphanDone, masked>>
+    /\ UNCHANGED xvars
+--- END
+--- FIND
+    IF purged THEN {"inflight"}
+    ELSE IF forgotten[T] THEN {decision[T]}
+--- REPLACE
+\* MUTATION: a stored row the registry no longer reports is exported as Indeterminate.
+    IF purged THEN {"inflight"}
+    ELSE IF forgotten[T] THEN {"indeterminate"}
+--- END

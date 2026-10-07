@@ -1412,6 +1412,42 @@ public static class LatticeMetrics
             description: "Terminal transitions of SetManyAtomicAsync sagas, tagged by outcome.");
 
     /// <summary>
+    /// Counter incremented when an <c>AtomicWriteGrain</c> saga's read-back of its
+    /// keys' original prepare stamps (issue #4522) leaves its fast path. The read
+    /// must account for every entry before the execute phase ends, so the
+    /// committed-values backstop can apply each key at its own stamp. Tagged with
+    /// <see cref="TagTree"/> and <see cref="TagReason"/> =
+    /// <see cref="PrepareStampReadBackExhaustive"/> (the first pass missed a key,
+    /// so every shard was asked to read its whole leaf chain - expected after a
+    /// shard root reactivated or a split moved a bucket),
+    /// <see cref="PrepareStampReadBackFailed"/> (a read faulted) or
+    /// <see cref="PrepareStampReadBackIncomplete"/> (a key was still not found).
+    /// The last two fail the batch, which is retried and, once its retries are
+    /// spent, aborted: the saga never commits without its stamps.
+    /// </summary>
+    public static readonly Counter<long> AtomicWritePrepareStampReadBackSlowPath =
+        Meter.CreateCounter<long>("orleans.lattice.atomic_write.prepare_stamp_read_back.slow_path", unit: "{read}",
+            description: "Atomic-write saga read-backs of original prepare stamps that left the fast path, tagged by tree and reason (exhaustive, read_failed, incomplete).");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// the first pass missed a key, so every shard read its whole leaf chain.
+    /// </summary>
+    public const string PrepareStampReadBackExhaustive = "exhaustive";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// a read faulted; the batch is retried.
+    /// </summary>
+    public const string PrepareStampReadBackFailed = "read_failed";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="AtomicWritePrepareStampReadBackSlowPath"/>:
+    /// a key was still not found after the exhaustive pass; the batch is retried.
+    /// </summary>
+    public const string PrepareStampReadBackIncomplete = "incomplete";
+
+    /// <summary>
     /// Histogram of end-to-end <c>SetManyAtomicAsync</c> saga durations,
     /// recorded once per terminal transition of an <c>AtomicWriteGrain</c>
     /// saga next to <see cref="AtomicWriteCompleted"/>. The duration is
@@ -2369,6 +2405,14 @@ public static class LatticeMetrics
     public const string WalGcBlockedConsumersName = "orleans.lattice.wal.gc.blocked_consumers";
 
     /// <summary>
+    /// Name of the per-partition unusable-pin hold-age gauge, registered by
+    /// <c>WalGcLeafPinHoldCensus</c> (issue #4622): seconds a partition has
+    /// been held by a leaf's durable materialiser pin (unusable, or uncovered and capping the retention ceiling below a configured window), as of the latest pass.
+    /// Zero-primed per partition; 0 means not held; -1 means unknown.
+    /// </summary>
+    public const string WalGcLeafPinHoldAgeName = "orleans.lattice.wal.gc.leaf_pin_hold_age";
+
+    /// <summary>
     /// Counter of WAL garbage-collection partition scans that trimmed a tree
     /// with <b>no durable materialiser offset floor</b> despite the durability
     /// hold (<see cref="LatticeOptions.WalDurabilityHoldCeilingBytes"/>) - either
@@ -3133,8 +3177,10 @@ public static class LatticeMetrics
     /// <summary>
     /// Counter of durable writes to the leaf-materialiser pin store, emitted by
     /// <c>WalMaterialiserPinGrain</c> on every <c>WriteStateAsync</c>. Tagged
-    /// with <see cref="TagOutcome"/> = <c>birth</c> (a synchronous through-write
-    /// seeded by a new leaf's block pin) or <c>coalesced</c> (a debounced flush
+    /// with <see cref="TagOutcome"/> = <c>birth</c> (a synchronous through-write:
+    /// a new leaf's block pin seed, or an override hold a leaf raises before
+    /// appending a write stamped below its clock, issue #4641) or <c>coalesced</c>
+    /// (a debounced flush
     /// draining one or more advancing reports). The pre-#1030 shape wrote once
     /// per advancing report through a single per-tree grain; coalescing collapses
     /// a report burst to one write per shard per flush window, so a sustained
@@ -5422,6 +5468,14 @@ public static class LatticeMetrics
     /// durable copy is the WAL. It is not an error and needs no intervention -
     /// WAL replay covers such a leaf completely - but a sustained rate names the
     /// population whose retained WAL cannot shrink until it checkpoints.
+    /// </para>
+    /// <para>
+    /// The same reason also counts a capture taken while a leaf's cache is not yet
+    /// anchored - before its activation replay has decided where to start, or
+    /// during a cold rebuild that has not converged - when the rebuild has
+    /// re-read nothing it could honestly claim (issue #4451). Claiming the
+    /// checkpoint there would assert coverage over rows the cache does not hold.
+    /// It is transient: the leaf captures normally once its replay converges.
     /// </para>
     /// </summary>
     public static readonly KeyValuePair<string, object?> SnapshotDeclineNoCoverageClaim =
@@ -9911,7 +9965,7 @@ public static class LatticeMetrics
     /// before starting a coordinator. Tagged with <see cref="TagTree"/> and a
     /// <c>reason</c> tag enumerating the rejection cause (e.g.
     /// <c>argument_out_of_range_min</c>, <c>argument_out_of_range_max</c>,
-    /// <c>resize_in_flight</c>, <c>state_write_failed</c>).
+    /// <c>resize_in_flight</c>, <c>resize_undoable</c>, <c>state_write_failed</c>).
     /// <para>
     /// Excludes Orleans-side message-routing rejections, which the
     /// Orleans runtime logs as "Forwarding failed" but does not surface
@@ -10017,6 +10071,22 @@ public static class LatticeMetrics
     public static readonly Counter<long> WalAppendAdmissionTimeouts =
         Meter.CreateCounter<long>("orleans.lattice.wal.writer.append.admission_timeouts", unit: "{timeout}",
             description: "Count of WalCommitLogWriter append dispatches whose per-partition admission wait exceeded WalAppendDispatchTimeout.");
+
+    /// <summary>
+    /// Counter of freshly authored local writes a WAL partition refused because
+    /// their HLC stamp was below the partition's clock floor (issue #4586),
+    /// tagged by <c>tree</c>, <c>shard</c> and <c>tenant</c>. A replicated
+    /// tree's partition publishes a floor that trails the wall clock by
+    /// <see cref="LatticeOptions.ReplicationClockFloorLag"/>, so a refusal means
+    /// a stamp was older than that lag when it reached the partition: clock skew
+    /// between silos, a write held up in the pipeline for longer than the lag, or
+    /// a caller-supplied idempotency key used after it expired. A refused
+    /// single-key write is re-stamped and retried; a sustained non-zero rate
+    /// calls for checking silo clock synchronisation and the lag.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFloorRefusals =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append.floor_refusals", unit: "{entry}",
+            description: "Freshly authored local writes a WAL partition refused because their stamp was below the partition's clock floor.");
 
     /// <summary>
     /// Histogram of wall-clock ms spent waiting for a per-partition
@@ -11183,4 +11253,27 @@ public static class LatticeMetrics
     public static readonly Histogram<double> GrainCallDuration =
         Meter.CreateHistogram<double>("orleans.lattice.grain.call.duration", unit: "ms",
             description: "End-to-end outgoing grain call duration observed by the caller, by grain type and outcome.");
+
+    /// <summary>
+    /// Name of the observable gauge reporting how long each closed restored copy
+    /// has been closed (issue #4593). Published by <c>CopyReceiveFenceCensus</c>.
+    /// </summary>
+    public const string CopyReceiveClosedAgeGaugeName = "orleans.lattice.restore.copy_receive_closed_age";
+
+    /// <summary>
+    /// Counter of replication applies refused because they routed to a restored
+    /// physical copy a coordinated restore has fenced against it (issue #4593).
+    /// Tagged with <see cref="TagTree"/> (the logical tree the apply addressed),
+    /// <see cref="TagReason"/> - <c>closed</c> (the copy is still closed) or
+    /// <c>pre_cutover</c> (the copy is open but the apply was admitted before the
+    /// restore paused receiving) - and the tenant. A coordinated restore closes its restored copy before the alias
+    /// swap and opens it when the saga's fence lifts, so a short burst during a
+    /// restore is expected: the replication applier defers each refused entry
+    /// and the sender re-ships it. A rate that never returns to zero means a copy
+    /// is stuck closed; read <see cref="CopyReceiveClosedAgeGaugeName"/> to find
+    /// it.
+    /// </summary>
+    public static readonly Counter<long> CopyReceiveFencedApplies =
+        Meter.CreateCounter<long>("orleans.lattice.restore.copy_receive_fenced", unit: "{apply}",
+            description: "Replication applies refused because they routed to a restored copy a coordinated restore has fenced: still closed, or admitted before the restore paused receiving.");
 }

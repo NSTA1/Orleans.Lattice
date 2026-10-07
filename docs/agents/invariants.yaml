@@ -407,7 +407,7 @@ invariants:
       - step: "Retry transport-level failures with the same operation id so the call re-attaches to the original saga."
         source: "docs/lattice/atomic-writes.md"
       - step: "Keep the registry decision recorded until every participant has drained its prepared bucket."
-        source: "spec/AtomicCommit.tla"
+        source: "spec/atomic-commit/AtomicCommit.tla"
       - step: "When several prepared buckets cover one key, select the bucket that can still decide visibility rather than letting an older undecided bucket shadow a newer committed batch or a newer in-flight bucket shadow an older committed one."
         source: "src/lattice/BPlusTree/AtomicVisibilityGate.cs#AtomicVisibilityGate.SelectDecidingPrepare"
       - step: "Run the paired non-vacuous guard when changing a catalogued property."
@@ -419,8 +419,8 @@ invariants:
       - "docs/lattice/api.md"
       - "docs/lattice/consistency.md"
       - "docs/lattice/verified-atomic-commit.md"
-      - "spec/AtomicCommit.tla"
-      - "spec/README.md"
+      - "spec/atomic-commit/AtomicCommit.tla"
+      - "spec/atomic-commit/README.md"
       - "test/lattice/Formal/TlcModelCheckTests.cs"
   - id: atomic-cross-cluster-receiver-gate
     name: "Cross-cluster atomic receiver gate"
@@ -496,7 +496,7 @@ invariants:
     sources:
       - "docs/lattice/atomic-writes.md"
       - "docs/lattice/consistency.md"
-      - "spec/AtomicCommit.tla"
+      - "spec/atomic-commit/AtomicCommit.tla"
   - id: auth-fail-closed-access-gates
     name: "Authorization fails closed"
     description: "Authorization denies on missing rules, ambiguous security context, or direct external grain calls, and denied mutations leave no partial state."
@@ -1126,7 +1126,7 @@ invariants:
       - "src/lattice.membership/LatticeMembershipMetrics.cs"
   - id: replication-causal-dependency-gate
     name: "Replication causal dependency gate"
-    description: "A receiver parks a causal-plus entry until the local vector clock dominates every non-exempt dependency in the entry frontier."
+    description: "A receiver parks a causal-plus entry until every non-exempt dependency in the entry frontier is met: the exact named write was applied to the tree, or the origin's shipped low watermark passes it and the write is not held unapplied. A per-origin maximum HLC is never treated as meeting a dependency."
     scope:
       packages:
         - "Orleans.Lattice.Replication"
@@ -1136,8 +1136,9 @@ invariants:
         - "VersionVector"
     violation_modes:
       - "An entry is applied before a causal dependency from another origin is present locally."
+      - "A dependency is treated as met because the origin's per-origin maximum HLC is above it, although the named write never arrived (#4586)."
       - "The entry's own-origin diagonal or receiver self-component is not exempted and the buffer deadlocks."
-      - "A bounded buffer eviction is silent."
+      - "A bounded buffer eviction is silent instead of dead-lettered before durable removal."
     detection_signals:
       - type: metric
         name: "orleans.lattice.replication.apply.causal_violations_blocked"
@@ -1151,7 +1152,7 @@ invariants:
     remediation:
       - step: "Park entries with unsatisfied causal dependencies in the per-tree bounded causal-apply buffer."
         source: "docs/lattice.replication/replication-apply.md"
-      - step: "Retry parked entries each time a later apply advances the local vector clock."
+      - step: "Drain parked entries after parks, relevant high-water-mark advances, bootstrap handoff, first touch after restart, and each maintenance tick."
         source: "docs/lattice.replication/replication-apply.md"
       - step: "Monitor causal_violations_blocked, buffered_entries, and dependency_wait together."
         source: "docs/lattice.replication/observability.md"
@@ -1338,9 +1339,9 @@ invariants:
     sources:
       - "src/lattice.api.replication/LatticeReplicationStatus.cs#LatticeReplicationStatus"
       - "src/lattice.api.replication/ReplicationAccessAuthorizer.cs#ReplicationAccessAuthorizer"
-  - id: replication-pinned-causal-floor
-    name: "Replication pinned causal floor"
-    description: "Steady-state receiver dedupe drops only entries at or below a pinned snapshot floor and not entries below the per-origin high-water mark."
+  - id: replication-point-write-no-hlc-floor
+    name: "Replication point-write no HLC floor"
+    description: "Steady-state receiver dedupe never drops point writes only because their HLC is at or below a per-origin high-water mark or legacy snapshot floor."
     scope:
       packages:
         - "Orleans.Lattice.Replication"
@@ -1350,7 +1351,7 @@ invariants:
         - "Bootstrap handoff"
     violation_modes:
       - "A genuinely new point write with a source HLC below the running high-water mark is dropped."
-      - "Snapshot-pinned backlog is re-applied above an already-installed snapshot frontier."
+      - "A genuinely new point write with a source HLC at or below a legacy snapshot coordinate is dropped."
       - "High-water-mark advance regresses under a lower applied HLC."
     detection_signals:
       - type: metric
@@ -1360,10 +1361,10 @@ invariants:
         name: "orleans.lattice.replication.apply.lag"
         source: "src/lattice.replication/LatticeReplicationMetrics.cs"
       - type: status-field
-        name: "pinned causal floor"
+        name: "per-origin high-water mark"
         source: "docs/lattice.replication/replication-apply.md"
     remediation:
-      - step: "Apply point writes above the pinned floor even when their HLC is below the running high-water mark."
+      - step: "Apply point writes regardless of whether their HLC is below the running high-water mark or legacy snapshot coordinate."
         source: "docs/lattice.replication/replication-apply.md"
       - step: "Advance the per-origin high-water mark monotonically after successful point apply."
         source: "docs/lattice.replication/replication-apply.md"

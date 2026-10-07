@@ -159,7 +159,7 @@ on each pass):
 
 | Consumer | Source it reads | Effect of a topology change |
 |---|---|---|
-| Driver activation background service (startup pass + runtime adds) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. No silo restart required. |
+| Driver activation background service (startup pass + runtime adds and removes) | `CurrentPeers` at startup + `Subscribe(...)` for the silo's lifetime | On `Added`, activates one per-peer shipper per replicated tree under a retry-with-backoff loop. On `Removed`, detaches each of the removed peer's shippers from the write-ahead log (see *Shipper-lifetime asymmetry*). No silo restart required. |
 | Commit-time doorbell sink (doorbell fan-out per commit) | `CurrentPeers` (live read per commit) | The next commit rings doorbells for exactly the current snapshot. A peer added 1 ms ago is rung; a peer removed 1 ms ago is not. |
 | Per-tree fall-off probe (per-cadence) | `CurrentPeers` (live read per cadence tick) | The next cadence tick probes exactly the current snapshot - a removed peer is dropped from the probe set; an added peer joins it on the next tick. |
 | Per-peer shipper pump | The grain key it was activated under - neither topology nor options is re-read | The shipper is bound to a specific `(tree, peer)` for its activation lifetime. See *Shipper-lifetime asymmetry* below. |
@@ -207,11 +207,17 @@ empty topology rather than a surprising re-emergence of a stale list.
    ringing the removed peer on the next commit. The next fall-off
    cadence tick excludes it from the probe set. The activation service
    does *not* tear down the existing shipper - see the asymmetry rule
-   below.
+   below - but it does detach it from the write-ahead log, so the
+   removed peer no longer holds the log's trims or the tree's saga
+   decision purges.
 3. **Re-add (peer disappears and reappears).** If the original shipper
    activation is still in memory, it is reused - there is no fresh
    activation, and the durable cursor on that activation continues
-   from where the previous run left off.
+   from where the previous run left off. Activating it re-attaches it
+   to the write-ahead log. It is still off the log, so it withholds saga
+   records until the peer is re-seeded; that re-seed's drain also clears
+   any pending bucket the peer staged before the removal whose decision
+   the source purged meanwhile.
 4. **Replace (host swaps the topology implementation).** Possible only
    at silo startup, before `AddLatticeReplication` registers the
    default. After registration the `TryAddSingleton` slot is occupied
@@ -243,6 +249,27 @@ any in-flight batch and any cursor advance that had not yet been
 persisted. The cost is that a peer removed from the topology is not
 the same as a peer disconnected from the wire - reachability is the
 transport's responsibility, not the topology's.
+
+What `Removed` does change is what the shipper *holds*
+([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A
+running shipper holds the tree's write-ahead log at its durable read
+position (the WAL GC trims below it), and a trim the `WalRetention`
+ceiling forces past it records a saga decision-purge hold (*Forced
+gaps* below). A peer that is gone for good must hold neither, so on
+`Removed` the activation service calls
+`IReplicationShipperGrain.DetachFromLogAsync` for each replicated
+tree. The shipper durably marks itself detached and takes the peer off
+the log (*Forced gaps* below) in the same write, withdraws from the
+log's offset consumers, and releases its purge hold. The GC no longer
+waits for it, so a trim can pass a prepare it has not read; it
+therefore keeps shipping only plain writes and withholds every saga
+record, and it keeps the re-seed marker for as long as it is detached.
+Topology removal is the escape hatch for a peer that will never
+re-seed. A detach that loses
+a race with the peer being added back is skipped. `EnsureActiveAsync`
+(the `Added` path and the startup pass) re-attaches the shipper. A
+peer removed while no silo was running stays attached until it is
+removed again with the cluster up.
 
 ##### Mismatch scenarios at a glance
 
@@ -356,6 +383,14 @@ operator alias change - the shipper must reset those cursors and re-ship from
 the new physical log start, or it would keep tailing the retired identity's
 WAL. An online reshard changes the tree's shard map, not its alias, so it
 does not trigger a rebind.
+A resize of a replicated tree cannot be undone after its alias swap
+([#4518](https://github.com/NSTA1/Orleans.Lattice/issues/4518)): writes the
+resized copy took may already have shipped, and last-writer-wins shipping
+never retracts them, so the rebind back to the old copy would leave them on
+the peer while this cluster discards them. An undo before the swap rebinds
+nothing, because the shipper never left the old copy. To return a replicated tree to its old
+shape, resize it again, back to its previous sizing: unlike an undo, a
+resize discards no write, so the clusters stay in agreement.
 
 Detection is **event-driven, not polled**. The alias swap is performed by an
 identifiable producer that writes the repoint into the tree registry; the
@@ -365,8 +400,9 @@ new alias is durably persisted and **only** when the effective physical id
 actually changed. The replication package registers an observer that fans the
 `TreeAliasChange` to the affected per-`(tree, peer)` shipper grains via
 `IReplicationShipperGrain.NotifySourceIdentityChangedAsync`, which rebinds
-immediately - the new physical id travels in the notification itself, so the
-rebind reads the registry **zero** times. Because the observer runs on the
+immediately - the new physical id travels in the notification itself, and the
+rebind reads only the tree's registry row, once, for the lineage the new
+binding is stamped with (see [Source lineage stamp](#source-lineage-stamp)). Because the observer runs on the
 source silo as an ordinary grain call, it reaches the shipper even while the
 inter-site delivery edge is partitioned, so the rebind is applied the moment
 the swap commits rather than after the edge heals.
@@ -380,6 +416,41 @@ A lost notification (observer fault, or a shipper deactivated across the swap)
 therefore degrades to poll-driven detection bounded by that interval rather
 than a permanent mis-binding - it never reintroduces a per-tick registry read
 on an idle tree.
+
+The backstop is not enough after a coordinated restore. The restore saga
+pauses shipping, cuts the alias over to the restored copy, and resumes
+shipping at global completion. A paused shipper does not re-resolve, and the
+backstop interval counts from the last resolve, which may be moments before
+the pause. If the push was lost, a resumed shipper would keep draining the
+retired log and carry a pre-restore write onto the peer's restored copy,
+re-advancing the restored cut for good (issue #4490). So `ResumeShippingAsync`
+forces the first tick after the resume to resolve the source identity, and to
+rebind with a cursor reset if it moved, before that tick reads or sends
+anything. A shipper reactivated during the pause resolves first anyway.
+
+A rebind also decides what happens to the saga terminals the shipper holds
+from the retired log (see [Saga terminal hold](#saga-terminal-hold)):
+
+- **A rebind made while shipping was paused by a saga**, or found by the
+  resolve that follows the resume, is a coordinated restore. Such a rebind
+  **drops** the holds. Both clusters were reset to the cut: a saga before the
+  cut is settled by each side's restored copy, a terminal after it must not
+  cross the cut, and every bucket the peer staged from the retired log went
+  with the copy its own cutover replaced.
+- **Any other rebind** (a resize, its undo, a schema remediation, an operator
+  alias change) **carries** each hold forward by transaction. A carried hold
+  waits for the new log's prepare tally or tail barrier, so it cannot overtake
+  a prepare the new copy mirrored. It also cannot strand the buckets the peer
+  already staged from the retired log.
+
+Two residuals apply to carried holds:
+
+- A prepare written to the retired copy before an online resize began
+  forwarding is not in the new copy's log (#4455). A hold carried past it
+  still releases on the new log's tail barrier.
+- A resize undo discards the writes the new copy accepted after the swap. A
+  terminal held from that copy for a saga bound to it is released on the old
+  copy's log, which the peer then applies (#4474).
 
 This event-driven inversion closes two problems the former per-tick registry
 resolve had at once: the idle-only registry read load (an otherwise-quiet link
@@ -400,6 +471,25 @@ the shipper's options instance or effective dictionary id changes), not on
 every pump tick. Together with the source-identity rebind this removes
 steady-state idle registry/metadata resolutions, so an idle shipper's
 only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
+
+### Source lineage stamp
+
+A restore, revert, purge and recreate, or alias move re-stamps the source tree's registry lineage (`TreeRegistryEntry.Lineage`, #4537). A batch the source read before that re-stamp can still reach a peer afterwards, as a push already in flight or a retry. If the peer has meanwhile drained the new lineage, the batch plants a source-origin row the new lineage never held, and the peer's next delete reconcile, aligned with the new lineage, would delete it on the source's behalf although the source never deleted it ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). So:
+
+- **Every push is stamped.** It carries the lineage the shipper's binding was read under (`ReplicationBatch.SourceLineage`, sent as the `x-lattice-replication-source-lineage` call header). The shipper reads the physical id and the lineage from one registry row, which an alias move re-stamps in the same write, so the pair is consistent.
+  - The stamp is `Guid.Empty` while the lineage is unknown, which happens briefly when a notified rebind finds the registry already moved on.
+  - There is no stamp when the registry tracks no lineage for the tree.
+  - A liveness probe carries no records and is not stamped.
+- **A binding whose lineage changes forces a gap.** The shipper first reads each partition's next sequence of the newly bound log as a boundary, then takes the peer off the log ([Forced gap](#forced-gap-a-peer-taken-off-the-log)).
+  - Only a move from one lineage to another is a change. A tree first registered after its shipper bound it replaced nothing, and a restart or backstop re-resolve that reads the same lineage is no change. A read that finds no lineage, such as a tree unregistered for a recreate, keeps the last lineage seen, so the recreate's new lineage is still compared against it.
+  - Every record below the boundary was appended before the re-seed marker, so the export that settles the re-seed carries it.
+  - The shipper consumes such a record without shipping it for as long as the binding holds, the re-seed rewind included, so the rewind cannot loop on it.
+  - This covers a purge and recreate too, whose old-lineage records stay in the same log. No old-lineage write lands after the re-stamp, so they are all below the boundary.
+  - A move of the physical log under an unchanged lineage, such as a resize, is no gap and keeps the replay it always had.
+- **A refusal re-resolves the binding.** A peer refuses a batch stamped with a lineage it did not drain (see [Snapshot bootstrap](snapshot-bootstrap.md#source-lineage-gate)). The ack reports `ReplicationAck.SourceLineageRefused` and the cursor holds. At the end of the tick the shipper resolves its binding again:
+  - A stale binding rebinds, and never re-sends the old log.
+  - A current, known binding means the peer drained another lineage, so the shipper takes the peer off the log, and the re-seed drains the current lineage.
+  - An unknown binding only backs off until the next resolve.
 
 ### Doorbell
 
@@ -478,24 +568,49 @@ exponential backoff sized by:
 `Random.Shared` is the jitter source - sufficient for distribution
 purposes, not cryptographic.
 
-### Permanent encode failure: dead-letter routing
+### Unencodable batches
 
 When building the outbound framing header throws an `ArgumentException`
-or `InvalidOperationException` - schema-shape failures the batch can
-never recover from in its current form - the shipper:
+or `InvalidOperationException` - a schema-shaped failure the batch can
+never recover from in its current form - the batch cannot reach the peer
+through the log. Parking it on this cluster's dead-letter queue would not
+help: a replay applies a parked entry here, where it is a no-op, and never
+sends it to the peer. So the shipper treats the batch like a
+[forced gap](#forced-gap-a-peer-taken-off-the-log) (#4614):
 
-1. Parks every entry in the offending batch on the per-tree
-   dead-letter store tagged with
-   `LatticeReplicationMetrics.ReasonSchema` so a single poison entry never
-   stalls the stream forever.
-2. Advances the cursor past the batch so the stream makes forward
-   progress.
-3. Logs a warning with the entry count and the new cursor position.
+1. It takes the peer off the log: it takes the replay hold, records the
+   tree's current export epoch as the re-seed marker, withholds saga
+   records, and asks the peer to re-seed on every push and liveness probe.
+   On the first failure it also drops its terminal holds, as the forced gap
+   does.
+2. It quarantines the batch: per partition, the hull from that partition's
+   cursor through the batch's last read sequence, merged with any earlier
+   quarantine. The marker and the hull are written durably **before** the
+   cursor moves.
+3. It advances the cursor past the batch, so plain writes keep shipping.
 
-The DLQ enqueue is best-effort; a deterministically-failing DLQ does not
-pin the ship loop. The original entries remain in the WAL until the GC
-pass trims them, so an operator can still recover off the WAL even when
-the DLQ is unavailable.
+Every further failure raises the marker to the current export epoch: an
+export already opened past the old epoch predates the new batch and must
+not clear the marker. The peer re-bootstraps from an export after the
+marker, which carries the quarantined writes (committed rows, prepared rows
+of sagas still in flight, and decision rows), encoded by the snapshot path
+rather than the batch framing. After the echo, the rewind consumes every
+quarantined position without shipping it - every record in the hull was
+appended before the marker, so the export already carried it - and the
+quarantine clears once no re-seed is outstanding and every partition's
+cursor has passed it. A rebind to a new source log clears it too, because
+its sequences belong to the retired log. The quarantine is one sequence
+range per partition, so it needs no capacity bound and never stalls the
+link.
+
+The shipper logs a warning naming the batch size and the epoch, and the
+link reports `Stalled` (with `ReseedRequiredSeconds` set) until the peer
+has re-seeded. Nothing is written to the dead-letter queue.
+
+A shipper whose state still carries a poison list from an earlier build
+(#4494, which parked the batch and poisoned its sagas) takes the peer off
+the log on activation and forgets the list: the re-seed delivers each of
+those sagas whole.
 
 ### Buffer reuse
 
@@ -551,6 +666,84 @@ then zero-HLC range deletes and prepared atomic-batch entries are never
 dropped. The receiver's shadow-forward identity cache and per-key
 last-writer-wins guard make any re-shipped duplicate a no-op.
 
+### Saga terminal hold
+
+A saga writes its prepares to the partitions their keys hash to, decides,
+and then writes one terminal (`TxCommit` / `TxAbort`) per touched shard to
+the partition its shard index hashes to. The receiver commits a saga once
+every shard's terminal has arrived. A receiver leaf that applies a terminal
+with no pending bucket for the saga records the terminal, and then refuses
+any prepare that arrives after it. So a terminal that reaches the peer ahead
+of one of its prepares leaves the saga split on the receiver for good: one
+key post-saga, the other never written (issue #4480).
+
+The HLC merge cannot prevent that. A partition is not HLC-ordered in append
+order, because leaf clocks are independent and skew across silos. So an
+unrelated entry with a higher HLC can sit ahead of a prepare and sort after
+the terminal. A partition read empty early in a tick is not read again that
+tick. And with `ShipMaxInFlight` above one, a failed batch is re-shipped
+after a later batch has applied.
+
+So whenever the shipper reads more than one partition, or pipelines, it
+pulls every terminal it reaches out of the merge into an in-memory hold.
+The terminal's partition keeps draining behind it. A held terminal is
+shipped, at the head of a later batch, only once the peer has acknowledged
+every prepare of its saga. The shipper knows that in one of two ways:
+
+- **A complete tally.** The shipper counts the prepared records it reads
+  for each transaction: every `AtomicBatchIndex` up to the transaction's
+  `AtomicBatchSize`, and the highest sequence it read in each partition.
+  Once every index has been read, the terminal ships when each partition's
+  acknowledged frontier has passed the saga's last prepare in it. The tally
+  is saga-wide: it never consults the terminal's shard count, so the split
+  coordinator's unstamped (count 0) sweep terminal is held exactly like any
+  other.
+- **A tail barrier**, when no complete tally exists. That happens when the
+  prepares were acknowledged before the shipper restarted, when they are
+  unsized legacy prepares, or when the tally was evicted (at most 1,024
+  tallies are kept). The shipper reads each partition's tail after it has
+  read the terminal, and ships the terminal once the acknowledged frontier
+  reaches that tail in every partition. This is sound because a prepare's
+  append completes before the saga decides, and the decision precedes every
+  terminal append.
+
+Release is gated on acknowledgements, not on reads, so a failed batch that
+carries a prepare cannot be overtaken by its terminal. A batch carrying a
+released terminal that is not accepted, for example one the receiver
+defers, re-arms the hold for the next tick.
+
+While a terminal is held, its partition's durable cursor stops at the
+terminal's sequence, and the HLC cursor reported to the WAL GC stays below
+the terminal's clock. So a restart re-reads the terminal and the GC cannot
+trim it. The in-memory resume point is not capped, so the entries after a
+held terminal are not re-shipped on every tick. After a restart, a held
+terminal whose prepares were acknowledged earlier releases on the tail
+barrier.
+
+A held terminal is never stranded. A batch that could not be encoded takes
+the peer off the log and drops every hold (see
+[Unencodable batches](#unencodable-batches)), so no terminal of a saga that
+lost a prepare in it is released before the peer has re-seeded:
+
+- A prepare trimmed before it shipped (a peer that fell off the log) is
+  passed by the acknowledged frontier like any other sequence.
+- The tail barrier needs only acknowledgements of entries that exist.
+- A rebind to a new source log (an alias swap) stops reading the retired
+  log. After a coordinated restore the holds are dropped, and otherwise they
+  are carried forward to the new log (see
+  [Source-identity rebind](#source-identity-rebind)).
+
+One case releases without the guarantee:
+
+- The hold assumes every key of the saga is replicated. A `KeyFilter` or
+  `KeyPrefixes` that drops some of a saga's prepares yields an
+  all-or-nothing view over the replicated subset only. That is the filter's
+  semantics.
+
+With one partition and a window of one, the stream already delivers each
+partition in append order and applies each batch before the next ships,
+so no hold is taken.
+
 Wire-compat is additive: the new `[Id(2)]` partition-cursor slot on
 the shipper's persisted state decodes as the empty dictionary for legacy
 persisted state, which the cold-start path treats identically to a
@@ -559,6 +752,125 @@ single read per tick; the shipping default is `8`, and the value must
 equal `LatticeOptions.WalPartitions` so the shipper reads every
 partition the commit-log writer fans across (see
 [`ReplogPartitions`](configuration.md#replogpartitions)).
+
+### Forced gap: a peer taken off the log
+
+A `WalRetention` ceiling trims the write-ahead log past a lagging consumer by design, so it can remove records the shipper has not yet delivered to its peer. Skipping the trimmed prefix is harmless for plain writes, but not for a saga: if the trimmed record was one of a saga's prepares and its terminal is still retained, the terminal reaches the peer without it, the receiver commits the saga and drains its other keys, and the lost key is missing - a torn saga ([#4534](https://github.com/NSTA1/Orleans.Lattice/issues/4534)). A shipper cannot even name the transactions it lost.
+
+The shipper therefore treats a shipping read whose first entry is above the requested sequence as a **forced gap** when the source WAL's trim watermark has reached the requested sequence. Offsets are not dense: a flush abandoned at its deadline that never lands leaves a hole, and a hole directly above a trim point leaves the lowest stored offset above the requested sequence although nothing the peer needs was trimmed. The trim watermark tells the two apart (issue #4621; see [the WAL](../lattice/wal.md#abandoned-flushes-holes-and-the-trim-watermark)). When the source cannot report a trusted watermark - a provider that keeps none, or a silo in the cluster that predates it - every jump is treated as a forced gap, which re-seeds a peer needlessly at worst and never skips a trim. On the first one it durably records the tree's current snapshot export epoch in `ReplicationShipperState.ReseedRequiredEpoch`, before it consumes past the gap, drops every terminal it was holding, and from then on:
+
+- **withholds every saga record** - prepares, `TxCommit` and `TxAbort` - from that peer, while plain writes keep shipping. Nothing the peer already holds can tear: a staged bucket with no terminal stays invisible. The withheld records stay in the log for the rewind: the shipper records each partition's durable cursor (or its lowest retained entry, past a trim) in `ReplicationShipperState.ReseedRetainFrom`, and its published read positions never pass it, so the WAL GC keeps every record it withholds. If the retention ceiling trims past that point anyway, the shipper does not rewind on the next echo, because the echoed export may predate a withheld saga's decision: it takes the peer off the log again, at the current export epoch ([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533));
+- **asks the peer to re-seed** on every push and liveness probe. The gRPC transport sends the recorded epoch in the `x-lattice-replication-reseed-after` call header. The receiver, having verified the caller's origin, starts a full bootstrap from that sender when it has not completed one from an export with a greater epoch and none is running (governed by `AutoBootstrapOnFallOffLog`), and echoes the epoch of its last completed one in `ReplicationAck.BootstrapEpoch`.
+
+Every full snapshot export takes a fresh export epoch before its registry snapshot, so an echoed epoch greater than the recorded one proves the peer was re-seeded from an export taken after the gap. Any ack can carry the echo: a push from a serial or a pipelined (`ShipMaxInFlight` > 1) window, or a liveness probe on a quiet link. At the end of the pump tick, after every batch of the tick has folded its cursors, the shipper clears the marker, rewinds every partition to its lowest retained entry, and resumes ([#4606](https://github.com/NSTA1/Orleans.Lattice/issues/4606)). Rewinding before a batch's fold would let that fold raise the partition past the retained saga records the rewind exists to re-ship. The export carried every stored saga's decision and committed values, and the re-shipped saga records settle against them; the [replay filter](#replay-filter-a-non-contiguous-stream-over-purged-sagas) withholds any saga whose decision the origin has purged. A range-scoped re-replay never advances the echoed epoch.
+
+While a re-seed is outstanding the peer's outbound status row reports how long it has waited, and `ILatticeReplicationStatus` classifies the link as `Stalled`, whatever its backlog and contact counters say.
+
+A custom `IReplicationTransport` does not carry the re-seed request, so a peer behind one stays withheld until it is bootstrapped by other means. The shipper logs a warning when it takes a peer off the log.
+
+#### Decision-purge holds
+
+The re-seed can only settle a saga whose decision the origin's transaction registry still stores, but a trimmed saga's decision becomes purgeable once its records are gone from the log. So a trim never passes a shipper silently: each WAL GC pass reads every registered shipper's durable read position, and before it trims an offset at or past one (only the `WalRetention` ceiling admits such a trim) it durably records a hold for that shipper in the tree's `IWalPurgeHoldGrain`, keyed by the physical tree and the shipper's grain id. A failed hold write skips the trim, and so does a pass that could not read the set of registered shippers; a shipper whose own position could not be read counts as position 0, so a forced trim holds it. While any hold is outstanding the registry purges no decision on the tree.
+
+The shipper releases its own hold, conditionally in the hold grain so a hold a concurrent trim widened is never released by an older read:
+
+- when the peer acknowledges the re-seed, since every partition then re-ships from its lowest retained entry, past whatever was trimmed;
+- on its phase timer (at most every 30 s), when no re-seed is outstanding and its durable read position is past every trimmed offset, as when the trimmed records were already in flight and were acknowledged after the trim;
+- when its peer is removed from the topology (*Shipper-lifetime asymmetry* above).
+
+An old silo never records a hold, and a host that has none behaves exactly as before.
+
+#### Cross-tree decision purge hold
+
+A receiver settles a cross-tree atomic write with a barrier that waits for every participating tree (see [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)). A tree that reaches it by a bootstrap or re-seed arrives through the decision row its export carries; once the origin has purged that row, the export carries only the sub-saga's committed rows, and a sibling that already delegated to the barrier waits for ever ([#4684](https://github.com/NSTA1/Orleans.Lattice/issues/4684)). So on a replicating host the transaction registry keeps a cross-tree sub-saga's expired tombstone, after the WAL guard above has cleared it, until `ICrossTreeDecisionHold` releases it:
+
+- **Boundary.** Each participant tree records, the first time its own registry asks, every WAL partition's next sequence (`ICrossTreeHoldTrackerGrain`, keyed by the operation id). Its decision is forgotten by then, so its terminals lie below. A participant whose log was rebound since is re-recorded against the new log.
+- **Peers.** For each participant, the configured peers when the tree is replicated, together with every peer that ever attached a shipper to it (`ICrossTreePeerEnrolmentGrain`, keyed by the tree). Removing a peer from the topology only detaches it, so a detached peer still holds: it can be added back against barriers that still need the decision.
+- **Acknowledged.** Each such peer's shipper must publish durable read positions at or past the participant's boundary on every partition it reads. A receiver acknowledges a cross-tree terminal only once its barrier recorded it, so an acknowledgement past the boundary means the peer's barrier has the participant's arrival. A detached shipper, one bound to another log, and one that has published nothing all hold.
+
+A peer that is gone for good, not merely detached, pins every such decision for ever: nothing un-enrols `ICrossTreePeerEnrolmentGrain`, so the wait set above keeps naming it regardless of how long it has been out of `ReplicationPeers`. The [decommission peer](../lattice.api.replication/architecture.md#decommissioning-a-peer) operator verb resolves this ([#4723](https://github.com/NSTA1/Orleans.Lattice/issues/4723)) in full, on both sides of the peer relationship: it refuses while the peer is still configured, then removes the peer from every registered tree's enrolment (`ICrossTreePeerEnrolmentGrain.DecommissionAsync`) - not only the currently-replicated trees, since enrolment outlives a tree's membership in the replicated set. Once a tree's enrolment no longer names the peer, the next registry purge pass (rate-limited to at most every `retention/2`, capped at 30 s, and only for an expired tombstone) stops waiting on it; the peer being absent from `ReplicationPeers` is this hold's own precondition, so the verb's configured-peer refusal is what keeps a release honest.
+
+That is only the origin side - this cluster shipping *to* the peer - and bounded by the purge cadence above. The verb also handles the opposite direction, as the *receiver* of operations the peer originated, in two phases over every registered tree so that the outcome does not depend on tree order ([#4742](https://github.com/NSTA1/Orleans.Lattice/issues/4742)). First it holds the read fence of every tree whose import from the peer still holds one: an abandon is not a decision, so an abandoned barrier must not let an import's fence lift over a sibling whose staged prepare is about to be discarded. Then it abandons every undecided [cross-tree receiver barrier](replication-apply.md#cross-tree-terminals-receiver-barrier) the peer originated (`ILatticeCrossTreeReceiverGrain.AbandonAsync`): the barrier is withdrawn from its trees' indexes and cleared to unopened, deciding nothing, because every tree of a barrier is a replica of its one origin and so none is left to vote. Then it discards every pending bucket the peer left on each tree, through `StalePendingClearer`: a prepare is staged on delivery, before its terminal, so a saga whose terminal never arrived - a cross-tree participant or a single-tree saga - would otherwise hold buckets nothing ever consumes. Each saga is settled with the verdict its registry resolves, delegation included, so an abandoned operation aborts on every tree alike and an already-decided one keeps its verdict everywhere. Both phases run unconditionally, independent of the enrolment-removal outcome above.
+
+A later re-add of the same cluster id is a fresh bootstrap, not a resumption: the verb also force-detaches the shipper on every tree it actually un-enrolled, so the peer re-enrols from scratch on reattachment ([#4701](https://github.com/NSTA1/Orleans.Lattice/issues/4701) runs `StalePendingClearer` on every full bootstrap). That re-enrolment is itself gated: the verb marks the peer in a cluster-wide decommissioned-peer registry, and `ICrossTreePeerEnrolmentGrain.EnrolAsync` refuses to enrol a decommissioned peer unless it is once again present in `ReplicationPeers`, so a decommissioned peer can only come back through an explicit, fresh configuration change - never through a shipper silently re-attaching on its own. Re-adding the peer to `ReplicationPeers` clears that registry row, which is what lets the fresh bootstrap above re-enrol it. Before clearing it, the re-add also abandons every barrier the peer still has on this receiver - including one that a terminal already past the enrolment gate reopened after the decommission, a decided one, and a tombstone - so none holds a tree's import fence against the fresh bootstrap, and then re-drives every import whose fence the decommission held from a fresh export, which decides whether that fence lifts.
+
+The coordinator also **sequences** the decision ([#4733](https://github.com/NSTA1/Orleans.Lattice/issues/4733)): it takes the next value of each participating tree's monotone decision counter (`ICrossTreeDecisionSequenceGrain`) and holds it pending until every prepared participant's transaction registry records it with the stamps below. Each tree's **purge frontier** is then `min(counter, lowest pending - 1, lowest stored - 1)`, the counter read before the registries, so a recorded sequence is never passed while its decision is stored. A decision stored before sequencing counts as 0. `ICrossTreePurgeFrontierSourceGrain` computes the frontier for every tree a decision was sequenced on and every replicated tree. Shippers advertise it to their peers, which drop a decided barrier tombstone once the frontier passes it on every participant (see [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)).
+
+The coordinator also **stamps** the decision before any participant finalizes: it reads each participating tree's snapshot export epoch (`IReplicationExportEpochGrain`, which every export advances before it opens) after the decision is durable, and records the stamps on every participant's cross-tree membership. Every decision row and every shipped terminal of the operation carries the full stamp vector, so a receiver can tell an export that opened after the decision from one that opened before it (see [Snapshot bootstrap](snapshot-bootstrap.md#snapshot-and-in-flight-atomic-visibility)). A failed stamp read fails the finalize, which the coordinator retries. Stamping ships with the hold and is covered by the same capability check, so an operation without stamps was decided by a silo that predates both.
+
+The decision is purged only once every participant has a boundary and every peer of every participant is past it; once every participant was released, the tracker keeps only a completed marker. A failed check holds. While any silo of the cluster predates the hold (does not host `ICrossTreeHoldTrackerGrain`), the hold releases nothing, and the snapshot export refuses every request with a transient deferral (gRPC `Unavailable`) that the receiver's bootstrap retries, because an older registry can purge a cross-tree decision on its own rules and the export would then carry the participant as bare committed rows.
+
+### Replay filter: a non-contiguous stream over purged sagas
+
+A host that ran without replication, or before the decision-purge guard ([#4508](https://github.com/NSTA1/Orleans.Lattice/issues/4508)) existed, purged saga decisions on retention alone while the write-ahead log kept their records. So does a registry activation on a silo that predates the guard, during a rolling upgrade. Re-shipping such a saga to a peer strands it there: nothing can settle it ([#4533](https://github.com/NSTA1/Orleans.Lattice/issues/4533)). A stream that delivers the log in order delivers every saga whole, prepares before terminals, and is never filtered. Only a **replay** is: after a re-seed rewinds the shipper to the lowest retained entry, or after a source-identity rebind restarts it on a new log.
+
+A replay records a horizon, `ReplicationShipperState.ReplayFilterHorizon`: every partition's next sequence when it began. While it is set, the shipper decides once per saga, on the first record of it that it reads, whether the origin proves the saga forgotten and its decision purged:
+
+1. It reads the saga's **participant row**. A saga registers its participants durably before it appends any prepare (the shard root awaits the registration and fails the write if it fails), and only `ForgetAsync`, after the decision, removes them. A row means the saga is live, or decided and not yet forgotten: it ships.
+2. With no row, it reads the **stored decision**. A decision means the saga was forgotten but its decision is still stored, which the peer's re-seed carried: it ships. No decision means it was purged: the decision is recorded before the forget and purged after it, so "no participants, then no decision" proves the purge.
+
+The verdict is cached for the replay and applies to every record of the saga, terminals included, so a saga is shipped whole or withheld whole. A failed read fails the tick, so the partition holds and retries rather than guessing. Every record of a purged saga was appended before its purge, so a purged verdict raises the horizon to the log's current next sequences, and the filter clears only once every partition's cursor has passed it. The cache lives only while the filter is set: it holds at most one entry per saga with a record between the cursors and the horizon, which the retained log bounds, and it is cleared when the filter starts, when it clears, and with the activation.
+
+A saga in flight when the peer is taken off the log can be decided, forgotten and, its records having been trimmed, purged while the replay runs; read as purged, its terminals would be withheld from a peer that the re-seed's export re-staged it on. So the shipper takes a **replay hold** on the tree's decision purges (`IWalPurgeHoldGrain`, the registry purges nothing while any hold is outstanding) before it reads the export epoch for the re-seed marker, or before a rebind replay begins, and releases it once the filter has cleared with no re-seed outstanding. A purged verdict is then only ever a saga purged before the hold, which no export can carry either. The hold is only honoured by silos that host `IWalPurgeHoldGrain`, so during a rolling upgrade the shipper reads the cluster manifest and, while any active silo lacks it, does not rewind for a re-seed: it stays off the log, withholding saga records and shipping plain writes. An export the peer drains in that window can also miss a decision the older registry purged meanwhile, so it must not settle the re-seed either ([#4664](https://github.com/NSTA1/Orleans.Lattice/issues/4664)). The shipper records durably that it saw such a silo while off the log (`ReplicationShipperState.ReseedSpansPreHoldSilo`), and on the first tick that sees every silo honour the hold it raises the marker to the tree's current export epoch. Only an export opened after that point settles the re-seed. If such a silo joins while a replay runs, it takes the peer off the log again.
+
+A withheld saga must still converge on the peer, so the shipper withholds one only when the replay carries its effects. A re-seed's snapshot carries a committed saga's values as committed rows (an aborted saga has none), and the receiver clears the source's stale pending buckets during that drain (see [Snapshot bootstrap](snapshot-bootstrap.md#re-seed-stale-pending-clear)). Otherwise the verdict takes the peer off the log instead, and the re-seed that follows restarts the replay with a carrier:
+
+- a replay that a **rebind** started has no snapshot;
+- a replay that an **earlier activation** started may have shipped part of the saga under a verdict that died with that activation.
+
+A rebind that meets no purged saga, which is the normal case, costs nothing beyond one registry read per saga in the replayed region. Every saga record in every released build's write-ahead log was appended after a durable participant registration, because both shipped together in lattice 4.0.0, so the predicate holds across rolling upgrades.
+
+### Applied low watermark: what the shipper vouches for
+
+Beside every batch, and on an idle link's liveness probe, the shipper ships `ReplicationBatch.SourceFrontier` ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). Every write this cluster authored to the tree and stamped strictly below its `TreeLowWatermark` was acknowledged by the peer, and is visible there, in the peer's lineage of the tree that the frontier names. `OriginLowWatermark` is the same claim over every tree this cluster replicates to the peer.
+
+- **Per partition.** A shipping read returns the partition's clock floor paired with the offset it was in force at: every fresh local write at or after that offset is stamped at or above the floor. Once the durable cursor has passed that offset, the floor is covered. The durable cursor moves only on acknowledgements and is capped at held saga terminals.
+- **Per tree.** The watermark is the minimum covered floor over the tree's partitions. A partition with no covered floor means the tree has no watermark.
+- **Clamps.** The watermark never passes:
+  - the earliest acknowledged prepare of a saga whose terminals the peer has not all acknowledged (`ReplicationShipperState.Frontier`), because a prepared write stays invisible on the peer until its terminal lands;
+  - a local record the cursor passed without delivering it (a batch that could not be encoded, quarantined as in #4614), until a re-seed from a later export carries it;
+  - a prepare it could not track, because more than 4096 shipped sagas awaited their terminals.
+- **No watermark at all** while any of these holds:
+  - the peer is off the log, or a replay filter is set;
+  - the latest acknowledgement did not report the peer's lineage, or the peer reports `Guid.Empty`, meaning it tracks no lineage;
+  - the cluster's clock floor gate is closed;
+  - the tree is key-filtered, since a filtered write never reaches the peer.
+- **Lineage.** Every acknowledgement reports the peer's lineage of the tree (`ReplicationAck.ReceiverLineage`). The receiver re-mints it whenever the tree's contents may lose writes: a restore, revert, alias swap, purge or recreate.
+  - A move to a different non-empty lineage is a [forced gap](#forced-gap-a-peer-taken-off-the-log): the peer's new contents may lack writes already shipped, so the shipper re-seeds the peer and vouches again only after the rewind's replay filter clears. This covers a move from none seen or from an empty lineage too, once anything was acknowledged.
+  - A peer's lineage re-seeds run one tree at a time (`IReplicationSourceFrontierAggregateGrain`), so a rollout does not re-seed every tree at once.
+- **Across trees.** The per-peer aggregate grain keeps each tree's latest watermark. The origin watermark is their minimum, or zero while any replicated tree has no fresh one.
+  - It carries a generation that rises on every activation, every lineage change and every tree joining.
+  - The receiver ignores an aggregate from an older generation than one it has seen.
+
+A rebind discards the floors of the retired log. A replay filter a rebind begins clears once every partition has passed its horizon. A partition never consumed counts as being at offset 0, so it no longer holds the filter open ([#4656](https://github.com/NSTA1/Orleans.Lattice/issues/4656)).
+
+### Tombstone reap gate
+
+[Tombstone compaction](../lattice/tombstone-compaction.md) reaps a tombstone once it is older than `TombstoneGracePeriod`. On its own that is a wall-clock bound. A write older than a delete can be delivered after the delete's tombstone was reaped, after a partition, a paused shipper or a stalled link that lasted longer than the grace period. It then finds no tombstone and resurrects the key on that replica only ([#4615](https://github.com/NSTA1/Orleans.Lattice/issues/4615)).
+
+`AddLatticeReplication` therefore registers a reap gate (`ReplicationTombstoneReapGate`). Each compaction batch of a replicated tree reads a ceiling from it. A tombstone, or a TTL-expired entry, is reaped only when it is past the grace period **and** stamped strictly below the ceiling `min(D, P)`:
+
+- **D: nothing it beats is still on its way here.** This bound covers every origin that has pushed the tree here, and every configured peer.
+  - It is the receiver tree frontier's applied low watermark for the origin: every write of the origin below it is applied here.
+  - It is clamped below every write of the origin that the tree's causal-apply buffer or dead-letter queue still holds, or that the last installed export lacked.
+  - A write marked lost is never applied, so it holds nothing back. A dead letter clamps until an operator discards it, at which point it is lost.
+  - An origin with no exact watermark makes D zero: the tree is degraded, the origin is pending, or its re-seed is outstanding.
+  - An origin's clock floor also bounds every write it authors later, so D covers a write that has not been authored yet.
+- **P: every peer applied every delete this cluster stamped below it.** This bound covers every configured peer.
+  - It is the peer's shipper reap watermark: the [applied low watermark](#applied-low-watermark-what-the-shipper-vouches-for), computed the same way but never shipped. It is withheld while the peer is off the log.
+  - A peer whose re-seed rewind passed a trimmed delete record counts once its watermark resumes past it, because the re-seed export carried the tombstone as a committed delete.
+  - A peer that has no watermark yet makes P zero.
+  - The reap watermark is not frozen by a key filter: it claims only the peer's in-scope writes, and the peer never holds an out-of-scope key. Any change to the filter withholds it until the cursor covers a floor read under the new scope, so a key brought into scope is never reaped on the strength of the old one.
+
+A tombstone the ceiling keeps counts as still inside the grace window, so its leaf re-scans it on a later pass. A tree replication is not enabled for, or a replicated tree with no peer and no origin, reaps on the grace period alone. A failure to read the ceiling reaps nothing.
+
+The gate trades storage for convergence. Tombstones accumulate on a replicated tree for as long as:
+- any origin is degraded or pending;
+- a write is parked or dead-lettered;
+- a peer is off the log;
+- a peer is unreachable.
+
+A peer that is gone for good blocks every reap of its trees until it is removed from the topology and detached (see [`WalRetention`](configuration.md#walretention)). The `orleans.lattice.replication.tombstone_reap.bound` counter reports which constraint bounds each ceiling (see [Observability](observability.md)).
 
 ### Deferred cursor persistence
 
@@ -584,11 +896,11 @@ checkpoints within the time bound. (A graceful deactivation also
 flushes - see below.)
 
 Re-shipping is safe because the receiver absorbs repeats without relying
-on its per-origin high-water mark, which drops nothing: an entry at or
-below the snapshot-pinned causal floor is dropped, a recently applied
-`(origin, HLC, key, op)` identity is suppressed by the shadow-forward
-identity cache, and anything else re-applies idempotently under per-key
-last-writer-wins. A silo crash inside the deferred-persist window
+on its per-origin high-water mark or any snapshot floor, neither of
+which drops point writes: a recently applied `(origin, HLC, key, op)`
+identity is suppressed by the shadow-forward identity cache, and
+anything else re-applies idempotently under per-key last-writer-wins. A
+silo crash inside the deferred-persist window
 therefore costs at most `ShipCursorWriteInterval x ShipBatchSize`
 entries of wasteful re-shipping and no data is lost. Lowering
 `ShipCursorWriteMaxDelay` only ever makes the durable cursor fresher; it
@@ -619,6 +931,39 @@ which point the next flush re-reports the new frontier through the
 recovered registry. Operators monitoring the WAL GC trim frontier
 should expect this lag to clear on the next post-outage ack rather
 than immediately when the registry recovers.
+
+### Per-partition read positions hold the WAL (issue #4579)
+
+The HLC cursor alone does not protect what the shipper has not read. It is
+the HLC of the last entry shipped in merge order, and a WAL partition is not
+HLC-ordered in offset: a silo whose clock trails, or a merge that keeps its
+source stamp, can put an entry the shipper
+has not read at an HLC at or below the cursor it has already reported. Once
+the owning leaf checkpoints past such an entry, nothing else holds it, so a
+GC pass could trim it unshipped.
+
+The shipper is therefore also an offset-reading WAL consumer:
+
+- Before its first read of a physical log it registers with that log's
+  durable consumer set, so a GC pass on any silo, and after a restart, asks
+  it where it is.
+- It answers with its durable `PartitionCursors`, which a held saga terminal
+  already caps. A position is raised only after the write that made it
+  durable. It is lowered before the next read when the in-memory cursors drop
+  (an alias rebind, a rewind).
+- A registered shipper that has acknowledged nothing answers 0 for every
+  partition, so it holds the whole log instead of racing the GC.
+- On an alias rebind it registers with the new physical log first and only
+  then withdraws from the old one. It answers nothing for a log it no longer
+  reads.
+
+The GC refuses every entry at or above the lowest position any registered
+consumer reports for that partition, however the HLC clauses read. Only the
+`WalRetention` TTL ceiling trims past it, and the shipper then sees the gap
+on its next read. A stalled or removed peer's shipper therefore holds the WAL
+at its last durable position until the TTL ceiling applies. A peer whose
+shipper has never activated is not yet a consumer; it starts from a snapshot
+bootstrap.
 
 ### Graceful deactivation
 
@@ -663,7 +1008,9 @@ HLC and the sender advances its durable cursor to
 `ack.HighestAppliedHlc`, so dropping the newer-HLC entry would strand
 the receiver's stored timestamp behind the sender's cursor and change
 LWW/HLC convergence against concurrent foreign-origin writes. Eliding
-safely requires the receiver to report which content it already holds.
+safely requires the receiver to report which writes it already holds -
+exactly, by content hash, origin and source HLC, with its leaf still at
+that version or newer (#4585), never by bytes alone.
 That is the separate opt-in `ContentHashDedupElisionEnabled` (default
 `false`, and it requires this master switch): before each batch ships
 the shipper runs a content-manifest exchange over the digest-probe
@@ -791,11 +1138,16 @@ last-run timestamps in persistent state:
   and, for each current topology peer that authored at least one
   entry in the window, calls
   `ILatticeFallOffLogDetector.CheckAndTriggerAsync(treeName, peer, oldestHlc)`
-  with that peer's own oldest HLC. A peer with no authored entry in the
-  window is skipped - probing it against another origin's entries was
-  the source of a false-positive re-bootstrap loop. On positive
-  detection, the detector drives the bootstrap kickoff itself -
-  the maintenance grain is a pure scheduler.
+  with that peer's own oldest local HLC. A peer with no authored entry
+  in the window is skipped - probing it against another origin's entries
+  was the source of a false-positive re-bootstrap loop. This probe only
+  compares local readings and guards local seal gaps; it is not the
+  cross-cluster source-WAL trim detector. Source trims are detected by
+  the sender shipper when a shipping read returns a first sequence above
+  the requested sequence, and the request is carried on
+  `ReplicationBatch.ReseedAfterEpoch`. On positive local detection, the
+  detector drives the bootstrap kickoff itself - the maintenance grain
+  is a pure scheduler.
 
 ### Failure handling
 
@@ -874,10 +1226,10 @@ emits; the table shows which driver is the source of each.
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
-| `dead_letter.enqueued` (reason=schema) | Shipper grain (framing-header construction failure) | Schema-shape failure building the outbound batch. |
-| `dead_letter.removed` | (already wired) | Operator discards / replays, or FIFO capacity eviction. |
+| `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
+| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
 
 ---
 

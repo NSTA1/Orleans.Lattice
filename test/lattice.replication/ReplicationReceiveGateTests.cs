@@ -26,7 +26,7 @@ public class ReplicationReceiveGateTests
     public async Task Reports_not_paused_when_the_fence_is_clear()
     {
         var (gate, fence) = CreateGate();
-        fence.IsPausedAsync().Returns(Task.FromResult(false));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = false, Epoch = 1 }));
 
         Assert.That(await gate.IsReceivePausedAsync(Tree), Is.False);
     }
@@ -35,7 +35,7 @@ public class ReplicationReceiveGateTests
     public async Task Reports_paused_when_the_fence_is_engaged()
     {
         var (gate, fence) = CreateGate();
-        fence.IsPausedAsync().Returns(Task.FromResult(true));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = true, Epoch = 1 }));
 
         Assert.That(await gate.IsReceivePausedAsync(Tree), Is.True);
     }
@@ -44,25 +44,36 @@ public class ReplicationReceiveGateTests
     public async Task Repeated_lookups_within_the_window_hit_the_cache_once()
     {
         var (gate, fence) = CreateGate();
-        fence.IsPausedAsync().Returns(Task.FromResult(true));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = true, Epoch = 1 }));
 
         var first = await gate.IsReceivePausedAsync(Tree);
 
         // Change the underlying answer; a second immediate lookup must still
         // return the cached value and must not re-dial the grain.
-        fence.IsPausedAsync().Returns(Task.FromResult(false));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = false, Epoch = 1 }));
         var second = await gate.IsReceivePausedAsync(Tree);
 
         Assert.That(first, Is.True);
         Assert.That(second, Is.True);
-        await fence.Received(1).IsPausedAsync();
+        await fence.Received(1).ObserveAsync();
+    }
+
+    [Test]
+    public async Task An_observation_carries_the_fence_epoch_it_was_read_under()
+    {
+        var (gate, fence) = CreateGate();
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = false, Epoch = 6 }));
+
+        var observed = await gate.ObserveAsync(Tree);
+
+        Assert.That(observed, Is.EqualTo(new ReceiveFenceObservation { Paused = false, Epoch = 6 }));
     }
 
     [Test]
     public async Task Distinct_tree_ids_do_not_grow_the_cache_without_bound()
     {
         var (gate, fence) = CreateGate();
-        fence.IsPausedAsync().Returns(Task.FromResult(false));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = false, Epoch = 1 }));
 
         // Entries carry an expiry but were never removed, so the map grew by one
         // permanent entry per distinct tree id ever applied - including trees
@@ -82,7 +93,7 @@ public class ReplicationReceiveGateTests
     public async Task Still_reports_the_authoritative_answer_once_the_cache_is_full()
     {
         var (gate, fence) = CreateGate();
-        fence.IsPausedAsync().Returns(Task.FromResult(false));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = false, Epoch = 1 }));
 
         for (var i = 0; i < ReplicationReceiveGate.MaxCachedTrees + 10; i++)
         {
@@ -91,7 +102,7 @@ public class ReplicationReceiveGateTests
 
         // A refused insert only costs an extra grain call; it must never mask an
         // engaged fence, which would let deferred entries apply during a pause.
-        fence.IsPausedAsync().Returns(Task.FromResult(true));
+        fence.ObserveAsync().Returns(Task.FromResult(new ReceiveFenceObservation { Paused = true, Epoch = 1 }));
 
         Assert.That(await gate.IsReceivePausedAsync("orders-late"), Is.True);
     }

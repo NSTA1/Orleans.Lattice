@@ -7,7 +7,7 @@ using Orleans.Runtime;
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
-/// Detector for the <c>PrepareTx(t)</c> row of <c>spec/Refinement.md</c>
+/// Detector for the <c>PrepareTx(t)</c> row of <c>spec/atomic-commit/Refinement.md</c>
 /// (gap #2553). The row claims <c>AtomicWriteGrain.PrepareAsync</c> +
 /// <c>ExecutePhaseAsync</c> "stage every write into per-leaf pending buckets
 /// (hidden)". Before these tests only half of that claim was falsifiable:

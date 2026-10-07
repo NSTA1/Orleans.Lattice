@@ -1,0 +1,18 @@
+# Pairs with DelegationsDisjoint. The registry registers a receiver delegation
+# for a txid it already delegates as an authoring sub-saga, which is what it
+# would do without TxRegistryGrain.ThrowIfWouldCoexist (issue #2353). The
+# public apply seam trusts the origin a caller supplies, so the registry's own
+# check is the only thing that keeps the two maps disjoint for a txid the
+# origin cluster is handed back.
+MODULE: DelegationsDisjointRegistryAdmitsForeignClaim
+TARGET: DelegationsDisjoint
+CLASS: Invariant
+SUMMARY: the registry admits a receiver delegation for a txid it already delegates as an authoring sub-saga
+PERTURBS: ForeignOriginClaim
+
+--- FIND
+    /\ orcv' = IF oext[tr] THEN orcv ELSE [orcv EXCEPT ![tr] = TRUE]
+--- REPLACE
+\* MUTATION: no coexistence check.
+    /\ orcv' = [orcv EXCEPT ![tr] = TRUE]
+--- END

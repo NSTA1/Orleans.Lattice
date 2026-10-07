@@ -1,0 +1,31 @@
+# Pairs with ReadPositionHonest, and reproduces issue #4700's second half: the
+# purge's evidence is shard-wide (ShardRootState.LeafClearsBegun), so it also
+# names a leaf the purge never reached. That leaf's row was lost to a fault and
+# its pin retired; the GC trimmed past it; recovery re-creates it empty, and it
+# silently loses writes nobody deleted. The base marks only the leaf the purge
+# reached. The depth-15 trace of the #4433 confirmation pass.
+MODULE: ReadPositionHonestShardWidePurgeMarker
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a shard-wide purge marker lets recovery re-create a leaf the purge never reached
+PERTURBS: MarkPurge
+
+--- FIND
+    /\ purgeRec' = [purgeRec EXCEPT ![l] = TRUE]
+--- REPLACE
+\* MUTATION: the marker names every leaf of the shard.
+    /\ purgeRec' = [k \in Leaves |-> TRUE]
+--- END
+--- FIND
+SnapshotLoss == FALSE
+--- REPLACE
+\* MUTATION: the environment may destroy a snapshot or a leaf row.
+SnapshotLoss == TRUE
+--- END
+
+--- FIND
+MaxFaults == 1
+--- REPLACE
+\* MUTATION: the row and the snapshot both vanish: two faults.
+MaxFaults == 2
+--- END

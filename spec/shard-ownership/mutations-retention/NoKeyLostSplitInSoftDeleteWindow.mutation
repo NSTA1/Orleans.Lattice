@@ -1,0 +1,21 @@
+# Pairs with NoKeyLost. Reproduces the rule first proposed for #4452, which
+# #4478 replaced: a split may run on the resized copy during the completed
+# resize's soft-delete window, but the terminal the old copy mirrors for a
+# saga bound to it reaches only the resized copy's shard at the same index,
+# not the split destination the split moved the slot to. The bucket the
+# split's sweep placed on the destination is never consumed, and once the
+# registry forgets the saga it reads as a revert of an acknowledged commit.
+# #4478's terminal closure (TerminalFanOutResolver's split-forward targets)
+# is what the base models. The edit lies in TermClosure, the operator the
+# terminal mirror uses, so the mutation declares no PERTURBS.
+MODULE: NoKeyLostSplitInSoftDeleteWindow
+TARGET: NoKeyLost
+CLASS: Invariant
+SUMMARY: a split on the resized copy in the soft-delete window strands the bound saga's bucket, because the mirrored terminal does not follow it
+
+--- FIND
+TermClosure(s) == IF spCopy = R /\ sp # "idle" /\ s = s1 THEN {<<R, s2>>} ELSE {}
+--- REPLACE
+\* MUTATION: the terminal mirror reaches only the shard at the same index.
+TermClosure(s) == {}
+--- END

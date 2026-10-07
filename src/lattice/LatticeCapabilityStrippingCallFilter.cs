@@ -115,6 +115,23 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// registry a leaf consults before bucketing a prepare (issue #4445); only a
     /// forwarding shard or the split sweep may assert it.
     /// </para>
+    /// <para>
+    /// The prepared-route marker and the original-prepare-stamp map are included
+    /// because a leaf honours them to decide the stamp a saga's value is applied
+    /// at (issue #4522); only the routing tier, a forwarding shard, the split
+    /// sweep, and the saga's terminal delivery may assert them.
+    /// </para>
+    /// <para>
+    /// The new-leaf create intent is included because a leaf whose state row is
+    /// missing writes a first row only under it (issue #4654); an external client
+    /// asserting it could re-create a leaf whose row was lost as an empty one. Only
+    /// the paths that create leaves may assert it.
+    /// </para>
+    /// <para>
+    /// The CRDT-join merge marker is included because a leaf honours it to join
+    /// an incoming CRDT row into its own instead of resolving last-writer-wins
+    /// (issue #4618); only the resize and snapshot mirror and drain may assert it.
+    /// </para>
     /// </summary>
     private static readonly string[] ReservedCapabilityKeys =
     [
@@ -130,6 +147,10 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
         LatticeEventConstants.RoutedPhysicalTreeIdRequestContextKey,
         LatticeEventConstants.AtomicBoundPhysicalTreeRequestContextKey,
         LatticeEventConstants.ForwardedPrepareRequestContextKey,
+        LatticeEventConstants.PreparedRouteRequestContextKey,
+        LatticeEventConstants.OriginalPrepareStampsRequestContextKey,
+        LatticeEventConstants.NewLeafIntentRequestContextKey,
+        LatticeEventConstants.CrdtJoinMergeRequestContextKey,
     ];
 
     /// <inheritdoc />

@@ -1,0 +1,22 @@
+# Pairs with RAllOrNothing. Regression check for issue #4685. The export reads the
+# saga's decision before its rows: a saga absent from that read commits and
+# drains between the two, and ships as a committed row with no decision row and
+# no prepared row. The import serves it post-saga with no read fence and no
+# barrier arrival, beside the sibling tree still pre-saga. #4694 completes the
+# export from the source WAL so its decision read and its rows are of one
+# instant.
+MODULE: RAllOrNothingExportPassesInterleaveWithSaga
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the export's decision read predates its rows, so a saga that decides between them ships as bare committed rows
+PERTURBS: ExportClose
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ \E snap \in Snap0 :
+         xs' =
+--- REPLACE
+\* MUTATION: the decision read may predate the rows.
+    /\ \E snap \in Snap0 \cup {"inflight"} :
+         xs' =
+--- END

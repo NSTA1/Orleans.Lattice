@@ -18,9 +18,8 @@ namespace Orleans.Lattice.Replication;
 /// resolves every local participant for a saga and drives them through this SPI:
 /// a resumable <see cref="PrepareAsync"/>, then exactly one terminal
 /// <see cref="CommitAsync"/> or <see cref="AbortAsync"/> delivered by the
-/// coordinator decision (or an auto-compensating <see cref="AbortAsync"/> fired
-/// by the participant model's bounded fence timer if the coordinator never
-/// returns).
+/// coordinator decision, whether the coordinator delivers it or the participant
+/// model learns it by asking the coordinator once its bounded fence expires.
 /// </para>
 /// <para>
 /// <b>Contract and guarantees.</b>
@@ -39,17 +38,22 @@ namespace Orleans.Lattice.Replication;
 ///   must be <b>total</b> - a participant that votes to commit must always be
 ///   able to undo that prepare (this matches the intra-cluster cross-tree saga
 ///   contract).</description></item>
-///   <item><description><b>Bounded fence-timer auto-compensation.</b> A prepared
-///   participant holds a bounded cutover fence while it waits for the decision.
-///   If the coordinator never returns before the fence expires, the participant
-///   model auto-compensates by calling <see cref="AbortAsync"/> with a request it
-///   rebuilds from the saga identity it persisted: the saga id, target, manifest id
-///   and coordinator cluster id, but not <see cref="SagaControlRequest.SetId"/>. A
-///   prepared mutation is undone after a coordinator loss only as far as the
-///   participant can compensate from those fields. The built-in restore participant
-///   compensates a single-tree restore from them, but for a backup-set restore the
-///   timed-out compensation lifts the write fence without removing the member
-///   trees' built shadows, which remain until they are deleted.</description></item>
+///   <item><description><b>No unilateral compensation.</b> A prepared participant
+///   holds a bounded cutover fence while it waits for the decision. When the fence
+///   expires the participant model asks the coordinator for the saga's durable
+///   decision and applies it: <see cref="CommitAsync"/> on a commit,
+///   <see cref="AbortAsync"/> on an abort (or when the coordinator holds no record
+///   of the saga). While the coordinator is still deciding or cannot be reached,
+///   the participant keeps the fence and never compensates on the timer alone
+///   (#4637); an operator can resolve it with
+///   <c>ILatticeReplicationAdmin.ResolveCrossClusterSagaParticipantAsync</c>. A
+///   decision applied this way is delivered with a request the participant model
+///   rebuilds from the saga identity it persisted: the saga id, target, manifest
+///   id, coordinator cluster id and <see cref="SagaControlRequest.SetId"/>. A
+///   participant state persisted before the set id was recorded rebuilds a
+///   request without it, which the built-in restore participant compensates as a
+///   single-tree restore, leaving a backup set's member shadows in place until
+///   they are deleted.</description></item>
 ///   <item><description><b>Idempotent re-attach.</b> Every method must be
 ///   idempotent: a duplicate <see cref="PrepareAsync"/>, <see cref="CommitAsync"/>,
 ///   or <see cref="AbortAsync"/> (from a retry after a mid-flight restart, or a

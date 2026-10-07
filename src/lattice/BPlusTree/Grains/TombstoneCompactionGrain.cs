@@ -949,6 +949,12 @@ internal sealed class TombstoneCompactionGrain(
 
             var batchSize = _currentLeafBatchSize > 0 ? _currentLeafBatchSize : LatticeOptions.DefaultCompactionLeafBatchSize;
 
+            // Read once per batch, after the pass pinned its physical tree, so a
+            // batch never reaps under a ceiling read before a lineage change of
+            // the tree it compacts (issue #4615). A failed read throws and the
+            // batch reaps nothing.
+            var reapCeiling = await ResolveReapCeilingAsync();
+
             // Both paths spend the same shared budget, so the leaf cap and the
             // wall-clock net are one implementation rather than a hand-rolled
             // counter per path (issue 1973).
@@ -972,7 +978,7 @@ internal sealed class TombstoneCompactionGrain(
                     var leafFaulted = false;
                     try
                     {
-                        leafResult = await dirtyLeaf.CompactTombstonesAsync(gracePeriod);
+                        leafResult = await CompactLeafAsync(dirtyLeaf, gracePeriod, reapCeiling);
                     }
                     catch (Exception leafEx)
                     {
@@ -1148,7 +1154,7 @@ internal sealed class TombstoneCompactionGrain(
                     // re-scans it for exactly that reason (issue 4135). The leaf
                     // tags its own visit `outcome=partial`, so the condition is
                     // still observable from here.
-                    await leaf.CompactTombstonesAsync(gracePeriod);
+                    await CompactLeafAsync(leaf, gracePeriod, reapCeiling);
                 }
                 catch
                 {
@@ -1258,6 +1264,26 @@ internal sealed class TombstoneCompactionGrain(
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolvedOpts.ShardCount);
         return (physicalTreeId, map.GetPhysicalShardIndices());
     }
+
+    /// <summary>
+    /// The tree's reap ceiling from the host's <see cref="ITombstoneReapGate"/>,
+    /// or <see langword="null"/> (ungated) on a host without one.
+    /// </summary>
+    private Task<HybridLogicalClock?> ResolveReapCeilingAsync()
+    {
+        var gate = context.ActivationServices?.GetService<ITombstoneReapGate>();
+        return gate is null ? Task.FromResult<HybridLogicalClock?>(null) : gate.GetReapCeilingAsync(TreeId);
+    }
+
+    /// <summary>
+    /// Compacts one leaf, under the reap ceiling when the tree has one. An
+    /// ungated tree takes the original call, unchanged.
+    /// </summary>
+    private static Task<LeafCompactionResult> CompactLeafAsync(
+        IBPlusLeafGrain leaf, TimeSpan gracePeriod, HybridLogicalClock? reapCeiling) =>
+        reapCeiling is { } ceiling
+            ? leaf.CompactTombstonesBelowAsync(gracePeriod, ceiling)
+            : leaf.CompactTombstonesAsync(gracePeriod);
 
     private static TimeSpan ClampPeriod(TimeSpan gracePeriod) =>
         gracePeriod < TimeSpan.FromMinutes(1) ? TimeSpan.FromMinutes(1) : gracePeriod;

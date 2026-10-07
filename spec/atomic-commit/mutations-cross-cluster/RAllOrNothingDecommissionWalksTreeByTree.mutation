@@ -1,0 +1,44 @@
+# Pairs with RAllOrNothing. Regression check for issue #4742. The receiver's
+# decommission walks the origin's trees one at a time, dropping each from the
+# operation's barrier - which then decides on the trees that remain - and
+# clearing its buckets by its own registry row. Walking the tree whose terminal
+# never arrived first decides the barrier on the arrived tree, which is served
+# post-saga, and then discards the other's bucket: the operation is split for
+# good. #4740 abandons every undecided barrier of the origin before any bucket
+# is touched, and clears each by the delegation-aware verdict.
+MODULE: RAllOrNothingDecommissionWalksTreeByTree
+TARGET: RAllOrNothing
+CLASS: Invariant
+SUMMARY: the decommission drops each tree from its barriers as it walks it, deciding on the trees that remain
+PERTURBS: Decommission, DecomWalk
+BOUNDS: LossPath = 4, JoinStart = 0, SagaOutcome = 0, Shape = 1, PreHold = 0, DialFaults = 0, AckLoss = 0
+
+--- FIND
+    /\ LET open == cdec = "inflight"
+
+--- REPLACE
+\* MUTATION: no barrier phase.
+    /\ LET open == FALSE
+
+--- END
+--- FIND
+    /\ LET v == RView(tr)
+       IN
+--- REPLACE
+\* MUTATION: the walk drops the tree, deciding on the trees that remain.
+    /\ LET rem == (RWaitSet \ (DecTrees \ dw)) \ {tr}
+           complete == cdec = "inflight" /\ rem # {} /\ \A w \in rem : carr[w] # "none"
+       IN /\ cdec' = IF complete THEN (IF \A w \in rem : carr[w] = "committed" THEN "committed" ELSE "aborted") ELSE cdec
+          /\ rfin' = IF complete THEN rfin \cup rem ELSE rfin
+    /\ LET v == rdec[tr]
+       IN
+--- END
+--- FIND
+    /\ UNCHANGED <<originVars, xtree, netVars, rterm, registryVars, barrierVars,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, idx, bclr, bdrop, bfresh>>
+--- REPLACE
+    /\ UNCHANGED <<originVars, xtree, netVars, rterm, registryVars, carr, rtodo,
+                   gone, purged, ptrim, rs, detached, rpoison, losses, preguard, filt, verdict, afence, ubnd, decom, afresh,
+                   boff, bpur, bfence, bcaught, acaught, abnd, uimp, xo, xs, idx, bclr, bdrop, bfresh>>
+--- END

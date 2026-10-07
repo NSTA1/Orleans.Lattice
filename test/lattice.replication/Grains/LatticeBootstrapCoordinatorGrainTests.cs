@@ -45,15 +45,19 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             string treeName = Tree,
             ILatticeMergeModeResolver? mergeResolver = null,
             LatticeReplicationOptions? replicationOptions = null,
-            IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null)
+            IReadOnlyDictionary<string, HybridLogicalClock>? localOldestByOrigin = null,
+            FakeBootstrapReadFence? readFence = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("bootstrap-coordinator", treeName));
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var apply = Substitute.For<IReplicationApplier>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         // Default apply seam returns a successful ApplyResult so the
         // drain loop advances; individual tests override this where
@@ -105,7 +109,8 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         var grain = new LatticeBootstrapCoordinatorGrain(
             context, factory, provider, apply, reminders, resolver, optionsMonitor,
             walIntrospection,
-            NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState);
+            NullLogger<LatticeBootstrapCoordinatorGrain>.Instance, fakeState,
+            readFence ?? new FakeBootstrapReadFence());
         return (grain, fakeState, factory, provider, reminders, apply, hwm, resolver);
     }
 
@@ -205,6 +210,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
@@ -222,6 +230,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var reminders = Substitute.For<IReminderRegistry>();
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
@@ -239,6 +250,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
@@ -256,6 +270,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
@@ -274,6 +291,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
     {
         var context = Substitute.For<IGrainContext>();
         var factory = Substitute.For<IGrainFactory>();
+        var degradedFrontier = HighWaterMarkTestGrains.DegradedTreeFrontier();
+        factory.GetGrain<IReplicationTreeFrontierGrain>(Arg.Any<string>()).Returns(degradedFrontier);
+        factory.GetGrain<Orleans.Lattice.BPlusTree.ICrossTreeBarrierIndexGrain>(Arg.Any<string>()).Returns(_ => HighWaterMarkTestGrains.EmptyBarrierIndex());
         var provider = Substitute.For<IBootstrapSnapshotSource>();
         var applier = Substitute.For<IReplicationApplier>();
         var reminders = Substitute.For<IReminderRegistry>();
@@ -656,7 +676,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // consumption coordinate at the snapshot's causal-stable cut (the
         // maximum frontier coordinate) even though the source authored
         // nothing of its own, so HWM[source] is no longer left at zero.
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(99)),
             Arg.Any<CancellationToken>());
@@ -690,7 +710,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(70)
@@ -720,7 +740,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -757,7 +777,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -801,7 +821,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -835,7 +855,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v =>
                 v.GetClock(SourceCluster) == Hlc(200)
@@ -879,7 +899,11 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>());
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Failed));
-        Assert.That(fake.State.InProgress, Is.False);
+        // Issue #4526: the drain had started applying the import, so the
+        // tree stays read-fenced and the bootstrap stays in progress to be
+        // re-driven rather than stopping.
+        Assert.That(fake.State.InProgress, Is.True);
+        Assert.That(fake.State.ReadFenceArmed, Is.True);
     }
 
     [Test]
@@ -890,7 +914,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         fake.State.SnapshotAsOfHlc = Hlc(2);
         fake.State.CausalStableFrontier = new VersionVector();
         var (grain, _, _, _, reminders, _, hwm, _) = Create(fake);
-        hwm.PinSnapshotAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>())
+        hwm.MergeBootstrapFrontierAsync(Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("pin boom"));
         reminders.GetReminder(Arg.Any<GrainId>(), "bootstrap-keepalive")
             .Returns(Task.FromResult<IGrainReminder?>(null));
@@ -978,16 +1002,18 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         await grain.ProcessNextPhaseAsync();
 
         // Expected writes:
-        //   1. drain-start (Phase=ApplyingSnapshot, cursor=Zero)
-        //   2. after entry 100 (cursor=Hlc(100))
-        //   3. after entry 200 (cursor=Hlc(200))
-        //   4. drain-end → IncrementalHandoff (cursor=Hlc(250))
-        Assert.That(fake.WriteCount, Is.EqualTo(4));
-        Assert.That(cursorAtWrite, Has.Count.EqualTo(4));
+        //   1. read fence armed (issue #4526; cursor=Zero)
+        //   2. drain-start (Phase=ApplyingSnapshot, cursor=Zero)
+        //   3. after entry 100 (cursor=Hlc(100))
+        //   4. after entry 200 (cursor=Hlc(200))
+        //   5. drain-end, fence lifted -> IncrementalHandoff (cursor=Hlc(250))
+        Assert.That(fake.WriteCount, Is.EqualTo(5));
+        Assert.That(cursorAtWrite, Has.Count.EqualTo(5));
         Assert.That(cursorAtWrite[0], Is.EqualTo(HybridLogicalClock.Zero));
-        Assert.That(cursorAtWrite[1], Is.EqualTo(Hlc(100)));
-        Assert.That(cursorAtWrite[2], Is.EqualTo(Hlc(200)));
-        Assert.That(cursorAtWrite[3], Is.EqualTo(Hlc(250)));
+        Assert.That(cursorAtWrite[1], Is.EqualTo(HybridLogicalClock.Zero));
+        Assert.That(cursorAtWrite[2], Is.EqualTo(Hlc(100)));
+        Assert.That(cursorAtWrite[3], Is.EqualTo(Hlc(200)));
+        Assert.That(cursorAtWrite[4], Is.EqualTo(Hlc(250)));
     }
 
     [Test]
@@ -1061,10 +1087,12 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>());
 
-        // First write must be ApplyingSnapshot (drain start), then
-        // the catch handler persists Failed.
-        Assert.That(phaseAtWrite, Has.Count.GreaterThanOrEqualTo(2));
-        Assert.That(phaseAtWrite[0], Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
+        // The first write arms the read fence (issue #4526) before the
+        // export is opened; the next must be ApplyingSnapshot (drain
+        // start), then the catch handler persists Failed.
+        Assert.That(phaseAtWrite, Has.Count.GreaterThanOrEqualTo(3));
+        Assert.That(phaseAtWrite[0], Is.EqualTo(LatticeBootstrapState.RequestingSnapshot));
+        Assert.That(phaseAtWrite[1], Is.EqualTo(LatticeBootstrapState.ApplyingSnapshot));
         Assert.That(phaseAtWrite[^1], Is.EqualTo(LatticeBootstrapState.Failed));
     }
 
@@ -1116,7 +1144,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         // HWM[source] covers the retained source-origin baselines rather than
         // being left at zero, which would re-arm the fall-off detector into a
         // perpetual re-bootstrap loop.
-        await hwm.Received(1).PinSnapshotAsync(
+        await hwm.Received(1).MergeBootstrapFrontierAsync(
             asOf,
             Arg.Is<VersionVector>(v => v.GetClock(SourceCluster) == Hlc(50)),
             Arg.Any<CancellationToken>());
@@ -1145,7 +1173,7 @@ public partial class LatticeBootstrapCoordinatorGrainTests
         Assert.That(fake.State.InProgress, Is.False);
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.LiveIncremental));
         await provider.DidNotReceiveWithAnyArgs().ExportAsync(default(string)!, default(string)!, default, default);
-        await hwm.DidNotReceiveWithAnyArgs().PinSnapshotAsync(default, default!, default);
+        await hwm.DidNotReceiveWithAnyArgs().MergeBootstrapFrontierAsync(default, default!, default);
     }
 
     [Test]
@@ -1282,6 +1310,9 @@ public partial class LatticeBootstrapCoordinatorGrainTests
             async () => await grain.ProcessNextPhaseAsync(),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("decorator boom"));
         Assert.That(fake.State.Phase, Is.EqualTo(LatticeBootstrapState.Failed));
-        Assert.That(fake.State.InProgress, Is.False);
+        // Issue #4526: a failure part-way through an import keeps the fence
+        // and the bootstrap in progress for its automatic re-drive.
+        Assert.That(fake.State.InProgress, Is.True);
+        Assert.That(fake.State.ReadFenceArmed, Is.True);
     }
 }

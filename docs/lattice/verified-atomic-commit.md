@@ -17,26 +17,85 @@ specification that pins the protocol design above the code. It is an assurance
 document; the runtime behaviour it protects is documented in
 [Atomic Writes](atomic-writes.md) and [Online Reshard](online-reshard.md).
 
-## Scope: one cluster
+## Scope: the single-cluster protocol and the replicated half, checked separately
 
-Everything this document verifies is the **single-cluster** protocol: one
+Most of this document verifies the **single-cluster** protocol: one
 coordinator, one tree's registry, and that cluster's own leaves. The
 cross-cluster half - a saga's prepared writes and terminals replicated to a peer,
 the receiver's per-source-shard terminal tally that holds the peer's view back
-until every shard's terminal has arrived, and the cross-tree receiver barrier -
-has **no formal artefact at either layer**. The TLA+ specification does not
-model it (see the cross-tree and cross-cluster entry under the refinement note's
-[abstraction gaps](../../spec/Refinement.md#deliberate-abstraction-gaps)), and
-no Coyote model drives it.
+until every shard's terminal has arrived, the cross-tree receiver barrier, and a
+receiver's bootstrap from a snapshot - is checked by a **separate** TLA+ module,
+[`AtomicCommitCrossCluster.tla`](../../spec/atomic-commit/AtomicCommitCrossCluster.tla)
+(mapped in its own
+[refinement note](../../spec/atomic-commit/RefinementCrossCluster.md)), and by two
+Coyote models of the receiver, described under
+[The replicated half](#the-replicated-half).
 
-Do not read coverage of the first as coverage of the second. A reader who finds
-the single-cluster half model-checked can reasonably assume the replicated half
-inherits that, and it does not: the receiver path has different inputs (a
-dial-back to the origin's decision, a tally, a cross-cluster transport that can
-drop or reorder) and its own failure modes. What does cover it is ordinary
-testing - the receiver gate's integration tests and the cross-cluster chaos
-suites in `test/lattice.replication/` - which is evidence of a different and
-weaker kind than an exhaustive check (issue #2324).
+Do not read coverage of either half as coverage of the other. The single-cluster
+properties say nothing about a receiver, and the cross-cluster properties are all
+claims about the receiver: its inputs (a tally, a barrier, a dial-back to that
+barrier, and a transport that may reorder, drop a delivery and duplicate) and its
+failure modes are its own. What the cross-cluster check covers, stated
+precisely:
+
+- It assumes a source shard's terminal reaches the receiver after that shard's
+  prepares, which the built-in shipper's terminal hold provides (issue #4480); a
+  bridge built on `IChangeFeed` relies on the feed's own ordering instead (issue
+  #4511, fixed by #4519).
+- It models every way production loses a record to a peer, each with its fix:
+  a WAL retention trim past the shipper (issue #4534) or a batch it cannot
+  encode (#4651) takes the peer off the log and withholds its saga records until
+  a re-seed (#4577); a removed peer's shipper detaches from the log and re-marks
+  its re-seed when it returns (#4652); and the receiver poisons a saga whose
+  prepare it gave up on, withholding the saga's terminals until its own re-seed
+  (issue #4591, fixed by #4633). The re-seed's drain discards a purged saga's
+  leftover buckets and drains a decided one's (#4631), the replay that follows
+  withholds a purged saga whole while purges are held (#4533, #4534-B), and no
+  export drained while a silo predates the purge hold settles a re-seed (issue
+  #4664, fixed by #4666). A tree that stops being replicated on the receiver is
+  dropped from the undecided cross-tree barrier its terminal would have reached
+  (#4698). A peer decommissioned for good (#4724) releases the origin's
+  cross-tree purge holds. On a receiving cluster (#4740, issue #4736) it first
+  abandons every undecided barrier from that peer whole, taking no decision, and
+  only then settles each tree's pending buckets from the peer by that tree's
+  registry, so the order the trees are walked in cannot split an operation
+  (issue #4742). No import from the peer lifts its read fence while the peer
+  stays decommissioned. Re-added, the peer's barriers are reset and each tree
+  comes back as a fresh replica, unreadable until its fresh import (#4701). A peer that needs a re-seed of two trees at once
+  re-seeds both. The module assumes an operator eventually re-adds or
+  decommissions a detached peer; one left detached for ever keeps its trees'
+  cross-tree decisions held at the origin for as long.
+  The module checks each loss path in its own variant configurations, one loss
+  per behaviour, and both trees off the log at one boundary in their own.
+- It takes a cross-tree import's export in steps - open, close, drain - and
+  every other import atomically. The export ships a decision row for a saga
+  that decided while it ran (issue #4627) and completes from the source WAL any
+  saga that decided between its passes (issue #4685, fixed by #4694), so its
+  decision read and its rows are of one instant. The receiver's drain installs
+  the rows one at a time, but behind a read fence for the whole drain (issue
+  #4526, fixed by #4594), so no reader observes a partial import. A cross-tree import records the
+  tree's arrival with the receiver barrier and keeps the tree read-fenced until
+  the barrier decides (issue #4683, fixed by #4706); the purge hold, the export
+  precondition and the boundary its fence waits on close the case where the
+  origin purged the tree's half of the operation first (issue #4684, fixed by
+  #4716 and #4721). A decided barrier keeps a tombstone of its verdict past its
+  retention, so a terminal re-shipped later or an import of a stale export never
+  reopens it, and a reader of a tree's barrier index settles each entry at the
+  barrier (issue #4730, fixed by #4732); the tombstone drops once the origin's
+  cross-tree purge frontier shows the operation purged on every participant
+  (issue #4733, #4735).
+- It replicates every key. On a peer with a `KeyFilter` or `KeyPrefixes`, the
+  shipper drops the filtered prepares but ships every terminal, so all-or-nothing
+  holds only over the keys that peer replicates.
+
+The key filter is a scope limit, not a defect. The
+bootstrap is modelled as production now ships it: the export carries the
+recorded verdict of every saga the origin stores (issue #4481, fixed by #4501),
+retained pre-cut records are shipped again and settled against it (issue #4482,
+fixed by #4510), and the origin keeps that verdict while a prepare can still be
+re-shipped (issue #4508, fixed by #4553). The receiver's integration tests and the cross-cluster chaos suites
+in `test/lattice.replication/` remain the evidence for the deployed system
+(issue #2324).
 
 ## The proven-core pattern
 
@@ -70,7 +129,8 @@ path. The cores are `internal` and exposed to the test assembly through
 | `ShadowedMigrationReadGuard` | How a read resolves against a leaf mid-migration when a prepared bucket has been shadow-forwarded across a shard split. | Phase 3 (#1591) |
 | `SplitBoundary` | Which post-split leaf owns a key, so migration routing is a pure function of the key and the split boundary. | Phase 3 (#1591) |
 | `TerminalDecisionGuard.Classify` | The write-once classification of an incoming terminal (apply, idempotent duplicate, or rejected flip) at the serialized registry. | Phase 5 (#1594) |
-| `TerminalArrivalTally` | The completeness gate over a saga's per-source-shard terminal arrivals at a receiver: the expected count only grows (a max-merge of the stamped counts), and the per-tree decision mark flips once the distinct arrivals reach it. | Phase 5 (#1594) |
+| `TerminalArrivalTally` | The completeness gate over a saga's per-source-shard terminal arrivals at a receiver: the expected count only grows (a max-merge of the stamped counts), and the per-tree decision mark flips once the distinct arrivals reach it. A terminal with no count is ungated (`IsUngated`) and marks on arrival. | Phase 5 (#1594), ungated test #4436 |
+| `CrossTreeReceiverBarrier` | The receiver-side cross-tree barrier: complete only once every wait-set tree's terminal has arrived, one verdict (commit iff every arrival committed), and a wait set that cannot drift between terminals. | #4436 |
 
 The core files live under `src/lattice/BPlusTree/` next to the grains that call
 them. The shape of a core is a pure verdict function, for example:
@@ -136,6 +196,31 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 | `MovedAwaySealInheritanceModel` | `SplitBoundary` - a leaf divided from a sealed leaf is born carrying the donor's moved-away seal | #3121 |
 
 The same directory also holds the models of the other verified protocols - the write-ahead log, the distributed lock and the atomic action - which [Verified WAL](verified-wal.md), [Verified Distributed Lock](verified-lock.md) and [Verified Atomic Action](verified-atomic-action.md) document.
+
+### The replicated half
+
+Two further models drive the receiver of a replicated saga, and their properties
+are the cross-cluster TLA+ module's, not the catalogue's below:
+
+| Model | Cores driven | Properties asserted |
+|-------|--------------|---------------------|
+| `CrossClusterReceiverTallyModel` | `TerminalArrivalTally` (including the ungated path), `TerminalDecisionGuard`, `TxRegistryDecisionCore`, `MigrationTerminalCore`, `AtomicVisibilityGate` - a single-tree saga over several source shards, its prepares and terminals delivered in explored orders with lost acks re-delivered | `RAllOrNothing` and `RStrictIsolation` at every reader probe; `RCommittedEventuallyVisible` and `RNoStrandedPrepare` once the stream drains |
+| `CrossTreeReceiverBarrierModel` | `CrossTreeReceiverBarrier`, `TerminalArrivalTally`, `TxRegistryDecisionCore`, `MigrationTerminalCore`, `AtomicVisibilityGate` - a cross-tree saga's hand-off (register the delegation, then notify the barrier), the per-tree finalise, and a dial to the barrier that can fail | The same four, across trees |
+
+Their guards remove one fix each - the stamped count, the tally, the per-shard
+delivery order, the late-prepare refusal, the whole-wait-set barrier, the
+register-before-notify order, and the Indeterminate answer for an undiallable
+delegation - and each must report a violation of one named property, checked by
+its tag in Coyote's bug report rather than accepted as any violation. Two of
+those guards reproduce production as it stood before a fix (issue #4480 before the
+shipper's terminal hold, and issue #4448 before #4461), which is why they are
+guards rather than fixed-design tests; they now stand as regression checks.
+
+Neither model loses a record: they deliver every prepare and terminal. The loss
+paths and their repair - the re-seed, the replay filter and the purge holds -
+are grain-level mechanisms rather than pure cores, so the TLA+ module checks
+them, in its variant configurations, and real-grain detectors cited in its
+refinement note pin each fix.
 
 ### Every model ships a non-vacuous guard test
 
@@ -204,8 +289,10 @@ Liveness and temporal properties:
 - **Termination** - every saga reaches a terminal decision under a bounded fault
   budget.
 - **EveryCommittedKeyReadable** - every committed saga's keys are eventually all
-  materialised at their post-saga value on their own leaves, so they stay
-  readable once the registry forgets the decision.
+  materialised at their post-saga value on their own leaves, and from then on
+  every reader is served that value: they stay readable once the registry
+  forgets the decision, and while it declines to report it, because a leaf that
+  has applied the terminal defers to its projection (issue #4428).
 - **NoStrandedPrepare** - every participant of a decided saga eventually applies
   the saga's terminal, so no prepared bucket is stranded.
 
@@ -244,22 +331,24 @@ keys, participant leaves, and a transaction status, with no serialization,
 timers, HLC, or WAL - so TLC can enumerate every interleaving of the decision and
 broadcast steps.
 
-The spec lives outside the compiled solution under [`spec/`](../../spec/):
+The spec lives outside the compiled solution, as the `atomic-commit` module under [`spec/`](../../spec/README.md), in [`spec/atomic-commit/`](../../spec/atomic-commit/README.md):
 
 | File | What it is |
 |------|-----------|
 | `AtomicCommit.tla` | The specification: state, actions, safety invariants, liveness properties. |
 | `AtomicCommit.cfg` | The TLC model: the bounded instance and the invariant / property list. |
-| `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/mutations/README.md`](../../spec/mutations/README.md)). |
+| `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/atomic-commit/mutations/README.md`](../../spec/atomic-commit/mutations/README.md)). |
 | `Refinement.md` | The refinement note mapping each spec variable and action to its protocol counterpart in the code cores. |
-| `README.md` | How to run TLC and the last-checked result. |
+| `AtomicCommit.manifest.json` | The counts the formal gates assert for this module, and where its mutations and refinement note live. |
+| `README.md` | What is modelled, the last-checked result, and the module's counts table. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
-overlapping write sets and a bounded reshard orphan step, and checks the type
-invariant `TypeOK`, the safety invariants of the catalogue above, and the
-temporal properties. A clean run enumerates a few tens of thousands of distinct
-states with no invariant, temporal-property, or deadlock violation. The spec's invariant names are the same names used by the property
-catalogue above; the [refinement note](../../spec/Refinement.md) is the mapping
+overlapping write sets and a bounded reshard orphan step, and checks all seven
+invariants (the type invariant `TypeOK` plus the six safety invariants of the
+catalogue above) and all six temporal properties. A clean run enumerates a few
+tens of thousands of distinct states with no invariant, temporal-property, or
+deadlock violation. The spec's invariant names are the same names used by the property
+catalogue above; the [refinement note](../../spec/atomic-commit/Refinement.md) is the mapping
 between the two levers. It maps every property the cfg checks to the core or
 production seam that plays its protocol role, with the test that would detect a
 regression there, and names `TypeOK` - a type-only well-formedness check with no
@@ -270,13 +359,29 @@ neither mapped nor excluded.
 TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
 `[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
 and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
-fixture checks that the base specification holds and that each checked property
-fires under its paired mutations in `spec/mutations/` while staying clean against
-the unmutated specification, so a property weakened until it can no longer fail
-breaks the build instead of passing vacuously. Locally the
+fixture checks that the base specification holds and that each of the thirteen
+checked properties of `AtomicCommit` (and every property of every other module) fires under its paired mutations in that module's mutation directory while
+staying clean against the unmutated specification, so a property weakened until it
+can no longer fail breaks the build instead of passing vacuously. Locally the
 fixture skips when the toolchain is absent; under CI a missing toolchain fails it.
 Run TLC by hand when iterating on the protocol design; the procedure and the CI
-decision are in [`spec/README.md`](../../spec/README.md).
+decision are in [`spec/README.md`](../../spec/README.md), which also describes the module layout the gates discover every specification by.
+
+The same directory holds the cross-cluster module,
+[`AtomicCommitCrossCluster.tla`](../../spec/atomic-commit/AtomicCommitCrossCluster.tla),
+which instances `AtomicCommit` for the origin cluster and specifies the
+receiver: replication of each prepare and terminal over a transport that may
+reorder, drop a delivery and duplicate; every way production loses a record to
+a peer, with its re-seed; the receiver's per-source-shard tally, including the
+ungated legacy path; the cross-tree receiver barrier and the registry's
+delegation to it, with an undiallable barrier answering Indeterminate; the two
+delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its
+properties - `RAllOrNothing`, `RStrictIsolation`, `RLinearizedTerminals`,
+`DelegationsDisjoint`, `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
+`RNoStrandedPrepare` - are claims about the receiver only, each paired with its
+own mutations under `spec/atomic-commit/mutations-cross-cluster/` and mapped in
+[`RefinementCrossCluster.md`](../../spec/atomic-commit/RefinementCrossCluster.md),
+whose abstraction gaps state what it does not cover.
 
 ## Why three levers
 

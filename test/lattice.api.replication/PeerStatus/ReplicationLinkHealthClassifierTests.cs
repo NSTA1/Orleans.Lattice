@@ -21,6 +21,32 @@ public sealed class ReplicationLinkHealthClassifierTests
     private static ReplicationLinkHealth Classify(ReplicationPeerStatusRow row, LatticeReplicationStatusOptions? options = null) =>
         ReplicationLinkHealthClassifier.Classify(row, options ?? Defaults);
 
+    [Test]
+    public void Peer_awaiting_a_reseed_after_a_trim_lost_records_is_stalled_however_healthy_its_counters()
+    {
+        // #4534: the sender withholds saga records until the peer re-seeds.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Classify(Outbound() with { ReseedRequiredSeconds = 0 }), Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Outbound(contactSeconds: double.NaN) with { ReseedRequiredSeconds = 5 }),
+                Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Outbound()), Is.EqualTo(ReplicationLinkHealth.Healthy));
+        });
+    }
+
+    [Test]
+    public void A_link_held_by_a_full_dead_letter_queue_is_stalled_in_either_direction()
+    {
+        // #4603: a full dead-letter queue keeps the next unparkable entry
+        // unacknowledged, so the link makes no progress.
+        Assert.Multiple(() =>
+        {
+            Assert.That(Classify(Outbound() with { DeadLetterFullSeconds = 0 }), Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Inbound() with { DeadLetterFullSeconds = 3 }), Is.EqualTo(ReplicationLinkHealth.Stalled));
+            Assert.That(Classify(Inbound()), Is.EqualTo(ReplicationLinkHealth.Healthy));
+        });
+    }
+
     [TestCase(0L, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind, ReplicationLinkHealth.Healthy)]
     [TestCase(LatticeReplicationStatusOptions.DefaultLaggingEntriesBehind + 1, ReplicationLinkHealth.Lagging)]

@@ -98,8 +98,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was short-circuited by
-    /// the receiver before merge - the snapshot-pinned causal floor already
-    /// covers the point write, the receiver-side local-origin gate rejected an
+    /// the receiver before merge - the receiver-side local-origin gate rejected an
     /// entry authored by this cluster, the entry is a tombstone-reap envelope
     /// (local structural cleanup, never applied), or, on the per-entry apply
     /// path only, a coordinated restore's receive fence deferred it (a deferred
@@ -127,6 +126,33 @@ public static class LatticeReplicationMetrics
     /// dependencies arrive.
     /// </summary>
     public const string OutcomeParkedCausalBuffer = "parked-causal-buffer";
+
+    /// <summary>
+    /// Apply-duration outcome for an entry dead-lettered because one of its
+    /// causal dependencies names a write this cluster acknowledged and then lost
+    /// for good (#4603). Terminal: the entry is parked with reason
+    /// <see cref="ReasonDependencyLost"/> and never applied.
+    /// </summary>
+    public const string OutcomeRejectedDependencyLost = "rejected-dependency-lost";
+
+    /// <summary>
+    /// Apply-duration outcome for a point write or saga prepare dropped below the
+    /// tree's bootstrap drop floor (#4549): stamped below the low watermark the
+    /// last full bootstrap's source vouched for at export open, and not held
+    /// there, so the bootstrap already reflects it. Acknowledged without being
+    /// merged, so a write still in flight from a third cluster cannot resurrect
+    /// a key the source deleted.
+    /// </summary>
+    public const string OutcomeBootstrapFloorDropped = "bootstrap-floor-dropped";
+
+    /// <summary>
+    /// Apply-duration outcome for a point write or saga prepare deferred by the
+    /// tree's bootstrap drop floor (#4549): either below a floor whose import has
+    /// not yet closed against a stable source, or refused by a shard armed with a
+    /// floor installed after the entry was admitted. Not acknowledged, so the
+    /// sender re-ships it and the re-delivery is admitted against the floor.
+    /// </summary>
+    public const string OutcomeBootstrapFloorDeferred = "bootstrap-floor-deferred";
 
     /// <summary>
     /// <see cref="TagOutcome"/> value: the entry was suppressed by the
@@ -209,6 +235,7 @@ public static class LatticeReplicationMetrics
     /// <see cref="ReasonHlcSkew"/>, <see cref="ReasonOversized"/>,
     /// <see cref="ReasonModeMismatch"/>, <see cref="ReasonForeignTenant"/>,
     /// <see cref="ReasonTenantOffline"/>, <see cref="ReasonSuspendedTenant"/>,
+    /// <see cref="ReasonPoisonedSaga"/>, <see cref="ReasonDependencyLost"/>,
     /// and <see cref="ReasonUnknown"/>.
     /// </summary>
     public const string TagReason = "reason";
@@ -238,7 +265,11 @@ public static class LatticeReplicationMetrics
     /// <summary>Reason tag value: entry removed by a successful <c>Replay</c>.</summary>
     public const string ReasonReplayed = "replayed";
 
-    /// <summary>Reason tag value: entry removed by FIFO capacity eviction during a later enqueue.</summary>
+    /// <summary>
+    /// Reason tag value retained for dashboards and older builds: entry removed
+    /// by FIFO capacity eviction during a later enqueue. Not emitted since
+    /// #4603, which replaced eviction with refusal.
+    /// </summary>
     public const string ReasonEvicted = "evicted";
 
     /// <summary>
@@ -655,8 +686,8 @@ public static class LatticeReplicationMetrics
     /// Counter of <see cref="MutationKind.Set"/> entries whose value
     /// payload was elided from an outbound batch by the sender-manifest /
     /// receiver-pull-missing content-hash round trip - the receiver already
-    /// held byte-identical content for the key, so only metadata (the
-    /// high-water-mark advance) was needed and the payload never travelled.
+    /// held exactly that write (its content, origin and source HLC, with the
+    /// leaf still at that version or newer), so the payload never travelled.
     /// Incremented once per elided entry, only when
     /// <see cref="LatticeReplicationOptions.ContentHashDedupElisionEnabled"/>
     /// is set and the peer advertised it can perform the exchange (the
@@ -737,7 +768,7 @@ public static class LatticeReplicationMetrics
 
     /// <summary>
     /// Counter of manifest entries the receiver reported it already holds
-    /// byte-identical content for - the entries the receiver told the sender
+    /// exactly (the same write, not merely the same bytes) - the entries the receiver told the sender
     /// it does not need shipped, so the sender elides their payloads.
     /// Incremented by the count of held (non-missing) entries each exchange.
     /// Pairs with the sender-side <see cref="ShipElidedPayloads"/>: the two
@@ -752,9 +783,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of metadata-only high-water-mark advances the receiver
     /// performed during a content-hash exchange - one increment per exchange
-    /// that durably advanced the per-origin high-water-mark for an
-    /// identical-content entry carrying a newer clock (the idempotent
-    /// re-set), without the payload ever travelling. Incremented once per
+    /// that durably advanced the per-origin high-water-mark to an elided
+    /// write the receiver already held above its mark (merged without moving
+    /// it, for example by a bootstrap drain), without the payload ever
+    /// travelling. Incremented once per
     /// exchange whose durable advance succeeded, never under the default-off
     /// behaviour (a cold or empty applied-content index reports every entry
     /// as missing and performs no advance). Tagged by <see cref="TagTree"/>
@@ -798,12 +830,149 @@ public static class LatticeReplicationMetrics
     /// Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>; the
     /// reason tag distinguishes operator <c>Discard</c>
     /// (<see cref="ReasonDiscarded"/>), successful <c>Replay</c>
-    /// (<see cref="ReasonReplayed"/>), and FIFO capacity eviction during
-    /// a later enqueue (<see cref="ReasonEvicted"/>).
+    /// (<see cref="ReasonReplayed"/>). <see cref="ReasonEvicted"/> is no longer
+    /// emitted: since #4603 a full queue refuses an enqueue instead of evicting
+    /// (see <see cref="DeadLetterRefused"/>).
     /// </summary>
     public static readonly Counter<long> DeadLetterRemoved =
         Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.removed", unit: "{entry}",
             description: "Entries removed from the per-tree dead-letter queue, tagged by tree and reason.");
+
+    /// <summary>
+    /// Counter of inbound saga records (a prepare, or a TxCommit / TxAbort
+    /// terminal) the receiver deferred instead of dead-lettering after
+    /// <see cref="LatticeReplicationOptions.MaxApplyRetries"/> failed applies
+    /// (#4591). A parked saga record would be acknowledged, letting the sender
+    /// release the saga's terminal and the receiver commit it torn, so the
+    /// record is deferred: the sender keeps and re-ships it, and the stream from
+    /// that origin for that tree waits until the failure clears. Tagged by
+    /// <see cref="TagTree"/> and <see cref="TagOrigin"/>. A sustained rate is a
+    /// stalled link that needs the cause fixed or the tree re-bootstrapped; the
+    /// error log names the transaction.
+    /// </summary>
+    public static readonly Counter<long> SagaApplyDeferred =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.saga_deferred", unit: "{entry}",
+            description: "Inbound saga records deferred instead of dead-lettered after exhausting the apply retry budget, tagged by tree and origin.");
+
+    /// <summary>
+    /// Counter of sagas the receiver poisoned after a deferred prepare exceeded
+    /// <see cref="LatticeReplicationOptions.SagaDeferralTimeout"/> or after a
+    /// host-trusted operator requested poison through
+    /// <see cref="ILatticeReplicationDeadLetters.PoisonSagaAsync"/>. Tagged by
+    /// <see cref="TagTree"/>, <see cref="TagOrigin"/>, and
+    /// <see cref="TagOutcome"/>:
+    /// <see cref="OutcomeReceiverSagaPoisonedTimeout"/> when the timeout poison
+    /// was recorded, <see cref="OutcomeReceiverSagaPoisonedOperator"/> when the
+    /// operator poison was recorded,
+    /// <see cref="OutcomeReceiverSagaPoisonRefusedDecided"/> when the receiver's
+    /// transaction registry already carried a terminal decision, and
+    /// <see cref="OutcomeReceiverSagaPoisonRefusedFull"/> when the bounded
+    /// poison set was full and the caller kept deferring fail-closed;
+    /// <see cref="OutcomeReceiverSagaQuarantined"/>,
+    /// <see cref="OutcomeReceiverSagaQuarantineFull"/>, and
+    /// <see cref="OutcomeReceiverSagaQuarantineReleased"/> record the
+    /// quarantine of a saga a re-seed could not settle (issue #4692).
+    /// </summary>
+    public static readonly Counter<long> ReceiverSagaPoisoned =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.saga_poisoned", unit: "{saga}",
+            description: "Receiver-side poisoned sagas, tagged by tree, origin and outcome (timeout/terminal_timeout/quarantined/quarantine_full/quarantine_released/operator/refused_decided/refused_full).");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for a
+    /// record of a saga the receiver poisoned after a prepare of it stayed
+    /// unappliable past <c>SagaDeferralTimeout</c>, or an operator poisoned
+    /// (#4591). The record is parked rather than applied so the receiver never
+    /// commits the saga without the lost write.
+    /// </summary>
+    public const string ReasonPoisonedSaga = "poisoned_saga";
+
+    /// <summary>Canonical name of the <see cref="ReceiverSagaPoisoned"/> counter.</summary>
+    public const string ReceiverSagaPoisonedName = "orleans.lattice.replication.apply.saga_poisoned";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// timeout of a deferred prepare recorded receiver-side poison.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedTimeout = "timeout";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga terminal that kept failing past the receiver saga deferral timeout
+    /// recorded receiver-side poison (issue #4692). The terminal is withheld,
+    /// not parked, and a re-seed settles the saga.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedTerminalTimeout = "terminal_timeout";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga whose poison a completed re-seed had already retired failed again,
+    /// so it was quarantined instead of re-seeded (issue #4692). Its records are
+    /// parked without being applied. An input-integrity fault.
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantined = "quarantined";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// saga that had to be quarantined (issue #4692) could not be, because the
+    /// bounded quarantine set is full. The record is held unacknowledged - the
+    /// stream from that origin for that tree waits - and the saga is neither
+    /// poisoned nor re-seeded again, so the re-seed cycle cannot return. Release
+    /// resolved quarantines with
+    /// <see cref="ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync"/>
+    /// to free capacity.
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantineFull = "quarantine_full";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>: a
+    /// host-trusted operator released a quarantined saga through
+    /// <see cref="ILatticeReplicationDeadLetters.ReleaseQuarantinedSagaAsync"/>
+    /// (issue #4692).
+    /// </summary>
+    public const string OutcomeReceiverSagaQuarantineReleased = "quarantine_released";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// host-trusted operator request recorded receiver-side poison.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonedOperator = "operator";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// poison was refused because the receiver registry already recorded a
+    /// terminal decision for the transaction.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonRefusedDecided = "refused_decided";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ReceiverSagaPoisoned"/>:
+    /// poison was refused because the bounded durable poison set is full.
+    /// </summary>
+    public const string OutcomeReceiverSagaPoisonRefusedFull = "refused_full";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value on <see cref="DeadLetterEnqueued"/> for an
+    /// entry whose causal dependency names a write the receiver acknowledged and
+    /// then lost for good - an operator discarded it from the dead-letter queue
+    /// (#4603). The dependency can never be satisfied, so the entry is parked as
+    /// a terminal state instead of waiting on the causal-apply buffer.
+    /// </summary>
+    public const string ReasonDependencyLost = "dependency_lost";
+
+    /// <summary>
+    /// Counter of entries the per-tree dead-letter queue refused because it
+    /// already holds
+    /// <see cref="LatticeReplicationOptions.DeadLetterQueueCapacity"/> entries
+    /// (#4603). The queue no longer evicts to make room: the refused entry is
+    /// kept unacknowledged (the receiver defers it so the sender re-ships, and
+    /// the shipper does not advance past it), so a sustained rate means a
+    /// replication stream is stalled until an operator replays or discards
+    /// parked entries. Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>
+    /// (the reason the entry would have been parked with).
+    /// </summary>
+    public static readonly Counter<long> DeadLetterRefused =
+        Meter.CreateCounter<long>("orleans.lattice.replication.dead_letter.refused", unit: "{entry}",
+            description: "Entries the per-tree dead-letter queue refused because it was full, tagged by tree and reason.");
 
     // --- Per-peer observable gauges ----------------------------------------------
     //
@@ -929,6 +1098,115 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="WalEntriesShipped"/> counter.
     /// </summary>
     public const string WalEntriesShippedName = "orleans.lattice.replication.wal.entries_shipped";
+
+    // --- Causal frontier (issue #4586 part 2b) -----------------------------------
+
+    /// <summary>
+    /// UpDownCounter of (tree, origin) pairs on this silo's receiver tree
+    /// frontiers, tagged by <see cref="TagTree"/>, <see cref="TagOrigin"/> and
+    /// <see cref="TagMode"/>: <c>exact</c> (the origin ships an applied low
+    /// watermark the tree accepted), <c>pending</c> (the tree tracks a lineage
+    /// but the origin has shipped no watermark yet - an older sender, or its
+    /// clock floor is not enabled), <c>awaiting_reseed</c> (the tree's contents
+    /// were replaced and await a full bootstrap) or <c>degraded</c> (the tree
+    /// registry tracks no lineage for the tree). Every mode but <c>exact</c> is
+    /// sound: only an applied write's exact identity meets a dependency on it.
+    /// A pair that stays outside <c>exact</c> on a fully upgraded cluster is the
+    /// signal to investigate.
+    /// </summary>
+    public static readonly UpDownCounter<long> CausalFrontierOrigins =
+        Meter.CreateUpDownCounter<long>("orleans.lattice.replication.causal.frontier_origins", unit: "{origin}",
+            description: "Receiver tree-frontier (tree, origin) pairs by mode: exact, pending, awaiting_reseed or degraded.");
+
+    /// <summary>
+    /// Counter of replacements of a replicated tree's contents - a restore,
+    /// revert or alias rebind - that happened outside a coordinated restore
+    /// (issue #4586), tagged by <see cref="TagTree"/>. After one, peers keep the
+    /// writes the replacement discarded and may diverge from this cluster, and a
+    /// peer write that depends on a discarded write may become visible there
+    /// without it. A coordinated restore converges them.
+    /// </summary>
+    public static readonly Counter<long> SourceRestoreUncoordinated =
+        Meter.CreateCounter<long>("orleans.lattice.replication.source_restore.uncoordinated", unit: "{restamp}",
+            description: "Replacements of a replicated tree's contents outside a coordinated restore, tagged by tree.");
+
+    // --- Tombstone reap gate (issue #4615) -----------------------------------------
+
+    /// <summary>
+    /// Counter of tombstone reap ceilings the replication reap gate computed,
+    /// one per compaction batch of a replicated tree, tagged by
+    /// <see cref="TagTree"/> and by <see cref="TagReason"/>: the constraint that
+    /// set the ceiling. <see cref="ReapBoundDegradedOrigin"/> and
+    /// <see cref="ReapBoundPeerFrontier"/> on a zero ceiling mean the batch reaped
+    /// nothing at all; otherwise tombstones at or above the ceiling were kept.
+    /// A tree whose ceilings stay bound by one reason accumulates tombstones;
+    /// see the reap gate in the replication drivers documentation.
+    /// </summary>
+    public static readonly Counter<long> TombstoneReapBound =
+        Meter.CreateCounter<long>("orleans.lattice.replication.tombstone_reap.bound", unit: "{ceiling}",
+            description: "Tombstone reap ceilings computed for replicated trees, tagged by the constraint that bound each one.");
+
+    /// <summary>Canonical name of the <see cref="TombstoneReapBound"/> counter.</summary>
+    public const string TombstoneReapBoundName = "orleans.lattice.replication.tombstone_reap.bound";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: an
+    /// origin of the tree has no exact applied low watermark here (the tree is
+    /// degraded, the origin pending, or its re-seed outstanding), so nothing is
+    /// reaped.
+    /// </summary>
+    public const string ReapBoundDegradedOrigin = "degraded_origin";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: an
+    /// origin's applied low watermark set the ceiling.
+    /// </summary>
+    public const string ReapBoundOriginFrontier = "origin_frontier";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: a write
+    /// of an origin parked, dead-lettered or missing from the installed export
+    /// set the ceiling.
+    /// </summary>
+    public const string ReapBoundHeldEntry = "held_entry";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="TombstoneReapBound"/>: a
+    /// peer's shipper reap watermark set the ceiling, or the peer has none.
+    /// </summary>
+    public const string ReapBoundPeerFrontier = "peer_frontier";
+
+    // --- Source lineage gate (issue #4673) -----------------------------------------
+
+    /// <summary>
+    /// Counter of pushed batches the receiver refused because the source read
+    /// them under a lineage this tree does not hold, tagged by
+    /// <see cref="TagTree"/>, <see cref="TagOrigin"/> and <see cref="TagReason"/>:
+    /// <see cref="SourceLineageRefusedStale"/> (the batch's source lineage is not
+    /// the one this tree last drained from the origin) or
+    /// <see cref="SourceLineageRefusedReplaced"/> (this tree's contents were
+    /// replaced since that drain). Each refusal is retried by the sender, which
+    /// re-resolves its source binding and re-seeds the peer when it is current,
+    /// so a sustained rate means a link stalled on a re-seed.
+    /// </summary>
+    public static readonly Counter<long> ApplySourceLineageRefused =
+        Meter.CreateCounter<long>("orleans.lattice.replication.apply.source_lineage_refused", unit: "{batch}",
+            description: "Pushed batches refused because the source read them under a lineage this tree does not hold.");
+
+    /// <summary>Canonical name of the <see cref="ApplySourceLineageRefused"/> counter.</summary>
+    public const string ApplySourceLineageRefusedName = "orleans.lattice.replication.apply.source_lineage_refused";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="ApplySourceLineageRefused"/>:
+    /// the batch's source lineage is not the one this tree last drained.
+    /// </summary>
+    public const string SourceLineageRefusedStale = "stale_lineage";
+
+    /// <summary>
+    /// <see cref="TagReason"/> value of <see cref="ApplySourceLineageRefused"/>:
+    /// this tree's contents were replaced since it last drained the origin.
+    /// </summary>
+    public const string SourceLineageRefusedReplaced = "replaced";
 
     // --- Causal+ apply-buffer instruments ---------------------------------------
 
@@ -1223,6 +1501,40 @@ public static class LatticeReplicationMetrics
     /// </summary>
     public const string BootstrapOutcomeTimedOut = "timed_out";
 
+    /// <summary>Bootstrap delete reconcile outcome: synthetic tombstones were applied.</summary>
+    public const string BootstrapReconcileOutcomeReconciled = "reconciled";
+
+    /// <summary>Bootstrap delete reconcile outcome: scoped export skipped reconciliation.</summary>
+    public const string BootstrapReconcileOutcomeSkippedScoped = "skipped_scoped";
+
+    /// <summary>Bootstrap delete reconcile outcome: source generation changed during export.</summary>
+    public const string BootstrapReconcileOutcomeSkippedUnstable = "skipped_unstable";
+
+    /// <summary>Bootstrap delete reconcile outcome: source was deleted or purging.</summary>
+    public const string BootstrapReconcileOutcomeSkippedDeleted = "skipped_deleted";
+
+    /// <summary>Bootstrap delete reconcile outcome: source generation was unknown.</summary>
+    public const string BootstrapReconcileOutcomeSkippedUnknown = "skipped_unknown";
+
+    /// <summary>Bootstrap delete reconcile outcome: receiver lineage did not match source lineage.</summary>
+    public const string BootstrapReconcileOutcomeSkippedLineageMismatch = "skipped_lineage_mismatch";
+
+    /// <summary>Bootstrap delete reconcile outcome: receiver has no durable aligned lineage for the source.</summary>
+    public const string BootstrapReconcileOutcomeSkippedNeverAligned = "skipped_never_aligned";
+
+    /// <summary>Bootstrap delete reconcile outcome: tree is not last-writer-wins.</summary>
+    public const string BootstrapReconcileOutcomeSkippedNotLww = "skipped_not_lww";
+
+    /// <summary>Bootstrap delete reconcile outcome: durable owed retry was scheduled.</summary>
+    public const string BootstrapReconcileOutcomeOwedRetry = "owed_retry";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="BootstrapReconcile"/>: a receiver
+    /// that could not prove its copy derives from the source's lineage adopted it,
+    /// because the whole-tree export carried every source-origin key it held.
+    /// </summary>
+    public const string BootstrapReconcileOutcomeAligned = "aligned";
+
     /// <summary>
     /// Counter incremented every time the receiver-side bootstrap
     /// coordinator classifies an exception thrown by its snapshot
@@ -1246,6 +1558,36 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="BootstrapTransientRetries"/> counter.
     /// </summary>
     public const string BootstrapTransientRetriesName = "orleans.lattice.replication.bootstrap.transient_retries";
+
+    /// <summary>
+    /// Counter incremented each time an operator force-lifts the read fence a
+    /// failed snapshot bootstrap left up over a partial import (issue #4526),
+    /// through <see cref="ILatticeReplicationAdmin.ForceLiftBootstrapReadFenceAsync"/>.
+    /// Tagged by <see cref="TagTree"/>. Every increment marks a window in which
+    /// reads of the tree may observe a partial import - a committed atomic batch
+    /// with some keys present and others not - until a later bootstrap
+    /// completes, so any non-zero value is an alert, not a trend.
+    /// </summary>
+    public static readonly Counter<long> BootstrapReadFenceForceLifted =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.read_fence_force_lifted", unit: "{lift}",
+            description: "Operator force-lifts of the read fence a failed snapshot bootstrap left over a partial import, tagged by tree. Each one exposes the partial import to readers.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="BootstrapReadFenceForceLifted"/> counter.
+    /// </summary>
+    public const string BootstrapReadFenceForceLiftedName = "orleans.lattice.replication.bootstrap.read_fence_force_lifted";
+
+    /// <summary>
+    /// Counter incremented once per bootstrap delete-reconcile decision. Tagged
+    /// by <see cref="TagTree"/>, <see cref="TagOrigin"/>, and
+    /// <see cref="TagOutcome"/>.
+    /// </summary>
+    public static readonly Counter<long> BootstrapReconcile =
+        Meter.CreateCounter<long>("orleans.lattice.replication.bootstrap.reconcile", unit: "{pass}",
+            description: "Bootstrap delete-reconcile decisions for source-origin keys absent from an in-place re-bootstrap export.");
+
+    /// <summary>Canonical name of the <see cref="BootstrapReconcile"/> counter.</summary>
+    public const string BootstrapReconcileName = "orleans.lattice.replication.bootstrap.reconcile";
 
     // --- Anti-entropy peer digest probe (detect stage) --------------------------
 
@@ -1938,12 +2280,19 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Tag key for the cause of a saga compensation carried by
     /// <see cref="SagaCompensations"/>. Values are
-    /// <see cref="SagaCauseVoteAbort"/> (a participant voted abort and the
-    /// coordinator drove a rollback) and <see cref="SagaCauseCoordinatorLoss"/>
-    /// (the cutover fence expired without a coordinator decision and the
-    /// participant auto-compensated).
+    /// <see cref="SagaCauseVoteAbort"/> (a rollback on the coordinator's abort
+    /// decision, delivered by the coordinator or learned by the participant on
+    /// fence expiry) and <see cref="SagaCauseCoordinatorLoss"/> (an operator
+    /// resolved the participant to abort while its coordinator was unreachable).
     /// </summary>
     public const string TagCause = "cause";
+
+    /// <summary>
+    /// Tag key for a receiver tree frontier's mode for one origin
+    /// (<see cref="CausalFrontierOrigins"/>): <c>exact</c>, <c>pending</c>,
+    /// <c>awaiting_reseed</c> or <c>degraded</c>.
+    /// </summary>
+    public const string TagMode = "mode";
 
     /// <summary><see cref="TagPhase"/> value: the unfenced, resumable prepare (shadow build) phase.</summary>
     public const string SagaPhasePrepare = "prepare";
@@ -2100,9 +2449,10 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of saga compensations, incremented once per participant grain that
     /// rolls back a prepared saga and tagged by <see cref="TagCause"/>
-    /// (<see cref="SagaCauseVoteAbort"/> for a coordinator-driven rollback after a
-    /// vote abort, or <see cref="SagaCauseCoordinatorLoss"/> for a fence-expiry
-    /// auto-compensation after the coordinator decision never arrived).
+    /// (<see cref="SagaCauseVoteAbort"/> for a rollback on the coordinator's abort
+    /// decision, delivered or learned on fence expiry, or
+    /// <see cref="SagaCauseCoordinatorLoss"/> for an operator resolution to abort
+    /// while the coordinator was unreachable).
     /// </summary>
     public static readonly Counter<long> SagaCompensations =
         Meter.CreateCounter<long>("orleans.lattice.replication.saga.compensations", unit: "{compensation}",

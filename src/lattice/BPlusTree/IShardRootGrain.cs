@@ -396,6 +396,18 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// Work-bounded probe for a range delete's issue stamp (issue #4530): walks
+    /// the same leaves <see cref="DeleteRangeBoundedAsync"/> would for
+    /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) and
+    /// returns the highest leaf clock among them, across at most
+    /// <see cref="LatticeOptions.MaxLeavesPerScanPage"/> leaves per call. The
+    /// caller drives it to completion with
+    /// <see cref="ShardRangeClockPage.ResumeFromInclusive"/>, as for the delete.
+    /// Writes nothing.
+    /// </summary>
+    Task<ShardRangeClockPage> GetRangeClockBoundedAsync(string startInclusive, string endExclusive);
+
+    /// <summary>
     /// Returns the total number of live (non-tombstoned) keys in this shard's B+ tree
     /// by walking the leaf chain and summing per-leaf counts.
     /// </summary>
@@ -864,14 +876,21 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// apply with <see cref="LatticeCrdtShapeNotRegisteredException"/> forever.
     /// </para>
     /// <para>
-    /// Cheap on a healthy shard: the leftmost leaf is unconditionally the first
-    /// node <see cref="PurgeAsync"/> clears, so a leftmost leaf that still
-    /// carries its binding proves no node in this shard was cleared and the
-    /// walk is skipped after a single probe. Idempotent, and safe to call on a
-    /// shard that was never purged.
+    /// Each routed leaf is re-bound through <see cref="IBPlusLeafGrain.RecoverBindingAsync"/>,
+    /// which re-creates a rowless leaf empty only when its own row record shows the
+    /// purge cleared it, and refuses any other rowless leaf, whose row may have been
+    /// lost (issue #4700). The walk reads every internal node; the leaf work is
+    /// paged so one call stays bounded: the call handles the leaves from
+    /// <paramref name="fromLeafIndex"/> on, and returns where the next call resumes,
+    /// or <c>-1</c> once the shard is done. Idempotent, and safe to call on a shard
+    /// that was never purged. A failure - a walk fault, or a fault reading a leaf's
+    /// record - propagates, so the recovery is retried rather than leaving a cleared
+    /// leaf with no path back.
     /// </para>
     /// </summary>
-    Task ReseedNodeBindingsAsync();
+    /// <param name="fromLeafIndex">The index of the first routed leaf to re-bind; <c>0</c> to start.</param>
+    /// <returns>The index to resume from, or <c>-1</c> when every leaf has been handled.</returns>
+    Task<int> ReseedNodeBindingsAsync(int fromLeafIndex);
 
     /// <summary>
     /// Merges entries into this shard using LWW (Last-Writer-Wins) semantics,
@@ -1298,6 +1317,23 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// and the materialised row count used by the snapshot-open budget gate.
     /// </returns>
     Task<SnapshotBaselineCaptureResult> CaptureSnapshotBaselineAsync(Guid token, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/> for a
+    /// snapshot capture that holds a saga decision gate (issue #4485): every
+    /// leaf's fold resolves its still-pending prepared buckets against the
+    /// gate's decision snapshot (see
+    /// <see cref="IBPlusLeafGrain.FoldTailOntoFrozenGatedAsync"/>), so every
+    /// shard of the capture puts each saga on the same side.
+    /// </summary>
+    /// <param name="token">The cursor's per-open baseline token. Must not be <see cref="Guid.Empty"/>.</param>
+    /// <param name="decisionGate">The capture's decision gate.</param>
+    /// <param name="cancellationToken">Cancels the leaf-chain walk and the per-leaf folds.</param>
+    /// <returns>As <see cref="CaptureSnapshotBaselineAsync(Guid, CancellationToken)"/>.</returns>
+    Task<SnapshotBaselineCaptureResult> CaptureGatedSnapshotBaselineAsync(
+        Guid token,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken);
 
     /// <summary>
     /// Marks this shard as the source of an in-progress adaptive split.
@@ -1949,6 +1985,56 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// write fence is engaged and its deadline has not yet passed.
     /// </summary>
     Task<bool> IsWriteFencedAsync();
+
+    /// <summary>
+    /// Every key this shard's leaves hold a prepare for under
+    /// <paramref name="transactionId"/> (issue #4522), mapped to its original
+    /// prepare stamp when the prepare is a marked last-writer-wins prepare, or
+    /// to <see langword="null"/> when it is not (see
+    /// <see cref="IBPlusLeafGrain.GetOriginalPrepareStampsAsync"/>). The saga
+    /// coordinator calls it after its prepares so its committed-values backstop
+    /// can be applied at each key's own stamp.
+    /// <para>
+    /// Without <paramref name="exhaustive"/> it reads the leaves this activation
+    /// recorded the saga's prepares reaching, an in-memory record a
+    /// reactivation loses, so a key can be missing from the answer. With
+    /// <paramref name="exhaustive"/> it reads every leaf of the shard's chain,
+    /// whose buckets are replayed from the write-ahead log, so a prepare that
+    /// landed on this shard is never missed. The coordinator escalates to it
+    /// only for keys the first pass did not find.
+    /// </para>
+    /// </summary>
+    /// <param name="transactionId">The saga whose prepares to read.</param>
+    /// <param name="exhaustive">Whether to read every leaf of the shard.</param>
+    Task<Dictionary<string, HybridLogicalClock?>> GetOriginalPrepareStampsAsync(Guid transactionId, bool exhaustive);
+
+    /// <summary>
+    /// Arms or lifts this shard's receiver bootstrap read fence (issue #4526),
+    /// durably. While armed, every read of the shard - the method set
+    /// <c>ShardRootGrain.IsBootstrapFencedMethod</c> names - is refused with
+    /// <see cref="LatticeTreeBootstrappingException"/>, and the shard refuses to
+    /// open a split or consolidation. Writes are unaffected. Idempotent.
+    /// </summary>
+    /// <param name="fenced"><see langword="true"/> to arm the fence, <see langword="false"/> to lift it.</param>
+    Task SetBootstrapReadFenceAsync(bool fenced);
+
+    /// <summary>
+    /// Raises the bootstrap drop-floor epoch this shard enforces (issue #4549)
+    /// and returns once every replicated write it admitted under an older epoch
+    /// has finished its leaf merge. From then on it refuses a replicated write
+    /// stamped with an older epoch with
+    /// <see cref="ReplicationFloorAdmissionStaleException"/>. The epoch is not
+    /// lowered; it lives in this activation, and a later activation reads it
+    /// from the tree registry, which the caller raises first.
+    /// </summary>
+    /// <param name="epoch">The floor epoch to enforce.</param>
+    Task ArmReplicationFloorEpochAsync(long epoch);
+
+    /// <summary>
+    /// Reports whether this shard's receiver bootstrap read fence is armed
+    /// (issue #4526).
+    /// </summary>
+    Task<bool> IsBootstrapReadFencedAsync();
 
     /// <summary>
     /// Test-only seam: requests that the grain runtime collect this

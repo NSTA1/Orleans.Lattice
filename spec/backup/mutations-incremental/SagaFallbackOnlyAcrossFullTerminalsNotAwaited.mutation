@@ -1,0 +1,15 @@
+# Pairs with SagaFallbackOnlyAcrossFull. A committed batch whose shard
+# terminals are still to come is settled at once, so a terminal that lands after
+# the drain is met by a later increment that no longer holds the batch's
+# prepares, which then falls back.
+MODULE: SagaFallbackOnlyAcrossFullTerminalsNotAwaited
+TARGET: SagaFallbackOnlyAcrossFull
+CLASS: Invariant
+SUMMARY: a committed batch is settled before every shard terminal is read
+
+--- FIND
+       \/ d0 = "committed" /\ Complete /\ ~TermsComplete
+--- REPLACE
+       \* MUTATION: shard terminals are not awaited.
+       \/ FALSE
+--- END

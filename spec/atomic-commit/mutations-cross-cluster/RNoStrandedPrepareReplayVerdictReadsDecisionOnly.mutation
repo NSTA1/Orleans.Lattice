@@ -1,0 +1,18 @@
+# Pairs with RNoStrandedPrepare. The replay filter skips the participant row and
+# reads only the decision, so a saga still in flight at the rewind - its prepared
+# rows restaged by the export - reads as purged and is withheld whole. #4533
+# reads the participant row first.
+MODULE: RNoStrandedPrepareReplayVerdictReadsDecisionOnly
+TARGET: RNoStrandedPrepare
+CLASS: Temporal
+SUMMARY: the replay filter's verdict reads the decision alone, so an undecided saga reads as purged
+PERTURBS: ReplayWithhold
+BOUNDS: LossPath = 1, JoinStart = 0, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ FirstSight = "withhold"
+--- REPLACE
+\* MUTATION: no decision reads as purged, the participant row unread.
+    /\ \/ FirstSight = "withhold"
+       \/ verdict = "none" /\ decision[T] = "inflight"
+--- END

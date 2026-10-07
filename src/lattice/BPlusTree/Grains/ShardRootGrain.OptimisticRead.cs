@@ -90,7 +90,9 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// bracket in <see cref="InvokeRoutingFiltered"/>.
     /// </remarks>
     Task IIncomingGrainCallFilter.Invoke(IIncomingGrainCallContext context) =>
-        ClassifyIncomingTurn(context.Request) switch
+        RefuseIfBootstrapFenced(context.Request)
+        ?? InvokeIfFloorStamped(context)
+        ?? ClassifyIncomingTurn(context.Request) switch
         {
             IncomingTurnKind.PointWrite => InvokePointWriteAsync(context),
             IncomingTurnKind.Serial => InvokeSerialTurnAsync(context),
@@ -398,6 +400,10 @@ internal sealed partial class ShardRootGrain : IIncomingGrainCallFilter
     /// </summary>
     private bool IsOptimisticReadGateOpen(string key)
     {
+        // A purged copy is admitted only by the registry check the serial
+        // prepare runs (issue #4503).
+        if (state.State.IsPurged) return false;
+
         try
         {
             ThrowIfTreeRejecting();

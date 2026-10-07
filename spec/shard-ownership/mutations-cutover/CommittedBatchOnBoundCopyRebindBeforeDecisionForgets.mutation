@@ -1,0 +1,23 @@
+# Pairs with CommittedBatchOnBoundCopy. The pre-decision re-bind does not record
+# the copy it leaves (production's RebindAcrossAliasSwapAsync before #4689 was fixed), so the
+# whole batch stays prepared on the previous copy after the commit.
+MODULE: CommittedBatchOnBoundCopyRebindBeforeDecisionForgets
+TARGET: CommittedBatchOnBoundCopy
+CLASS: Invariant
+SUMMARY: the pre-decision re-bind does not record the copy it leaves
+PERTURBS: RebindBeforeDecision
+
+--- FIND
+    /\ prepped = Keys
+    /\ alias # bound
+    /\ bound' = alias
+    /\ prepped' = {}
+    /\ left' = (left \cup {bound}) \ {alias}
+--- REPLACE
+    /\ prepped = Keys
+    /\ alias # bound
+    /\ bound' = alias
+    /\ prepped' = {}
+    \* MUTATION: the copy left behind is not recorded.
+    /\ left' = left \ {alias}
+--- END

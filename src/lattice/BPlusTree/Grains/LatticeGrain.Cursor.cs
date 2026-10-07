@@ -149,14 +149,21 @@ internal sealed partial class LatticeGrain
     /// lifetime.
     /// </description></item>
     /// <item><description>
-    /// Fan out <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// Acquire a saga decision gate on every registry key of the tree (unless
+    /// a backup set already holds one for this open), so no new saga decision
+    /// is recorded while the baselines are captured (issue #4485). Then fan
+    /// out <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureGatedSnapshotBaselineAsync"/>
     /// across every physical shard, whatever range the cursor covers and at
     /// most <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> at a
     /// time, to freeze a per-cursor baseline (each shard's leaf-chain
-    /// projection at a uniform per-partition captured WAL head), seeded in
+    /// projection at a uniform per-partition captured WAL head, with every
+    /// prepared bucket still pending at that head resolved against the gate's
+    /// decision snapshot), seeded in
     /// memory into transient per-shard snapshot leaves (persisted only once
     /// the cursor pages past its first page). The cursor serves those rows
-    /// with no WAL replay, so it does not depend on WAL retention.
+    /// with no WAL replay, so it does not depend on WAL retention. The gate is
+    /// released, and the capture accepted only if the gate was held
+    /// throughout; otherwise the capture is retried.
     /// </description></item>
     /// <item><description>
     /// Gate the open against
@@ -233,18 +240,32 @@ internal sealed partial class LatticeGrain
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
-        // Step 2: per-shard frozen-baseline capture, concurrent across
-        // shards. Each shard freezes its leaf chain, captures a uniform
-        // per-partition WAL head, folds each leaf's own (frontier, head]
-        // tail exactly once, and seeds the materialised per-shard baseline,
-        // keyed by this open's baseline token, into the transient snapshot
-        // leaf's memory (persisted only once the cursor pages past its first
-        // page, issue #916). Serving the cursor
-        // then reads those frozen rows with no WAL replay, so a later WAL
-        // GC that trims the prefix cannot turn the scan empty/partial (the
-        // bug this fixes). Per-shard ShardActivationRetry wrap: a single
+        // Step 2: per-shard frozen-baseline capture under a saga decision gate
+        // (issue #4485), concurrent across shards. Each shard freezes its leaf
+        // chain, captures a uniform per-partition WAL head, folds each leaf's
+        // own (frontier, head] tail exactly once, resolves every prepared
+        // bucket still pending at that head against the gate's decision
+        // snapshot (D0), and seeds the materialised per-shard baseline, keyed
+        // by this open's baseline token, into the transient snapshot leaf's
+        // memory (persisted only once the cursor pages past its first page,
+        // issue #916). Serving the cursor then reads those frozen rows with no
+        // WAL replay, so a later WAL GC that trims the prefix cannot turn the
+        // scan empty/partial. Per-shard ShardActivationRetry wrap: a single
         // shard's cold-start seed-timeout retries only that shard, not the
         // whole fan-out.
+        //
+        // Why the gate. Each shard captures at its own moment and a saga's
+        // terminal broadcast is one append per shard, so per-shard heads alone
+        // can tear a multi-shard atomic batch: a shard whose terminal landed
+        // reads post-saga while a sibling still holding the bucket (or captured
+        // before the saga prepared there) reads pre-saga. While the gate is held
+        // no NEW saga decision can be recorded on the tree (writes and prepares
+        // are never blocked), every terminal anywhere follows a recorded
+        // decision, and D0 is the registry's decisions at the gate. So every
+        // commit terminal a baseline contains is for a saga Committed in D0, and
+        // every such saga had all its prepares acknowledged before its decision:
+        // resolving the remaining buckets against D0 puts every saga on one side
+        // of the capture on every shard.
         //
         // The fan-out is bounded to MaxConcurrentSnapshotCaptures shards at a
         // time (via captureGate). Each capture blocks its shard root's
@@ -254,24 +275,15 @@ internal sealed partial class LatticeGrain
         // it keeps all but the in-flight shards free; the captured baseline
         // and its point-in-time consistency are unchanged - only the dispatch
         // schedule differs (see issue #1054).
-        var baselineToken = Guid.NewGuid();
-        var captureConcurrency = Math.Max(1, Options.MaxConcurrentSnapshotCaptures);
-        using var captureGate = new SemaphoreSlim(captureConcurrency);
-        var captureTasks = new Task<SnapshotBaselineCaptureResult>[physicalShards.Count];
-        for (var i = 0; i < physicalShards.Count; i++)
-        {
-            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            captureTasks[i] = CaptureShardBaselineGatedAsync(
-                shard, baselineToken, captureGate, cancellationToken);
-        }
-        await Task.WhenAll(captureTasks);
+        var (baselineToken, captureResults, undecidedSagaIds) = await CaptureGatedBaselinesAsync(
+            physicalTreeId, physicalShards, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
 
         var perShardPerPartitionOffsets = new Dictionary<int, IReadOnlyList<long>>(physicalShards.Count);
         long maxBaselineRows = 0;
         for (var i = 0; i < physicalShards.Count; i++)
         {
-            var capture = captureTasks[i].Result;
+            var capture = captureResults[i];
             perShardPerPartitionOffsets[physicalShards[i]] = capture.CapturedHeadPerPartition;
             if (capture.RowCount > maxBaselineRows) maxBaselineRows = capture.RowCount;
         }
@@ -324,6 +336,9 @@ internal sealed partial class LatticeGrain
             // leave the slot null there to avoid persisting the full slot
             // array for the common no-split case.
             PinnedShardMap = physicalShards.Count > 1 ? shardMap : null,
+            // The sagas this snapshot holds pre-saga because they were undecided
+            // at its gate, for an incremental backup layered on it (#4589).
+            UndecidedSagaIds = undecidedSagaIds,
 
             // Per-cursor frozen-baseline identity. The per-shard baseline rows
             // captured above are persisted under this token; the snapshot
@@ -358,10 +373,160 @@ internal sealed partial class LatticeGrain
     }
 
     /// <summary>
+    /// Runs the bounded per-shard baseline capture fan-out under a saga decision
+    /// gate (issue #4485) and returns the baseline token and per-shard results of
+    /// the attempt that was accepted.
+    /// <para>
+    /// When the caller already holds a gate (a cross-tree-consistent backup set,
+    /// <see cref="SnapshotDecisionGateContext.Current"/>), the fan-out resolves
+    /// against it and the caller validates and releases it. Otherwise this open
+    /// acquires its own gate on every registry key of the tree, renews it while
+    /// the fan-out runs, and accepts the attempt only when the release reports
+    /// the gate continuously held and the registry shard high-water unmoved. A
+    /// rejected attempt is retried with fresh tokens up to
+    /// <see cref="SnapshotDecisionGateContext.MaxCaptureAttempts"/> times, then
+    /// fails closed with <see cref="LatticeTransactionOutcomeUnavailableException"/>.
+    /// </para>
+    /// </summary>
+    private async Task<(Guid BaselineToken, SnapshotBaselineCaptureResult[] Results, IReadOnlyList<Guid> UndecidedSagaIds)> CaptureGatedBaselinesAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        CancellationToken cancellationToken)
+    {
+        if (SnapshotDecisionGateContext.Current is { } externalToken)
+        {
+            var baselineToken = Guid.NewGuid();
+            var results = await CaptureShardBaselinesAsync(
+                physicalTreeId, physicalShards, baselineToken, new SnapshotDecisionGate(externalToken, TreeId), cancellationToken);
+            var undecided = await TxRegistryFanOut.GetCaptureGateUndecidedAsync(grainFactory, TreeId, externalToken);
+            return (baselineToken, results, undecided);
+        }
+
+        for (var attempt = 1; ; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var gateToken = Guid.NewGuid();
+            var highWater = await TxRegistryFanOut.AcquireCaptureGateAsync(
+                grainFactory, TreeId, gateToken, TxRegistryCaptureGateMode.Gate, SnapshotDecisionGateContext.Lease);
+
+            var baselineToken = Guid.NewGuid();
+            SnapshotBaselineCaptureResult[]? results = null;
+            IReadOnlyList<Guid> undecided = Array.Empty<Guid>();
+            var renewed = true;
+            using (var renewStop = new CancellationTokenSource())
+            {
+                var renewal = RenewDecisionGateAsync(highWater, gateToken, renewStop.Token);
+                try
+                {
+                    results = await CaptureShardBaselinesAsync(
+                        physicalTreeId, physicalShards, baselineToken, new SnapshotDecisionGate(gateToken, TreeId), cancellationToken);
+
+                    // Read before the release: the registry forgets the hold, and
+                    // with it the sagas it answered undecided, once released (#4589).
+                    undecided = await TxRegistryFanOut.GetCaptureGateUndecidedAsync(grainFactory, TreeId, gateToken);
+                }
+                catch (TxDecisionGateRefusedException ex) when (ex.Refusal == TxDecisionGateRefusal.GateLapsed)
+                {
+                    // A leaf's fold found the gate gone (lapsed, or lost to a
+                    // registry reactivation). The release below reports the same
+                    // and the attempt is retried.
+                    results = null;
+                }
+                catch
+                {
+                    renewStop.Cancel();
+                    await renewal;
+                    await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, TreeId, highWater, gateToken);
+                    throw;
+                }
+                finally
+                {
+                    renewStop.Cancel();
+                }
+
+                renewed = await renewal;
+            }
+
+            // Validate before accepting: the gate must have been held, without a
+            // lapse, on every registry key from acquisition to here, and no new
+            // registry shard may have appeared. Otherwise a decision could have
+            // been recorded mid-capture and a shard could hold its terminal while
+            // a sibling resolved the saga pre-saga.
+            var valid = await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, TreeId, highWater, gateToken);
+            if (valid && renewed && results is not null)
+            {
+                return (baselineToken, results, undecided);
+            }
+
+            if (attempt >= SnapshotDecisionGateContext.MaxCaptureAttempts)
+            {
+                throw new LatticeTransactionOutcomeUnavailableException(
+                    $"Snapshot open for tree '{TreeId}' could not hold the saga decision gate for the whole baseline capture "
+                    + $"in {SnapshotDecisionGateContext.MaxCaptureAttempts} attempts, so it cannot guarantee that no atomic batch "
+                    + "is split across the snapshot. Retry the open.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Renews this open's decision gate every
+    /// <see cref="SnapshotDecisionGateContext.RenewInterval"/> until
+    /// <paramref name="stop"/> fires. Returns <see langword="false"/> as soon as a
+    /// renewal finds the gate no longer held.
+    /// </summary>
+    private async Task<bool> RenewDecisionGateAsync(int highWater, Guid gateToken, CancellationToken stop)
+    {
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(SnapshotDecisionGateContext.RenewInterval, stop);
+            }
+            catch (OperationCanceledException)
+            {
+                return true;
+            }
+
+            if (!await TxRegistryFanOut.RenewCaptureGateAsync(
+                    grainFactory, TreeId, highWater, gateToken, SnapshotDecisionGateContext.Lease))
+            {
+                return false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The bounded per-shard baseline capture fan-out itself: at most
+    /// <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> shard roots
+    /// capture at once, each resolving its pending buckets against
+    /// <paramref name="decisionGate"/>.
+    /// </summary>
+    private async Task<SnapshotBaselineCaptureResult[]> CaptureShardBaselinesAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        Guid baselineToken,
+        SnapshotDecisionGate decisionGate,
+        CancellationToken cancellationToken)
+    {
+        var captureConcurrency = Math.Max(1, Options.MaxConcurrentSnapshotCaptures);
+        using var captureGate = new SemaphoreSlim(captureConcurrency);
+        var captureTasks = new Task<SnapshotBaselineCaptureResult>[physicalShards.Count];
+        for (var i = 0; i < physicalShards.Count; i++)
+        {
+            var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
+            captureTasks[i] = CaptureShardBaselineGatedAsync(
+                shard, baselineToken, decisionGate, captureGate, cancellationToken);
+        }
+
+        return await Task.WhenAll(captureTasks);
+    }
+
+    /// <summary>
     /// Captures one shard's snapshot baseline while holding a slot in
     /// <paramref name="gate"/>, so no more than
     /// <see cref="LatticeOptions.MaxConcurrentSnapshotCaptures"/> shard roots
-    /// are blocked on <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureSnapshotBaselineAsync"/>
+    /// are blocked on <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.CaptureGatedSnapshotBaselineAsync"/>
     /// at once. The per-shard <see cref="ShardActivationRetry"/> wrap is
     /// preserved so a single shard's cold-start seed-timeout retries only that
     /// shard. The slot is released once the capture completes (or throws) so
@@ -370,6 +535,7 @@ internal sealed partial class LatticeGrain
     private static async Task<SnapshotBaselineCaptureResult> CaptureShardBaselineGatedAsync(
         IShardRootGrain shard,
         Guid baselineToken,
+        SnapshotDecisionGate decisionGate,
         SemaphoreSlim gate,
         CancellationToken cancellationToken)
     {
@@ -377,7 +543,7 @@ internal sealed partial class LatticeGrain
         try
         {
             return await ShardActivationRetry.RunAsync(
-                () => shard.CaptureSnapshotBaselineAsync(baselineToken, cancellationToken),
+                () => shard.CaptureGatedSnapshotBaselineAsync(baselineToken, decisionGate, cancellationToken),
                 cancellationToken);
         }
         finally

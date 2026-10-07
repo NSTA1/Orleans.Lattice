@@ -1,0 +1,14 @@
+# Pairs with EventualConvergence in ReplicationReBootstrap. Without the last-writer-wins
+# merge the replicas keep whichever write arrived last, which differs by cluster.
+MODULE: EventualConvergenceDeliverOverwrites
+TARGET: EventualConvergence
+CLASS: Temporal
+SUMMARY: the receiver installs a delivered write instead of merging it, so an older write replaces a newer one
+PERTURBS: Deliver
+
+--- FIND
+          ELSE /\ reg' = [reg EXCEPT ![e[2]] = Merge(@, AsReg(w))]
+--- REPLACE
+\* MUTATION: no merge.
+          ELSE /\ reg' = [reg EXCEPT ![e[2]] = AsReg(w)]
+--- END

@@ -147,6 +147,7 @@ public sealed class LatticeReplicationStatusGrpcInterceptorTests
             Assert.That((int)LatticeReplicationApiOperation.GetReplicationConfig, Is.EqualTo(2));
             Assert.That((int)LatticeReplicationApiOperation.Unknown, Is.EqualTo(3));
             Assert.That((int)LatticeReplicationApiOperation.GetPeerStatus, Is.EqualTo(4));
+            Assert.That((int)LatticeReplicationApiOperation.DecommissionPeer, Is.EqualTo(5));
         });
     }
 }

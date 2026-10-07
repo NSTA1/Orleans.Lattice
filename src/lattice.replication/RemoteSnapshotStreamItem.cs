@@ -30,4 +30,28 @@ public readonly record struct RemoteSnapshotStreamItem
     /// an empty key/value.
     /// </summary>
     [Id(0)] public SnapshotEntry Entry { get; init; }
+
+    /// <summary>
+    /// Optional end-of-stream source generation trailer. When this value is
+    /// present the message is a trailer rather than a snapshot entry.
+    /// </summary>
+    [Id(1)] public SnapshotSourceGeneration? CloseGeneration { get; init; }
+
+    /// <summary>
+    /// The source's applied low watermarks and held writes for the tree (issue
+    /// #4586 part 2b), carried on the trailer beside
+    /// <see cref="CloseGeneration"/>. A receiver that predates the slot ignores
+    /// it.
+    /// </summary>
+    [Id(2)] internal SnapshotSourceFrontier? SourceFrontier { get; init; }
+
+    /// <summary>
+    /// On the trailer, the sibling boundaries the export captured at its end
+    /// (issue #4684): per tree the source replicates, other than the exported
+    /// one. Present only on an export served under the cross-tree hold.
+    /// </summary>
+    [Id(3)] internal System.Collections.Immutable.ImmutableDictionary<string, CrossTreeSiblingBoundary>? SiblingBoundaries { get; init; }
+
+    /// <summary>Whether this item is the trailer rather than an entry.</summary>
+    internal bool IsTrailer => CloseGeneration is not null || SiblingBoundaries is not null;
 }

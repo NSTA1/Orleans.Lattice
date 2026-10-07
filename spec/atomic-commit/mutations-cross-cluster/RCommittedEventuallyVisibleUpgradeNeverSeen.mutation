@@ -1,0 +1,18 @@
+# Pairs with RCommittedEventuallyVisible. The wait for a silo that predates the
+# purge hold must end once every silo honours it: if the shipper never observes
+# the upgrade (PurgeHoldSupport.AllSilosHonour reading the cluster manifest), a
+# receiver joining through a bootstrap never starts its replay and the committed
+# saga is never visible there.
+MODULE: RCommittedEventuallyVisibleUpgradeNeverSeen
+TARGET: RCommittedEventuallyVisible
+CLASS: Temporal
+SUMMARY: the shipper never sees every silo honour the purge hold, so a joining receiver waits for ever
+PERTURBS: UpgradeDone
+BOUNDS: LossPath = 0, JoinStart = 1, SagaOutcome = 0, Shape = 0
+
+--- FIND
+    /\ preguard' = FALSE
+--- REPLACE
+\* MUTATION: the upgrade is never observed.
+    /\ preguard' = preguard
+--- END

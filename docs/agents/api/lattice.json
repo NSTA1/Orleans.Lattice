@@ -5699,7 +5699,7 @@
         },
         {
           "error_id": "invalid-operation",
-          "condition": "A resize is in flight and the target needs a migration (an observably empty tree is re-pinned before the resize interlock is checked), or a different reshard target is already in progress."
+          "condition": "A resize is in flight, or a completed resize can still be undone while the previous physical copy mirrors into the resized one (until it is purged, SoftDeleteDuration after the resize), and the target needs a migration (an observably empty tree is re-pinned before the resize interlock is checked); or a different reshard target is already in progress."
         },
         {
           "error_id": "tree-not-registered",

@@ -54,14 +54,16 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(treeId).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(treeId).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
         hwm.TryAdvanceAsync(Arg.Any<string>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
             .Returns(true);
         hwm.GetVectorAsync(Arg.Any<CancellationToken>()).Returns(new VersionVector());
-        var applier = new ReplicationApplier(factory, Monitor(), replicationContext: new AnyTreeLwwContext());
+        var monitor = Monitor();
+        var applier = new ReplicationApplier(factory, monitor, replicationContext: new AnyTreeLwwContext());
+        CausalBufferTestWiring.Wire(factory, applier, monitor, treeId);
         return (applier, factory, apply, hwm);
     }
 
@@ -280,7 +282,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         factory.GetGrain<IReplicationApplyGrain>(Arg.Any<string>()).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(HybridLogicalClock.Zero);
@@ -394,7 +396,7 @@ public partial class ReplicationApplierTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var apply = Substitute.For<IReplicationApplyGrain>();
-        var hwm = Substitute.For<IReplicationHighWaterMarkGrain>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
         var lattice = Substitute.For<ILattice>();
         factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(apply);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
@@ -629,11 +631,14 @@ public partial class ReplicationApplierTests
     }
 
     [Test]
-    public async Task ApplyAsync_state_merge_dedupes_when_entry_below_hwm()
+    public async Task ApplyAsync_state_merge_folds_entry_below_hwm_and_dedupes_its_exact_redelivery()
     {
-        var (applier, lattice, _, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
+        // A typed-CRDT entry below the per-origin HWM is not dropped (there
+        // is no HLC drop threshold - #1060, #4463): it folds through the
+        // idempotent CRDT delta seam. Its exact re-delivery is suppressed by
+        // the shadow-forward identity cache.
+        var (applier, _, apply, hwm) = CreateTypedCrdtApplier(LatticeMergeMode.OrSet);
         hwm.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
-        hwm.GetPinnedFloorAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(Hlc(50));
         var entry = SetEntry("k", Hlc(20)) with
         {
             Mode = LatticeMergeMode.OrSet,
@@ -641,11 +646,15 @@ public partial class ReplicationApplierTests
             Delta = EncodeOrSetDelta(),
         };
 
-        var result = await applier.ApplyAsync(entry);
+        var first = await applier.ApplyAsync(entry);
+        var redelivered = await applier.ApplyAsync(entry);
 
-        Assert.That(result.Applied, Is.False);
-        await lattice.DidNotReceiveWithAnyArgs().GetWithVersionAsync(default!, default);
-        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(default!, default!, default, default);
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Applied, Is.True);
+            Assert.That(redelivered.Applied, Is.False);
+        });
+        await apply.Received(1).ApplyCrdtDeltaWithExpiryAsync("k", LatticeMergeMode.OrSet, Arg.Any<byte[]>(), 0L);
     }
 
     [Test]

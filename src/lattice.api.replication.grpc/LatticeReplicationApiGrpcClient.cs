@@ -145,6 +145,33 @@ public sealed class LatticeReplicationApiGrpcClient
     }
 
     /// <summary>
+    /// Permanently decommissions the peer <paramref name="peerClusterId"/>:
+    /// removes it from every replicated tree's durable enrollment and releases
+    /// any origin-side cross-tree decision hold waiting on its acknowledgement.
+    /// Idempotent for an already-decommissioned peer.
+    /// </summary>
+    /// <param name="peerClusterId">The peer cluster id to decommission. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The result of the decommission operation.</returns>
+    /// <exception cref="ArgumentException"><paramref name="peerClusterId"/> is <c>null</c> or empty.</exception>
+    public async Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(
+        string peerClusterId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(peerClusterId);
+
+        var response = await UnaryAsync(
+            _methods.DecommissionPeer,
+            new ReplicationDecommissionPeerRequestMessage { PeerClusterId = peerClusterId },
+            cancellationToken).ConfigureAwait(false);
+
+        return new ReplicationDecommissionPeerResult(
+            response.PeerClusterId,
+            response.TreeCount,
+            response.AlreadyDecommissioned);
+    }
+
+    /// <summary>
     /// Returns the endpoint's advertised auth schemes. This RPC is
     /// unauthenticated: it can be called before any credential is acquired, so a
     /// client can discover how to sign in.

@@ -180,6 +180,38 @@ public class LatticeReplicationMetricsTests
                 Is.EqualTo("orleans.lattice.replication.dead_letter.enqueued"));
             Assert.That(LatticeReplicationMetrics.DeadLetterRemoved.Name,
                 Is.EqualTo("orleans.lattice.replication.dead_letter.removed"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisoned.Name,
+                Is.EqualTo("orleans.lattice.replication.apply.saga_poisoned"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisoned.Unit, Is.EqualTo("{saga}"));
+            Assert.That(LatticeReplicationMetrics.ReceiverSagaPoisonedName,
+                Is.EqualTo("orleans.lattice.replication.apply.saga_poisoned"));
+        });
+    }
+
+    [Test]
+    public void Receiver_saga_poisoned_counter_records_with_tree_origin_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            LatticeReplicationMetrics.ReceiverSagaPoisonedName);
+
+        LatticeReplicationMetrics.ReceiverSagaPoisoned.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-b"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.OutcomeReceiverSagaPoisonedTimeout));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(only.Value, Is.EqualTo(1L));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "tree" && (string?)t.Value == "t"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "origin" && (string?)t.Value == "site-b"));
+            Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+                t.Key == "outcome" && (string?)t.Value == "timeout"));
         });
     }
 
@@ -411,6 +443,9 @@ public class LatticeReplicationMetricsTests
             Assert.That(LatticeReplicationMetrics.BootstrapDuration.Name,
                 Is.EqualTo("orleans.lattice.replication.bootstrap.duration"));
             Assert.That(LatticeReplicationMetrics.BootstrapDuration.Unit, Is.EqualTo("ms"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcile.Name,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.reconcile"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcile.Unit, Is.EqualTo("{pass}"));
         });
     }
 
@@ -425,6 +460,8 @@ public class LatticeReplicationMetricsTests
                 Is.EqualTo("orleans.lattice.replication.bootstrap.bytes_received"));
             Assert.That(LatticeReplicationMetrics.BootstrapDurationName,
                 Is.EqualTo("orleans.lattice.replication.bootstrap.duration"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcileName,
+                Is.EqualTo("orleans.lattice.replication.bootstrap.reconcile"));
         });
     }
 
@@ -436,6 +473,9 @@ public class LatticeReplicationMetricsTests
             Assert.That(LatticeReplicationMetrics.BootstrapOutcomeLive, Is.EqualTo("live"));
             Assert.That(LatticeReplicationMetrics.BootstrapOutcomeFailed, Is.EqualTo("failed"));
             Assert.That(LatticeReplicationMetrics.BootstrapOutcomeTimedOut, Is.EqualTo("timed_out"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled, Is.EqualTo("reconciled"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedUnstable, Is.EqualTo("skipped_unstable"));
+            Assert.That(LatticeReplicationMetrics.BootstrapReconcileOutcomeSkippedNeverAligned, Is.EqualTo("skipped_never_aligned"));
         });
     }
 
@@ -501,6 +541,30 @@ public class LatticeReplicationMetricsTests
             t.Key == "origin" && (string?)t.Value == "site-a"));
         Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
             t.Key == "outcome" && (string?)t.Value == "live"));
+    }
+
+    [Test]
+    public void Bootstrap_reconcile_counter_records_with_tree_origin_and_outcome_tags()
+    {
+        using var collector = new MeterCollector<long>(
+            LatticeReplicationMetrics.MeterName,
+            "orleans.lattice.replication.bootstrap.reconcile");
+
+        LatticeReplicationMetrics.BootstrapReconcile.Add(1,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, "t"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOrigin, "site-a"),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome,
+                LatticeReplicationMetrics.BootstrapReconcileOutcomeReconciled));
+
+        Assert.That(collector.Measurements, Has.Count.EqualTo(1));
+        var only = collector.Measurements.Single();
+        Assert.That(only.Value, Is.EqualTo(1L));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "tree" && (string?)t.Value == "t"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "origin" && (string?)t.Value == "site-a"));
+        Assert.That(only.Tags, Has.Some.Matches<KeyValuePair<string, object?>>(t =>
+            t.Key == "outcome" && (string?)t.Value == "reconciled"));
     }
 
     // ------------------------------------------------------------------

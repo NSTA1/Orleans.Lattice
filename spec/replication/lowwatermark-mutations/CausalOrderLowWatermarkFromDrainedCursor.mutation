@@ -1,0 +1,14 @@
+# Pairs with CausalOrder. Takes S_p from the drained cursor. A transport loss rewinds the drain, so
+# entries below S were never acknowledged.
+MODULE: CausalOrderLowWatermarkFromDrainedCursor
+TARGET: CausalOrder
+CLASS: Invariant
+SUMMARY: S_p advances when the drained cursor, not the acked one, passes O, so a lost batch is counted as delivered
+PERTURBS: Pass
+BOUNDS: NParts = 1, MaxLoss = 1
+
+--- FIND
+pub[p][2] <= aack[p]
+--- REPLACE
+pub[p][2] <= adr[p]
+--- END

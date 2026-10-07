@@ -84,6 +84,27 @@ internal sealed class WalLogSubscriber(
                 .ReadAsync(sourceTreeId, partition, checkpoint, cancellationToken)
                 .ConfigureAwait(false))
             {
+                // Read-side fall-off check (issues #4584, #4579). The guard above
+                // probes the tail before the read, so a trim landing between the
+                // probe and the read, or between two pages of it, would hand back
+                // the first retained entry past a trimmed range and this consumer
+                // would advance across entries it never saw. Offsets are dense in
+                // what the log hands out, so a jump is either that trim or a slot
+                // whose flush failed and was never acknowledged (a resync after a
+                // failed slot can leave one). Only the tail, probed after the
+                // jump was observed, tells them apart: a tail past the next offset
+                // needed is a trim, and the consumer has fallen off the log.
+                if (offset > lastOffset + 1)
+                {
+                    var tailAfterRead = await commitLogReader
+                        .GetTailOffsetAsync(sourceTreeId, partition, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (tailAfterRead > lastOffset + 1)
+                    {
+                        return new WalDrainResult { FellOffLog = true };
+                    }
+                }
+
                 lastOffset = offset;
                 readThisPartition++;
                 entriesRead++;
