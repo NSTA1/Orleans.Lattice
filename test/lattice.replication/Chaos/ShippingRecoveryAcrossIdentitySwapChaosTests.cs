@@ -16,13 +16,18 @@ namespace Orleans.Lattice.Replication.Tests.Chaos;
 /// <b>What this pins.</b> When a logical source tree's effective physical
 /// id changes under its registry alias, the registry fires an
 /// alias-change notification that the replication observer fans to the
-/// affected per-peer shipper grains; each shipper rebinds by clearing its
-/// per-partition cursors and re-shipping from the new physical WAL log
-/// start. Peers merge every shipped entry by HLC (LWW), so the re-ship is
-/// idempotent. After the workload quiesces every peer site converges on
-/// the POST-swap source key set: no peer is left tailing the orphaned
-/// pre-swap physical WAL, and the keys written only to the abandoned
-/// identity while the edge was partitioned never reach a receiver.
+/// affected per-peer shipper grains, and each shipper rebinds to the new
+/// physical WAL. A move that only gives the tree its first lineage replays
+/// the new log from its start; a move between two lineages (#4673) instead
+/// forces a lineage gap: the shipper consumes the new log below a boundary
+/// without shipping it and asks the peer to re-seed from a snapshot export of
+/// the new copy, which the receiver pulls from the source site over the same
+/// partitionable edge. Peers merge every shipped or imported entry by HLC
+/// (LWW), so both paths are idempotent. After the workload quiesces every
+/// peer site converges on the POST-swap source key set: no peer is left
+/// tailing the orphaned pre-swap physical WAL, and the keys written only to
+/// the abandoned identity while the edge was partitioned never reach a
+/// receiver.
 /// </para>
 /// <para>
 /// <b>Deterministic rebind, not polling.</b> Detection is event-driven:
@@ -192,10 +197,11 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
         var expected = baseline.Append("gen-marker").ToArray();
         await WaitForPresenceAsync(peer, expected, ConvergenceTimeout);
 
-        Assert.That(Encoding.UTF8.GetString((await peer.GetAsync("gen-marker"))!),
-            Is.EqualTo("gen3"), "Peer must converge on the final identity's marker.");
-        Assert.That(Encoding.UTF8.GetString((await peer.GetAsync("base-00"))!),
-            Is.EqualTo("gen3-base-00"), "Peer must carry the final identity's values.");
+        // Presence alone is not convergence: gen1's marker and values arrive
+        // first. Wait for the final identity's values.
+        var finalValues = baseline.ToDictionary(k => k, k => $"gen3-{k}", StringComparer.Ordinal);
+        finalValues["gen-marker"] = "gen3";
+        await WaitForValuesAsync(peer, finalValues, ConvergenceTimeout);
 
         await AssertAbsenceHoldsAsync(peer, allDoomed);
     }
@@ -256,12 +262,39 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
             var allPresent = true;
             foreach (var k in keysArr)
             {
-                if (await peer.GetAsync(k) is null) { allPresent = false; break; }
+                if (await TryReadAsync(peer, k) is not { Refused: false, Value: not null }) { allPresent = false; break; }
             }
             if (allPresent) return;
             await Task.Delay(100);
         }
         Assert.Fail($"Peer did not converge on {keysArr.Length} keys within {timeout.TotalSeconds}s.");
+    }
+
+    /// <summary>
+    /// Waits until every key in <paramref name="expected"/> reads its expected
+    /// value. A value can be present before it is final - an earlier
+    /// generation's write arrives first - so presence alone does not show
+    /// convergence on the final identity.
+    /// </summary>
+    private static async Task WaitForValuesAsync(ILattice peer, IReadOnlyDictionary<string, string> expected, TimeSpan timeout)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        var last = new Dictionary<string, string?>(StringComparer.Ordinal);
+        while (Environment.TickCount64 < deadline)
+        {
+            var all = true;
+            foreach (var (k, want) in expected)
+            {
+                var read = await TryReadAsync(peer, k);
+                var got = read is { Refused: false, Value: { } bytes } ? Encoding.UTF8.GetString(bytes) : null;
+                last[k] = got;
+                if (got != want) { all = false; break; }
+            }
+            if (all) return;
+            await Task.Delay(100);
+        }
+        Assert.Fail("Peer did not converge on the final identity's values within "
+            + $"{timeout.TotalSeconds}s; last read: {string.Join(", ", last.Select(p => $"{p.Key}={p.Value ?? "<absent>"}"))}.");
     }
 
     /// <summary>
@@ -276,11 +309,28 @@ public class ShippingRecoveryAcrossIdentitySwapChaosTests
         {
             foreach (var k in keys)
             {
-                var v = await peer.GetAsync(k);
-                Assert.That(v, Is.Null,
+                var read = await TryReadAsync(peer, k);
+                Assert.That(read.Refused ? null : read.Value, Is.Null,
                     $"Key '{k}' from an abandoned identity must never reach a receiver.");
             }
             await Task.Delay(100);
+        }
+    }
+
+    /// <summary>
+    /// Reads <paramref name="key"/>, reporting a read the peer refuses while a
+    /// re-seed drains rather than failing on it: the peer refuses every read
+    /// until the import lands (<see cref="LatticeTreeBootstrappingException"/>).
+    /// </summary>
+    private static async Task<(bool Refused, byte[]? Value)> TryReadAsync(ILattice peer, string key)
+    {
+        try
+        {
+            return (false, await peer.GetAsync(key));
+        }
+        catch (LatticeTreeBootstrappingException)
+        {
+            return (true, null);
         }
     }
 }

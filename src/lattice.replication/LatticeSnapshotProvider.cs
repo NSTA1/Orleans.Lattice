@@ -312,7 +312,14 @@ internal sealed class LatticeSnapshotProvider(
         string physicalTreeId,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var lattice = _grainFactory.GetGrain<ILattice>(treeName);
+        // Read the rows from the physical copy the export stamps, never through
+        // the logical tree's grain: a LatticeGrain caches its physical routing
+        // per activation and drops it only on a routing error, so after an alias
+        // move that leaves the old copy intact it keeps reading the old copy,
+        // while the heads, the generation, the lineage and the close check are
+        // all of physicalTreeId. Mixing the two shipped the old copy's rows
+        // under the new copy's lineage (issue #4673's re-seed after an alias move).
+        var lattice = _grainFactory.GetGrain<ILattice>(physicalTreeId);
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
 
         // Issue #4685: every WAL partition's readable head, captured BEFORE
