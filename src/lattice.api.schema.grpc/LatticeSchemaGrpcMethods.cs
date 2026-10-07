@@ -62,16 +62,12 @@ internal sealed class LatticeSchemaGrpcMethods
     /// <summary>The unary advance-target-version RPC method name.</summary>
     public const string AdvanceTargetVersionMethodName = "AdvanceTargetVersion";
 
-    /// <summary>The unary advance-and-migrate RPC method name.</summary>
-    /// <summary>The unary migrate-to-target-version RPC method name.</summary>
     /// <summary>The unary clear-version-config RPC method name.</summary>
     public const string ClearVersionConfigMethodName = "ClearVersionConfig";
 
-    /// <summary>The unary remediate RPC method name.</summary>
     /// <summary>The unary get-remediation-status RPC method name.</summary>
     public const string GetRemediationStatusMethodName = "GetRemediationStatus";
 
-    /// <summary>The unary scan-compliance RPC method name.</summary>
     /// <summary>The unary capability-probe RPC method name.</summary>
     public const string ProbeCapabilitiesMethodName = "ProbeCapabilities";
 

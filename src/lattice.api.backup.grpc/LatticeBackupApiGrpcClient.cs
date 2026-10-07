@@ -56,12 +56,6 @@ public sealed class LatticeBackupApiGrpcClient
             LatticeBackupGrpcMethods.FromServiceProvider(serializerProvider));
     }
 
-    /// <summary>Captures a full backup of the request's scope.</summary>
-    /// <summary>Captures an incremental backup layered on a base backup.</summary>
-    /// <summary>
-    /// Captures a backup set - one full backup per scope, grouped under a single
-    /// set manifest - optionally at a single cross-tree causal fence.
-    /// </summary>
     /// <summary>
     /// Starts a tracked full capture and returns its handle at once; poll
     /// <see cref="GetBackupOperationStatusAsync"/> for progress and the outcome.
@@ -323,7 +317,6 @@ public sealed class LatticeBackupApiGrpcClient
         return response.Deleted;
     }
 
-    /// <summary>Restores a backup into its target tree.</summary>
     /// <summary>Reverts a shadow-cutover restore. Idempotent.</summary>
     public async Task RevertRestoreAsync(
         LatticeRestoreResult restore,

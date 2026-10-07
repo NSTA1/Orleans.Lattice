@@ -58,16 +58,12 @@ internal abstract class LatticeSchemaGrpcServiceBase
     /// <summary>Advances a tree's target schema version. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<VersionConfigResponse> AdvanceTargetVersion(AdvanceVersionRequest request, ServerCallContext context);
 
-    /// <summary>Advances a tree's target version and eagerly migrates. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
-    /// <summary>Migrates a tree to its current target version. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     /// <summary>Clears a tree's version config. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<SchemaRemovedResponse> ClearVersionConfig(SchemaTreeRequest request, ServerCallContext context);
 
-    /// <summary>Runs (or resumes) a tree's remediation. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     /// <summary>Reads a tree's remediation status. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<SchemaRemediationReportResponse> GetRemediationStatus(SchemaTreeRequest request, ServerCallContext context);
 
-    /// <summary>Scans a tree for compliance against its policy. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     /// <summary>Probes the caller's schema-management capabilities for a tree. Implemented in <see cref="LatticeSchemaGrpcService"/>.</summary>
     public abstract Task<LatticeSchemaCapabilities> ProbeCapabilities(SchemaTreeRequest request, ServerCallContext context);
 

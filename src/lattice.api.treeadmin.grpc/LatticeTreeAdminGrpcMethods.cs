@@ -138,7 +138,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only WAL move plan RPC method name.</summary>
     public const string PlanWalMoveMethodName = "PlanWalMove";
 
-    /// <summary>The unary WAL move execute trigger RPC method name.</summary>
     /// <summary>The unary WAL move reclaim RPC method name.</summary>
     public const string ReclaimMovedWalSourceMethodName = "ReclaimMovedWalSource";
 
@@ -151,8 +150,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only materialised-view status RPC method name.</summary>
     public const string GetViewStatusMethodName = "GetViewStatus";
 
-    /// <summary>The unary materialised-view rebuild trigger RPC method name.</summary>
-    /// <summary>The unary materialised-view reconcile trigger RPC method name.</summary>
     /// <summary>The unary materialised-view drop RPC method name.</summary>
     public const string DropViewMethodName = "DropView";
 
@@ -162,7 +159,6 @@ internal sealed class LatticeTreeAdminGrpcMethods
     /// <summary>The unary read-only tag-index status RPC method name.</summary>
     public const string GetTagIndexStatusMethodName = "GetTagIndexStatus";
 
-    /// <summary>The unary tag-index reconcile trigger RPC method name.</summary>
     /// <summary>The unary shard tombstone-compaction trigger RPC method name.</summary>
     public const string TriggerShardCompactionMethodName = "TriggerShardCompaction";
 

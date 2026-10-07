@@ -139,7 +139,6 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Computes a WAL move plan on the wrapped facade.</summary>
     public abstract Task<TreeWalMovePlan> PlanWalMove(TreeAdminWalMovePlanRequest request, ServerCallContext context);
 
-    /// <summary>Executes a WAL move on the wrapped facade.</summary>
     /// <summary>Reclaims a moved WAL source on the wrapped facade.</summary>
     public abstract Task<TreeWalMoveReceipt> ReclaimMovedWalSource(TreeAdminWalReclaimRequest request, ServerCallContext context);
 
@@ -152,8 +151,6 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads a materialised view's status from the wrapped facade.</summary>
     public abstract Task<TreeViewStatus> GetViewStatus(TreeAdminViewRequest request, ServerCallContext context);
 
-    /// <summary>Rebuilds a materialised view on the wrapped facade.</summary>
-    /// <summary>Reconciles a materialised view on the wrapped facade.</summary>
     /// <summary>Drops a materialised view on the wrapped facade.</summary>
     public abstract Task<TreeAdminViewRequest> DropView(TreeAdminViewRequest request, ServerCallContext context);
 
@@ -163,7 +160,6 @@ internal abstract class LatticeTreeAdminGrpcServiceBase
     /// <summary>Reads a tag index's status from the wrapped facade.</summary>
     public abstract Task<TreeTagIndexStatus> GetTagIndexStatus(TreeAdminTagIndexRequest request, ServerCallContext context);
 
-    /// <summary>Reconciles a tag index on the wrapped facade.</summary>
     /// <summary>Triggers a shard tombstone-compaction pass on the wrapped facade.</summary>
     public abstract Task<TreeCompactionTriggerResult> TriggerShardCompaction(TreeAdminShardRequest request, ServerCallContext context);
 
