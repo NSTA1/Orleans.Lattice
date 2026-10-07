@@ -24,20 +24,23 @@ internal sealed class CrossTreeExportGate(IServiceProvider services)
     /// <summary>Test seam: overrides the cluster-manifest check.</summary>
     internal Func<bool>? AllSilosHonourOverrideForTesting { get; set; }
 
-    /// <summary>Test seam: restricts the siblings a capture lists, beyond the replicated trees.</summary>
+    /// <summary>Test seam: selects the sibling trees a capture lists.</summary>
     internal Func<string, bool>? SiblingFilterForTesting { get; set; }
 
     /// <summary>
-    /// Captures, for every tree this cluster replicates other than
-    /// <paramref name="treeName"/>, its physical write-ahead log, each
-    /// partition's next sequence and its export epoch (issue #4684). Called at
-    /// the end of an export, so every sibling record the export's rows can
-    /// depend on lies below the captured tails. A receiver keeps the imported
-    /// tree read-fenced until each sibling it replicates has passed its
-    /// boundary.
+    /// Captures the physical write-ahead log, each partition's next sequence,
+    /// and export epoch (issue #4684) for every replicated participant tree
+    /// named by the snapshot. Called at the end of an export, so every sibling
+    /// record the export's cross-tree rows can depend on lies below the
+    /// captured tails. A null participant set retains the conservative
+    /// enrollment-wide behavior for providers without complete participant
+    /// metadata.
     /// </summary>
     public async Task<ImmutableDictionary<string, CrossTreeSiblingBoundary>> CaptureSiblingBoundariesAsync(
-        string treeName, ILatticeReplicationContext replicationContext, CancellationToken cancellationToken)
+        string treeName,
+        ILatticeReplicationContext replicationContext,
+        IReadOnlyCollection<string>? participantTrees,
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(treeName);
         ArgumentNullException.ThrowIfNull(replicationContext);
@@ -45,10 +48,16 @@ internal sealed class CrossTreeExportGate(IServiceProvider services)
         var options = services.GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
         var registry = grainFactory.GetLatticeRegistry();
         var builder = ImmutableDictionary.CreateBuilder<string, CrossTreeSiblingBoundary>(StringComparer.Ordinal);
-        foreach (var sibling in await registry.GetAllTreeIdsAsync().ConfigureAwait(false))
+        var registeredTrees = await registry.GetAllTreeIdsAsync().ConfigureAwait(false);
+        var registered = new HashSet<string>(registeredTrees, StringComparer.Ordinal);
+        var selectedTrees = SiblingFilterForTesting is null
+            ? participantTrees is null ? registeredTrees : participantTrees
+            : registeredTrees.Where(tree => SiblingFilterForTesting(tree));
+        foreach (var sibling in selectedTrees)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (string.Equals(sibling, treeName, StringComparison.Ordinal)
+            if (!registered.Contains(sibling)
+                || string.Equals(sibling, treeName, StringComparison.Ordinal)
                 || replicationContext.ResolveMergeMode(sibling) is null
                 || SiblingFilterForTesting?.Invoke(sibling) == false)
             {
