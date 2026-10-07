@@ -1,7 +1,9 @@
 using Bunit;
+using Orleans.Lattice.Api.Replication;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Tenancy;
 using Orleans.Lattice.Explorer.UI.Design.Components;
+using Orleans.Lattice.Tenancy;
 
 namespace Orleans.Lattice.Samples.Explorer.Tests;
 
@@ -33,6 +35,61 @@ public sealed class TenancyRegionsSmokeTests
             await _sample.DisposeAsync();
             File.Delete(_sample.Console.ConfigPath);
         }
+    }
+
+    [Test]
+    public async Task A_drain_waits_for_the_remote_region_and_completes_when_registry_shipping_resumes()
+    {
+        const string Tenant = "delayed-drain";
+        const string East = SampleIdentities.EastRegion;
+        const string West = SampleIdentities.WestRegion;
+        using var caller = LatticeCredentialContext.Use(
+            SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme);
+        var admin = _sample.East.Services.GetRequiredService<ILatticeTenantAdmin>();
+        var east = _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>();
+        var west = _sample.West!.Services.GetRequiredService<ILatticeTenantRegionAdmin>();
+        await admin.CreateTenantAsync(Tenant);
+        await east.AuthorizeAllowedRegionsAsync(Tenant, [East, West]);
+        await east.SetResidencyAsync(Tenant, [East, West]);
+        var registry = _sample.East.Services.GetRequiredService<ITenantRegistry>();
+        foreach (var region in new[] { East, West })
+        {
+            await SampleSeeder.PromoteToOnlineAsync(registry, TenantId.Parse(Tenant), region, East);
+        }
+
+        var seeded = await SampleTestHost.EventuallyAsync(async () =>
+        {
+            var remote = await _sample.West.Services.GetRequiredService<ITenantRegistry>().GetAsync(TenantId.Parse(Tenant));
+            return remote?.GetRegionStatus(West) == TenantRegionStatus.Online;
+        }, Budget);
+        if (!seeded)
+        {
+            await PrintReplicationAsync();
+        }
+        Assert.That(seeded, Is.True, "the tenant definition must reach the peer without a second seed");
+
+        _sample.PeerLink.Pause();
+        try
+        {
+            await east.SetResidencyAsync(Tenant, [East]);
+            Assert.That((await east.GetTenantRegionStatusAsync(Tenant)).Regions.Single(row => row.RegionId == West).Status,
+                Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+            Assert.That((await west.GetTenantRegionStatusAsync(Tenant)).Regions.Single(row => row.RegionId == West).Status,
+                Is.EqualTo(TenantRegionLifecycleStatus.Online), "a disconnected peer has not observed the removal");
+        }
+        finally
+        {
+            _sample.PeerLink.Resume();
+        }
+
+        Assert.That(await SampleTestHost.EventuallyAsync(async () =>
+        {
+            var origin = await east.GetTenantRegionStatusAsync(Tenant);
+            var remote = await west.GetTenantRegionStatusAsync(Tenant);
+            return origin.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Removed
+                && remote.Regions.Single(row => row.RegionId == West).Status == TenantRegionLifecycleStatus.Removed
+                && origin.Regions.Single(row => row.RegionId == East).Status == TenantRegionLifecycleStatus.Online;
+        }, Budget), Is.True, "the remote drain completion returns to its origin after the link resumes");
     }
 
     [Test]
@@ -91,7 +148,7 @@ public sealed class TenancyRegionsSmokeTests
         Button(cut, "Drain and apply").Click();
 
         toasts.WaitForState(() => Toasts(toasts).Contains($"Tenant {Acme} is draining {West}."), Budget);
-        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West && row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim() == "Draining"));
+        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West && row.Children[2].TextContent.Trim() == "Not served"));
         var eastRow = cut.FindAll("tbody tr").Single(row => row.Children[0].TextContent.Trim() == East);
         Assert.Multiple(() =>
         {
@@ -103,19 +160,54 @@ public sealed class TenancyRegionsSmokeTests
 
         using (LatticeCredentialContext.Use(SampleSeeder.BasicToken(SampleIdentities.Administrator), scheme: DemoBasicAuthenticator.Scheme))
         {
+            var observed = new Dictionary<string, TenantRegionLifecycleStatus>();
+            var removed = await SampleTestHost.EventuallyAsync(async () =>
+            {
+                foreach (var region in _sample.Regions)
+                {
+                    var status = await region.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
+                    observed[region.Id] = status.Regions.Single(row => row.RegionId == West).Status;
+                }
+
+                return observed.Values.All(status => status == TenantRegionLifecycleStatus.Removed);
+            }, Budget);
+            if (!removed)
+            {
+                await PrintReplicationAsync();
+            }
+            Assert.That(removed, Is.True, "west observes east's registry change, completes its drain and replicates Removed back to east; last statuses: "
+                + string.Join(", ", observed.Select(entry => $"{entry.Key}: {entry.Value}")));
             var report = await _sample.East.Services.GetRequiredService<ILatticeTenantRegionAdmin>().GetTenantRegionStatusAsync(Acme);
             Assert.Multiple(() =>
             {
                 Assert.That(report.Regions.Where(region => region.IsAllowed).Select(region => region.RegionId), Is.EqualTo(new[] { East, West }));
                 Assert.That(report.Regions.Single(region => region.RegionId == East).Status, Is.EqualTo(TenantRegionLifecycleStatus.Online));
-                Assert.That(report.Regions.Single(region => region.RegionId == West).Status, Is.EqualTo(TenantRegionLifecycleStatus.Draining));
+                Assert.That(report.Regions.Single(region => region.RegionId == West).Status, Is.EqualTo(TenantRegionLifecycleStatus.Removed));
             });
         }
 
         // And east still serves acme: its admin reads acme's orders there.
+        Wait(cut, () => cut.FindAll("tbody tr").Any(row => row.Children[0].TextContent.Trim() == West
+            && row.Children[1].QuerySelector(".lt-pill__text")!.TextContent.Trim() == "Removed"));
         await using var acme = await ConsoleCircuit.OpenAsync(_sample, SampleIdentities.AcmeAdmin, Acme);
         var read = await acme.ReadAsync(SampleSeeder.OrdersTree(Acme), "order-1001");
         Assert.That(read.Status, Is.EqualTo(Orleans.Lattice.Api.State.StateQueryStatus.Found), "acme is still served in east");
+    }
+
+    private async Task PrintReplicationAsync()
+    {
+        using var system = LatticeSystemOrigin.Enter();
+        foreach (var region in _sample.Regions)
+        {
+            var status = await region.Services.GetRequiredService<ILatticeReplicationStatus>()
+                .GetPeerStatusAsync(new ReplicationPeerStatusQuery { TreeId = "sys-tenant-registry" });
+            foreach (var link in status.Peers)
+            {
+                NUnit.Framework.TestContext.Out.WriteLine(
+                    $"{region.Id} {link.Direction} {link.PeerRegionId}: {link.Health}, stall={link.StallReason}, "
+                    + $"backlog={link.EntriesBehind}, errors={link.ConsecutiveErrors}, last contact={link.TimeSinceLastContact}");
+            }
+        }
     }
 
     private static string[] Chips(IRenderedComponent<TenancyRegions> cut) =>

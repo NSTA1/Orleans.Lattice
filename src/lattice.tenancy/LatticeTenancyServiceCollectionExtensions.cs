@@ -24,6 +24,9 @@ public static class LatticeTenancyServiceCollectionExtensions
     /// that sets history retention and seeds the reserved default tenant with an
     /// unbounded quota. Also ensures the view infrastructure is present so the
     /// registry tree gets durable per-key history out of the box.
+    /// When replication is also registered, the definition registry is enrolled
+    /// automatically on every region as a last-writer-wins tree, independently
+    /// of registration order. Usage and overage trees remain opt-in.
     /// <para>
     /// Enabling tenancy hard-depends on the core, membership, and auth add-ons,
     /// so this must be called <i>after</i>
@@ -98,6 +101,17 @@ public static class LatticeTenancyServiceCollectionExtensions
         }
 
         builder.Services.AddSingleton<TenancyRegistrationMarker>();
+
+        // A static floor is present on every receiver before the first write,
+        // unlike independent runtime enrolments, which can become ambiguous.
+        builder.Services.PostConfigureAll<LatticeReplicationOptions>(options =>
+        {
+            var trees = options.ReplicatedTrees is null
+                ? new Dictionary<string, LatticeMergeMode>(StringComparer.Ordinal)
+                : new Dictionary<string, LatticeMergeMode>(options.ReplicatedTrees, StringComparer.Ordinal);
+            trees[TenantTreeNames.RegistryTree] = LatticeMergeMode.LwwRegister;
+            options.ReplicatedTrees = trees;
+        });
 
         // Durable per-key history for the sys-tenant-* trees rides on the view
         // infrastructure; ensure it is present (idempotent).

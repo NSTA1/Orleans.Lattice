@@ -60,8 +60,12 @@ the browser is sent the fault's detail too.
 | Silo / gateway ports | 11111 / 30000 | 11112 / 30001 |
 | Explorer console | `http://localhost:5080/` | served by `east` |
 
-Both regions run the same code, with the same identities, policy and tenants.
-`east` also seeds the data that replication carries to `west`:
+Both regions run the same code. Baseline sample access is seeded locally; tenant
+definitions, grants and delegated access are seeded once in `east` and replicated
+to `west`. Tenancy automatically enrols `sys-tenant-registry`, and the sample
+enrols the membership and authorization system trees too. Startup waits for the
+peer to observe the tenants and acme's Online residency before installing its app.
+`east` seeds the data that replication carries to `west`:
 
 - `factory-floor` (default tenant): 12 machines, replicated last-writer-wins.
 - `t/acme/orders` and `t/globex/orders`: five orders in each tenant.
@@ -204,13 +208,14 @@ tenant admin sees:
   residency and the page previews what applying it does, region by region. A
   region added to a residency starts *Provisioning*, and nothing in the sample
   promotes it, so a change that would leave a tenant served nowhere turns
-  **Apply residency** off. Remove the region the console is connected to from
-  acme's residency and its row shows the step it has reached (*Removing:
-  Draining*, *Step 1 of 3*); that region's own silos complete the drain, and the
-  page follows it to *Removed* without a refresh. Each region keeps its own
-  tenant registry in this sample, so a drain recorded for the other region is
-  never seen by that region's silos and stays *Draining* here, which is what the
-  page says a lasting *Draining* means.
+  **Apply residency** off. Remove either region from acme's residency and its row
+  shows the step it has reached (*Removing: Draining*, *Step 1 of 3*). The registry
+  change replicates to the drained region, whose silos complete the drain; that
+  completion replicates back and the page follows it to *Removed* without a
+  refresh. If the peer link is paused, the origin waits at *Draining* until the
+  peer observes the change and returns its confirmation. The status explanation
+  names registry replication and region availability as checks, and does not claim
+  the disconnected peer has stopped serving.
 
 For the **tenant-scoped view**, restart with `--sign-in-as acme-admin`. The
 console opens at `/t/acme` with only Data, Apps, Access, Tenancy, Replication and
@@ -234,7 +239,9 @@ and a link per tree and direction - `factory-floor` both ways,
 `sys-replication-config` (the replicated runtime configuration) and the task
 board's tree - each with its backlog, errors and last contact. **Enrolled
 trees** shows how each is enrolled: `factory-floor` and the app tree at runtime,
-the configuration tree statically.
+the configuration tree statically. The definition registry (`sys-tenant-registry`)
+and membership/auth trees are also statically enrolled; tenant orders and invoices
+are enrolled at runtime and seeded in east alone.
 
 Press **P** in the console window to pause the link. Replication between the
 regions is refused in both directions (the Explorer's own calls are not), so

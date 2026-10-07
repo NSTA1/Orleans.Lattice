@@ -16,7 +16,7 @@ public sealed class TenancyRegionLifecycleTests
     [TestCase(TenantRegionLifecycleStatus.Provisioning, "Not served here until it is Online. Nothing in Lattice advances an added region: a platform operator of the hosting deployment promotes it once the tenant's data is in place.")]
     [TestCase(TenantRegionLifecycleStatus.Backfilling, "Not served here until it is Online. Lattice copies no data into an added region; the hosting deployment fills it in, and a platform operator promotes it.")]
     [TestCase(TenantRegionLifecycleStatus.Online, "Serves this tenant.")]
-    [TestCase(TenantRegionLifecycleStatus.Draining, "No longer serves this tenant. The region's own silos complete the drain as soon as they see the change; a region that stays Draining has silos that are not running or have not seen it yet.")]
+    [TestCase(TenantRegionLifecycleStatus.Draining, "Awaiting confirmation from this region: its silos complete the drain after observing the change in sys-tenant-registry. If it stays Draining, check that the region is running and registry replication works in both directions. This view cannot confirm whether the remote region has observed the change; it may still serve the tenant until it does.")]
     [TestCase(TenantRegionLifecycleStatus.Offline, "Drained; no longer serves this tenant.")]
     [TestCase(TenantRegionLifecycleStatus.Removed, "Left the tenant's residency; does not serve this tenant.")]
     public void Every_lifecycle_status_has_a_meaning(TenantRegionLifecycleStatus status, string meaning) =>
@@ -30,6 +30,17 @@ public sealed class TenancyRegionLifecycleTests
             var meaning = TenancyFormat.RegionStatusMeaning(status);
             Assert.That(meaning, Does.Not.Contain("being copied in").And.Not.Contain("data here is draining"), status.ToString());
         }
+    }
+
+    [Test]
+    public void Draining_explains_pending_confirmation_without_claiming_remote_observation()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(TenancyFormat.DrainingMeaning, Does.Contain("Awaiting confirmation").And.Contain("sys-tenant-registry"));
+            Assert.That(TenancyFormat.DrainingMeaning, Does.Contain("both directions").And.Contain("cannot confirm"));
+            Assert.That(TenancyFormat.DrainingMeaning, Does.Contain("may still serve"));
+        });
     }
 
     [Test]

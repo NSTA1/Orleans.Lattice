@@ -58,7 +58,7 @@ internal static class SampleSeeder
         ("t-003", "Review night-shift report", "done"),
     ];
 
-    /// <summary>Seeds what every region holds: identities, policy and tenants.</summary>
+    /// <summary>Seeds each region's sample identities and baseline policy.</summary>
     /// <param name="region">The region.</param>
     /// <param name="staticDirectory">Whether the static roster backs the directory, so the demo groups can be seeded.</param>
     /// <param name="log">Receives one line per seeded item.</param>
@@ -73,19 +73,10 @@ internal static class SampleSeeder
             await SeedAccessAsync(region.Services, cancellationToken).ConfigureAwait(false);
             log($"[{region.Id}] Access: deny-by-default, 'operators' (member 'alice') may Read '{SampleIdentities.FactoryFloorTree}'.");
         }
-
-        if (!region.Plan.IsEstate)
-        {
-            return;
-        }
-
-        await SeedTenancyAsync(region, cancellationToken).ConfigureAwait(false);
-        log($"[{region.Id}] Tenancy: tenants '{SampleIdentities.AcmeTenant}' (admin '{SampleIdentities.AcmeAdmin}') and '{SampleIdentities.GlobexTenant}' (admin '{SampleIdentities.GlobexAdmin}'), both also administered by the operator and allowed in east and west, each with an '{SampleIdentities.TenantOrdersTree}' tree and quotas; '{SampleIdentities.AcmeTenant}' is resident and Online in east and west, '{SampleIdentities.GlobexTenant}' has no residency and is served in every region; '{SampleIdentities.AcmeTenant}' offers '{SampleIdentities.GlobexTenant}' Read on its orders.");
-        log($"[{region.Id}] Delegated access: '{SampleIdentities.GlobexTenant}' keeps its own group 't/{SampleIdentities.GlobexTenant}/{SampleIdentities.GlobexOperatorsGroup}' (member '{SampleIdentities.Alice}') in its member set, with globex rules granting it Read on '{SampleIdentities.TenantOrdersTree}' and '{SampleIdentities.GlobexInvoicesTree}'; a Platform rule denies '{SampleIdentities.Alice}' the invoices, shadowing globex's rule.");
     }
 
     /// <summary>
-    /// Enrols the demo tree in replication from the primary region, then waits
+    /// Enrols the demo tree and tenant data in replication from the primary region, then waits
     /// until the peer has learned the enrolment.
     /// </summary>
     /// <remarks>
@@ -107,17 +98,28 @@ internal static class SampleSeeder
         ArgumentNullException.ThrowIfNull(peer);
         ArgumentNullException.ThrowIfNull(log);
 
-        using (LatticeSystemOrigin.Enter())
+        foreach (var treeId in new[]
         {
-            var control = primary.Services.GetRequiredService<ILatticeReplicationControl>();
-            await control.EnableReplicationAsync(SampleIdentities.FactoryFloorTree, LatticeMergeMode.LwwRegister, cancellationToken: cancellationToken)
-                .ConfigureAwait(false);
+            SampleIdentities.FactoryFloorTree,
+            OrdersTree(SampleIdentities.AcmeTenant),
+            OrdersTree(SampleIdentities.GlobexTenant),
+            InvoicesTree,
+        })
+        {
+            using (LatticeSystemOrigin.Enter())
+            {
+                var control = primary.Services.GetRequiredService<ILatticeReplicationControl>();
+                await control.EnableReplicationAsync(treeId, LatticeMergeMode.LwwRegister, cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            if (!await WaitForEnrolmentAsync(peer, treeId, EnrolmentBudget, cancellationToken).ConfigureAwait(false))
+            {
+                throw new TimeoutException($"Region '{peer.Id}' has not learned replication enrolment for '{treeId}'.");
+            }
         }
 
-        var learned = await WaitForEnrolmentAsync(peer, SampleIdentities.FactoryFloorTree, EnrolmentBudget, cancellationToken).ConfigureAwait(false);
-        log(learned
-            ? $"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}' enrolled (last-writer-wins) with '{peer.Id}'."
-            : $"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}' enrolled, but '{peer.Id}' had not learned it within {EnrolmentBudget.TotalSeconds:0}s.");
+        log($"[{primary.Id}] Replication: '{SampleIdentities.FactoryFloorTree}', tenant orders and invoices enrolled (last-writer-wins) with '{peer.Id}'.");
     }
 
     /// <summary>How long seeding waits for the peer to learn an enrolment before carrying on.</summary>
@@ -166,8 +168,8 @@ internal static class SampleSeeder
 
     /// <summary>
     /// Seeds what only the primary region holds: the demo tree's data and, on the
-    /// estate, the task board installed in the acme tenant with a few cards.
-    /// Replication carries both to the peer.
+    /// estate, tenant definitions, tenant data and the task board installed in
+    /// acme with a few cards. Replication carries them to the peer.
     /// </summary>
     /// <param name="region">The primary region.</param>
     /// <param name="peer">The peer region, or <see langword="null"/> for a single-region run.</param>
@@ -177,6 +179,12 @@ internal static class SampleSeeder
     {
         ArgumentNullException.ThrowIfNull(region);
         ArgumentNullException.ThrowIfNull(log);
+
+        if (peer is not null)
+        {
+            await SeedTenancyAsync(region, peer, cancellationToken).ConfigureAwait(false);
+            log($"[{region.Id}] Tenancy: acme and globex seeded once; tenant definitions replicate to '{peer.Id}'. acme is Online in east and west; globex has no residency. Tenant orders, grants and delegated access are seeded in this region and replicate to the peer.");
+        }
 
         var grains = region.Services.GetRequiredService<IGrainFactory>();
         using (LatticeSystemOrigin.Enter())
@@ -269,7 +277,7 @@ internal static class SampleSeeder
             cancellationToken).ConfigureAwait(false);
     }
 
-    private static async Task SeedTenancyAsync(SampleRegion region, CancellationToken cancellationToken)
+    private static async Task SeedTenancyAsync(SampleRegion region, SampleRegion peer, CancellationToken cancellationToken)
     {
         var services = region.Services;
 
@@ -332,6 +340,8 @@ internal static class SampleSeeder
                 await PromoteToOnlineAsync(registry, acme, regionId, region.Id, cancellationToken).ConfigureAwait(false);
             }
         }
+
+        await WaitForTenantSeedAsync(peer, cancellationToken).ConfigureAwait(false);
 
         // Each tenant's orders, and the rule that lets its admin work with them:
         // tenancy scopes what an admin may reach, and the deny-by-default gate
@@ -396,6 +406,33 @@ internal static class SampleSeeder
         }
 
         await SeedGlobexAccessAsync(services, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static async Task WaitForTenantSeedAsync(SampleRegion peer, CancellationToken cancellationToken)
+    {
+        var registry = peer.Services.GetRequiredService<ITenantRegistry>();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(EnrolmentBudget);
+        using var poll = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
+        try
+        {
+            do
+            {
+                var acme = await registry.GetAsync(TenantId.Parse(SampleIdentities.AcmeTenant), deadline.Token).ConfigureAwait(false);
+                var globex = await registry.GetAsync(TenantId.Parse(SampleIdentities.GlobexTenant), deadline.Token).ConfigureAwait(false);
+                if (acme?.GetRegionStatus(SampleIdentities.EastRegion) == TenantRegionStatus.Online
+                    && acme.GetRegionStatus(SampleIdentities.WestRegion) == TenantRegionStatus.Online
+                    && globex is not null)
+                {
+                    return;
+                }
+            }
+            while (await poll.WaitForNextTickAsync(deadline.Token).ConfigureAwait(false));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Region '{peer.Id}' has not observed the seeded tenant registry within {EnrolmentBudget.TotalSeconds:0}s. Check sys-tenant-registry replication.");
+        }
     }
 
     /// <summary>

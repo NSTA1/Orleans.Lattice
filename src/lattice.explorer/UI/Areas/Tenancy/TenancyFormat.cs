@@ -101,7 +101,7 @@ internal static class TenancyFormat
 
     /// <summary>What a region in the Draining state means for the tenant, and what it means when it stays there.</summary>
     public const string DrainingMeaning =
-        "No longer serves this tenant. The region's own silos complete the drain as soon as they see the change; a region that stays Draining has silos that are not running or have not seen it yet.";
+        "Awaiting confirmation from this region: its silos complete the drain after observing the change in sys-tenant-registry. If it stays Draining, check that the region is running and registry replication works in both directions. This view cannot confirm whether the remote region has observed the change; it may still serve the tenant until it does.";
 
     /// <summary>What a region means for a tenant with no residency set.</summary>
     public const string NoResidencyMeaning = "No residency is set, so this region serves the tenant, as every region does.";
